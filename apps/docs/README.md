@@ -86,6 +86,8 @@ NIHO_DOCS_SHELL=dev    npm -C apps/docs run dev:fake    # 開発の editor（loc
   - `shell_ai_stop(turnId)`：止める。
   - 安全性（設計 §13）：remote 由来の文字列で CLI の引数に載るのは**モデルの ID だけ**（`is_safe_model`：空白・制御文字なし・`-` で始まらない）。
     システムプロンプトは native が組み、画面の文字列は題名（1 行に畳む）だけ入れる。指示は標準入力。`/bin/sh` は通らない。
+    Codex は唯一の writable root（`page/`）が cwd（crate の `TurnCtx::command`）なので、プロンプトの相対パスは provider ごとに組む。
+    同じ会話の依頼は重ねない（置き場の lease。重なったら `shell_ai_busy`）。
 - 次の段で足すもの：`packages/desktop-bridge`（TS の glue）、旧い画面の退役、配布の既定を remote に。
 
 ### NIHO アカウント（L5 #18557）
