@@ -12,7 +12,15 @@ const ASSET_ID = "0b6f7d8e-1c2a-4b3c-8d4e-5f6a7b8c9d0e";
 const OBJECT = `audio/${ASSET_ID}`;
 const NOW = Date.parse("2030-01-01T00:00:00.000Z");
 
-function claimOf(extra: { audio?: Partial<NonNullable<ClaimedTranscription["audio"]>> | null; diarize?: boolean } = {}): ClaimedTranscription {
+function claimOf(
+  extra: {
+    audio?: Partial<NonNullable<ClaimedTranscription["audio"]>> | null;
+    diarize?: boolean;
+    /** 音声の列（#36 段 3b-4）。渡さなければ part 0 の 1 件（audio と同じもの）。 */
+    parts?: ClaimedTranscription["parts"];
+    candidateId?: string | null;
+  } = {},
+): ClaimedTranscription {
   const audio =
     extra.audio === null
       ? null
@@ -41,9 +49,11 @@ function claimOf(extra: { audio?: Partial<NonNullable<ClaimedTranscription["audi
       diarize: extra.diarize ?? true,
       replace: false,
       terms: ["合成語"],
+      candidateId: extra.candidateId ?? null,
     },
     generation: 1,
     audio,
+    parts: extra.parts ?? (audio ? [{ ...audio, partIndex: 0, offsetSec: 0, durationSec: null, sourceName: null }] : []),
   };
 }
 
@@ -112,7 +122,7 @@ describe("executeRun", () => {
         return fake.transcribe(input);
       },
     };
-    const outcome = await executeRun({ store, storage: await storageWithAudio(), engine, runId: RUN_ID, timeoutMs: 60_000, now: () => NOW });
+    const outcome = await executeRun({ store, storage: await storageWithAudio(), engines: () => engine, runId: RUN_ID, timeoutMs: 60_000, now: () => NOW });
     expect(outcome).toEqual({ status: "succeeded" });
     expect(seen[0]?.audio.contentType).toBe("audio/mp4");
     expect(seen[0]?.audio.sizeBytes).toBe(3);
@@ -126,15 +136,114 @@ describe("executeRun", () => {
     expect(failed).toEqual([]);
   });
 
+  it("keeps the audio length the engine reported, even when the last utterance ends earlier (trailing silence)", async () => {
+    const { store, finished } = memoryStore(claimOf());
+    const engine: TranscriptionEngine = {
+      name: "fake",
+      transcribe: async () => ({ segments: [{ start: 0, end: 10, text: "合成", speaker: 1 }], durationSec: 100 }),
+    };
+    const outcome = await executeRun({ store, storage: await storageWithAudio(), engines: () => engine, runId: RUN_ID, timeoutMs: 60_000, now: () => NOW });
+    expect(outcome).toEqual({ status: "succeeded" });
+    expect(finished[0]?.output.durationSec).toBe(100);
+  });
+
+  it("transcribes every audio of the recording and joins them with the stored offsets", async () => {
+    const second = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+    const secondObject = `audio/${second}`;
+    const claim = claimOf({
+      parts: [
+        { assetId: ASSET_ID, objectPath: OBJECT, status: "uploaded", bytes: 3, contentType: "audio/mp4", sha256: "c".repeat(64), expiresAt: null, partIndex: 0, offsetSec: 0, durationSec: 600, sourceName: "音声 1.m4a" },
+        { assetId: second, objectPath: secondObject, status: "uploaded", bytes: 2, contentType: "audio/mp4", sha256: "d".repeat(64), expiresAt: null, partIndex: 1, offsetSec: 600, durationSec: 300, sourceName: "音声 2.m4a" },
+      ],
+    });
+    const { store, finished, failed } = memoryStore(claim);
+    const storage = await storageWithAudio();
+    const ticket = await storage.startUpload({ objectPath: secondObject, contentType: "audio/mp4", sizeBytes: 2, origin: null });
+    expect(storage.putFakeObject(ticket.url.split("/").pop()!, new Uint8Array([4, 5]), "audio/mp4")).toBe("ok");
+    const seen: EngineInput[] = [];
+    const engine: TranscriptionEngine = {
+      name: "fake",
+      transcribe: async (input) => {
+        seen.push(input);
+        await input.audio.stream.cancel();
+        // それぞれの音声の先頭を 0 とした時刻で返る
+        return { segments: [{ start: 0, end: 5, text: `${seen.length} 本目`, speaker: 1 }], durationSec: 5 };
+      },
+    };
+    const outcome = await executeRun({ store, storage, engines: () => engine, runId: RUN_ID, timeoutMs: 60_000, now: () => NOW });
+    expect(outcome).toEqual({ status: "succeeded" });
+    // 音声は足した順に 1 本ずつ渡す
+    expect(seen.map((input) => input.audio.sizeBytes)).toEqual([3, 2]);
+    expect(finished[0]?.output.segments.map((item) => [item.start, item.end, item.text, item.speaker])).toEqual([
+      [0, 5, "1 本目", 1],
+      // 2 本目は記録してある 600 秒ぶんずれ、話者の番号は続く
+      [600, 605, "2 本目", 2],
+    ]);
+    expect(finished[0]?.output.durationSec).toBe(605);
+    expect(failed).toEqual([]);
+  });
+
+  it("fails without calling the engine when one of the audios is still uploading or has expired", async () => {
+    const ready = { assetId: ASSET_ID, objectPath: OBJECT, status: "uploaded" as const, bytes: 3, contentType: "audio/mp4", sha256: "c".repeat(64), expiresAt: null, partIndex: 0, offsetSec: 0, durationSec: 600, sourceName: null };
+    const engine: TranscriptionEngine = { name: "fake", transcribe: async () => expect.unreachable("the engine must not be called") };
+    const uploading = memoryStore(claimOf({ parts: [ready, { ...ready, partIndex: 1, status: "uploading", assetId: "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e" }] }));
+    expect(await executeRun({ store: uploading.store, storage: await storageWithAudio(), engines: () => engine, runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({
+      status: "failed",
+      errorCode: "audio_missing",
+    });
+    const expired = memoryStore(claimOf({ parts: [ready, { ...ready, partIndex: 1, expiresAt: new Date(NOW - 1000).toISOString() }] }));
+    expect(await executeRun({ store: expired.store, storage: await storageWithAudio(), engines: () => engine, runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({
+      status: "failed",
+      errorCode: "audio_expired",
+    });
+    expectQuietLogs();
+  });
+
+  it("fails without calling the engine when the run's engine is not configured on this server", async () => {
+    const { store, finished, failed } = memoryStore(claimOf());
+    const outcome = await executeRun({
+      store,
+      storage: await storageWithAudio(),
+      // 鍵の無いエンジン（run には記録されているが、このサーバーでは使えない）
+      engines: () => null,
+      runId: RUN_ID,
+      timeoutMs: 60_000,
+      now: () => NOW,
+    });
+    expect(outcome).toEqual({ status: "failed", errorCode: "engine_unavailable" });
+    expect(failed).toEqual([{ runId: RUN_ID, generation: 1, code: "engine_unavailable" }]);
+    expect(finished).toEqual([]);
+    expectQuietLogs();
+  });
+
+  it("picks the engine the run was created with", async () => {
+    const { store, finished } = memoryStore(claimOf());
+    const asked: string[] = [];
+    const outcome = await executeRun({
+      store,
+      storage: await storageWithAudio(),
+      engines: (name) => {
+        asked.push(name);
+        return name === "fake" ? createFakeEngine() : null;
+      },
+      runId: RUN_ID,
+      timeoutMs: 60_000,
+      now: () => NOW,
+    });
+    expect(outcome).toEqual({ status: "succeeded" });
+    expect(asked).toEqual(["fake"]);
+    expect(finished).toHaveLength(1);
+  });
+
   it("drops the speakers when the run does not diarize", async () => {
     const { store, finished } = memoryStore(claimOf({ diarize: false }));
-    await executeRun({ store, storage: await storageWithAudio(), engine: createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW });
+    await executeRun({ store, storage: await storageWithAudio(), engines: () => createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW });
     expect(finished[0]?.output.segments.map((segment) => segment.speaker)).toEqual([null, null, null]);
   });
 
   it("does nothing when the run was claimed by another or finished", async () => {
     const { store, finished, failed } = memoryStore(null);
-    expect(await executeRun({ store, storage: createFakeStorage(), engine: createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000 })).toEqual({ status: "skipped" });
+    expect(await executeRun({ store, storage: createFakeStorage(), engines: () => createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000 })).toEqual({ status: "skipped" });
     expect(finished).toEqual([]);
     expect(failed).toEqual([]);
   });
@@ -149,14 +258,14 @@ describe("executeRun", () => {
     ];
     for (const [claim, storage, code] of cases) {
       const { store, failed, finished } = memoryStore(claim);
-      expect(await executeRun({ store, storage, engine, runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({ status: "failed", errorCode: code });
+      expect(await executeRun({ store, storage, engines: () => engine, runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({ status: "failed", errorCode: code });
       expect(failed).toEqual([{ runId: RUN_ID, generation: 1, code }]);
       expect(finished).toEqual([]);
     }
     expect(engine.transcribe).not.toHaveBeenCalled();
     // 期限の無い音声は期限切れにしない
     const { store } = memoryStore(claimOf({ audio: { expiresAt: null } }));
-    expect(await executeRun({ store, storage: await storageWithAudio(), engine: createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({ status: "succeeded" });
+    expect(await executeRun({ store, storage: await storageWithAudio(), engines: () => createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({ status: "succeeded" });
     expectQuietLogs();
   });
 
@@ -166,7 +275,7 @@ describe("executeRun", () => {
       throw new StorageError("unavailable");
     };
     const { store, failed } = memoryStore(claimOf());
-    expect(await executeRun({ store, storage, engine: createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({ status: "failed", errorCode: "internal" });
+    expect(await executeRun({ store, storage, engines: () => createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({ status: "failed", errorCode: "internal" });
     expect(failed[0]?.code).toBe("internal");
     expectQuietLogs();
   });
@@ -181,7 +290,7 @@ describe("executeRun", () => {
     ];
     for (const [engineCode, code] of map) {
       const { store, failed, finished } = memoryStore(claimOf());
-      const outcome = await executeRun({ store, storage: await storageWithAudio(), engine: failingEngine(new EngineError(engineCode)), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW });
+      const outcome = await executeRun({ store, storage: await storageWithAudio(), engines: () => failingEngine(new EngineError(engineCode)), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW });
       expect(outcome).toEqual({ status: "failed", errorCode: code });
       expect(failed).toEqual([{ runId: RUN_ID, generation: 1, code }]);
       expect(finished).toEqual([]);
@@ -198,7 +307,7 @@ describe("executeRun", () => {
         }),
     };
     const first = memoryStore(claimOf());
-    expect(await executeRun({ store: first.store, storage: await storageWithAudio(), engine: hanging, runId: RUN_ID, timeoutMs: 20, now: () => NOW })).toEqual({
+    expect(await executeRun({ store: first.store, storage: await storageWithAudio(), engines: () => hanging, runId: RUN_ID, timeoutMs: 20, now: () => NOW })).toEqual({
       status: "failed",
       errorCode: "engine_timeout",
     });
@@ -208,7 +317,7 @@ describe("executeRun", () => {
       transcribe: async () => ({ segments: Array.from({ length: 20_001 }, (_, index) => ({ start: index, end: index + 1, text: "合成", speaker: 0 })), durationSec: null }),
     };
     const second = memoryStore(claimOf());
-    expect(await executeRun({ store: second.store, storage: await storageWithAudio(), engine: huge, runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({
+    expect(await executeRun({ store: second.store, storage: await storageWithAudio(), engines: () => huge, runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({
       status: "failed",
       errorCode: "too_large",
     });
@@ -218,11 +327,11 @@ describe("executeRun", () => {
   it("never lets an exception out: unexpected engine, store and claim failures become internal", async () => {
     const engineThrows = memoryStore(claimOf());
     expect(
-      await executeRun({ store: engineThrows.store, storage: await storageWithAudio(), engine: failingEngine(new TypeError("synthetic detail")), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW }),
+      await executeRun({ store: engineThrows.store, storage: await storageWithAudio(), engines: () => failingEngine(new TypeError("synthetic detail")), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW }),
     ).toEqual({ status: "failed", errorCode: "internal" });
 
     const finishThrows = memoryStore(claimOf(), Object.assign(new Error("synthetic detail"), { code: "XX000" }));
-    expect(await executeRun({ store: finishThrows.store, storage: await storageWithAudio(), engine: createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({
+    expect(await executeRun({ store: finishThrows.store, storage: await storageWithAudio(), engines: () => createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({
       status: "failed",
       errorCode: "internal",
     });
@@ -230,7 +339,7 @@ describe("executeRun", () => {
 
     // claim そのものが失敗: claim される前（世代 0）の run だけを失敗にする
     const claimThrows = memoryStore(new Error("synthetic detail"));
-    expect(await executeRun({ store: claimThrows.store, storage: await storageWithAudio(), engine: createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000 })).toEqual({
+    expect(await executeRun({ store: claimThrows.store, storage: await storageWithAudio(), engines: () => createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000 })).toEqual({
       status: "failed",
       errorCode: "internal",
     });
@@ -242,21 +351,21 @@ describe("executeRun", () => {
       throw new Error("synthetic detail");
     };
     expect(
-      await executeRun({ store: failThrows.store, storage: await storageWithAudio(), engine: failingEngine(new EngineError("unavailable")), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW }),
+      await executeRun({ store: failThrows.store, storage: await storageWithAudio(), engines: () => failingEngine(new EngineError("unavailable")), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW }),
     ).toEqual({ status: "failed", errorCode: "engine_unavailable" });
     expectQuietLogs();
   });
 
   it("reports a superseded finish as an internal failure and a stale finish as skipped", async () => {
     const superseded = memoryStore(claimOf(), "superseded");
-    expect(await executeRun({ store: superseded.store, storage: await storageWithAudio(), engine: createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({
+    expect(await executeRun({ store: superseded.store, storage: await storageWithAudio(), engines: () => createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({
       status: "failed",
       errorCode: "internal",
     });
     // store が書かずに failed にしたので、もう一度は失敗にしない
     expect(superseded.failed).toEqual([]);
     const stale = memoryStore(claimOf(), "stale");
-    expect(await executeRun({ store: stale.store, storage: await storageWithAudio(), engine: createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({ status: "skipped" });
+    expect(await executeRun({ store: stale.store, storage: await storageWithAudio(), engines: () => createFakeEngine(), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({ status: "skipped" });
     expect(stale.failed).toEqual([]);
   });
 
@@ -273,7 +382,7 @@ describe("executeRun", () => {
       contentType: "audio/mp4",
     });
     const { store } = memoryStore(claimOf());
-    await executeRun({ store, storage, engine: failingEngine(new EngineError("rejected")), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW });
+    await executeRun({ store, storage, engines: () => failingEngine(new EngineError("rejected")), runId: RUN_ID, timeoutMs: 60_000, now: () => NOW });
     expect(cancelled).toBe(true);
   });
 });

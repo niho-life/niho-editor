@@ -19,21 +19,22 @@ export const AUDIO_STAGE_LABELS: Readonly<Record<AudioUploadStage, string>> = {
 };
 
 export type AudioImportProgress = { stage: AudioUploadStage; /** 0〜100 の整数。 */ percent: number };
-export type AudioImportOutcome = { ok: true; result: UploadAudioFileResult } | { ok: false; kind: AudioUploadFailureKind };
+export type AudioImportOutcome<T = UploadAudioFileResult> = { ok: true; result: T } | { ok: false; kind: AudioUploadFailureKind };
 
 /**
- * 「録音から」の音声の取り込み（#36 段 3b-1）。uploadAudioFile を 1 本だけ走らせ、進み具合（段階と整数の %）と中止を持つ。
+ * 音声の取り込み（#36 段 3b-1。録音ページを作る `uploadAudioFile` と、あとの音声を足す `uploadAudioPart` の両方に使う）。
+ * 1 本だけ走らせ、進み具合（段階と整数の %）と中止を持つ。
  * - 同じファイル（マイクの録音も）の取り込み直しには同じ Idempotency-Key を使う（同じ録音ページに戻る。ページを増やさない）。
  *   キーが別の内容に使われていた（409 など、理由が other）ときだけ、次は新しいキーにする。
  * - 画面を離れたら（unmount）中止する。
  */
-export function useAudioImport(options: { upload?: (input: UploadAudioFileInput) => Promise<UploadAudioFileResult> } = {}) {
+export function useAudioImport<T = UploadAudioFileResult>(options: { upload?: (input: UploadAudioFileInput) => Promise<T> } = {}) {
   const [progress, setProgress] = useState<AudioImportProgress | null>(null);
   const controller = useRef<AbortController | null>(null);
   const keys = useRef(new WeakMap<Blob, string>());
-  const uploadRef = useRef(options.upload ?? uploadAudioFile);
+  const uploadRef = useRef(options.upload ?? (uploadAudioFile as unknown as (input: UploadAudioFileInput) => Promise<T>));
 
-  const run = useCallback(async (file: File, input: { durationSec?: number | null; lang?: "ja" | "en" } = {}): Promise<AudioImportOutcome> => {
+  const run = useCallback(async (file: File, input: { durationSec?: number | null; lang?: "ja" | "en" } = {}): Promise<AudioImportOutcome<T>> => {
     if (controller.current) return { ok: false, kind: "other" };
     const current = new AbortController();
     controller.current = current;

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { RecordingStart, type RecordingHow, type RecordingNext } from "niho-docs-ui/shell";
 import { AUDIO_FILE_ACCEPT, AUDIO_FILE_EXTENSIONS_LABEL, isAudioFileName } from "@/lib/audio-formats";
 import { probeAudioDuration } from "@/lib/audio-duration";
-import { audioLimitsNote, audioUploadMessage, checkAudioFile, getAudioLimitsCached, type AudioLimits } from "@/lib/audio-upload-client";
+import { audioLimitsNote, audioUploadMessage, checkAudioFile, getAudioLimitsCached, uploadAudioPart, type AudioLimits } from "@/lib/audio-upload-client";
 import type { MicRecording } from "@/lib/mic-recorder";
 import { RecordingRequestError, VTT_FILE_MAX_BYTES, importVtt, recordingErrorMessage } from "@/lib/recording-client";
 import { recordingKeep, type KeptTake, type RecordingKeep } from "@/lib/recording-keep";
@@ -45,6 +45,8 @@ const UNKNOWN_FILE: Message = { kind: "error", text: "このファイルは取�
  * - 文字起こし済みの .vtt は、そのまま録音ページを作る（段 1 の API）。
  * - 音声ファイル（.m4a .mp3 .wav .aac .ogg .flac .webm）は「取り込む」で、上限の確認 → sha256 → 開始 → 保存先へ直接 PUT → 完了。
  *   進み具合（段階と %）が見え、中止できる。終わったら録音ページへ移る（文字起こしは録音ページで始める）。
+ * - **音声は何本でも選べる**（#36 段 3b-4）。1 本目で録音ページを作り、残りはその録音に足す（順に送る）。
+ *   そのあと録音ページで 1 回だけ文字起こしを始めると、前の音声の長さだけ時刻をずらして 1 本につながる。
  * - 「録音する」→「録音をはじめる」でマイクから録音し、「止める」と同じ取り込みの流れに乗る。「やり直す」は確認してから捨てる。
  * - 取り込み中・録音中・まだ取り込んでいない録音があるときは、閉じる前にブラウザの確認を出す。失敗しても選んだファイル・録音は残す。
  * - 録っている間は端末の控え（recording-keep.ts）にも書く。**録音中に画面を閉じても失わない**ので、次に開いたときに
@@ -75,6 +77,10 @@ export function RecordingStartScreen({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   // 前回の録音（画面を閉じた・取り込めなかった控え）
   const [kept, setKept] = useState<readonly KeptTake[]>([]);
+  // 2 本目以降に選んだ音声（1 本目で録音ページを作ってから、この順に足す）
+  const [extra, setExtra] = useState<readonly File[]>([]);
+  // 1 本目は取り込めたが、足す途中で失敗した録音ページ（「開く」で移れる）
+  const [created, setCreated] = useState<{ id: string; title: string } | null>(null);
   const input = useRef<HTMLInputElement>(null);
   // 端末の控え（この画面の間は同じもの。IndexedDB が無ければ null）
   const [keep] = useState<RecordingKeep | null>(() => (injected === undefined ? recordingKeep() : injected));
@@ -99,6 +105,24 @@ export function RecordingStartScreen({
         setKept((takes) => takes.filter((take) => take.id !== keepId));
       }
       frame.pageCreated(page.id, page.title, "rec");
+      // 2 本目以降は、作った録音に足す（1 本でも失敗したらここで止め、画面に残って知らせる）
+      const rest = [...extra];
+      for (const [index, part] of rest.entries()) {
+        setMessage({ kind: "info", text: `音声を足しています（${index + 2}/${rest.length + 1} 本目）` });
+        const added = await uploadAudioPart({ file: part, pageId: page.id, durationSec: await probeAudioDuration(part).catch(() => null) }).then(
+          () => true,
+          () => false,
+        );
+        if (!added) {
+          setCreated({ id: page.id, title: page.title });
+          setExtra(rest.slice(index));
+          setMessage({ kind: "error", text: `${part.name}を足せませんでした。録音ページで足せます。` });
+          importing.current = false;
+          setBusy(false);
+          return;
+        }
+      }
+      setExtra([]);
       router.push(`/p/${page.id}`);
       // 移るまで、もう一度取り込ませない（この画面は移ると外れる）
       return;
@@ -147,21 +171,33 @@ export function RecordingStartScreen({
     });
   };
 
-  const choose = (picked: File | undefined) => {
+  /**
+   * 選んだファイル（何本でも）。1 本目が音声なら、音声だけを順番に取る（.vtt が混ざっていたら、それは録音ページで足せると言う）。
+   * 1 本目が .vtt なら、.vtt は 1 つずつ（残りは無視する）。
+   */
+  const choose = (chosen: readonly File[]) => {
+    const picked = chosen[0];
     if (!picked || locked) return;
     setHow("file");
+    setCreated(null);
     if (isVtt(picked)) {
       const problem = vttRejection(picked);
-      setMessage(problem);
+      setMessage(problem ?? (chosen.length > 1 ? { kind: "info", text: "文字起こし（.vtt）は 1 つずつ取り込めます。残りは録音ページで足せます。" } : null));
       if (!problem) {
         fileRef.current = picked;
         setFile(picked);
         setFileDuration(null);
+        setExtra([]);
       }
       return;
     }
     if (isAudioFileName(picked.name)) {
+      const audios = chosen.filter((file) => isAudioFileName(file.name));
+      setExtra(audios.slice(1));
       chooseAudio(picked);
+      if (audios.length < chosen.length) {
+        setMessage({ kind: "info", text: "音声だけを取り込みます。文字起こし（.vtt）は録音ページで足せます。" });
+      }
       return;
     }
     setMessage(UNKNOWN_FILE);
@@ -278,9 +314,13 @@ export function RecordingStartScreen({
           ? IMPORT_LABEL
           : undefined
       : audioChosen
-        ? IMPORT_LABEL
+        ? extra.length > 0
+          ? `${extra.length + 1} 本を取り込む`
+          : IMPORT_LABEL
         : undefined;
-  const fileDetail = file ? `${fileDuration !== null ? `${formatClock(fileDuration)} · ` : ""}${sizeLabel(file.size)} · 別のファイルを選ぶ` : "";
+  const fileDetail = file
+    ? `${extra.length > 0 ? `ほかに ${extra.length} 本 · ` : ""}${fileDuration !== null ? `${formatClock(fileDuration)} · ` : ""}${sizeLabel(file.size)} · 別のファイルを選ぶ`
+    : "";
   const progress = audio.progress;
   const statusText = progress ? AUDIO_STAGE_LABELS[progress.stage] : message?.kind === "info" ? message.text : "";
   const alertText = message?.kind === "error" ? message.text : micError;
@@ -291,7 +331,7 @@ export function RecordingStartScreen({
         onDragOver={(event: DragEvent) => event.preventDefault()}
         onDrop={(event: DragEvent) => {
           event.preventDefault();
-          choose(event.dataTransfer.files[0]);
+          choose([...event.dataTransfer.files]);
         }}
       >
         <RecordingStart
@@ -319,10 +359,11 @@ export function RecordingStartScreen({
         ref={input}
         type="file"
         accept={`.vtt,text/vtt,${AUDIO_FILE_ACCEPT}`}
+        multiple
         hidden
         tabIndex={-1}
         onChange={(event) => {
-          choose(event.target.files?.[0]);
+          choose([...(event.target.files ?? [])]);
           // 同じファイルをもう一度選んでも change が起きるように
           event.target.value = "";
         }}
@@ -378,6 +419,22 @@ export function RecordingStartScreen({
             </button>
             <button type="button" className="es-btn es-btn--quiet es-btn--sm" onClick={() => setConfirmDiscard(false)}>
               やめる
+            </button>
+          </div>
+        )}
+        {created && !busy && (
+          <div style={PANEL_STYLE} data-audio-created={created.id}>
+            <span className="es-note">1 本目は取り込めました</span>
+            <span className="es-sp" />
+            <button
+              type="button"
+              className="es-btn es-btn--outline es-btn--sm"
+              onClick={() => {
+                setExtra([]);
+                router.push(`/p/${created.id}`);
+              }}
+            >
+              録音ページを開く
             </button>
           </div>
         )}

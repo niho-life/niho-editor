@@ -10,12 +10,19 @@ import {
   type TranscriptionOutput,
 } from "@niho/editor-store";
 import { StorageError, type ObjectStorage, type ReadObject } from "../storage/types";
-import { EngineError, type EngineErrorCode, type TranscriptionEngine } from "./engine";
+import { composeParts, type TranscribedPart } from "./compose-parts";
+import { EngineError, type EngineErrorCode, type TranscriptionEngine, type TranscriptionEngineName } from "./engine";
 import { normalizeEngineResult } from "./normalize";
 
 /**
- * 1 つの run の実行（#36 段 2b）: claim → 録音の音声の資産 → 保存先から読み出す → エンジン → 正規化 → 確定。
- * 呼ぶのは実行の呼び出し口（dispatch.ts。今は開発と CI の inline だけ。本番の worker は後段）。
+ * 1 つの run の実行（#36 段 2b）: claim → 録音の音声 → 保存先から読み出す → エンジン → 正規化 → 確定。
+ * 呼ぶのは実行の呼び出し口（dispatch.ts。inline は開発と CI、本番は Cloud Tasks の worker）。
+ *
+ * - 音声が複数ある録音（#36 段 3b-4）は、**すべての音声を順に**文字起こしして 1 本につなぐ（compose-parts.ts。前の音声の
+ *   長さだけ時刻をずらし、話者の番号は音声ごとに振り直す）。1 回の実行の時間切れ（既定 20 分）は全部で共有する
+ *   （1 つの task の締め切りを超えないため。足りなければ `EDITOR_TRANSCRIBE_TIMEOUT_SEC` を上げる）。
+ * - run に案（candidate）が付いていれば、確定で書くのは正本ではなくその案（store の finishRun が分ける）。
+ * - エンジンは **run に記録された名前**で引く（案を別のエンジンで作れるため）。その鍵がサーバーに無ければ engine_unavailable。
  *
  * - 途中の失敗は短い code にして run を failed にする（failRun。世代が一致するときだけ）。音声は消さないので「もう一度」ができる。
  *   音声の資産が無い・アップロードが済んでいない・保存先に無い → audio_missing、期限切れ → audio_expired、
@@ -42,7 +49,8 @@ export function pgTranscriptionRunStore(pool: Connectable & Queryable): Transcri
 export type ExecuteRunDeps = {
   store: TranscriptionRunStore;
   storage: ObjectStorage;
-  engine: TranscriptionEngine;
+  /** run に記録されたエンジンの口（使えないエンジンなら null → engine_unavailable）。 */
+  engines: (name: TranscriptionEngineName) => TranscriptionEngine | null;
   runId: string;
   /** 1 回の文字起こしの時間切れ（ミリ秒。設定の EDITOR_TRANSCRIBE_TIMEOUT_SEC）。 */
   timeoutMs: number;
@@ -99,22 +107,37 @@ export async function executeRun(deps: ExecuteRunDeps): Promise<ExecuteRunOutcom
     return { status: "failed", errorCode: code };
   };
 
-  if (!audio || audio.status !== "uploaded") return fail("audio_missing");
-  if (audio.expiresAt !== null && Date.parse(audio.expiresAt) <= now()) return fail("audio_expired");
+  // run に記録されたエンジン（案を別のエンジンで作れるので、run ごとに違う）
+  const engine = deps.engines(run.engine);
+  if (!engine) return fail("engine_unavailable");
+  // 音声の列（part 0 から。古い claim の口しか無いときは part 0 だけ）
+  const parts = claim.parts.length > 0 ? claim.parts : audio ? [{ ...audio, partIndex: 0, offsetSec: 0, durationSec: null, sourceName: null }] : [];
+  if (parts.length === 0) return fail("audio_missing");
+  if (parts.some((part) => part.status !== "uploaded")) return fail("audio_missing");
+  if (parts.some((part) => part.expiresAt !== null && Date.parse(part.expiresAt) <= now())) return fail("audio_expired");
 
   const signal = AbortSignal.timeout(deps.timeoutMs);
   let opened: ReadObject | null = null;
   try {
-    opened = await deps.storage.readObject(audio.objectPath);
-    if (!opened) return await fail("audio_missing");
-    const raw = await deps.engine.transcribe({
-      audio: { stream: opened.body, contentType: audio.contentType, sizeBytes: opened.sizeBytes },
-      language: run.language,
-      diarize: run.diarize,
-      terms: run.terms,
-      signal,
-    });
-    const normalized = normalizeEngineResult(raw, { diarize: run.diarize });
+    const transcribed: TranscribedPart[] = [];
+    for (const part of parts) {
+      opened = await deps.storage.readObject(part.objectPath);
+      if (!opened) return await fail("audio_missing");
+      const raw = await engine.transcribe({
+        audio: { stream: opened.body, contentType: part.contentType, sizeBytes: opened.sizeBytes },
+        language: run.language,
+        diarize: run.diarize,
+        terms: run.terms,
+        signal,
+      });
+      // エンジンが読まなかった音声は、次の音声へ進む前に閉じる
+      if (!opened.body.locked) await opened.body.cancel().catch(() => undefined);
+      opened = null;
+      const normalizedPart = normalizeEngineResult(raw, { diarize: run.diarize });
+      transcribed.push({ offsetSec: part.offsetSec, segments: normalizedPart.segments, durationSec: normalizedPart.durationSec });
+    }
+    // 前の音声の長さだけずらして 1 本につなぐ（1 本だけの録音は、ずらす量 0 でそのまま）
+    const normalized = composeParts(transcribed);
     const finished = await deps.store.finishRun(deps.runId, generation, normalized);
     if (finished === "succeeded") return { status: "succeeded" };
     if (finished === "superseded") {

@@ -43,7 +43,7 @@ function memoryStore(pages: Page[] = []) {
       if (page.audio !== "uploaded") return { status: "audio_not_ready" };
       if (page.expired) return { status: "audio_expired" };
       const active = runs.find((run) => run.pageId === id && (run.status === "queued" || run.status === "running"));
-      if (active) return { status: "existing", run: view(active) };
+      if (active) return { status: "existing", run: view(active), candidate: active.input.candidate ?? null };
       if (page.segments > 0 && !input.replace) return { status: "has_transcript" };
       const run: Run = {
         id: randomUUID(),
@@ -134,7 +134,7 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
     const target = page({ language: "en" });
     const { store, runs } = memoryStore([target]);
     const { dispatcher: d, dispatched } = dispatcher();
-    const response = await start(target.id, { terms: [" 合成語 ", "Synthetic"], diarize: false }, deps("user-a", store, { engine: "deepgram", dispatcher: d }));
+    const response = await start(target.id, { terms: [" 合成語 ", "Synthetic"], diarize: false }, deps("user-a", store, { engine: "deepgram", engines: ["deepgram"], dispatcher: d }));
     expect(response.status).toBe(202);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
@@ -149,14 +149,22 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
     expect(dispatched).toEqual([body.run.id]);
   });
 
+  it("starts with the engine the screen asked for (when its key is set)", async () => {
+    const target = page();
+    const { store, runs } = memoryStore([target]);
+    const runner = { engine: "deepgram" as const, engines: ["deepgram" as const, "gemini" as const], dispatcher: dispatcher().dispatcher };
+    expect((await start(target.id, { engine: "gemini" }, deps("user-a", store, runner))).status).toBe(202);
+    expect(runs[0]!.input).toEqual({ engine: "gemini", diarize: true, replace: false, terms: [] });
+  });
+
   it("uses the defaults for an empty body and passes the asked language", async () => {
     const target = page();
     const { store, runs } = memoryStore([target]);
-    expect((await start(target.id, {}, deps("user-a", store, { engine: "fake", dispatcher: dispatcher().dispatcher }))).status).toBe(202);
+    expect((await start(target.id, {}, deps("user-a", store, { engine: "fake", engines: ["fake"], dispatcher: dispatcher().dispatcher }))).status).toBe(202);
     expect(runs[0]!.input).toEqual({ engine: "fake", diarize: true, replace: false, terms: [] });
     const other = page();
     const second = memoryStore([other]);
-    expect((await start(other.id, { lang: "en", replace: true }, deps("user-a", second.store, { engine: "fake", dispatcher: dispatcher().dispatcher }))).status).toBe(202);
+    expect((await start(other.id, { lang: "en", replace: true }, deps("user-a", second.store, { engine: "fake", engines: ["fake"], dispatcher: dispatcher().dispatcher }))).status).toBe(202);
     expect(second.runs[0]!.input).toEqual({ engine: "fake", language: "en", diarize: true, replace: true, terms: [] });
   });
 
@@ -164,8 +172,8 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
     const target = page();
     const { store, runs } = memoryStore([target]);
     const { dispatcher: d, dispatched } = dispatcher();
-    const first = await (await start(target.id, {}, deps("user-a", store, { engine: "fake", dispatcher: d }))).json();
-    const again = await start(target.id, { replace: true }, deps("user-a", store, { engine: "fake", dispatcher: d }));
+    const first = await (await start(target.id, {}, deps("user-a", store, { engine: "fake", engines: ["fake"], dispatcher: d }))).json();
+    const again = await start(target.id, { replace: true }, deps("user-a", store, { engine: "fake", engines: ["fake"], dispatcher: d }));
     expect(again.status).toBe(200);
     expect((await again.json()).run).toEqual(first.run);
     expect(runs).toHaveLength(1);
@@ -176,7 +184,7 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const target = page();
     const { store, runs, calls } = memoryStore([target]);
-    const response = await start(target.id, {}, deps("user-a", store, { engine: "fake", dispatcher: dispatcher(true).dispatcher }));
+    const response = await start(target.id, {}, deps("user-a", store, { engine: "fake", engines: ["fake"], dispatcher: dispatcher(true).dispatcher }));
     expect(response.status).toBe(202);
     const body = await response.json();
     expect(body.run.status).toBe("failed");
@@ -184,7 +192,7 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
     expect(runs[0]!.status).toBe("failed");
     expect(calls).toContain("fail:0:internal");
     // もう一度は新しい run
-    const retry = await start(target.id, {}, deps("user-a", store, { engine: "fake", dispatcher: dispatcher().dispatcher }));
+    const retry = await start(target.id, {}, deps("user-a", store, { engine: "fake", engines: ["fake"], dispatcher: dispatcher().dispatcher }));
     expect(retry.status).toBe(202);
     expect(runs).toHaveLength(2);
     expect(JSON.stringify((console.error as unknown as { mock: { calls: unknown[] } }).mock.calls)).not.toContain("synthetic dispatch failure");
@@ -197,7 +205,7 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
     const transcribed = page({ segments: 3 });
     const { store, runs } = memoryStore([uploading, vtt, expired, transcribed]);
     const { dispatcher: d, dispatched } = dispatcher();
-    const runner = { engine: "fake" as const, dispatcher: d };
+    const runner = { engine: "fake" as const, engines: ["fake" as const], dispatcher: d };
     for (const [target, reason] of [
       [uploading, "audio_not_ready"],
       [vtt, "audio_not_ready"],
@@ -218,7 +226,7 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
     const theirs = page({ owner: "user-b" });
     const trashed = page({ deleted: true });
     const { store, runs } = memoryStore([theirs, trashed]);
-    const runner = { engine: "fake" as const, dispatcher: dispatcher().dispatcher };
+    const runner = { engine: "fake" as const, engines: ["fake" as const], dispatcher: dispatcher().dispatcher };
     const results = [];
     for (const id of [theirs.id, trashed.id, randomUUID(), "not-a-uuid"]) results.push(await snapshot(await start(id, {}, deps("user-a", store, runner))));
     expect(results[0]?.status).toBe(404);
@@ -230,7 +238,7 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
   it("checks 401, then 403, then 503 transcription_unavailable, before reading the body or touching the store", async () => {
     const target = page();
     const { store, calls } = memoryStore([target]);
-    const runner = { engine: "fake" as const, dispatcher: dispatcher().dispatcher };
+    const runner = { engine: "fake" as const, engines: ["fake" as const], dispatcher: dispatcher().dispatcher };
     const anonymous = await start(target.id, "not json", deps(null, store, null));
     expect(anonymous.status).toBe(401);
     expect(await anonymous.text()).toBe('{"error":"unauthorized"}');
@@ -255,12 +263,15 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
 
   it("answers 400 with a reason for a malformed body, before looking up the page, and 413 for an oversized body", async () => {
     const { store, calls } = memoryStore();
-    const runner = { engine: "fake" as const, dispatcher: dispatcher().dispatcher };
+    const runner = { engine: "fake" as const, engines: ["fake" as const], dispatcher: dispatcher().dispatcher };
     const id = randomUUID();
     const cases: Array<[unknown, string]> = [
       ["not json", "body"],
       [[], "body"],
-      [{ engine: "deepgram" }, "body"],
+      // engine は項目として受けるが、鍵の無いエンジンは選べない（この server は fake だけ）
+      [{ engine: "deepgram" }, "engine"],
+      [{ engine: 7 }, "engine"],
+      [{ model: "gemini-3.8-flash" }, "body"],
       [{ lang: "fr" }, "lang"],
       [{ diarize: "yes" }, "diarize"],
       [{ replace: 1 }, "replace"],
@@ -292,7 +303,7 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
       status: async () => null,
       failRun: async () => false,
     };
-    const response = await start(randomUUID(), {}, deps("user-a", failing, { engine: "fake", dispatcher: dispatcher().dispatcher }));
+    const response = await start(randomUUID(), {}, deps("user-a", failing, { engine: "fake", engines: ["fake"], dispatcher: dispatcher().dispatcher }));
     expect(response.status).toBe(500);
     expect(await response.text()).toBe('{"error":"internal"}');
     expect(errors).toHaveBeenCalledWith("editor-web: request failed", { route: "POST /api/pages/[id]/recording/transcribe", name: "Error", code: "XX000" });
@@ -304,7 +315,7 @@ describe("GET /api/pages/{id}/recording/transcription", () => {
   it("answers the latest run, or run: null before the first one", async () => {
     const target = page();
     const { store } = memoryStore([target]);
-    const d = deps("user-a", store, { engine: "fake", dispatcher: dispatcher().dispatcher });
+    const d = deps("user-a", store, { engine: "fake", engines: ["fake"], dispatcher: dispatcher().dispatcher });
     const empty = await status(target.id, d);
     expect(empty.status).toBe(200);
     expect(empty.headers.get("cache-control")).toBe("private, no-store");
@@ -367,7 +378,8 @@ describe("GET /api/pages/{id}/recording with the transcription", () => {
 
   it("adds the latest run (only the documented fields), or null", async () => {
     const withRun = await (await get(recordingsStore(run))).json();
-    expect(Object.keys(withRun).sort()).toEqual(["recording", "speakers", "transcription"]);
+    // 音声の列・文字起こしの案・使えるエンジン（#36 段 3b-4）も同じ応答に入る
+    expect(Object.keys(withRun).sort()).toEqual(["audios", "candidates", "engines", "recording", "speakers", "transcription"]);
     expect(withRun.transcription).toEqual(run);
     expect((await (await get(recordingsStore(null))).json()).transcription).toBeNull();
     expect((await get(recordingsStore(run), "user-b")).status).toBe(404);

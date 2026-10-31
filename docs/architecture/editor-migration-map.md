@@ -21,8 +21,8 @@ Issue #45 の前半（対応表とデータの移行手順）です。Mac アプ
 | ホーム／最近 | `pages.json`、`HomeScreen`、`recent.json` | サイドバーの一覧（更新順） | 変換 | 手動の並び（`PageIndex.order`）は無くなる。`pages.json` に更新時刻が無く、Rust が mtime から出している |
 | フォルダ（入れ子なし） | `Project`、`project.json`、`FolderScreen`、`FolderInfo` | サイドバーにフォルダは無い（親子は録音→手順のサブページだけ） | 受け皿なし | 背景情報、登場人物、固有名詞、自動参考ページ（同じフォルダの独立文書を最大 64 枚）の行き先 |
 | 文書ページ | `pages/<id>.md`、`DocumentScreen`、`BlockEditor` | `pages`（`kind=note`）＋ `blocks` | 変換 | Markdown → TipTap。表・コードなど限定 AST 外の要素。画像 `niho-docs-asset:` → `assets`。editor の本文は 1 MiB まで（現行は最大 8 MiB） |
-| 録音ページ・音声 | `Recording`、`inputs/`、`RecordingScreen`、`AudioPlaybackBar` | `pages`（`kind=rec`）＋録音ブロック＋ `assets`（`kind=audio`） | 変換 | 複数音声（Part、時刻のずらし）。音声は 1 ファイル 2 GiB・1 録音 6 時間まで。`available:false`（手元に無い音声）。`recording` を持つ列が無い |
-| 文字起こし・話者・別エンジン案 | `transcript.md`、`transcript-speakers.ts`、`candidateSets` | 録音の `transcript: Segment[]`、`speakers[]` | 変換（案は受け皿なし） | `[hh:mm:ss] 話者N: 本文` の行を分解する。話者名は版ごと（`RunRecord.transcriptSpeakerNames`）。終了時刻やミリ秒は `source.vtt` にしか無い |
+| 録音ページ・音声 | `Recording`、`inputs/`、`RecordingScreen`、`AudioPlaybackBar` | `pages`（`kind=rec`）＋ `page_recordings` ＋ `assets`（`kind=audio`）＋ `page_recording_audios`（2 本目以降） | 変換 | 複数音声は Part ごとに行を持ち、`offset_sec`（前の音声の長さ）で時刻をずらして 1 本につなぐ。上限は 1 ファイル 2 GiB・1 本 6 時間（`audio-limits.ts`）。`available:false` は Part の `status`（取り込み中）と `expires_at`（30 日で bucket から消える）に当たる。**再生は 1 本目だけ**（Part ごとの再生は後段） |
+| 文字起こし・話者・別エンジン案 | `transcript.md`、`transcript-speakers.ts`、`candidateSets`（工程 1） | `page_recordings.segments`・`speaker_names` ＋ `page_recording_candidates`（案） | 変換 | `[hh:mm:ss] 話者N: 本文` の行を分解する。終了時刻とミリ秒は `segments` の `start`・`end`（秒の小数）に入るので、editor では原本頼みでなくなる。話者名は**案ごと**に持ち（旧版の「版ごと」に当たる）、採用した案の名前が正本になる。案の状態は列に持たず、有効な run と段落の有無から決める |
 | 工程設計（フロー）・テンプレート | `Flow`、`FLOW_TEMPLATES`（記事制作・議事録・インサイト整理・コーチング）、`flows/*.json` | 設定 › 手順（`pages.recipe`） | 受け皿なし | 手順の実体の表が無い（`recipe` は text の参照だけ）。`guide`、`terms`、`samples`、プロファイル（標準・高性能・軽量）。録音ごとの `flowSnapshot` |
 | 成果物・工程の帯 | `artifacts/<stepId>.md`、`ArtifactScreen`、`WorkView`、`RunBand` | 手順のサブページ（`kind=step`、`parent`＝録音、`step_status`）と手順の帯 | 変換 | stale は `Basis` のハッシュ比較で決まる。原データが無いと再計算できない。複数案（`candidateSets`）の行き先なし |
 | 版・履歴・この版に戻す | `versions/<stepId>/v_*.md`、`runs.jsonl`、`auto-version.ts` | `page_versions`、「…」の履歴 | 変換 | `reason` に restore や手動が無い。版の本文は Markdown → blocks。版の数とサイズ |
@@ -81,7 +81,9 @@ Issue #45 の前半（対応表とデータの移行手順）です。Mac アプ
 
 ## 5. 失われやすいもの（editor に受け皿が無い）
 
-手動の並び、フォルダ、「最近」、自動参考ページ、複数案（`candidateSets`）、stale 判定の根拠（`Basis`）、AI と作る の会話と差分の控え、実行記録と使用量、`RunCheckpoint`、派生文書の出典（`derivation`）、端末ごとの設定（`settings.json`・API キー・CLI のログイン）。残すか捨てるかは §7-4。残す場合は書き出し（zip）に入れるか、新しい表を切る。
+手動の並び、「最近」、自動参考ページ、stale 判定の根拠（`Basis`）、AI と作る の会話と差分の控え、実行記録と使用量、`RunCheckpoint`、派生文書の出典（`derivation`）、端末ごとの設定（`settings.json`・API キー・CLI のログイン）。残すか捨てるかは §7-4。残す場合は書き出し（zip）に入れるか、新しい表を切る。
+
+受け皿ができたもの: 複数案（`candidateSets`）は**工程 1（文字起こし）の案だけ** `page_recording_candidates` に入る（#36 段 3b-4。同じ音声を別のエンジンで起こして見比べ、採用する）。成果物の工程（工程 2 以降）の案は、まだ受け皿なし。フォルダは維持（§7-1 の決定）。
 
 ## 6. Mac アプリ（#45 の後半）：作り直さず、殻にする
 
@@ -102,7 +104,7 @@ Issue #45 の前半（対応表とデータの移行手順）です。Mac アプ
 | 3 | 「この Mac だけ」の新しい形式 | 今のファイル構造にアダプタを付けるか、別の局所ストアか。`desktop-vault` は廃止か縮小か。Mac の同じ一覧にサーバーのページと混ぜるか |
 | 4 | 捨てていいデータ | AI と作る の会話、使用量、複数案、別エンジンの文字起こし案、`RunCheckpoint`、stale の根拠 |
 
-決まったもの（オーナー 2026-11-01）：**1** → フォルダは維持。editor では子を持てるページ（深さはフォルダ › ページ › 録音のサブページまで）。**3** → 「この Mac だけ」は保存先ではなく端末内の文字起こしの一時置き場だけ。`desktop-vault` は退役。**2・4 は未決**（オーナー確認中。「破棄でも良い」という発言はあるが決定ではない。段階 5 のモデルは取り込みの余地を残す）。
+決まったもの（オーナー 2026-11-01）：**1** → フォルダは維持。editor では子を持てるページ（深さはフォルダ › ページ › 録音のサブページまで）。**3** → 「この Mac だけ」は保存先ではなく端末内の文字起こしの一時置き場だけ。`desktop-vault` は退役。**4** → 旧版のデータは**運ばない**（オーナー「旧版のデータは全て削除でも良い。簡単な方で」。受け皿ができた複数案も移行では運ばない）。**2 は未決**（旧 Web の停止日・旧 URL の転送だけが残る。データを運ばないので一括変換も取り込みも作らない）。
 | 5 | 「あなたについて」の行き先 | プロフィールの「紹介」（公開時の著者）と統合するか、AI の項目として別に持つか |
 | 6 | 版の持ち方 | 全版か直近 N 版か。`reason` に `restore` を足すか |
 | 7 | 既存の画像の掲載許諾 | `consent=false` で入れ、公開時に再確認 ◎ |

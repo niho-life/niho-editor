@@ -20,6 +20,8 @@ import { durationLabel, readTimestampsPreference, shellSegments, shellSpeakers, 
 import { useRecordingPlayback } from "@/lib/use-recording-playback";
 import { PlaybackSeek } from "./PlaybackSeek";
 import { RecordingAppend } from "./RecordingAppend";
+import { RecordingAudios } from "./RecordingAudios";
+import { RecordingCandidates } from "./RecordingCandidates";
 import { RecordingTranscription } from "./RecordingTranscription";
 
 /** 直した段落の文章（まだ保存されていない）。held は、保存に失敗したか競合した段落で、もう一度確定するまで送らない。 */
@@ -42,6 +44,8 @@ const PROBLEM_STYLE: CSSProperties = { display: "flex", alignItems: "center", fl
  * - 音声のある録音（#36 段 3b-1）は、文字起こしの開始と状態（RecordingTranscription）を上に出す。段落がまだ無ければ段落の欄は出さない。
  *   文字起こしが済んだら録音を読み直し、下書きは捨てる（置き換えは確かめてから始めている。前の段落の位置の下書きを新しい段落に重ねない）。
  * - あとの音声の文字起こし（.vtt）を足せる（#36 段 3b-3。RecordingAppend）。時刻は前の音声の長さだけずらして 1 本につながる。
+ * - 音声は複数持てる（#36 段 3b-4。RecordingAudios）。足した音声は、文字起こしをやり直すと 1 本につながる。
+ * - 同じ音声の別の案（RecordingCandidates）を作って見比べ、採用できる。採用すると正本が入れ替わる（revision が進む）。
  * - 再生（#36 段 3b-2）: 音声がアップロード済みで期限の前、かつ段落の欄があるときだけ `<audio preload="metadata">` を 1 つ置き、
  *   同じ origin の route（`/api/pages/{id}/recording/audio`）から読む。再生・一時停止は段落の欄の再生ボタン、位置はスライダー
  *   （PlaybackSeek）、段落の時刻を押すとそこから再生。いま再生している段落を強調する（段落が移ったときだけ描き直す。直している最中の
@@ -69,10 +73,26 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
   const draftsRef = useRef<Drafts>({});
   const chain = useRef<Promise<unknown>>(Promise.resolve());
 
-  const applySnapshot = useCallback((next: RecordingSnapshot) => {
+  /** 読み込んだ録音をそのまま置く（別のページの音声・案を引き継がない）。 */
+  const replaceSnapshot = useCallback((next: RecordingSnapshot) => {
     snapshotRef.current = next;
     setSnapshot(next);
   }, []);
+  /**
+   * 変更（段落の直し・話者の名前・.vtt を足す・採用）の応答を置く。応答は `recording` と `speakers` だけで、音声の列と
+   * 案の一覧（読み取りのときだけ入る）は含まない。含まないときは直前のものを残す（空に戻すと、音声が無い・案が消えたように見える）。
+   */
+  const applySnapshot = useCallback(
+    (next: RecordingSnapshot) => {
+      const previous = snapshotRef.current;
+      replaceSnapshot({
+        ...next,
+        ...(next.audios === undefined && previous?.audios !== undefined ? { audios: previous.audios } : {}),
+        ...(next.candidates === undefined && previous?.candidates !== undefined ? { candidates: previous.candidates } : {}),
+      });
+    },
+    [replaceSnapshot],
+  );
   const applyDrafts = useCallback((next: Drafts) => {
     draftsRef.current = next;
     setDrafts(next);
@@ -83,7 +103,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
     getRecording(pageId).then(
       (loaded) => {
         if (cancelled) return;
-        applySnapshot(loaded);
+        replaceSnapshot(loaded);
         setLoadedPage(pageId);
         setLoad({ state: "ready" });
       },
@@ -95,7 +115,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [pageId, attempt, applySnapshot]);
+  }, [pageId, attempt, replaceSnapshot]);
 
   /** 書き込みを 1 本ずつ順に走らせる（前の失敗は次を止めない）。 */
   const enqueue = useCallback(<T,>(job: () => Promise<T>): Promise<T> => {
@@ -316,12 +336,29 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
           }}
         />
       )}
+      {audio && (
+        <RecordingAudios pageId={pageId} audios={snapshot.audios ?? []} onChanged={reloadAfterTranscription} disabled={saving} />
+      )}
       {hasSegments && (
         <RecordingAppend
           pageId={pageId}
           revision={() => snapshotRef.current?.recording.revision ?? null}
           onSnapshot={applySnapshot}
           enqueue={enqueue}
+          disabled={saving}
+        />
+      )}
+      {audio && hasSegments && (
+        <RecordingCandidates
+          pageId={pageId}
+          candidates={snapshot.candidates ?? []}
+          engines={snapshot.engines ?? []}
+          onSnapshot={(next) => {
+            applyDrafts({});
+            applySnapshot(next);
+            setNotice(null);
+          }}
+          onChanged={reloadAfterTranscription}
           disabled={saving}
         />
       )}

@@ -9,20 +9,32 @@ import {
   type TranscriptionQueue,
   type TranscriptionTasksConfig,
 } from "./cloud-tasks";
-import { resolveTranscriptionConfig, type TranscriptionEnv } from "./config";
+import { resolveTranscriptionEngines, type TranscriptionEnv } from "./config";
 import { createDeepgramEngine } from "./deepgram";
+import { createGeminiEngine } from "./gemini";
 import { createCloudTasksDispatcher, createInlineDispatcher, resolveDispatcherKind, type TranscriptionDispatcher } from "./dispatch";
 import type { TranscriptionEngine, TranscriptionEngineName } from "./engine";
 import { createFakeEngine, fakeFailFromEnv } from "./fake";
 import { executeRun, pgTranscriptionRunStore, type TranscriptionRunStore } from "./run";
 
-/** 開始の API が使うもの: run に記録するエンジンの名前と、実行の呼び出し口。 */
-export type TranscriptionRunner = { engine: TranscriptionEngineName; dispatcher: TranscriptionDispatcher };
+/**
+ * 開始の API が使うもの: run に記録する**既定の**エンジンの名前、いま使えるエンジンの名前（画面が案のエンジンを選べる）、
+ * 実行の呼び出し口。
+ */
+export type TranscriptionRunner = { engine: TranscriptionEngineName; engines: TranscriptionEngineName[]; dispatcher: TranscriptionDispatcher };
 
 type Env = TranscriptionEnv & Readonly<Record<string, string | undefined>>;
 
-/** 1 つの run を実行するのに要るもの。 */
-type ExecutionParts = { engine: TranscriptionEngine; storage: ObjectStorage; store: TranscriptionRunStore; timeoutMs: number };
+/** 1 つの run を実行するのに要るもの。エンジンは run に記録された名前で引く（案を別のエンジンで作れるため）。 */
+type ExecutionParts = {
+  /** 使えるエンジン（名前 → 口）。 */
+  engines: Map<TranscriptionEngineName, TranscriptionEngine>;
+  /** 既定のエンジンの名前（開始の API が run に記録する）。 */
+  engine: TranscriptionEngineName;
+  storage: ObjectStorage;
+  store: TranscriptionRunStore;
+  timeoutMs: number;
+};
 
 // Cloud Tasks のキューは設定と時間切れごとに 1 つ（メタデータサーバーのアクセストークンを要求の間で使い回す）
 let cloudTasks: { key: string; queue: TranscriptionQueue } | undefined;
@@ -38,24 +50,27 @@ function transcriptionQueue(config: TranscriptionTasksConfig, timeoutMs: number)
  * 設定の誤りは起動時の検査（src/startup-check.ts）が先に止めるので、ここは後ろの守り（値を出さずに null）。
  */
 function executionParts(pool: Connectable & Queryable, env: Env): ExecutionParts | null {
-  let config;
-  try {
-    config = resolveTranscriptionConfig(env);
-  } catch {
-    return null;
-  }
-  if (config.engine === "off") return null;
+  const available = resolveTranscriptionEngines(env);
+  if (!available) return null;
   const storage = getStorage(env);
   if (!storage) return null;
-  const engine: TranscriptionEngine =
-    config.engine === "deepgram"
-      ? createDeepgramEngine({ apiKey: config.apiKey, timeoutMs: config.timeoutMs })
-      : createFakeEngine({ failWith: fakeFailFromEnv(env) });
-  return { engine, storage, store: pgTranscriptionRunStore(pool), timeoutMs: config.timeoutMs };
+  const engines = new Map<TranscriptionEngineName, TranscriptionEngine>();
+  if (available.fake) engines.set("fake", createFakeEngine({ failWith: fakeFailFromEnv(env) }));
+  if (available.deepgram) engines.set("deepgram", createDeepgramEngine({ apiKey: available.deepgram, timeoutMs: available.timeoutMs }));
+  if (available.gemini) engines.set("gemini", createGeminiEngine({ apiKey: available.gemini.apiKey, model: available.gemini.model, timeoutMs: available.timeoutMs }));
+  if (engines.size === 0) return null;
+  return { engines, engine: available.default, storage, store: pgTranscriptionRunStore(pool), timeoutMs: available.timeoutMs };
 }
 
 function execute(parts: ExecutionParts, runId: string) {
-  return executeRun({ store: parts.store, storage: parts.storage, engine: parts.engine, runId, timeoutMs: parts.timeoutMs });
+  return executeRun({
+    store: parts.store,
+    storage: parts.storage,
+    // run に記録されたエンジンで実行する（無ければ engine_unavailable）
+    engines: (name) => parts.engines.get(name) ?? null,
+    runId,
+    timeoutMs: parts.timeoutMs,
+  });
 }
 
 /**
@@ -80,7 +95,7 @@ export function getTranscriptionRunner(pool: Connectable & Queryable, env: Env =
       failQueued: (runId) => failRun(pool, runId, 0, "internal"),
     });
   }
-  return { engine: parts.engine.name, dispatcher };
+  return { engine: parts.engine, engines: [...parts.engines.keys()], dispatcher };
 }
 
 /**

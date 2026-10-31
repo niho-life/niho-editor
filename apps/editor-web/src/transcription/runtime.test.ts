@@ -28,6 +28,22 @@ describe("getTranscriptionRunner", () => {
     expect(getTranscriptionRunner(pool, { NODE_ENV: "test", EDITOR_TRANSCRIBE_ENGINE: "deepgram", DEEPGRAM_API_KEY: KEY })?.engine).toBe("deepgram");
   });
 
+  it("opens Gemini as well when its key is set (the default engine does not change)", () => {
+    // 既定は Deepgram、鍵が両方あるので案は Gemini でも作れる
+    const both = getTranscriptionRunner(pool, { ...PRODUCTION, ...TASKS_ENV, GEMINI_API_KEY: KEY });
+    expect(both?.engine).toBe("deepgram");
+    expect(both?.engines).toEqual(["deepgram", "gemini"]);
+    // 既定が Gemini でも同じ（鍵のあるエンジンが並ぶ）
+    const gemini = getTranscriptionRunner(pool, { ...PRODUCTION, ...TASKS_ENV, EDITOR_TRANSCRIBE_ENGINE: "gemini", GEMINI_API_KEY: KEY });
+    expect(gemini?.engine).toBe("gemini");
+    expect(gemini?.engines).toEqual(["deepgram", "gemini"]);
+    // 鍵が Gemini だけなら Deepgram は出さない
+    const only = getTranscriptionRunner(pool, { ...PRODUCTION, ...TASKS_ENV, EDITOR_TRANSCRIBE_ENGINE: "gemini", DEEPGRAM_API_KEY: undefined, GEMINI_API_KEY: KEY });
+    expect(only?.engines).toEqual(["gemini"]);
+    // 開発の既定（偽物）だけのときは偽物
+    expect(getTranscriptionRunner(pool, { NODE_ENV: "development" })?.engines).toEqual(["fake"]);
+  });
+
   it("prepares the Cloud Tasks dispatcher in production when the mode and the queue are set", () => {
     const runner = getTranscriptionRunner(pool, { ...PRODUCTION, ...TASKS_ENV });
     expect(runner?.engine).toBe("deepgram");

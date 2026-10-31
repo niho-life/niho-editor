@@ -33,8 +33,11 @@ export type TranscriptionStore = {
   failRun: (runId: string, generation: number, errorCode: TranscriptionErrorCode) => Promise<boolean>;
 };
 
-/** 実行の準備（run に記録するエンジンの名前と、実行の呼び出し口）。 */
-export type TranscriptionRunnerDeps = { engine: TranscriptionEngineName; dispatcher: TranscriptionDispatcher };
+/**
+ * 実行の準備（run に記録する**既定の**エンジンの名前、いま使えるエンジンの名前、実行の呼び出し口）。
+ * `engines` が 2 つ以上なら、画面は案のエンジンを選べる（#36。Gemini を足したときから）。
+ */
+export type TranscriptionRunnerDeps = { engine: TranscriptionEngineName; engines: TranscriptionEngineName[]; dispatcher: TranscriptionDispatcher };
 
 export type TranscriptionApiDeps = {
   auth: () => AuthProvider;
@@ -48,12 +51,12 @@ export type TranscriptionApiDeps = {
 /** 開始の要求の本文の上限（固有名詞 100 個 × 64 文字を JSON にしても収まる）。超えたら 413。 */
 export const TRANSCRIBE_BODY_MAX_BYTES = 64 * 1024;
 
-const START_KEYS = ["lang", "diarize", "replace", "terms"] as const;
+const START_KEYS = ["lang", "diarize", "replace", "terms", "engine"] as const;
 
-export type TranscribeBadRequestReason = "body" | "lang" | "diarize" | "replace" | "terms";
+export type TranscribeBadRequestReason = "body" | "lang" | "diarize" | "replace" | "terms" | "engine";
 
-/** 開始できない理由（409）。 */
-export type TranscribeConflictReason = "audio_not_ready" | "audio_expired" | "has_transcript";
+/** 開始できない理由（409）。candidate_missing は、案に書く実行で案が見つからないとき（#36 段 3b-4）。 */
+export type TranscribeConflictReason = "audio_not_ready" | "audio_expired" | "has_transcript" | "candidate_missing";
 
 /** 応答に載せる run（決まった項目だけ。store が何を足しても他の値を出さない）。録音の GET（recordings-api.ts）も使う。 */
 export function transcriptionRunBody(run: TranscriptionRunView) {
@@ -100,10 +103,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-type StartRequest = { language?: PageLang; diarize: boolean; replace: boolean; terms: string[] };
+type StartRequest = { language?: PageLang; diarize: boolean; replace: boolean; terms: string[]; engine?: TranscriptionEngineName };
 
-/** `{ lang?, diarize?, replace?, terms? }` だけを受ける。既定は diarize: true・replace: false・terms: []・言語は録音の言語。 */
-function parseStart(body: unknown): { ok: true; value: StartRequest } | { ok: false; reason: TranscribeBadRequestReason } {
+/**
+ * `{ lang?, diarize?, replace?, terms?, engine? }` だけを受ける。既定は diarize: true・replace: false・terms: []・
+ * 言語は録音の言語・エンジンは設定の既定。`engine` は**いま使えるエンジン**だけ（鍵の無いエンジンは 400 engine）。
+ */
+function parseStart(body: unknown, engines: readonly TranscriptionEngineName[]): { ok: true; value: StartRequest } | { ok: false; reason: TranscribeBadRequestReason } {
   if (!isPlainObject(body) || !Object.keys(body).every((key) => (START_KEYS as readonly string[]).includes(key))) return { ok: false, reason: "body" };
   let language: PageLang | undefined;
   if (body.lang !== undefined) {
@@ -123,9 +129,20 @@ function parseStart(body: unknown): { ok: true; value: StartRequest } | { ok: fa
       terms.push(term);
     }
   }
+  let engine: TranscriptionEngineName | undefined;
+  if (body.engine !== undefined) {
+    if (typeof body.engine !== "string" || !engines.includes(body.engine as TranscriptionEngineName)) return { ok: false, reason: "engine" };
+    engine = body.engine as TranscriptionEngineName;
+  }
   return {
     ok: true,
-    value: { ...(language === undefined ? {} : { language }), diarize: body.diarize ?? true, replace: body.replace ?? false, terms },
+    value: {
+      ...(language === undefined ? {} : { language }),
+      diarize: body.diarize ?? true,
+      replace: body.replace ?? false,
+      terms,
+      ...(engine === undefined ? {} : { engine }),
+    },
   };
 }
 
@@ -146,17 +163,19 @@ export function startTranscriptionRoute(request: Request, id: string, deps: Tran
     // 本文の検査は id の有無より先（どの id でも同じ順に判定し、存在を漏らさない）
     const body = await readJsonBody(request, TRANSCRIBE_BODY_MAX_BYTES);
     if (!body.ok) return body.response.status === 400 ? badRequest("body") : body.response;
-    const parsed = parseStart(body.value);
+    const parsed = parseStart(body.value, runner.engines);
     if (!parsed.ok) return badRequest(parsed.reason);
+    const { engine = runner.engine, ...start } = parsed.value;
 
     // owner は認証の層の本人だけ（要求の値からは決めない）
     const owner = session.userId;
-    const result = await store.enqueue(owner, id, { engine: runner.engine, ...parsed.value });
+    const result = await store.enqueue(owner, id, { engine, ...start });
     if (!result) return notFoundResponse();
     switch (result.status) {
       case "audio_not_ready":
       case "audio_expired":
       case "has_transcript":
+      case "candidate_missing":
         return cannotStart(result.status);
       case "existing":
         // 有効な run が既にある: 積み直さない

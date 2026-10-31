@@ -84,6 +84,32 @@ async function uploadedRecording(pool: PgPool, owner: string = OWNER, extra: Par
   return started.page.id;
 }
 
+/**
+ * 0011 までの schema（音声と案の migration より前の DB）に、アップロード済みの音声の録音を直に入れる。store の startAudioRecording は
+ * 今の列を書くので、古い schema の「既にある行」はここで作る。
+ */
+async function legacyUploadedRecording(pool: PgPool, owner: string = OWNER): Promise<string> {
+  const assetId = randomUUID();
+  const page = (
+    await pool.query<{ id: string }>("INSERT INTO pages (owner, kind, title, lang, blocks) VALUES ($1, 'rec', $2, 'ja', '[]'::jsonb) RETURNING id", [
+      owner,
+      "合成の打ち合わせ",
+    ])
+  ).rows[0]!;
+  await pool.query(
+    `INSERT INTO assets (id, owner, page_id, kind, bucket_path, bytes, sha256, content_type)
+     VALUES ($1, $2, $3, 'audio', $4, 64, $5, 'audio/mp4')`,
+    [assetId, owner, page.id, `audio/${assetId}`, DECLARED_SHA],
+  );
+  await pool.query(
+    `INSERT INTO page_recordings
+       (page_id, owner, source, language, engine, duration_sec, source_name, segments, speaker_names, audio_asset, audio_status, audio_expires_at)
+     VALUES ($1, $2, 'audio', 'ja', NULL, 30, $3, '[]'::jsonb, '{}'::jsonb, $4, 'uploaded', clock_timestamp() + make_interval(hours => 720))`,
+    [page.id, owner, "合成の打ち合わせ.m4a", assetId],
+  );
+  return page.id;
+}
+
 async function runRow(pool: PgPool, id: string): Promise<Record<string, unknown> | undefined> {
   return (await pool.query("SELECT * FROM transcription_runs WHERE id = $1", [id])).rows[0];
 }
@@ -195,8 +221,9 @@ describe("0012 on a database that has 0001 to 0011", { skip: databaseUrl === und
     const client = await pool.connect();
     try {
       assert.deepEqual((await applyMigrations(client, dirUrl)).applied, earlier);
-      // 0008 までの DB にある録音: アップロード済みの音声と VTT
-      const audioPage = await uploadedRecording(pool);
+      // 0008 までの DB にある録音: アップロード済みの音声と VTT。音声の行は**当時の形の SQL** で入れる
+      // （store の INSERT は今の列〔音声と案の migration の audio_duration_sec〕を書くので、0011 までの schema には入らない）
+      const audioPage = await legacyUploadedRecording(pool);
       const vtt = await createRecordingPage(pool, OWNER, {
         lang: "ja",
         source: "vtt",
@@ -261,7 +288,7 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.deepEqual(row.terms, ["合成語", "Synthetic"]);
 
     const again = await enqueueTranscription(pool, OWNER, pageId, run({ language: "ja", replace: true }));
-    assert.deepEqual(again, { status: "existing", run: created.run }, "an active run is returned as it is");
+    assert.deepEqual(again, { status: "existing", run: created.run, candidate: null }, "an active run is returned as it is, with where it writes");
     assert.equal(await countRuns(pool, pageId), 1);
     assert.deepEqual(await latestRun(pool, OWNER, pageId), created.run);
     const ja = await uploadedRecording(pool);

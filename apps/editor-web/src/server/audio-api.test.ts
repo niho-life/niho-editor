@@ -1,11 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AudioInfo, Recording, RecordingPage, StartAudioRecordingInput } from "@niho/editor-store";
+import { AUDIO_PARTS_MAX, type AudioInfo, type AudioPart, type Recording, type RecordingPage, type StartAudioRecordingInput } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
 import { AUDIO_MAX_BYTES, audioLimits } from "../recording/audio-limits";
 import { FAKE_STORAGE_PATH, createFakeStorage, type FakeStorage } from "../storage/fake";
 import { StorageError, type ObjectStorage } from "../storage/types";
-import { AUDIO_START_BODY_MAX_BYTES, audioLimitsRoute, completeAudioRoute, startAudioRoute, type AudioApiDeps, type AudioStore } from "./audio-api";
+import {
+  AUDIO_START_BODY_MAX_BYTES,
+  audioLimitsRoute,
+  completeAudioPartRoute,
+  discardAudioPartRoute,
+  completeAudioRoute,
+  startAudioPartRoute,
+  startAudioRoute,
+  type AudioApiDeps,
+  type AudioStore,
+} from "./audio-api";
 
 // 合成のユーザー ID・ファイル名・ダミーのハッシュだけを使う
 
@@ -22,6 +32,8 @@ type Row = {
   uploadKey: string | null;
   requestHash: string | null;
   sha256: string;
+  /** 2 本目以降の音声（#36 段 3b-4）。 */
+  parts: (AudioPart & { uploadKey: string | null; requestHash: string })[];
 };
 
 /** メモリの中だけの合成の store（packages/editor-store と同じ約束: 自分の・ゴミ箱でない行だけ、冪等キー、大きさの照合）。 */
@@ -54,7 +66,7 @@ function memoryStore() {
         createdAt: now,
         updatedAt: now,
       };
-      rows.push({ page, owner, deleted: false, recording, assetId: input.assetId, uploadKey: input.uploadKey, requestHash: input.requestHash, sha256: input.sha256 });
+      rows.push({ page, owner, deleted: false, recording, assetId: input.assetId, uploadKey: input.uploadKey, requestHash: input.requestHash, sha256: input.sha256, parts: [] });
       return { status: "created", page, recording, assetId: input.assetId };
     },
     completeAudioUpload: async (owner, id, stored) => {
@@ -72,6 +84,74 @@ function memoryStore() {
       return { assetId: row.assetId, objectPath: `audio/${row.assetId}`, status, bytes, contentType, sha256: row.sha256, expiresAt };
     },
     getRecording: async (owner, id) => find(owner, id)?.recording ?? null,
+    // 2 本目以降の音声（packages/editor-store の startAudioPart・completeAudioPart・listAudioParts と同じ約束）
+    startAudioPart: async (owner, id, input) => {
+      const row = find(owner, id);
+      if (!row) return null;
+      const keyed = input.uploadKey === null ? undefined : rows.flatMap((item) => item.parts.map((part) => ({ item, part }))).find(({ part }) => part.uploadKey === input.uploadKey);
+      if (keyed) {
+        if (keyed.item !== row || keyed.item.deleted || keyed.part.requestHash !== input.requestHash) return { status: "conflict" };
+        return { status: "existing", part: keyed.part };
+      }
+      if (row.parts.length + (row.recording.audio ? 1 : 0) >= AUDIO_PARTS_MAX) return { status: "too_many" };
+      const tail = row.parts.reduce((max, part) => Math.max(max, part.offsetSec + (part.durationSec ?? 0)), 0);
+      const part = {
+        partIndex: (row.parts.at(-1)?.partIndex ?? 0) + 1,
+        assetId: input.assetId,
+        objectPath: `audio/${input.assetId}`,
+        status: "uploading" as const,
+        bytes: input.bytes,
+        contentType: input.contentType,
+        sha256: input.sha256,
+        durationSec: input.durationSec,
+        offsetSec: Math.max(row.recording.durationSec ?? 0, tail),
+        sourceName: input.sourceName,
+        expiresAt: new Date(input.retentionDays * 24 * 60 * 60 * 1000).toISOString(),
+        uploadKey: input.uploadKey,
+        requestHash: input.requestHash,
+      };
+      row.parts.push(part);
+      return { status: "created", part };
+    },
+    completeAudioPart: async (owner, id, partIndex, stored) => {
+      const row = find(owner, id);
+      const part = row?.parts.find((item) => item.partIndex === partIndex);
+      if (!part) return null;
+      if (part.status === "uploaded") return { status: "ok", part };
+      if (part.bytes !== stored.sizeBytes) return { status: "size_mismatch" };
+      part.status = "uploaded";
+      return { status: "ok", part };
+    },
+    discardAudioPart: async (owner, id, partIndex) => {
+      const row = find(owner, id);
+      const part = row?.parts.find((item) => item.partIndex === partIndex);
+      if (!row || !part) return null;
+      if (part.status === "uploaded") return "not_unfinished";
+      row.parts.splice(row.parts.indexOf(part), 1);
+      return "discarded";
+    },
+    listAudioParts: async (owner, id) => {
+      const row = find(owner, id);
+      if (!row) return [];
+      const zero: AudioPart[] = row.recording.audio
+        ? [
+            {
+              partIndex: 0,
+              assetId: row.assetId!,
+              objectPath: `audio/${row.assetId}`,
+              status: row.recording.audio.status,
+              bytes: row.recording.audio.bytes,
+              contentType: row.recording.audio.contentType,
+              sha256: row.sha256,
+              durationSec: row.recording.durationSec,
+              offsetSec: 0,
+              sourceName: row.recording.sourceName,
+              expiresAt: row.recording.audio.expiresAt,
+            },
+          ]
+        : [];
+      return [...zero, ...row.parts];
+    },
   };
   return { store, rows, inputs };
 }
@@ -99,6 +179,12 @@ function request(method: string, path: string, body?: unknown, headers: Record<s
 }
 
 const start = (body: unknown, d: AudioApiDeps, headers: Record<string, string> = {}) => startAudioRoute(request("POST", "/api/recordings/audio/start", body, headers), d);
+const startPart = (id: string, body: unknown, d: AudioApiDeps, headers: Record<string, string> = {}) =>
+  startAudioPartRoute(request("POST", `/api/pages/${id}/recording/audio/parts`, body, headers), id, d);
+const completePart = (id: string, index: string, d: AudioApiDeps, headers: Record<string, string> = {}) =>
+  completeAudioPartRoute(request("POST", `/api/pages/${id}/recording/audio/parts/${index}/complete`, undefined, headers), id, index, d);
+const discardPart = (id: string, index: string, d: AudioApiDeps, headers: Record<string, string> = {}) =>
+  discardAudioPartRoute(request("DELETE", `/api/pages/${id}/recording/audio/parts/${index}`, undefined, headers), id, index, d);
 const complete = (id: string, d: AudioApiDeps, headers: Record<string, string> = {}) =>
   completeAudioRoute(request("POST", `/api/pages/${id}/recording/audio/complete`, undefined, headers), id, d);
 
@@ -363,6 +449,7 @@ describe("POST /api/pages/{id}/recording/audio/complete", () => {
       uploadKey: null,
       requestHash: null,
       sha256: SHA,
+      parts: [],
     });
     const stat = vi.spyOn(storage, "stat");
     const results = [];
@@ -400,5 +487,192 @@ describe("POST /api/pages/{id}/recording/audio/complete", () => {
     const internal = await complete(id, deps("user-a", broken, storage));
     expect(internal.status).toBe(500);
     expect(await internal.text()).toBe('{"error":"internal"}');
+  });
+});
+
+describe("音声を足す（POST /api/pages/{id}/recording/audio/parts）", () => {
+  const PART = { name: "音声 2.m4a", contentType: "audio/mp4", sizeBytes: 7, sha256: SHA, durationSec: 300 };
+
+  /** 1 本目の音声（アップロード済み）の録音ページ。 */
+  async function recordingWithAudio(storage: FakeStorage, d: AudioApiDeps) {
+    const id = await startAndPut(storage, d, 5, { ...START, durationSec: 600 });
+    expect((await complete(id, d)).status).toBe(200);
+    return id;
+  }
+
+  it("2 本目を足し、前の音声の長さだけずらす量を返す（場所・資産の id は出さない）", async () => {
+    const { store } = memoryStore();
+    const storage = createFakeStorage();
+    const d = deps("user-a", store, storage);
+    const id = await recordingWithAudio(storage, d);
+
+    const started = await startPart(id, PART, d);
+    expect(started.status).toBe(201);
+    const body = await started.json();
+    expect(body.part).toEqual({
+      partIndex: 1,
+      status: "uploading",
+      bytes: 7,
+      contentType: "audio/mp4",
+      durationSec: 300,
+      // 1 本目の長さ（600 秒）だけ後ろ
+      offsetSec: 600,
+      sourceName: "音声 2.m4a",
+      expiresAt: expect.any(String),
+    });
+    expect(body.parts.map((part: { partIndex: number; offsetSec: number }) => [part.partIndex, part.offsetSec])).toEqual([
+      [0, 0],
+      [1, 600],
+    ]);
+    // 保存先の場所・資産の id は出さない
+    expect(JSON.stringify(body.parts)).not.toMatch(/assetId|objectPath|bucket|sha256/);
+    expect(body.upload.url).toContain(FAKE_STORAGE_PATH);
+
+    // ブラウザが保存先へ直接 PUT してから完了
+    expect(storage.putFakeObject(tokenOf(body.upload.url), new Uint8Array(7), null)).toBe("ok");
+    const done = await completePart(id, "1", d);
+    expect(done.status).toBe(200);
+    const after = await done.json();
+    expect(after.part.status).toBe("uploaded");
+    expect(after.parts).toHaveLength(2);
+    // 済んだあとにもう一度呼んでも同じ（冪等）
+    expect((await completePart(id, "1", d)).status).toBe(200);
+  });
+
+  it("3 本目は 1 本目と 2 本目の長さの合計だけずらす", async () => {
+    const { store } = memoryStore();
+    const storage = createFakeStorage();
+    const d = deps("user-a", store, storage);
+    const id = await recordingWithAudio(storage, d);
+    await startPart(id, PART, d);
+    const third = await (await startPart(id, { ...PART, name: "音声 3.m4a", durationSec: 120 }, d)).json();
+    expect(third.part.offsetSec).toBe(900);
+  });
+
+  it("同じ Idempotency-Key の再送は同じ音声（内容が違えば 409）", async () => {
+    const { store } = memoryStore();
+    const storage = createFakeStorage();
+    const d = deps("user-a", store, storage);
+    const id = await recordingWithAudio(storage, d);
+    const key = randomUUID();
+    const first = await (await startPart(id, PART, d, { "idempotency-key": key })).json();
+    const again = await startPart(id, PART, d, { "idempotency-key": key });
+    expect(again.status).toBe(200);
+    const body = await again.json();
+    expect(body.part.partIndex).toBe(first.part.partIndex);
+    // まだアップロード中なので ticket は作り直す
+    expect(body.upload.url).toContain(FAKE_STORAGE_PATH);
+    const changed = await startPart(id, { ...PART, sizeBytes: 9 }, d, { "idempotency-key": key });
+    expect(changed.status).toBe(409);
+    expect(await changed.json()).toEqual({ error: "idempotency_conflict" });
+    expect((await startPart(id, PART, d, { "idempotency-key": "not-a-uuid" })).status).toBe(400);
+  });
+
+  it("本数の上限を超えたら 409、上限と形の検査は保存の前に行う", async () => {
+    const { store, rows } = memoryStore();
+    const storage = createFakeStorage();
+    const d = deps("user-a", store, storage);
+    const id = await recordingWithAudio(storage, d);
+    for (let index = 1; index < AUDIO_PARTS_MAX; index += 1) expect((await startPart(id, PART, d)).status).toBe(201);
+    const over = await startPart(id, PART, d);
+    expect(over.status).toBe(409);
+    expect(await over.json()).toEqual({ error: "too_many_audios" });
+    expect(rows[0]!.parts).toHaveLength(AUDIO_PARTS_MAX - 1);
+    // 形の検査（上限・拡張子・長さ）は録音の開始と同じ
+    for (const [body, reason] of [
+      [{ ...PART, sizeBytes: AUDIO_MAX_BYTES + 1 }, "too_large"],
+      [{ ...PART, name: "字幕.vtt" }, "extension"],
+      [{ ...PART, durationSec: 6 * 60 * 60 + 1 }, "too_long"],
+      [{ ...PART, lang: "ja" }, "body"],
+    ] as const) {
+      const response = await startPart(id, body, d);
+      expect(response.status, JSON.stringify(body)).toBe(400);
+      expect((await response.json()).reason).toBe(reason);
+    }
+  });
+
+  it("別の人・存在しないページ・無い番号・未認証・別の origin は同じように断る", async () => {
+    const { store } = memoryStore();
+    const storage = createFakeStorage();
+    const mine = deps("user-a", store, storage);
+    const id = await recordingWithAudio(storage, mine);
+    expect((await startPart(id, PART, deps("user-b", store, storage))).status).toBe(404);
+    expect((await startPart(randomUUID(), PART, mine)).status).toBe(404);
+    expect((await startPart(id, PART, deps(null, store, storage))).status).toBe(401);
+    expect((await startPart(id, PART, mine, { origin: "http://evil.test" })).status).toBe(403);
+    expect((await completePart(id, "9", mine)).status).toBe(404);
+    // part 0 は /audio/complete（この route は 1 以上だけ）
+    expect((await completePart(id, "0", mine)).status).toBe(404);
+    expect((await completePart(id, "x", mine)).status).toBe(404);
+    expect((await completePart(id, "1", deps("user-b", store, storage))).status).toBe(404);
+  });
+
+  it("保存先に無い・大きさが違うアップロードは 409 incomplete", async () => {
+    const { store } = memoryStore();
+    const storage = createFakeStorage();
+    const d = deps("user-a", store, storage);
+    const id = await recordingWithAudio(storage, d);
+    const started = await (await startPart(id, PART, d)).json();
+    const missing = await completePart(id, "1", d);
+    expect(missing.status).toBe(409);
+    expect(await missing.json()).toEqual({ error: "incomplete", reason: "missing" });
+    expect(storage.putFakeObject(tokenOf(started.upload.url), new Uint8Array(6), null)).toBe("ok");
+    const mismatch = await completePart(id, "1", d);
+    expect(mismatch.status).toBe(409);
+    expect(await mismatch.json()).toEqual({ error: "incomplete", reason: "size_mismatch" });
+  });
+});
+
+describe("取り込みをやめた音声を取り除く（DELETE /api/pages/{id}/recording/audio/parts/{index}）", () => {
+  const PART = { name: "音声 2.m4a", contentType: "audio/mp4", sizeBytes: 7, sha256: SHA, durationSec: 300 };
+
+  async function recordingWithPart(storage: FakeStorage, d: AudioApiDeps) {
+    const id = await startAndPut(storage, d, 5, { ...START, durationSec: 600 });
+    expect((await complete(id, d)).status).toBe(200);
+    const started = await startPart(id, PART, d);
+    expect(started.status).toBe(201);
+    const body = await started.json();
+    return { id, index: String(body.part.partIndex), uploadUrl: body.upload.url as string };
+  }
+
+  it("アップロードが済んでいない音声を取り除き、残った音声の列を返す", async () => {
+    const { store } = memoryStore();
+    const storage = createFakeStorage();
+    const d = deps("user-a", store, storage);
+    const { id, index } = await recordingWithPart(storage, d);
+
+    const response = await discardPart(id, index, d);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.parts.map((part: { partIndex: number }) => part.partIndex)).toEqual([0]);
+    // 同じ取り消しを 2 回押しても、もう無いので 404
+    expect((await discardPart(id, index, d)).status).toBe(404);
+  });
+
+  it("アップロードの済んだ音声は消さない（409 not_unfinished）", async () => {
+    const { store } = memoryStore();
+    const storage = createFakeStorage();
+    const d = deps("user-a", store, storage);
+    const { id, index, uploadUrl } = await recordingWithPart(storage, d);
+    expect(storage.putFakeObject(tokenOf(uploadUrl), new Uint8Array(7), null)).toBe("ok");
+    expect((await completePart(id, index, d)).status).toBe(200);
+
+    const response = await discardPart(id, index, d);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "not_unfinished" });
+  });
+
+  it("1 本目（0）・不正な番号・別の人・ログインなし・別の origin は断る", async () => {
+    const { store } = memoryStore();
+    const storage = createFakeStorage();
+    const d = deps("user-a", store, storage);
+    const { id, index } = await recordingWithPart(storage, d);
+
+    for (const bad of ["0", "-1", "01", "1.5", "abc", "1000"]) expect((await discardPart(id, bad, d)).status).toBe(404);
+    expect((await discardPart(id, index, deps("user-b", store, storage))).status).toBe(404);
+    expect((await discardPart(id, index, deps(null, store, storage))).status).toBe(401);
+    expect((await discardPart(id, index, d, { origin: "https://evil.example" })).status).toBe(403);
+    // 断られたあとも、音声は残っている
+    expect((await discardPart(id, index, d)).status).toBe(200);
   });
 });

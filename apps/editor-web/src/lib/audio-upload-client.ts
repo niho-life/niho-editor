@@ -49,6 +49,23 @@ export type AudioStartResponse = {
 
 export type AudioCompleteResponse = { recording: AudioStartResponse["recording"]; speakers: unknown[] };
 
+/** 音声 1 本（#36 段 3b-4。応答の形。保存先の場所・資産の id は入らない）。 */
+export type AudioPartView = {
+  partIndex: number;
+  status: "uploading" | "uploaded";
+  bytes: number;
+  contentType: string;
+  durationSec: number | null;
+  /** 文字起こしをずらす量（秒）。 */
+  offsetSec: number;
+  sourceName: string | null;
+  expiresAt: string | null;
+};
+
+/** 2 本目以降の音声の開始の結果（`upload` が null なら既に済んでいる）。 */
+export type AudioPartStartResponse = { status: 200 | 201; part: AudioPartView; parts: AudioPartView[]; upload: AudioUploadTicket | null };
+export type AudioPartCompleteResponse = { part: AudioPartView; parts: AudioPartView[] };
+
 /** API の失敗。`error` と `reason` はサーバーの短い code（`bad_request`・`too_large`・`incomplete`・`size_mismatch` など）。 */
 export class AudioUploadError extends Error {
   override readonly name = "AudioUploadError";
@@ -148,6 +165,82 @@ export async function startAudioUpload(
     speakers: Array.isArray(data.speakers) ? data.speakers : [],
     upload: data.upload as AudioUploadTicket | null,
   };
+}
+
+function isPartView(value: unknown): value is AudioPartView {
+  if (!isPlainObject(value)) return false;
+  const { partIndex, status, bytes, contentType, offsetSec } = value;
+  return (
+    typeof partIndex === "number" &&
+    Number.isSafeInteger(partIndex) &&
+    partIndex >= 0 &&
+    (status === "uploading" || status === "uploaded") &&
+    typeof bytes === "number" &&
+    typeof contentType === "string" &&
+    typeof offsetSec === "number"
+  );
+}
+
+function partsOf(value: unknown): AudioPartView[] {
+  return Array.isArray(value) ? value.filter(isPartView) : [];
+}
+
+/** 2 本目以降の音声のアップロードを始める（#36 段 3b-4。録音ページは作らない）。 */
+export async function startAudioPartUpload(
+  pageId: string,
+  input: AudioStartRequest,
+  options: { idempotencyKey?: string; fetch?: FetchLike } = {},
+): Promise<AudioPartStartResponse> {
+  const fetchImpl = options.fetch ?? fetch;
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (options.idempotencyKey !== undefined) {
+    if (!UUID_PATTERN.test(options.idempotencyKey)) throw new TypeError("idempotencyKey must be a UUID");
+    headers["idempotency-key"] = options.idempotencyKey;
+  }
+  const body: Record<string, unknown> = { name: input.name, contentType: input.contentType, sizeBytes: input.sizeBytes, sha256: input.sha256 };
+  // 言語はページのもの（2 本目以降は送らない）
+  if (input.durationSec !== undefined) body.durationSec = input.durationSec;
+  const response = await fetchImpl(`/api/pages/${encodeURIComponent(pageId)}/recording/audio/parts`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (response.status !== 200 && response.status !== 201) throw await failure(response);
+  const data = await readJson(response);
+  if (!isPlainObject(data) || !isPartView(data.part)) throw new AudioUploadError(500);
+  if (data.upload !== null && !isTicket(data.upload)) throw new AudioUploadError(500);
+  return { status: response.status as 200 | 201, part: data.part, parts: partsOf(data.parts), upload: data.upload as AudioUploadTicket | null };
+}
+
+/** 2 本目以降の音声のアップロードの完了。 */
+export async function completeAudioPartUpload(pageId: string, partIndex: number, fetchImpl: FetchLike = fetch): Promise<AudioPartCompleteResponse> {
+  const response = await fetchImpl(`/api/pages/${encodeURIComponent(pageId)}/recording/audio/parts/${partIndex}/complete`, {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok) throw await failure(response);
+  const data = await readJson(response);
+  if (!isPlainObject(data) || !isPartView(data.part)) throw new AudioUploadError(500);
+  return { part: data.part, parts: partsOf(data.parts) };
+}
+
+/**
+ * アップロードが済んでいない 2 本目以降の音声を取り除く（途中でやめた取り込みの行が、その録音の文字起こしを止め続けないように）。
+ * 済んでいる音声は 409（not_unfinished）で消えない。残った音声の列を返す。
+ */
+export async function discardAudioPartUpload(pageId: string, partIndex: number, fetchImpl: FetchLike = fetch): Promise<AudioPartView[]> {
+  const response = await fetchImpl(`/api/pages/${encodeURIComponent(pageId)}/recording/audio/parts/${partIndex}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok) throw await failure(response);
+  const data = await readJson(response);
+  if (!isPlainObject(data)) throw new AudioUploadError(500);
+  return partsOf(data.parts);
 }
 
 /** ticket の url へ音声を直接 PUT する。412（既に置いてある）は成功と同じに扱い、続けて完了を呼べばよい。 */
@@ -364,12 +457,22 @@ function failureOfApi(error: AudioUploadError): AudioUploadFailure {
   return new AudioUploadFailure("other");
 }
 
+/** 開始と完了だけが違う 2 つの流れ（録音ページを作る / 2 本目以降の音声を足す）。 */
+type UploadSteps<S extends { upload: AudioUploadTicket | null }, C> = {
+  start: (request: AudioStartRequest, options: { idempotencyKey: string; fetch: FetchLike }) => Promise<S>;
+  complete: (started: S, fetchImpl: FetchLike) => Promise<C>;
+};
+
 /**
- * 音声ファイルを取り込んで録音ページを作る。段階（hashing → starting → uploading → completing）と割合を onProgress で返す。
- * 失敗はすべて AudioUploadFailure（中止は kind が aborted）。送る前に断れるものは、保存先にもサーバーにも何も作らない。
+ * 音声 1 つを保存先へ送る一続きの流れ: 上限の確認 → 事前検査 → sha256 → 開始 → ticket の url へ直接 PUT（進み具合・中止）→ 完了。
+ * 段階（hashing → starting → uploading → completing）と割合を onProgress で返す。失敗はすべて AudioUploadFailure
+ * （中止は kind が aborted）。送る前に断れるものは、保存先にもサーバーにも何も作らない。
  * `upload` が null（同じキーで既に済んでいる）なら PUT をとばして完了だけ呼ぶ。
  */
-export async function uploadAudioFile(input: UploadAudioFileInput): Promise<UploadAudioFileResult> {
+async function uploadAudio<S extends { upload: AudioUploadTicket | null }, C>(
+  input: UploadAudioFileInput,
+  steps: UploadSteps<S, C>,
+): Promise<{ started: S; completed: C }> {
   const { file, signal, onProgress } = input;
   const baseFetch = input.fetch ?? fetch;
   // API の呼び出しにも中止を効かせる
@@ -408,9 +511,9 @@ export async function uploadAudioFile(input: UploadAudioFileInput): Promise<Uplo
     const request: AudioStartRequest = { name: file.name, contentType: check.contentType, sizeBytes: file.size, sha256 };
     if (input.lang !== undefined) request.lang = input.lang;
     if (check.durationSec !== undefined) request.durationSec = check.durationSec;
-    let started: AudioStartResponse;
+    let started: S;
     try {
-      started = await startAudioUpload(request, { idempotencyKey, fetch: fetchImpl });
+      started = await steps.start(request, { idempotencyKey, fetch: fetchImpl });
     } catch (error) {
       if (isAbortError(error) || signal?.aborted) throw new AudioUploadFailure("aborted");
       throw error instanceof AudioUploadError ? failureOfApi(error) : new AudioUploadFailure("connection");
@@ -433,18 +536,42 @@ export async function uploadAudioFile(input: UploadAudioFileInput): Promise<Uplo
     }
 
     onProgress?.({ stage: "completing", fraction: 0 });
-    let completed: AudioCompleteResponse;
+    let completed: C;
     try {
-      completed = await completeAudioUpload(started.page.id, fetchImpl);
+      completed = await steps.complete(started, fetchImpl);
     } catch (error) {
       if (isAbortError(error) || signal?.aborted) throw new AudioUploadFailure("aborted");
       throw error instanceof AudioUploadError ? failureOfApi(error) : new AudioUploadFailure("connection");
     }
-    return { page: started.page, recording: completed.recording, speakers: completed.speakers };
+    return { started, completed };
   } catch (error) {
     if (error instanceof AudioUploadFailure) throw error;
     throw new AudioUploadFailure(isAbortError(error) ? "aborted" : "other");
   }
+}
+
+/** 音声ファイルを取り込んで録音ページを作る（#36 段 3b-1）。 */
+export async function uploadAudioFile(input: UploadAudioFileInput): Promise<UploadAudioFileResult> {
+  const { started, completed } = await uploadAudio(input, {
+    start: (request, options) => startAudioUpload(request, options),
+    complete: (first, fetchImpl) => completeAudioUpload(first.page.id, fetchImpl),
+  });
+  return { page: started.page, recording: completed.recording, speakers: completed.speakers };
+}
+
+export type UploadAudioPartInput = UploadAudioFileInput & { pageId: string };
+export type UploadAudioPartResult = AudioPartCompleteResponse;
+
+/**
+ * 2 本目以降の音声を、いまの録音ページに足す（#36 段 3b-4）。流れは録音ページを作るときと同じ（開始と完了だけが違う）。
+ * 言語はページのものを使う（送らない）。
+ */
+export async function uploadAudioPart(input: UploadAudioPartInput): Promise<UploadAudioPartResult> {
+  const { completed } = await uploadAudio(input, {
+    start: (request, options) => startAudioPartUpload(input.pageId, request, options),
+    complete: (part, fetchImpl) => completeAudioPartUpload(input.pageId, part.part.partIndex, fetchImpl),
+  });
+  return completed;
 }
 
 function bytesLabel(bytes: number): string {

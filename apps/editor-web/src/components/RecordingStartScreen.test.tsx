@@ -61,9 +61,20 @@ const LIMITS = {
 const audioPage = { id: PAGE_ID, kind: "rec", title: "合成の会議", lang: "ja", createdAt: "2030-01-01T00:00:00.000Z", updatedAt: "2030-01-01T00:00:00.000Z" };
 const audioRecording = (status: "uploading" | "uploaded") => ({ ...created.recording, source: "audio", segments: [], speakerNames: {}, audio: { status, bytes: 3, contentType: "audio/mp4", expiresAt: "2030-01-31T03:00:00.000Z" } });
 
+const audioPart = (partIndex: number, status: "uploading" | "uploaded" = "uploading") => ({
+  partIndex,
+  status,
+  bytes: 3,
+  contentType: "audio/mp4",
+  durationSec: null,
+  offsetSec: 600,
+  sourceName: `音声 ${partIndex + 1}.m4a`,
+  expiresAt: "2030-01-31T03:00:00.000Z",
+});
+
 type Route = () => Response | Promise<Response>;
-/** 同じ origin の API の偽物（上限・開始・完了）。 */
-function audioApi(routes: { limits?: Route; start?: Route; complete?: Route } = {}) {
+/** 同じ origin の API の偽物（上限・開始・完了と、2 本目以降の音声）。 */
+function audioApi(routes: { limits?: Route; start?: Route; complete?: Route; parts?: Route } = {}) {
   const fetchMock = vi.fn(async (resource: RequestInfo | URL, init?: RequestInit) => {
     const path = String(resource);
     void init;
@@ -72,6 +83,16 @@ function audioApi(routes: { limits?: Route; start?: Route; complete?: Route } = 
       return routes.start ? routes.start() : respond(201, { page: audioPage, recording: audioRecording("uploading"), speakers: [], upload: { url: TICKET_URL, method: "PUT", headers: { "Content-Type": "audio/mp4" }, expiresAt: "2030-01-08T00:00:00.000Z", maxBytes: 3 } });
     }
     if (path === `/api/pages/${PAGE_ID}/recording/audio/complete`) return routes.complete ? routes.complete() : respond(200, { recording: audioRecording("uploaded"), speakers: [] });
+    // 2 本目以降の音声（#36 段 3b-4）
+    if (path === `/api/pages/${PAGE_ID}/recording/audio/parts`) {
+      return routes.parts
+        ? routes.parts()
+        : respond(201, { part: audioPart(1), parts: [audioPart(0, "uploaded"), audioPart(1)], upload: { url: TICKET_URL, method: "PUT", headers: {}, expiresAt: "2030-01-08T00:00:00.000Z", maxBytes: 3 } });
+    }
+    if (/\/recording\/audio\/parts\/\d+\/complete$/.test(path)) {
+      const index = Number(path.split("/").at(-2));
+      return respond(200, { part: audioPart(index, "uploaded"), parts: [audioPart(0, "uploaded"), audioPart(index, "uploaded")] });
+    }
     throw new Error(`unexpected ${path}`);
   });
   const calls = (path: string) => fetchMock.mock.calls.filter(([resource]) => String(resource) === path);
@@ -221,8 +242,12 @@ const alertText = () => container!.querySelector('[role="alert"]')?.textContent 
 const vttFile = (name = "dinner.vtt", text = VTT) => new File([text], name, { type: "text/vtt" });
 
 async function choose(file: File) {
+  await chooseMany([file]);
+}
+
+async function chooseMany(files: File[]) {
   const input = fileInput();
-  Object.defineProperty(input, "files", { value: [file], configurable: true });
+  Object.defineProperty(input, "files", { value: files, configurable: true });
   await act(async () => {
     input.dispatchEvent(new Event("change", { bubbles: true }));
   });
@@ -513,6 +538,55 @@ describe("RecordingStartScreen（音声ファイル）", () => {
     expect(container!.textContent).not.toContain("storage.example.test");
     expect(container!.textContent).toContain("合成の会議.m4a");
     expect(router.push).not.toHaveBeenCalled();
+  });
+});
+
+describe("RecordingStartScreen（音声を 2 本以上まとめて）", () => {
+  const audioFile = (name: string) => new File([new Uint8Array([1, 2, 3])], name, { type: "audio/mp4" });
+
+  it("1 本目で録音ページを作り、残りはその録音に足してから移る", async () => {
+    const { fetchMock, calls } = audioApi();
+    vi.stubGlobal("fetch", fetchMock);
+    await mount({ limits: LIMITS });
+    await chooseMany([audioFile("会議 1.m4a"), audioFile("会議 2.m4a"), audioFile("会議 3.m4a")]);
+    // 選んだ本数と、取り込みのボタンの文言
+    expect(container!.textContent).toContain("ほかに 2 本");
+    await start("3 本を取り込む");
+    await until(() => router.push.mock.calls.length > 0);
+    // 1 本目は録音ページを作る開始、2 本目以降は足す開始
+    expect(calls("/api/recordings/audio/start")).toHaveLength(1);
+    expect(calls(`/api/pages/${PAGE_ID}/recording/audio/parts`)).toHaveLength(2);
+    expect(router.push).toHaveBeenCalledWith(`/p/${PAGE_ID}`);
+    expect(frame.pageCreated).toHaveBeenCalledWith(PAGE_ID, "合成の会議", "rec");
+  });
+
+  it("足す途中で失敗したら、その場で知らせて録音ページを開ける（1 本目は残る）", async () => {
+    const { fetchMock } = audioApi({ parts: () => respond(502, { error: "storage_failed" }) });
+    vi.stubGlobal("fetch", fetchMock);
+    await mount({ limits: LIMITS });
+    await chooseMany([audioFile("会議 1.m4a"), audioFile("会議 2.m4a")]);
+    await start("2 本を取り込む");
+    await until(() => alertText() !== "");
+    expect(alertText()).toBe("会議 2.m4aを足せませんでした。録音ページで足せます。");
+    expect(router.push).not.toHaveBeenCalled();
+    await act(async () => buttonByText("録音ページを開く").click());
+    expect(router.push).toHaveBeenCalledWith(`/p/${PAGE_ID}`);
+  });
+
+  it("音声と .vtt を一度に選んだら、音声だけを取り込むと言う", async () => {
+    vi.stubGlobal("fetch", audioApi().fetchMock);
+    await mount({ limits: LIMITS });
+    await chooseMany([audioFile("会議 1.m4a"), vttFile("字幕.vtt")]);
+    expect(status()).toBe("音声だけを取り込みます。文字起こし（.vtt）は録音ページで足せます。");
+    expect(container!.textContent).not.toContain("ほかに 1 本");
+  });
+
+  it(".vtt は 1 つずつ（残りは録音ページで足せる）", async () => {
+    vi.stubGlobal("fetch", audioApi().fetchMock);
+    await mount({ limits: LIMITS });
+    await chooseMany([vttFile("字幕 1.vtt"), vttFile("字幕 2.vtt")]);
+    expect(status()).toBe("文字起こし（.vtt）は 1 つずつ取り込めます。残りは録音ページで足せます。");
+    expect(container!.textContent).toContain("字幕 1.vtt");
   });
 });
 

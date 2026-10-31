@@ -19,7 +19,7 @@ import { resolveTranscriptionConfig, type TranscriptionEnv } from "../transcript
  */
 
 /** 画面に出す文字起こしの方式。`fake` は開発・CI の偽物、`off` は使わない設定（または設定の誤り）。 */
-export type TranscribeEngineFact = "deepgram" | "fake" | "off";
+export type TranscribeEngineFact = "deepgram" | "fake" | "gemini" | "off";
 
 export type SettingsFacts = {
   transcription: {

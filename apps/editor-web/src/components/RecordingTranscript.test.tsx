@@ -42,6 +42,8 @@ function createServer(initial?: Partial<RecordingData>) {
     status: 200,
     /** 値を入れると、次の PATCH はそれが呼ばれるまで返さない。 */
     hold: null as Promise<void> | null,
+    /** 読み取り（GET）の応答にだけ付く欄（音声の列・案の一覧。変更の応答には入らない）と、録音の audio。 */
+    getOnly: null as null | { audio: unknown; audios: unknown[]; candidates: unknown[] },
   };
   const snapshot = () => ({
     recording: {
@@ -54,7 +56,7 @@ function createServer(initial?: Partial<RecordingData>) {
       sourceSha256: null,
       segments: state.data.segments,
       speakerNames: state.data.speakerNames,
-      audio: null,
+      audio: state.getOnly?.audio ?? null,
       createdAt: "2026-10-30T00:00:00.000Z",
       updatedAt: "2026-10-30T00:00:00.000Z",
     },
@@ -65,7 +67,7 @@ function createServer(initial?: Partial<RecordingData>) {
     if (state.status !== 200) return json(state.status, { error: "x" });
     if (init?.method === "GET") {
       state.gets += 1;
-      return json(200, snapshot());
+      return json(200, state.getOnly ? { ...snapshot(), audios: state.getOnly.audios, candidates: state.getOnly.candidates } : snapshot());
     }
     const patch = JSON.parse(init!.body as string) as Patch;
     state.patches.push(patch);
@@ -438,6 +440,45 @@ describe("RecordingTranscript: leaving with unsaved writing", () => {
 });
 
 describe("RecordingTranscript: speakers", () => {
+  it("変更の応答には音声の列と案の一覧が入らないので、直したあとも直前のものを残す（空に戻さない）", async () => {
+    const server = createServer();
+    server.state.getOnly = {
+      audio: { status: "uploaded", bytes: 64, contentType: "audio/mp4", expiresAt: "2030-02-01T00:00:00.000Z" },
+      audios: [{ index: 0, status: "uploaded", durationSec: 125, offsetSec: 0, sourceName: "dinner.m4a", expiresAt: "2030-02-01T00:00:00.000Z" }],
+      candidates: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          name: "Deepgram",
+          engine: "deepgram",
+          engineLabel: "Deepgram",
+          language: "ja",
+          durationSec: 125,
+          adopted: true,
+          state: "ready",
+          segmentCount: 4,
+          preview: [],
+          createdAt: "2030-01-01T00:00:00.000Z",
+          updatedAt: "2030-01-01T00:00:00.000Z",
+        },
+      ],
+    };
+    await mount(server);
+    await until(() => paragraphs().length === 4);
+    expect(container!.querySelector('[data-recording-candidates="1"]')).not.toBeNull();
+    const audiosBefore = container!.querySelector("[data-recording-audios]")?.outerHTML ?? "";
+
+    await edit(1, "二つ目の段落を直しました。");
+    expect(server.state.patches).toHaveLength(1);
+    // 直したあとも、案の一覧（1 件）と音声の列がそのまま出ている
+    expect(container!.querySelector('[data-recording-candidates="1"]')).not.toBeNull();
+    expect(container!.querySelector("[data-recording-audios]")?.outerHTML ?? "").toBe(audiosBefore);
+    // 話者の名前を変えたあとも同じ
+    act(() => chip("話者3").click());
+    setValue(container!.querySelector<HTMLInputElement>(".es-spkform input")!, "Haruka");
+    await submitName();
+    expect(container!.querySelector('[data-recording-candidates="1"]')).not.toBeNull();
+  });
+
   it("renames a speaker; every paragraph shows the new name", async () => {
     const server = await mount();
     await until(() => paragraphs().length === 4);

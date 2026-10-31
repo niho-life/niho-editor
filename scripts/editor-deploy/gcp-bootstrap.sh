@@ -99,6 +99,12 @@ resources() {
   gcp secrets add-iam-policy-binding "$SECRET_DEEPGRAM_KEY" \
     --member "serviceAccount:$RUNNER_SA_EMAIL" --role roles/secretmanager.secretAccessor > /dev/null
 
+  log "gemini key secret (#36 段 3b-4): created without a version; the owner adds the key with set-gemini-key.sh (no version = no Gemini candidates)"
+  ensure_secret "$SECRET_GEMINI_KEY"
+  # Only the web service reads it (the migration job does not).
+  gcp secrets add-iam-policy-binding "$SECRET_GEMINI_KEY" \
+    --member "serviceAccount:$RUNNER_SA_EMAIL" --role roles/secretmanager.secretAccessor > /dev/null
+
   log "google OAuth client secret (#47 google): created without a version if it is missing; an existing secret and its versions are left alone (the owner adds a version with set-google-oauth-secret.sh; no version = nobody can log in)"
   ensure_secret "$SECRET_GOOGLE_OAUTH"
   # Only the web service reads it (the migration job does not).

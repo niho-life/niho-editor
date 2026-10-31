@@ -74,6 +74,15 @@ if transcribe_key_ready; then
 else
   log "transcription: off (the newest version of $SECRET_DEEPGRAM_KEY is missing or not enabled)"
 fi
+# Gemini (#36 段 3b-4): apart from the default engine. With the key the screen can make a Gemini candidate of the same
+# audio and compare it; without it only the default engine shows up. set-gemini-key.sh adds the version.
+gem=0
+if gemini_key_ready; then
+  gem=1
+  log "gemini candidates: on${GEMINI_MODEL:+ ($GEMINI_MODEL)}"
+else
+  log "gemini candidates: off (the newest version of $SECRET_GEMINI_KEY is missing or not enabled)"
+fi
 # The dispatcher is the other half (#36, §12): the key alone cannot transcribe audio, because a transcription does not fit
 # in one request of the app. With TRANSCRIBE_MODE=cloud-tasks the start enqueues, and the worker route runs it apart.
 if [[ "$TRANSCRIBE_MODE" == cloud-tasks ]]; then
@@ -124,8 +133,8 @@ gcp run deploy "$SERVICE" \
   --cpu 1 --memory 512Mi --cpu-boost --concurrency 40 --timeout "$(service_request_timeout)" \
   --add-cloudsql-instances "$CONNECTION" \
   --network "$VPC_NETWORK" --subnet "$VPC_SUBNET" --vpc-egress private-ranges-only \
-  --set-secrets "$(service_secrets "$ai" "$tr" "$google")" \
-  --set-env-vars "$(service_env_vars "$ai" "$tr")$(steps_env_vars)$(transcribe_env_vars)" \
+  --set-secrets "$(service_secrets "$ai" "$tr" "$google" "$gem")" \
+  --set-env-vars "$(service_env_vars "$ai" "$tr" "$gem")$(steps_env_vars)$(transcribe_env_vars)" \
   --labels "$COST_LABEL,commit=${TAG:0:12}"
 
 # 一度でも特定の revision へ traffic を割り当てる（docs/ops/editor-deploy.md §9 の戻し方）と、Cloud Run は以降のデプロイもその割り当てを

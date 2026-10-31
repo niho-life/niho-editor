@@ -80,6 +80,19 @@ check "secrets with both keys" "$(service_secrets 1 1)" \
 check "env with the transcription engine" "$(service_env_vars 0 1)" "$base_env,EDITOR_TRANSCRIBE_ENGINE=deepgram"
 check "env without the transcription engine" "$(service_env_vars 0 0)" "$base_env"
 
+# Gemini の案（#36 段 3b-4）。鍵は Secret なので env はモデルだけ（deploy.env が空ならアプリの既定）
+check "secrets with the gemini key" "$(service_secrets 0 0 0 1)" \
+  "DATABASE_URL=niho-editor-database-url:latest,GEMINI_API_KEY=niho-editor-gemini-key:latest"
+check "secrets with every key" "$(service_secrets 1 1 1 1)" \
+  "DATABASE_URL=niho-editor-database-url:latest,ANTHROPIC_API_KEY=niho-editor-anthropic-key:latest,DEEPGRAM_API_KEY=niho-editor-deepgram-key:latest,GOOGLE_OAUTH_CLIENT_SECRET=niho-editor-google-oauth-secret:latest,GEMINI_API_KEY=niho-editor-gemini-key:latest"
+check "gemini key secret name" "$SECRET_GEMINI_KEY" "niho-editor-gemini-key"
+# モデルを指定しなければ env は増えない（既定のエンジンも変わらない）
+check "env with gemini and no model" "$(service_env_vars 0 1 1)" "$base_env,EDITOR_TRANSCRIBE_ENGINE=deepgram"
+check "env with gemini and a model" "$(GEMINI_MODEL=gemini-3.1-pro-preview service_env_vars 0 1 1)" \
+  "$base_env,EDITOR_TRANSCRIBE_ENGINE=deepgram,EDITOR_GEMINI_MODEL=gemini-3.1-pro-preview"
+check "env without gemini ignores the model" "$(GEMINI_MODEL=gemini-3.1-pro-preview service_env_vars 0 1 0)" \
+  "$base_env,EDITOR_TRANSCRIBE_ENGINE=deepgram"
+
 # The example's own AI lines, and overrides.
 DEPLOY_ENV="$dir/deploy.env.example" load_deploy_env
 check "example AI_MODEL" "$AI_MODEL" "claude-sonnet-5-5"

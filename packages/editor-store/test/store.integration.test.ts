@@ -53,7 +53,12 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       [schema],
     );
     // page_shares は共有リンク（0004）、ai_usage は AI の使用量（0005）、step_runs・step_attempts は手順の実行（0006。ページの表とは別）、page_recordings は録音の文字起こし（0007）、
+<<<<<<< HEAD
+    // transcription_runs は文字起こしの実行（0012）、editor_settings はアカウントの設定（0013）、
+    // page_recording_audios は 2 本目以降の音声・page_recording_candidates は文字起こしの案（#36 段 3b-4）、recipes は手順（#37）
+=======
     // transcription_runs は文字起こしの実行（0012）、editor_settings はアカウントの設定（0013）、ai_conversations・ai_messages・ai_message_changes は AI チャット、ai_usage_device は CLI の使用量（0022・0025）
+>>>>>>> origin/main
     // publications（作り直し）・publication_versions・publication_redirects・site_connections・site_connection_keys・preview_tokens は公開（0009）
     const documented = [
       "pages",
@@ -72,10 +77,15 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "preview_tokens",
       "transcription_runs",
       "editor_settings",
+<<<<<<< HEAD
+      "page_recording_audios",
+      "page_recording_candidates",
+=======
       "ai_conversations",
       "ai_messages",
       "ai_message_changes",
       "ai_usage_device",
+>>>>>>> origin/main
       "recipes",
     ];
     assert.deepEqual(tables.rows.map((row) => row.table_name), [...documented, MIGRATIONS_TABLE].sort());

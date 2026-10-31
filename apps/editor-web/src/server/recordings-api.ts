@@ -1,9 +1,11 @@
 import { isLanguage } from "@niho/docs-core";
 import type {
+  AudioPart,
   CreateRecordingInput,
   OwnerId,
   PageLang,
   Recording,
+  RecordingCandidateView,
   RecordingMutation,
   RecordingPage,
   TranscriptionRunView,
@@ -11,6 +13,8 @@ import type {
 } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
 import { appendTranscript, type AppendRejection } from "../recording/append-transcript";
+import { audioPartBody } from "./audio-api";
+import { candidateBody } from "./recording-candidates-api";
 import { SEGMENT_EDITS_MAX, editSegments, type SegmentEdit, type SegmentEditRejection } from "../recording/edit-segments";
 import { listSpeakers, mergeSpeakers, renameSpeaker, type SpeakerRejection, type SpeakerSummary } from "../recording/speakers";
 import { VTT_IMPORT_ENGINE, VTT_IMPORT_MAX_BYTES, importVtt, readVtt, type VttImportFailure } from "../recording/vtt-import";
@@ -39,12 +43,21 @@ export type RecordingsStore = {
   ) => Promise<UpdateRecordingResult<RecordingMutationRejection> | null>;
   /** 最新の文字起こしの run（#36 段 2b）。あれば GET の応答に `transcription`（run が無ければ null）を足す。 */
   latestTranscription?: (owner: OwnerId, pageId: string) => Promise<TranscriptionRunView | null>;
+  /** 音声の列（#36 段 3b-4）。あれば GET の応答に `audios` を足す。 */
+  listAudioParts?: (owner: OwnerId, pageId: string) => Promise<AudioPart[]>;
+  /** 文字起こしの案（#36 段 3b-4）。あれば GET の応答に `candidates` を足す。 */
+  listCandidates?: (owner: OwnerId, pageId: string) => Promise<RecordingCandidateView[]>;
 };
+
+/** いま使えるエンジンの名前（画面が案のエンジンを選べるか決める）。 */
+export type RecordingEnginesReader = () => readonly string[];
 
 export type RecordingsApiDeps = {
   auth: () => AuthProvider;
   /** DB が使えないときは null（503）。 */
   store: () => RecordingsStore | null;
+  /** いま使えるエンジン（#36 段 3b-4。無ければ空＝画面はエンジンを選ばない）。 */
+  engines?: RecordingEnginesReader;
   env?: Readonly<Record<string, string | undefined>>;
 };
 
@@ -168,8 +181,9 @@ export function importVttRoute(request: Request, deps: RecordingsApiDeps): Promi
 }
 
 /**
- * GET /api/pages/{id}/recording — 録音（`{ recording, speakers, transcription }`。transcription は最新の文字起こしの run（#36 段 2b）で、
- * 無ければ null）。無ければ同じ 404。
+ * GET /api/pages/{id}/recording — 録音（`{ recording, speakers, transcription, audios, candidates, engines }`）。
+ * transcription は最新の文字起こしの run（#36 段 2b。無ければ null）、audios は音声の列（#36 段 3b-4。足した順）、
+ * candidates は文字起こしの案（作った順。案を作っていない録音は空）。無ければ同じ 404。
  */
 export function getRecordingRoute(request: Request, id: string, deps: RecordingsApiDeps): Promise<Response> {
   return guarded("GET /api/pages/[id]/recording", async () => {
@@ -179,9 +193,20 @@ export function getRecordingRoute(request: Request, id: string, deps: Recordings
     if (!store) return errorResponse("unavailable");
     const recording = await store.getRecording(session.userId, id);
     if (!recording) return notFoundResponse();
-    if (!store.latestTranscription) return jsonResponse(200, withSpeakers(recording));
-    const run = await store.latestTranscription(session.userId, id);
-    return jsonResponse(200, { ...withSpeakers(recording), transcription: run ? transcriptionRunBody(run) : null });
+    const owner = session.userId;
+    const [run, audios, candidates] = await Promise.all([
+      store.latestTranscription?.(owner, id) ?? null,
+      store.listAudioParts?.(owner, id) ?? [],
+      store.listCandidates?.(owner, id) ?? [],
+    ]);
+    if (!store.latestTranscription && !store.listAudioParts && !store.listCandidates) return jsonResponse(200, withSpeakers(recording));
+    return jsonResponse(200, {
+      ...withSpeakers(recording),
+      transcription: run ? transcriptionRunBody(run) : null,
+      audios: audios.map(audioPartBody),
+      candidates: candidates.map(candidateBody),
+      engines: [...(deps.engines?.() ?? [])],
+    });
   });
 }
 

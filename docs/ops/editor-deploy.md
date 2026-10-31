@@ -34,8 +34,10 @@
 | `EDITOR_ORIGIN` | `https://<APP_DOMAIN>` | 更新系の要求の `Origin` 検査。独自ドメインが無いうちは `run.app` の URL。`google` では `/auth/callback` の URL もこれから作る |
 | `EDITOR_STORAGE` | `gcs` | 資産の保存先。**毎回渡す**。未設定は本番で `off` の扱いになり、画像と音声の API が 503 `storage_unavailable` を返す（`apps/editor-web/src/storage/config.ts`） |
 | `EDITOR_ASSETS_BUCKET` | 資産バケット名 | 画像（#33）と音声（#36）の実体。実行 ID はこのバケットに作成と閲覧だけできる |
-| `EDITOR_TRANSCRIBE_ENGINE` | `deepgram` | 文字起こしのエンジン。`niho-editor-deepgram-key` に有効な版があるときだけ渡す（§12） |
+| `EDITOR_TRANSCRIBE_ENGINE` | `deepgram` | 文字起こしの**既定の**エンジン。`niho-editor-deepgram-key` に有効な版があるときだけ渡す（§12） |
 | `DEEPGRAM_API_KEY` | Secret | 同上 |
+| `GEMINI_API_KEY` | Secret | 任意。渡すと **Gemini の案**（#36 段 3b-4）を作れる（既定のエンジンは変わらない）。鍵は `niho-editor-gemini-key` に置く |
+| `EDITOR_GEMINI_MODEL` | 任意 | Gemini のモデル。空ならアプリの既定（`gemini-3.8-flash`） |
 | `EDITOR_TRANSCRIBE_TIMEOUT_SEC` | `TRANSCRIBE_TIMEOUT_SEC` | 同上。任意。空ならアプリの既定（1200 秒） |
 | `EDITOR_TRANSCRIBE_MODE` ほか 3 つ | `TRANSCRIBE_MODE=cloud-tasks` のときだけ | 文字起こしの呼び出し口（キュー・worker の URL・OIDC の身元。§12） |
 | `DATABASE_URL` | Secret | アプリ用ロール |
@@ -57,7 +59,7 @@ migrate ジョブには `DATABASE_URL`（migrate ロール）と `EDITOR_APP_DAT
 1. API の有効化
 2. サービスアカウント 2 つと `roles/cloudsql.client`
 3. Cloud SQL にデータベース `niho_editor` と migrate ロール（アプリ用ロールは migrate ジョブが作る）
-4. Secret 5 つと、読める人の限定（AI の鍵・文字起こしの鍵・Google の client secret は版なしで作る。値はオーナーが §10・§12・§13 の手順で入れる）
+4. Secret 6 つと、読める人の限定（AI の鍵・文字起こしの鍵・Gemini の鍵・Google の client secret は版なしで作る。値はオーナーが §10・§12・§13 の手順で入れる）
 5. Artifact Registry（直近 5 個だけ残す）
 6. 資産バケット（private）
 7. 手順の実行基盤（`scripts/editor-deploy/steps-infra.sh`。§11）と文字起こしの実行基盤（`scripts/editor-deploy/transcribe-infra.sh`。§12）
@@ -275,6 +277,21 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 2. **呼び出し口（dispatcher）**: `deploy.env` の `TRANSCRIBE_MODE=cloud-tasks`。1 回の文字起こしは最長 20 分かかり、**1 回の要求に収まりません**（Cloud Run は応答のあとに CPU を絞る）。そこで手順（#37、§11）と同じ形で、Cloud Tasks に積み、同じサービスの OIDC で守った worker の route が実行します。空のままだと、鍵があっても起こす処理は動きません（ログに `transcription dispatcher: off`）。
 
 **VTT の取り込みは、鍵も呼び出し口も必要としません。** 既に文字起こし済みのファイルを持ち込む経路は、どちらが閉じていても動きます。
+
+#### 3 つ目（任意）: Gemini の案
+
+同じ音声を**別のエンジンでも起こして見比べる**（#36 段 3b-4）ための鍵です。**既定のエンジンは変わりません**（上の `deepgram` のまま）。
+
+- 鍵は Secret Manager の `niho-editor-gemini-key`（実行 ID だけが読める）。最新の版が有効なときだけ `deploy.sh` が
+  `GEMINI_API_KEY` を足し、ログに `gemini candidates: on` / `off` と出す。
+- 版が無ければ、画面に出るエンジンは Deepgram だけ（案は「別の案を作る」で同じエンジンの 2 本目になる）。
+- モデルは任意の `deploy.env` の `GEMINI_MODEL`（空ならアプリの既定 `gemini-3.8-flash`）。`deploy.sh` は `EDITOR_GEMINI_MODEL`
+  としてだけ渡す（鍵は env に出さない）。形が規則に合わなければ配備を止める（新しい revision が起動しない値を通さない）。
+- 入れ方: ① （初回だけ）`gcp-bootstrap.sh resources`（Secret を版なしで作り、実行 ID に読む権限を付ける）→
+  ② Google AI Studio でこの用途だけの API キーを作る（使用上限も付ける）→ ③ `scripts/editor-deploy/set-gemini-key.sh`
+  （標準入力から読む。引数では受け付けない）→ ④ `deploy.sh --no-build`。
+- 音声は Gemini に渡ります（上げてから消すまでの経路は `apps/editor-web/src/transcription/gemini.ts`。終わったら
+  Gemini 側のファイルを消す）。**実際の Gemini API での通しはまだ取れていません**（下の「実地の確認」と同じ事情）。
 
 鍵の扱いは AI（§10）と同じ規則です。**鍵は公開リポジトリ・Issue・PR・チャット・ログ・シェルの履歴に出さない。** 入れる経路は `set-transcribe-key.sh` だけ（標準入力から読み、画面・ファイル・コマンドラインに出さない。引数では受け付けない）。
 

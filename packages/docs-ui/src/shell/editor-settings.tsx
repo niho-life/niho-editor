@@ -22,8 +22,8 @@ export const EDITOR_SETTINGS_NAV = [
 
 export type EditorSettingsAiLang = "same" | "ja" | "en";
 
-/** 文字起こしの方式。`fake` は開発・CI の偽物、`off` は使わない設定。Gemini はまだ出さない。 */
-export type EditorSettingsEngine = "deepgram" | "fake" | "off";
+/** 文字起こしの方式。`fake` は開発・CI の偽物、`off` は使わない設定。 */
+export type EditorSettingsEngine = "deepgram" | "fake" | "gemini" | "off";
 
 /** 保存先（`DocsStorageMode`。`UNSET` は未選択＝クラウドと同じ扱い）。 */
 export type EditorSettingsStorage = "UNSET" | "CLOUD" | "CLOSING" | "LOCAL";
@@ -135,7 +135,7 @@ const BUSY = { opacity: 0.4, cursor: "progress" } as const;
 
 export const EDITOR_SETTINGS_TEXT = {
   aiLang: { same: "書いた言語のまま", ja: "日本語", en: "English" },
-  engine: { deepgram: "Deepgram", fake: "偽物（開発・CI）", off: "使わない" },
+  engine: { deepgram: "Deepgram", fake: "偽物（開発・CI）", gemini: "Gemini", off: "使わない" },
   storage: { UNSET: "NIHO クラウド（未選択）", CLOUD: "NIHO クラウド", CLOSING: "クラウドから移行中", LOCAL: "この Mac だけ" },
   empty: "まだありません",
   loading: "読み込んでいます…",

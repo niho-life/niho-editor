@@ -70,6 +70,15 @@ load_deploy_env() {
     (( TRANSCRIBE_TIMEOUT_SEC >= 60 && TRANSCRIBE_TIMEOUT_SEC <= 3300 )) \
       || die "TRANSCRIBE_TIMEOUT_SEC must be between 60 and 3300 seconds in $DEPLOY_ENV"
   fi
+  # The Gemini model of the transcription candidates (#36 段 3b-4). Optional; empty leaves the app default
+  # (gemini-3.8-flash). The shape is the one the app accepts (GEMINI_MODEL in apps/editor-web/src/transcription/config.ts):
+  # a value outside it would stop the new revision from starting, so refuse it now.
+  GEMINI_MODEL="${GEMINI_MODEL:-}"
+  if [[ -n "$GEMINI_MODEL" ]]; then
+    if ! [[ "$GEMINI_MODEL" =~ ^[a-z0-9][a-z0-9.-]*$ ]] || (( ${#GEMINI_MODEL} > 64 )); then
+      die "GEMINI_MODEL in $DEPLOY_ENV must be lowercase letters, digits, '.' and '-' (64 characters at most)"
+    fi
+  fi
   # The dispatcher that runs a transcription apart from the request: off unless TRANSCRIBE_MODE=cloud-tasks (§12).
   # Without it the engine cannot be reached in production at all (the start answers 503), key or no key.
   TRANSCRIBE_MODE="${TRANSCRIBE_MODE:-}"
@@ -94,6 +103,9 @@ load_deploy_env() {
   SECRET_MIGRATE_DATABASE_URL=niho-editor-migrate-database-url
   SECRET_ANTHROPIC_KEY=niho-editor-anthropic-key
   SECRET_DEEPGRAM_KEY=niho-editor-deepgram-key
+  # The Gemini key of the transcription candidates (#36 段 3b-4). Optional: with it the app can also transcribe with
+  # Gemini (another candidate to compare), while EDITOR_TRANSCRIBE_ENGINE stays the default engine.
+  SECRET_GEMINI_KEY=niho-editor-gemini-key
   # The OAuth client secret of the Google sign-in (#47 google). The owner adds the version with set-google-oauth-secret.sh.
   SECRET_GOOGLE_OAUTH=niho-editor-google-oauth-secret
 }
@@ -138,17 +150,21 @@ is_transcribe_key() { [[ "$1" =~ ^[!-~]+$ ]] && (( ${#1} <= 512 )); }
 # Transcription (#36) is on under the same rule as AI: the owner adds the key with set-transcribe-key.sh. Without it the
 # engine stays off and the app answers 503 (the VTT import still works; only the engine needs the key).
 transcribe_key_ready() { newest_version_enabled "$SECRET_DEEPGRAM_KEY"; }
+# Gemini (#36 段 3b-4) is on under the same rule, and apart from the default engine: with an enabled newest version the
+# app can make a Gemini candidate of the same audio; without it only the default engine shows up on the screen.
+gemini_key_ready() { newest_version_enabled "$SECRET_GEMINI_KEY"; }
 
 # The functions below take the AI switch as $1 and the transcription switch as $2 (1 = the matching *_key_ready said yes,
 # 0 = no) and never call gcloud for them, so lib-test.sh checks them without GCP.
 
 # Secrets of the web service. `--set-secrets` replaces the whole list on every deploy: the database URL is always in it.
-# $3 is the Google sign-in switch (1 = google_oauth_secret_ready said yes).
+# $3 is the Google sign-in switch (1 = google_oauth_secret_ready said yes), $4 the Gemini switch (gemini_key_ready).
 service_secrets() {
   local secrets="DATABASE_URL=$SECRET_DATABASE_URL:latest"
   if [[ "${1:-0}" == 1 ]]; then secrets+=",ANTHROPIC_API_KEY=$SECRET_ANTHROPIC_KEY:latest"; fi
   if [[ "${2:-0}" == 1 ]]; then secrets+=",DEEPGRAM_API_KEY=$SECRET_DEEPGRAM_KEY:latest"; fi
   if [[ "${3:-0}" == 1 ]]; then secrets+=",GOOGLE_OAUTH_CLIENT_SECRET=$SECRET_GOOGLE_OAUTH:latest"; fi
+  if [[ "${4:-0}" == 1 ]]; then secrets+=",GEMINI_API_KEY=$SECRET_GEMINI_KEY:latest"; fi
   printf '%s' "$secrets"
 }
 
@@ -173,6 +189,9 @@ service_env_vars() {
     printf '%sEDITOR_TRANSCRIBE_ENGINE=deepgram' "$ENV_SEP"
     if [[ -n "$TRANSCRIBE_TIMEOUT_SEC" ]]; then printf '%sEDITOR_TRANSCRIBE_TIMEOUT_SEC=%s' "$ENV_SEP" "$TRANSCRIBE_TIMEOUT_SEC"; fi
   fi
+  # Gemini (#36 段 3b-4). $3 is the Gemini switch: the key is a secret, so the only env is the model, and only when
+  # deploy.env sets GEMINI_MODEL (empty means the app's default). The default engine above does not change.
+  if [[ "${3:-0}" == 1 && -n "$GEMINI_MODEL" ]]; then printf '%sEDITOR_GEMINI_MODEL=%s' "$ENV_SEP" "$GEMINI_MODEL"; fi
 }
 
 # Steps (#37): the worker route is a path of the same service; its run.app URL is also the OIDC audience.

@@ -45,8 +45,10 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 | `EDITOR_ASSET_ORIGIN` | 任意。公開版の写真の URL の origin（https の origin だけ）。写真は `${origin}/assets/${sha256}.${ext}`。未設定・不正なら写真のあるページは公開できない（422。シートでは押せない）。公開 API のプレビューの写真も同じ URL（未設定なら写真のある下書きのプレビューは 503） |
 | `EDITOR_STORAGE` | 任意。資産（音声・画像）の保存先。`fake`（メモリの偽物。開発・CI だけで、`NODE_ENV=production` では起動しない）・`gcs`・`off`。未設定は本番 `off`（音声・画像の API は 503 `storage_unavailable`）、それ以外は `fake`。未知の値は起動しない |
 | `EDITOR_ASSETS_BUCKET` | `EDITOR_STORAGE=gcs` のとき必須。資産の bucket 名（無い・規則に合わなければ起動しない。値は表示しない） |
-| `EDITOR_TRANSCRIBE_ENGINE` | 任意。文字起こしのエンジン（#36 段 2b）。`fake`（偽物。開発・CI だけで、`NODE_ENV=production` では起動しない）・`deepgram`・`off`。未設定は本番 `off`、それ以外は `fake`。未知の値は起動しない。本番は実行の口ができるまで、どの値でも開始は 503 |
+| `EDITOR_TRANSCRIBE_ENGINE` | 任意。文字起こしの**既定の**エンジン（#36 段 2b）。`fake`（偽物。開発・CI だけで、`NODE_ENV=production` では起動しない）・`deepgram`・`gemini`・`off`。未設定は本番 `off`、それ以外は `fake`。未知の値は起動しない |
 | `DEEPGRAM_API_KEY` | `EDITOR_TRANSCRIBE_ENGINE=deepgram` のとき必須。無い・空白や改行や制御文字を含むなら起動しない（前後の空白は除いて使う。値は表示しない） |
+| `GEMINI_API_KEY` | `EDITOR_TRANSCRIBE_ENGINE=gemini` のとき必須（検査は Deepgram の鍵と同じ）。**既定が別のエンジンでも、この鍵が入っていれば Gemini の案を作れる**（#36 段 3b-4。鍵が無いエンジンは画面に出ない） |
+| `EDITOR_GEMINI_MODEL` | 任意。Gemini のモデル（既定 `gemini-3.8-flash`。小文字英数と `.`・`-` の 1〜64 文字。規則に合わなければ起動しない） |
 | `EDITOR_TRANSCRIBE_TIMEOUT_SEC` | 任意。1 回の文字起こしの時間切れ（秒）。既定 1200、60〜3300 の整数（範囲の外・整数でなければ起動しない） |
 
 確認のコマンド: `typecheck`・`lint`・`test`（vitest。`TEST_DATABASE_URL` があれば `*.pg.test.ts` も専用の schema で動く）・`build`・`test:startup`（build の後。本番の起動の守り）・`test:e2e`（`DATABASE_URL` と migration、build が要る。`next dev` を起動して API と画面を確かめ、公開 API は本番の build で確かめる。作った行・schema は消す）。packages を入れ直したあとは `.next` を消してから（`rm -rf .next`）build・e2e をする。
@@ -226,7 +228,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **Deepgram の呼び出し**（`src/transcription/deepgram.ts`）: Mac 版（`apps/docs/crates/api-ai/src/deepgram.rs`）と同じ `model=nova-3`・`smart_format=false`・`punctuate=true`・`utterances=true`・`paragraphs=false`・`diarize_model=latest`（話者を分けるとき）・`keyterm`、header `Authorization: Token <鍵>`、本文は音声のバイト列そのまま（`Content-Length` 付き）。違いは `diarize=true|false` を明示すること。応答は 64 MiB まで、`results.utterances` が無い・空なら `engine_bad_response`。
 - **偽物**（`src/transcription/fake.ts`。開発と CI だけ）: 音声を読み捨て、`[fake]` の印を付けた固定の段落 3 つ（話者 2 人）を返す。`EDITOR_TRANSCRIBE_FAKE_FAIL`（`unavailable`・`rejected`・`timeout`・`bad_response`）を設定すると、その理由で失敗する（e2e 用。本番では偽物が起動しないので効かない）。
 - **画面から呼ぶ関数**（組み込みは段 3）: `src/lib/transcription-client.ts`（`startTranscription`・`getTranscription`・`isTranscriptionDone`）。
-- **本番の守り**: `NODE_ENV=production` で `EDITOR_TRANSCRIBE_ENGINE=fake`、`deepgram` で `DEEPGRAM_API_KEY` が無い・不正、未知の値、時間切れの範囲の外は起動しない（`src/startup-check.ts`。値は表示しない）。要求ごとの解決（`src/transcription/runtime.ts`）でも同じ規則で、誤りは 503。入口 `scripts/server-entry.mjs` と Dockerfile は変えていない（保存先の設定と同じ）。
+- **本番の守り**: `NODE_ENV=production` で `EDITOR_TRANSCRIBE_ENGINE=fake`、`deepgram`・`gemini` でその鍵が無い・不正、未知の値、時間切れの範囲の外は起動しない（`src/startup-check.ts`。値は表示しない）。要求ごとの解決（`src/transcription/runtime.ts`）でも同じ規則で、誤りは 503。入口 `scripts/server-entry.mjs` と Dockerfile は変えていない（保存先の設定と同じ）。
 
 ## 本文の画像（#33）
 
