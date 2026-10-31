@@ -45,6 +45,7 @@ mod shell;
 #[cfg(target_os = "macos")]
 mod single_instance;
 mod speech;
+mod staging;
 mod store;
 mod updater;
 
@@ -2640,6 +2641,8 @@ pub fn run() {
     .setup(move |app| {
       let data_dir = resolve_data_dir(app, dev);
       let _ = std::fs::create_dir_all(&data_dir);
+      // 一時置き場（設計 §13）の古い残骸を掃く
+      let _ = staging::Staging::new(&data_dir).sweep(staging::SWEEP_AFTER);
       if dev {
         if let Some(window) = app.get_webview_window("main") {
           let _ = window.set_title(DEV_WINDOW_TITLE);
@@ -2751,6 +2754,16 @@ pub fn run() {
     })
     .invoke_handler(tauri::generate_handler![
       shell::shell_capabilities,
+      shell::shell_mic_status,
+      shell::shell_recording_start,
+      shell::shell_recording_stop,
+      shell::shell_recording_discard,
+      shell::shell_recording_read,
+      shell::shell_audio_pick,
+      shell::shell_audio_read,
+      shell::shell_staging_discard,
+      shell::shell_transcribe_local,
+      shell::shell_transcribe_stop,
       app_paths,
       load_settings,
       save_settings,

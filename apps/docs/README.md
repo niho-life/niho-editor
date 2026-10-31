@@ -64,7 +64,17 @@ NIHO_DOCS_SHELL=dev    npm -C apps/docs run dev:fake    # 開発の editor（loc
   のときだけ数える。配布物の `tauri.conf.json` は `app.security.capabilities` を `["default", "remote-editor"]` に固定しているので入らない。
 - `shell_capabilities` は殻の自己紹介（版・開発の起動か・端末の力の有無）。画面はこれが返ることで Mac の殻の中だと分かる。
   鍵・パス・端末の名前は返さない。
-- 次の段で足すもの：一時置き場（`staging/<操作の id>/`）、端末内の文字起こし・録音・CLI の AI の command、旧い画面の退役。
+- **端末の力 ①**（第 2 段）：remote から呼べる command を足した。すべて **id だけ**でやり取りし、パスは画面に返さない。
+  - 録音：`shell_mic_status` / `shell_recording_start` / `shell_recording_stop`（名前・長さ・書き出せたか）/ `shell_recording_discard` /
+    `shell_recording_read`（書き出した `.m4a` のバイト列。画面がサーバーへ上げる。1 回 512 MB まで）
+  - 音声ファイル：`shell_audio_pick`（Mac の選択ダイアログ → 一時置き場 `staging/<id>/audio/<n>.<ext>` に写す）/ `shell_audio_read` /
+    `shell_staging_discard`
+  - 端末内の文字起こし：`shell_transcribe_local`（出どころは `{ kind: "recording", recordingId }` か `{ kind: "staged", stagingId }`。
+    同梱の `niho-speech` で、進みは channel で画面へ）/ `shell_transcribe_stop`
+  - 一時置き場（`src-tauri/src/staging.rs`）は app data の `staging/<操作の id>/`（0700・中は 0600）。起動時に 24 時間より古い残骸を掃く。
+    端末内の文字起こしと CLI の AI で同じ仕組みを使う（設計 §13）。
+  - 結果（文字起こし・音声）をサーバーへ書くのは画面の側（native はサーバーの API に触らない）。
+- 次の段で足すもの：CLI の AI の command（一時置き場の `page/` を直接編集 → 画面が T5 の口へ書き戻す）、`packages/desktop-bridge`（TS の glue）、旧い画面の退役。
 
 ### NIHO アカウント（L5 #18557）
 

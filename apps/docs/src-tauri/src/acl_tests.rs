@@ -93,6 +93,27 @@ fn reachable_commands(capability: &serde_json::Value) -> BTreeSet<String> {
     .collect()
 }
 
+/// 殻（remote）から届いてよいコマンド。**全部 `shell_` で始まり、id だけでやり取りする。** ここに足すときは、
+/// パス・引数・環境・CLI の場所を画面から受け取らないこと（設計 §13）。
+fn shell_commands() -> BTreeSet<String> {
+  [
+    "shell_capabilities",
+    "shell_mic_status",
+    "shell_recording_start",
+    "shell_recording_stop",
+    "shell_recording_discard",
+    "shell_recording_read",
+    "shell_audio_pick",
+    "shell_audio_read",
+    "shell_staging_discard",
+    "shell_transcribe_local",
+    "shell_transcribe_stop",
+  ]
+  .into_iter()
+  .map(String::from)
+  .collect()
+}
+
 /// Mac の殻（設計 §13）: editor.niho.life から呼べるのは端末の力だけ。保管庫・設定・鍵・CLI の起動には届かない。
 #[test]
 fn the_remote_editor_capability_reaches_only_the_shell_commands() {
@@ -109,7 +130,8 @@ fn the_remote_editor_capability_reaches_only_the_shell_commands() {
     "remote の capability に端末の力以外の permission がある"
   );
   let reachable = reachable_commands(&remote);
-  assert_eq!(reachable, BTreeSet::from(["shell_capabilities".to_string()]));
+  assert_eq!(reachable, shell_commands());
+  assert!(reachable.iter().all(|name| name.starts_with("shell_")), "{reachable:?}");
   // 保管庫・会話・鍵・本人実行・保存先のコマンドは、1 つも remote から届かない
   for forbidden in [
     "load_pages",
@@ -132,10 +154,7 @@ fn the_dev_editor_capability_is_not_shipped() {
   let dev = capability(include_str!("../capabilities/remote-editor-dev.json"));
   assert_eq!(dev["remote"]["urls"], serde_json::json!(["http://localhost:3000"]));
   assert_eq!(granted(&dev), BTreeSet::from(["allow-editor-shell".to_string()]));
-  assert_eq!(
-    reachable_commands(&dev),
-    BTreeSet::from(["shell_capabilities".to_string()])
-  );
+  assert_eq!(reachable_commands(&dev), shell_commands());
   let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
   assert_eq!(
     conf["app"]["security"]["capabilities"],

@@ -175,6 +175,15 @@ impl Recorder {
     self.dir.join(format!("{id}{WORKING_SUFFIX}"))
   }
 
+  /// 書き出し済みの録音（`recordings/<id>.m4a`）。無い・まだ録音中なら None。殻（shell.rs）が id だけで音声を読むために使う。
+  pub fn exported_file(&self, id: &str) -> Option<PathBuf> {
+    if crate::store::validate_id(id).is_err() || self.in_use(id) || self.current(id).is_some() {
+      return None;
+    }
+    let path = self.output_path(id);
+    path.is_file().then_some(path)
+  }
+
   fn owner_path(&self, id: &str) -> PathBuf {
     self.dir.join(format!(".{id}{OWNER_SUFFIX}"))
   }
