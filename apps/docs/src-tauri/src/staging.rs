@@ -53,6 +53,30 @@ impl Staging {
     Ok(Staged { id, path })
   }
 
+  /// 決まった id の置き場を作り直す（CLI の AI は会話ごとに同じ path を使う。続き（resume）が cwd を引き継ぐため）。
+  /// 残っていた中身は消す。symlink やファイルにすり替わっていたら断る。
+  pub fn recreate(&self, id: &str) -> io::Result<Staged> {
+    if !is_staging_id(id) {
+      return Err(io::Error::new(io::ErrorKind::InvalidInput, "staging id"));
+    }
+    fs::create_dir_all(&self.root)?;
+    set_mode(&self.root, 0o700)?;
+    let path = self.root.join(id);
+    match fs::symlink_metadata(&path) {
+      Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "staging entry"));
+      }
+      Ok(_) => fs::remove_dir_all(&path)?,
+      Err(_) => {}
+    }
+    fs::create_dir(&path)?;
+    set_mode(&path, 0o700)?;
+    Ok(Staged {
+      id: id.to_string(),
+      path,
+    })
+  }
+
   /// 既にある操作の置き場（id の形が違う・無ければ None）。
   pub fn open(&self, id: &str) -> Option<Staged> {
     if !is_staging_id(id) {
@@ -107,7 +131,19 @@ impl Staged {
     Ok(path)
   }
 
-  /// 手元のファイルを写す（0600）。選んだ音声など。本文を書く口（0600 で書く）は CLI の AI の段で足す。
+  /// 本文・参照・指示を書く（0600）。`dir` が None なら置き場の直下。
+  pub fn write_private(&self, dir: Option<&str>, name: &str, bytes: &[u8]) -> io::Result<PathBuf> {
+    let parent = match dir {
+      Some(dir) => self.dir(dir)?,
+      None => self.path.clone(),
+    };
+    let path = parent.join(name);
+    fs::write(&path, bytes)?;
+    set_mode(&path, 0o600)?;
+    Ok(path)
+  }
+
+  /// 手元のファイルを写す（0600）。選んだ音声など。
   pub fn copy_in(&self, dir: &str, name: &str, from: &Path) -> io::Result<PathBuf> {
     let path = self.dir(dir)?.join(name);
     fs::copy(from, &path)?;

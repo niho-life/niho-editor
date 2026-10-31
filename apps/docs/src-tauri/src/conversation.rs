@@ -581,7 +581,7 @@ fn read_composer_changes(
   Ok((pages, created))
 }
 
-fn chat_time_limit() -> Duration {
+pub(crate) fn chat_time_limit() -> Duration {
   std::env::var(crate::TURN_TIME_LIMIT_ENV)
     .ok()
     .and_then(|value| value.trim().parse::<u64>().ok())

@@ -74,7 +74,21 @@ NIHO_DOCS_SHELL=dev    npm -C apps/docs run dev:fake    # 開発の editor（loc
   - 一時置き場（`src-tauri/src/staging.rs`）は app data の `staging/<操作の id>/`（0700・中は 0600）。起動時に 24 時間より古い残骸を掃く。
     端末内の文字起こしと CLI の AI で同じ仕組みを使う（設計 §13）。
   - 結果（文字起こし・音声）をサーバーへ書くのは画面の側（native はサーバーの API に触らない）。
-- 次の段で足すもの：CLI の AI の command（一時置き場の `page/` を直接編集 → 画面が T5 の口へ書き戻す）、`packages/desktop-bridge`（TS の glue）、旧い画面の退役。
+- **端末の力 ②**（第 3 段・`src-tauri/src/shell_ai.rs`）：CLI の AI。本人のサブスクのアカウントで Claude Code・Codex CLI・Antigravity CLI を
+  この Mac で動かし、旧アプリと同じく**文書ファイルを直接編集する**。
+  - `shell_ai_engines`：3 つの CLI の状態（入っているか・ログイン済みか・使えるモデルの一覧）。パス・版は返さない。
+  - `shell_ai_turn(turnId, request)`：依頼は固定の形 `{ engine: "cli:claude-code" | "cli:codex" | "cli:antigravity", model, effort?,
+    conversationId?, resumeSession?, instruction, page: { pageId, title, markdown }, context: [{ name, title, markdown }] }`（知らない項目は断る）。
+    一時置き場 `staging/<会話の id の hash>/` に `page/body.md`（書ける唯一の場所）・`context/<name>.md`・`instructions.md` を 0600 で置き、
+    `ToolPolicy::ProjectFolder { writable: ["page"] }` で CLI を起動する（cwd は一時置き場。同じ会話は同じ path＝CLI の続きが効く）。
+    進みは channel に `{ turnId, seq, event }`、結果は `{ finalEvent, page?: { pageId, markdown }, pageRemoved, extraFiles }`。
+    **サーバーへ書くのは画面**（T5 の `POST /api/pages/{id}/ai/chat/turns` の `writes`）。終わったら置き場は消す。
+  - `shell_ai_stop(turnId)`：止める。
+  - 安全性（設計 §13）：remote 由来の文字列で CLI の引数に載るのは**モデルの ID だけ**（`is_safe_model`：空白・制御文字なし・`-` で始まらない）。
+    システムプロンプトは native が組み、画面の文字列は題名（1 行に畳む）だけ入れる。指示は標準入力。`/bin/sh` は通らない。
+    Codex は唯一の writable root（`page/`）が cwd（crate の `TurnCtx::command`）なので、プロンプトの相対パスは provider ごとに組む。
+    同じ会話の依頼は重ねない（置き場の lease。重なったら `shell_ai_busy`）。
+- 次の段で足すもの：`packages/desktop-bridge`（TS の glue）、旧い画面の退役、配布の既定を remote に。
 
 ### NIHO アカウント（L5 #18557）
 
