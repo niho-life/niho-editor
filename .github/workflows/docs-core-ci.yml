@@ -13,6 +13,7 @@ on:
       - "packages/ui/**"
       - "packages/desktop-account/**"
       - "packages/desktop-vault/**"
+      - "packages/desktop-bridge/**"
       - "packages/niho-cloud-contract/**"
       - "packages/editor-publish-contract/**"
       - "packages/editor-publish/**"
@@ -208,6 +209,21 @@ jobs:
       - run: packages/docs-core/node_modules/.bin/tsc -p packages/desktop-vault/tsconfig.json
 
   # 名前は mac だが ubuntu で動く（必須チェックの名前なので変えない）。macOS で動くのは下の docs-mac-native だけ。
+  desktop-bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packages/desktop-bridge/package-lock.json
+      - run: npm -C packages/desktop-bridge ci
+      - run: npm -C packages/desktop-bridge run typecheck
+      - run: npm -C packages/desktop-bridge run lint
+      - run: npm -C packages/desktop-bridge test
+
   docs-mac-frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 20
