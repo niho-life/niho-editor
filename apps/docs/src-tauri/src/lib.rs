@@ -42,6 +42,7 @@ mod sample_url;
 mod samples;
 mod secrets;
 mod shell;
+mod shell_ai;
 #[cfg(target_os = "macos")]
 mod single_instance;
 mod speech;
@@ -2764,6 +2765,9 @@ pub fn run() {
       shell::shell_staging_discard,
       shell::shell_transcribe_local,
       shell::shell_transcribe_stop,
+      shell_ai::shell_ai_engines,
+      shell_ai::shell_ai_turn,
+      shell_ai::shell_ai_stop,
       app_paths,
       load_settings,
       save_settings,

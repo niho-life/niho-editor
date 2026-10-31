@@ -108,6 +108,9 @@ fn shell_commands() -> BTreeSet<String> {
     "shell_staging_discard",
     "shell_transcribe_local",
     "shell_transcribe_stop",
+    "shell_ai_engines",
+    "shell_ai_turn",
+    "shell_ai_stop",
   ]
   .into_iter()
   .map(String::from)
@@ -139,6 +142,8 @@ fn the_remote_editor_capability_reaches_only_the_shell_commands() {
     "read_page",
     "run_turn",
     "run_chat_turn",
+    "stop_turn",
+    "provider_status",
     "save_api_key",
     "personal_open",
     "cloud_state",
