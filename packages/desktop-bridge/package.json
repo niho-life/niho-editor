@@ -1,0 +1,29 @@
+{
+  "name": "niho-desktop-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Mac の殻（apps/docs）が editor.niho.life に見せる command の型付きの包み。Tauri の import は tauri-shell-transport.ts だけ。command の一覧は apps/docs/src-tauri/permissions/docs.toml の allow-editor-shell とテストで突き合わせる。docs/architecture/editor-niho-life-design.md §13",
+  "exports": {
+    "./*": "./src/*.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@tauri-apps/api": "^2.12.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/api": "^2.12.0",
+    "@types/node": "^24",
+    "@typescript-eslint/parser": "^8.70.1",
+    "eslint": "^10.11.0",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": "24.x"
+  }
+}
