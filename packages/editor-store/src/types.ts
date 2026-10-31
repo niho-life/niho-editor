@@ -30,6 +30,8 @@ export type Page = {
   parent: string | null;
   recipe: string | null;
   stepStatus: StepStatus | null;
+  /** 同じ親の中の手動の並び（小さいほど上。0 は並べ替えていない）。 */
+  sortOrder: number;
   /** 楽観ロックの番号。保存のたびに +1。保存の要求はこれを `baseRevision` として持ってくる。 */
   revision: number;
   createdAt: string;
@@ -57,7 +59,7 @@ export type PagePublicationSummary = {
  * 一覧の 1 行（本文は含めない）。parent はサブページを親の下に並べるため、stepStatus は「作成中」を出すため、
  * publication は 2 行目の公開先を出すため。
  */
-export type PageSummary = Pick<Page, "id" | "kind" | "title" | "lang" | "parent" | "stepStatus" | "createdAt" | "updatedAt"> & {
+export type PageSummary = Pick<Page, "id" | "kind" | "title" | "lang" | "parent" | "stepStatus" | "sortOrder" | "createdAt" | "updatedAt"> & {
   publication: PagePublicationSummary | null;
 };
 
@@ -97,6 +99,15 @@ export type SaveOptions = {
  * `too_deep` は段が深くなりすぎる移動、`cycle` は自分自身・自分の子孫の下へ入れる移動（どちらも何も書かない）。
  */
 export type MovePageResult = "moved" | "too_deep" | "cycle";
+
+/** 手動の並びを 1 つ動かす向き。 */
+export type OrderMove = "up" | "down";
+
+/**
+ * 手動の並びを動かした結果（ページが無いときは null）。`edge` はもう端にいる（何も書かない）。
+ * 動かすと、同じ親の中の全ての行に 1 から振り直す。
+ */
+export type MoveOrderResult = "moved" | "edge";
 
 /** 保存の結果（該当するページが無いときは null）。競合のときは何も書かず、今のページを返す。 */
 export type SaveResult = { status: "saved"; page: Page } | { status: "conflict"; page: Page };

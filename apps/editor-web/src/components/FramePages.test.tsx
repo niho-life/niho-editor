@@ -96,7 +96,7 @@ describe("NewPage: the creation redirect belongs to the draft that made the page
 
 describe("OpenPage: the steps band, the transcript, then the title and body", () => {
   const PAGE = "33333333-3333-4333-8333-333333333333";
-  const summary = (kind: "note" | "rec" | "step", parent: string | null = null) => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent, stepStatus: null, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
+  const summary = (kind: "note" | "rec" | "step", parent: string | null = null) => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent, stepStatus: null, sortOrder: 0, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
 
   async function open(kind: "note" | "rec" | "step", parent: string | null = null) {
     container = document.createElement("div");
@@ -154,7 +154,7 @@ describe("OpenPage: the steps band, the transcript, then the title and body", ()
 
 describe("OpenPage: the language and the recording length for the info panel", () => {
   const ID = "33333333-3333-4333-8333-333333333333";
-  const summary = { id: ID, kind: "rec" as const, title: "合成の録音", lang: "en" as const, parent: null, stepStatus: null, publication: null, createdAt: "2026-10-28T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" };
+  const summary = { id: ID, kind: "rec" as const, title: "合成の録音", lang: "en" as const, parent: null, stepStatus: null, sortOrder: 0, publication: null, createdAt: "2026-10-28T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" };
 
   it("opens the editor in the page's language, tells the frame the recording length, and reports a saved language change to the list", async () => {
     container = document.createElement("div");

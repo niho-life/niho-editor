@@ -18,8 +18,8 @@ Issue #45 の前半（対応表とデータの移行手順）です。Mac アプ
 
 | 現行の機能 | 現行の場所 | editor での置き場所 | 状態 | 難所 |
 | --- | --- | --- | --- | --- |
-| ホーム／最近 | `pages.json`、`HomeScreen`、`recent.json` | サイドバーの一覧（更新順） | 変換 | 手動の並び（`PageIndex.order`）は無くなる。`pages.json` に更新時刻が無く、Rust が mtime から出している |
-| フォルダ（入れ子なし） | `Project`、`project.json`、`FolderScreen`、`FolderInfo` | サイドバーにフォルダは無い（親子は録音→手順のサブページだけ） | 受け皿なし | 背景情報、登場人物、固有名詞、自動参考ページ（同じフォルダの独立文書を最大 64 枚）の行き先 |
+| ホーム／最近 | `pages.json`、`HomeScreen`、`recent.json` | サイドバーの木（手動の並び ＋ 更新順）と「最近」 | そのまま | 手動の並びは `pages.sort_order`、「最近」は `page_opens`（migration `20261101013000_folder_order_fields_opens`。[editor-recipes-and-folders.md](editor-recipes-and-folders.md) §4）。`pages.json` に更新時刻が無く、Rust が mtime から出している |
+| フォルダ（入れ子なし） | `Project`、`project.json`、`FolderScreen`、`FolderInfo` | フォルダ＝子を持てるページ（`pages.parent`。サイドバーは 1 本の木） | そのまま | 背景情報はフォルダのページの本文、登場人物・固有名詞は `page_fields`（`20261101013000_folder_order_fields_opens`）。自動参考ページは `GET /api/pages/{id}/children` を T5 が使う（§3・§4） |
 | 文書ページ | `pages/<id>.md`、`DocumentScreen`、`BlockEditor` | `pages`（`kind=note`）＋ `blocks` | 変換 | Markdown → TipTap。表・コードなど限定 AST 外の要素。画像 `niho-docs-asset:` → `assets`。editor の本文は 1 MiB まで（現行は最大 8 MiB） |
 | 録音ページ・音声 | `Recording`、`inputs/`、`RecordingScreen`、`AudioPlaybackBar` | `pages`（`kind=rec`）＋録音ブロック＋ `assets`（`kind=audio`） | 変換 | 複数音声（Part、時刻のずらし）。音声は 1 ファイル 2 GiB・1 録音 6 時間まで。`available:false`（手元に無い音声）。`recording` を持つ列が無い |
 | 文字起こし・話者・別エンジン案 | `transcript.md`、`transcript-speakers.ts`、`candidateSets` | 録音の `transcript: Segment[]`、`speakers[]` | 変換（案は受け皿なし） | `[hh:mm:ss] 話者N: 本文` の行を分解する。話者名は版ごと（`RunRecord.transcriptSpeakerNames`）。終了時刻やミリ秒は `source.vtt` にしか無い |
@@ -28,7 +28,7 @@ Issue #45 の前半（対応表とデータの移行手順）です。Mac アプ
 | 版・履歴・この版に戻す | `versions/<stepId>/v_*.md`、`runs.jsonl`、`auto-version.ts` | `page_versions`、「…」の履歴 | 変換 | `reason` に restore や手動が無い。版の本文は Markdown → blocks。版の数とサイズ |
 | AI と作る | `conversation.ts`、`composer.ts`、`ChatPanel`、`DiffDialog` | ページの AI（書式バーの「AI」＋差分の提案） | 受け皿なし | 会話履歴の置き場が無い（設計 §6 は提案を採用まで保存しない）。新しい文書を作る動作、フォルダ内の他ページを見る動作は消える。CLI 方式は Mac のみ |
 | リンクで共有 | `page-sharing.ts`、`page-sharing-panel.tsx` | 「…」›リンクで共有、`/s/{token}`（#34） | 変換 | 既存 URL は `niho.life/docs/p#<22文字>`。`share` の列が無い。「最新の本文」型か固定した版か |
-| 書き出し | `PageTop`、`folder-export-tree.ts`、`GoogleDocs*` | 「…」›書き出し（.md＋写真の zip、Google ドキュメント）、設定 › 保存 | 変換 | フォルダ前提の木を、ページ＋サブページの木に作り替える。「Finder で表示」は Mac のみ。全ページの一括書き出しは現行に無い |
+| 書き出し | `PageTop`、`folder-export-tree.ts`、`GoogleDocs*` | 「…」›書き出し（.md）、情報パネル › このフォルダの中をまとめて（.md＋写真の zip）、設定 › 保存 | 変換 | フォルダの木の書き出しは `GET /api/pages/{id}/export.zip`（§4）。Google ドキュメントと、選んで書き出す（旧 `include`）はまだ無い。「Finder で表示」は Mac のみ |
 | 取り込み（VTT・音声・お手本） | `vtt.ts`、`importAudio`、`FlowDesign` のお手本 | 録音から／音声ファイルから（.vtt 可）、手順のお手本 | 変換 | `transcriptImport` のメタデータと `source.vtt` の原本の置き場。ページや保管庫全体の取り込みは現行に無い |
 | 設定：あなたについて | `about.json`（2,000 字） | 設定 › プロフィール（紹介）または AI | 受け皿なし | 意味が違う（プロンプト用の本人情報と、公開時の著者情報） |
 | 設定：接続・モデル | `settings.json`、`Settings.tsx` | Web は不要（サーバー側） | Mac のみ | API キー・CLI のログインは移せない |
@@ -81,7 +81,9 @@ Issue #45 の前半（対応表とデータの移行手順）です。Mac アプ
 
 ## 5. 失われやすいもの（editor に受け皿が無い）
 
-手動の並び、フォルダ、「最近」、自動参考ページ、複数案（`candidateSets`）、stale 判定の根拠（`Basis`）、AI と作る の会話と差分の控え、実行記録と使用量、`RunCheckpoint`、派生文書の出典（`derivation`）、端末ごとの設定（`settings.json`・API キー・CLI のログイン）。残すか捨てるかは §7-4。残す場合は書き出し（zip）に入れるか、新しい表を切る。
+**手動の並び・フォルダ・「最近」・フォルダの背景情報・登場人物・固有名詞は受け皿を作った**（migration `20261101013000_folder_order_fields_opens`・
+[editor-recipes-and-folders.md](editor-recipes-and-folders.md) §3・§4。オーナー判断 2026-11-01）。残っているのは:
+複数案（`candidateSets`）、stale 判定の根拠（`Basis`）、AI と作る の会話と差分の控え、実行記録と使用量、`RunCheckpoint`、派生文書の出典（`derivation`）、端末ごとの設定（`settings.json`・API キー・CLI のログイン）。残すか捨てるかは §7-4。残す場合は書き出し（zip）に入れるか、新しい表を切る。
 
 ## 6. Mac アプリ（#45 の後半）：作り直さず、殻にする
 

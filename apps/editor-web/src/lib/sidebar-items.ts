@@ -83,10 +83,22 @@ export function withoutPageTree(pages: readonly PageSummary[], id: string): Page
   return pages.filter((page) => !removed.has(page.id));
 }
 
-/** 作った順（手順の順）。ISO 8601 の UTC の文字列は文字の順が時刻の順。 */
-function byCreated(a: PageSummary, b: PageSummary): number {
+/**
+ * フォルダ・録音の中の並び（editor-store の `orderOf` と同じ規則）: 手動の並びが先で、同じなら作った順。
+ * ISO 8601 の UTC の文字列は文字の順が時刻の順。
+ */
+function byOrderThenCreated(a: PageSummary, b: PageSummary): number {
+  if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
   if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * 上の段の並び（editor-store の `orderOf` と同じ規則）: 手動の並びが先で、同じなら渡した順（サーバーの更新の新しい順）。
+ * 並べ替えていない行（0）は上に来る＝新しく作ったページが先頭に出る。
+ */
+function byOrderThenGiven(a: PageSummary, b: PageSummary): number {
+  return a.sortOrder - b.sortOrder;
 }
 
 /** 木の段の上限（editor-store の `MAX_PAGE_DEPTH` と同じ。フォルダ › ページ › 録音のサブページ）。 */
@@ -95,7 +107,8 @@ const MAX_DEPTH = 2;
 /**
  * サイドバーの 1 本の木（フォルダ＝子を持てるページ。docs/architecture/editor-recipes-and-folders.md §3・§4）。
  *
- * - 上の段は渡した順（更新順）。その中の行は作った順（手順のサブページが段の順に並ぶ）。
+ * - 並びは手動の並び（`sortOrder`）が先。同じなら上の段は渡した順（更新順）、その中の行は作った順
+ *   （手順のサブページが段の順に並ぶ）。読み込んだ分の中で並べ替えるので、まだ読んでいないページは続きを読んだときに入る。
  * - 親を読み込んでいない行・親子が壊れている行は上の段に出す（行が消えない）。
  * - `collapsed` のフォルダは、中の行を出さない（`folder` の行の `open` が false になる）。
  * - 段は 2 まで（フォルダ › ページ › 録音のサブページ）。それより深い行は出さない（サーバーもその移動を断る）。
@@ -120,13 +133,14 @@ export function arrangeSidebarItems(pages: readonly PageSummary[], options: { no
   const walk = (page: PageSummary, depth: 0 | 1 | 2): void => {
     if (shown.has(page.id)) return;
     shown.add(page.id);
-    const under = depth < MAX_DEPTH ? (children.get(page.id) ?? []).toSorted(byCreated) : [];
+    const under = depth < MAX_DEPTH ? (children.get(page.id) ?? []).toSorted(byOrderThenCreated) : [];
     const open = under.length > 0 && collapsed?.has(page.id) !== true;
     items.push(rowOf(page, now, depth, under.length > 0, open));
     if (!open) return;
     for (const child of under) walk(child, (depth + 1) as 1 | 2);
   };
-  for (const top of tops) walk(top, 0);
+  // 手動の並び（渡した順＝更新の新しい順は、同じ並びの中でそのまま。sort は安定）
+  for (const top of tops.toSorted(byOrderThenGiven)) walk(top, 0);
   return items;
 }
 
@@ -160,4 +174,43 @@ export function folderOptions(pages: readonly PageSummary[], id: string): { id: 
     }
   }
   return pages.filter((page) => page.parent === null && !inside.has(page.id)).map((page) => ({ id: page.id, title: page.title }));
+}
+
+/**
+ * そのページが同じ階層の中で上へ・下へ動かせるか（情報パネルの「並び」。読み込んである行で見る）。
+ * 木に出ていない行（親を読み込んでいない・段が深すぎる）は動かせない扱いにする。
+ */
+export function orderNeighbours(pages: readonly PageSummary[], id: string): { canUp: boolean; canDown: boolean } {
+  const page = pages.find((item) => item.id === id);
+  if (!page) return { canUp: false, canDown: false };
+  const siblings = pages.filter((item) => item.parent === page.parent);
+  const sorted = page.parent === null ? siblings.toSorted(byOrderThenGiven) : siblings.toSorted(byOrderThenCreated);
+  const at = sorted.findIndex((item) => item.id === id);
+  return { canUp: at > 0, canDown: at >= 0 && at < sorted.length - 1 };
+}
+
+/** 「最近」の行（木にしない。段も開閉も持たない）。 */
+export function recentRows(pages: readonly PageSummary[], now: number): ShellListItem[] {
+  return pages.map((page) => rowOf(page, now, 0, false, false));
+}
+
+/**
+ * 並べ替えたあとの行（サーバーと同じ規則で作り直す）。同じ階層の行を今の並びで取り、1 つ動かして 1 から振り直す。
+ * 動かせない（もう端・木に出ていない）ときは渡した配列をそのまま返す。
+ */
+export function reorderedPages(pages: readonly PageSummary[], id: string, move: "up" | "down"): PageSummary[] {
+  const page = pages.find((item) => item.id === id);
+  if (!page) return [...pages];
+  const siblings = pages.filter((item) => item.parent === page.parent);
+  const sorted = page.parent === null ? siblings.toSorted(byOrderThenGiven) : siblings.toSorted(byOrderThenCreated);
+  const at = sorted.findIndex((item) => item.id === id);
+  const to = move === "up" ? at - 1 : at + 1;
+  if (at < 0 || to < 0 || to >= sorted.length) return [...pages];
+  const moved = [...sorted];
+  [moved[at], moved[to]] = [moved[to]!, moved[at]!];
+  const orders = new Map(moved.map((item, index) => [item.id, index + 1]));
+  return pages.map((item) => {
+    const order = orders.get(item.id);
+    return order === undefined ? item : { ...item, sortOrder: order };
+  });
 }

@@ -73,7 +73,7 @@ afterEach(async () => {
 const NOW = Date.parse("2026-10-31T03:00:00.000Z");
 
 function page(id: string, title = id): PageSummary {
-  return { id, kind: "note", title, lang: "ja", parent: null, stepStatus: null, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z", publication: null };
+  return { id, kind: "note", title, lang: "ja", parent: null, stepStatus: null, sortOrder: 0, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z", publication: null };
 }
 
 let mounted: FrameInitial | null = null;
@@ -82,7 +82,7 @@ async function mount(initial: Partial<FrameInitial> = {}, children: ReactNode = 
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  mounted = { pages: [], next: null, now: NOW, me: { name: "開発ユーザー", caption: "stub", initial: "開" }, initialNarrow: false, ...initial };
+  mounted = { pages: [], next: null, recent: [], now: NOW, me: { name: "開発ユーザー", caption: "stub", initial: "開" }, initialNarrow: false, ...initial };
   await rerender(children);
   return container;
 }
@@ -313,7 +313,7 @@ describe("EditorFrame", () => {
     expect(nav.push).not.toHaveBeenCalled();
 
     nav.pathname = "/settings";
-    await act(async () => root!.render(<EditorFrame initial={{ pages: [], next: null, now: NOW, me: { name: "x", caption: "", initial: "x" }, initialNarrow: true }}>{null}</EditorFrame>));
+    await act(async () => root!.render(<EditorFrame initial={{ pages: [], next: null, recent: [], now: NOW, me: { name: "x", caption: "", initial: "x" }, initialNarrow: true }}>{null}</EditorFrame>));
     expect(container!.querySelector(".es-ttl")?.textContent).toBe("設定");
     expect(container!.querySelector(".es-dt--plain")).not.toBeNull();
   });
@@ -2076,5 +2076,167 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
     ]);
     await act(async () => bar.querySelector<HTMLButtonElement>('button[aria-label="録音"]')!.click());
     expect(nav.push).toHaveBeenLastCalledWith("/p/new?from=recording");
+  });
+});
+
+describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・フォルダの書き出し（#37）", () => {
+  const FOLDER = "00000000-0000-4000-8000-0000000000f0";
+  const INSIDE = "00000000-0000-4000-8000-0000000000f1";
+  const OTHER = "00000000-0000-4000-8000-0000000000f2";
+  const inside = (parent: string, id: string, title: string): PageSummary => ({ ...page(id, title), parent });
+
+  function FakePage({ page: attached }: { page: AttachedPage }) {
+    const { attachPage } = useEditorFrame();
+    useEffect(() => attachPage(attached), [attachPage, attached]);
+    return <p>合成の本文</p>;
+  }
+  /** 開いたページ（OpenPage と同じく、一覧の行を枠に知らせる）。 */
+  function OpenedPage({ summary }: { summary: PageSummary }) {
+    const { pageOpened } = useEditorFrame();
+    useEffect(() => pageOpened(summary), [pageOpened, summary]);
+    return <p>合成の本文</p>;
+  }
+  function fakePage(id: string | null): AttachedPage {
+    return {
+      id,
+      status: "saved",
+      flush: vi.fn(async () => true),
+      revision: () => 1,
+      reopen: vi.fn(),
+      shared: null,
+      setShared: vi.fn(),
+      lang: "ja",
+      setLang: vi.fn(),
+      langNote: null,
+      text: { read: () => "", subscribe: () => () => undefined },
+    };
+  }
+  async function until(condition: () => boolean) {
+    for (let tries = 0; tries < 200 && !condition(); tries++) await act(async () => await new Promise((resolve) => setTimeout(resolve, 5)));
+    expect(condition()).toBe(true);
+  }
+
+  /** 「最近」の節の行（無ければ null）。 */
+  const recentRows = () => {
+    const group = container!.querySelector(".es-sb-group");
+    return group ? [...group.querySelectorAll(".es-di-t")].map((node) => node.textContent) : null;
+  };
+  const railButton = (label: string) => [...container!.querySelectorAll<HTMLButtonElement>(".es-rail button")].find((button) => (button.getAttribute("aria-label") ?? button.textContent)?.includes(label));
+
+  it("「最近」は木の上に出て、開閉でき、ページを開くとサーバーに記録して前に出る", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push(`${init?.method ?? "GET"} ${url}`);
+        return new Response(null, { status: 204 });
+      }),
+    );
+    nav.pathname = `/p/${OTHER}`;
+    await mount({ pages: [page(FOLDER, "鎌倉の記事"), page(OTHER, "別のページ")], recent: [page(FOLDER, "鎌倉の記事")] }, <p>本文</p>);
+    expect(recentRows()).toEqual(["鎌倉の記事"]);
+
+    // 開閉（開いているのが既定）
+    const head = container!.querySelector<HTMLButtonElement>(".es-sb-grouphd")!;
+    expect(head.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => head.click());
+    expect(recentRows()).toEqual([]);
+    await act(async () => container!.querySelector<HTMLButtonElement>(".es-sb-grouphd")!.click());
+
+    // ページを開くと記録し、「最近」の先頭に出る
+    await rerender(<OpenedPage summary={page(OTHER, "別のページ")} />);
+    await until(() => calls.some((call) => call.includes("/open")));
+    expect(calls.filter((call) => call.includes("/open"))).toEqual([`POST /api/pages/${OTHER}/open`]);
+    expect(recentRows()).toEqual(["別のページ", "鎌倉の記事"]);
+  });
+
+  it("「最近」は検索しているあいだ出さない", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ hits: [] }), { status: 200, headers: { "content-type": "application/json" } })));
+    await mount({ pages: [page(FOLDER, "鎌倉の記事")], recent: [page(FOLDER, "鎌倉の記事")] });
+    expect(recentRows()).toEqual(["鎌倉の記事"]);
+    await click('button[aria-label="探す"]');
+    await act(async () => {
+      const input = container!.querySelector<HTMLInputElement>('[role="search"] input')!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "鎌倉");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(recentRows()).toBeNull();
+  });
+
+  it("情報パネルの「並び」で 1 つ動かし、木の順が変わる", async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, body: init?.body === undefined ? undefined : JSON.parse(String(init.body)) });
+        return new Response(JSON.stringify({ moved: true }), { status: 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+    nav.pathname = `/p/${OTHER}`;
+    // 上の段は渡した順（更新の新しい順）。別のページが下
+    await mount({ pages: [page(FOLDER, "鎌倉の記事"), page(OTHER, "別のページ")] }, <FakePage page={fakePage(OTHER)} />);
+    expect(rows()).toEqual(["鎌倉の記事", "別のページ"]);
+    await click('.es-dt button[aria-label="このページの設定と AI"]');
+
+    const up = railButton("1 つ上へ")!;
+    expect(up.getAttribute("aria-disabled")).toBeNull();
+    expect(railButton("1 つ下へ")?.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => up.click());
+    await until(() => rows()[0] === "別のページ");
+    expect(calls.filter((call) => call.url.includes("/order"))).toEqual([{ url: `/api/pages/${OTHER}/order`, body: { move: "up" } }]);
+    // 端に来たので「上へ」が押せなくなる
+    await until(() => railButton("1 つ上へ")?.getAttribute("aria-disabled") === "true");
+  });
+
+  it("「このフォルダの背景」はフォルダのページでだけ出し、登場人物と固有名詞を保存する", async () => {
+    const calls: { method: string; url: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ method: init?.method ?? "GET", url, body: init?.body === undefined ? undefined : JSON.parse(String(init.body)) });
+        const fields = init?.method === "PATCH" ? JSON.parse(String(init.body)) : { entities: [], terms: [] };
+        return new Response(JSON.stringify({ fields }), { status: 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+    nav.pathname = `/p/${FOLDER}`;
+    await mount({ pages: [page(FOLDER, "鎌倉の記事"), inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER)} />);
+    await click('.es-dt button[aria-label="このページの設定と AI"]');
+    await until(() => calls.some((call) => call.url.includes("/fields")));
+    expect(container!.querySelector(".es-psfields")?.textContent).toContain("このフォルダの背景");
+
+    await act(async () => railButton("編集")!.click());
+    await act(async () => [...container!.querySelectorAll<HTMLButtonElement>(".es-rail button")].find((button) => button.textContent === "行を追加")!.click());
+    await act(async () => {
+      const input = container!.querySelector<HTMLInputElement>(".es-psfields input")!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "田中");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => railButton("登場人物を保存")!.click());
+    await until(() => calls.some((call) => call.method === "PATCH"));
+    expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({ entities: [{ name: "田中", reading: "", role: "", note: "" }], terms: [] });
+
+    // フォルダでないページには節を出さない
+    nav.pathname = `/p/${INSIDE}`;
+    await rerender(<FakePage page={fakePage(INSIDE)} />);
+    expect(container!.querySelector(".es-psfields")).toBeNull();
+  });
+
+  it("フォルダの書き出しは zip の URL を押す（フォルダでないページには出さない）", async () => {
+    const clicked: string[] = [];
+    const click_ = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {
+      clicked.push(this.getAttribute("href") ?? "");
+    };
+    try {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ fields: { entities: [], terms: [] } }), { status: 200, headers: { "content-type": "application/json" } })));
+      nav.pathname = `/p/${FOLDER}`;
+      await mount({ pages: [page(FOLDER, "鎌倉の記事"), inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER)} />);
+      await click('.es-dt button[aria-label="このページの設定と AI"]');
+      const button = [...container!.querySelectorAll<HTMLButtonElement>(".es-rail button")].find((item) => item.textContent?.includes("このフォルダの中をまとめて"))!;
+      await act(async () => button.click());
+      expect(clicked).toEqual([`/api/pages/${FOLDER}/export.zip`]);
+    } finally {
+      HTMLAnchorElement.prototype.click = click_;
+    }
   });
 });

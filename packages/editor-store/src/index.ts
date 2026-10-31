@@ -62,6 +62,21 @@ export {
   type SettingsTerm,
 } from "./settings.ts";
 export {
+  EMPTY_PAGE_FIELDS,
+  PAGE_FIELD_LIMITS,
+  cleanPageFieldsPatch,
+  getPageFields,
+  hasPageFields,
+  isPageEntity,
+  pageFieldsProblem,
+  savePageFields,
+  type PageEntity,
+  type PageFields,
+  type PageFieldsPatch,
+  type PageFieldsProblem,
+} from "./page-fields.ts";
+export { RECENT_LIMIT, listRecentPages, recordPageOpen } from "./page-opens.ts";
+export {
   RECIPE_LIMITS,
   RECIPE_ORIGINS,
   addRecipes,

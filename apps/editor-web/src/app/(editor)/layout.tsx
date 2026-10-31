@@ -2,8 +2,9 @@ import type { ReactNode } from "react";
 import { headers } from "next/headers";
 import { EditorFrame } from "@/components/EditorFrame";
 import { StoreUnavailable } from "@/components/Notice";
+import { listRecentPages } from "@niho/editor-store";
 import { PAGE_CHUNK } from "@/lib/page-limits";
-import { getStore } from "@/server/db";
+import { getPool, getStore } from "@/server/db";
 import { frameMe, guessNarrow } from "@/server/frame";
 import { requireSession } from "@/server/session";
 
@@ -22,10 +23,16 @@ export default async function EditorLayout({ children }: { children: ReactNode }
   const session = await requireSession();
   const store = getStore();
   if (!store) return <StoreUnavailable />;
-  const [chunk, requestHeaders] = await Promise.all([store.listPageChunk(session.userId, { limit: PAGE_CHUNK }), headers()]);
+  const pool = getPool();
+  const [chunk, recent, requestHeaders] = await Promise.all([
+    store.listPageChunk(session.userId, { limit: PAGE_CHUNK }),
+    // 「最近」（#37。開いたページの記録。行が無ければ空）
+    pool ? listRecentPages(pool, session.userId) : Promise.resolve([]),
+    headers(),
+  ]);
   return (
     <EditorFrame
-      initial={{ pages: chunk.pages, next: chunk.next, now: renderedAt(), me: frameMe(session), initialNarrow: guessNarrow(requestHeaders) }}
+      initial={{ pages: chunk.pages, next: chunk.next, recent, now: renderedAt(), me: frameMe(session), initialNarrow: guessNarrow(requestHeaders) }}
     >
       {children}
     </EditorFrame>

@@ -213,7 +213,7 @@ export function EditorSettingsPage(props: EditorSettingsPageProps) {
           </ShellKv>
         </ShellKvs>
         {termsDraft !== null && (
-          <TermsEditor terms={termsDraft} max={limits.glossary} busy={busy} onChange={props.onTermsDraft} onCancel={props.onCancelTerms} onSave={props.onSaveTerms} />
+          <ShellTermsEditor terms={termsDraft} max={limits.glossary} busy={busy} onChange={props.onTermsDraft} onCancel={props.onCancelTerms} onSave={props.onSaveTerms} />
         )}
         {usage?.nearLimit && (
           <p role="alert" style={NOTE}>
@@ -312,14 +312,20 @@ export function EditorSettingsPage(props: EditorSettingsPageProps) {
   );
 }
 
-/** 固有名詞と誤りやすい表記の編集。誤りやすい表記は 1 つの欄に「・」で並べて書く。 */
-function TermsEditor({
+/**
+ * 固有名詞と誤りやすい表記の編集。誤りやすい表記は 1 つの欄に「・」で並べて書く。
+ * 設定（アカウント共通）とフォルダの欄（#37）で同じ部品を使う（`heading` で見出しの言葉だけを替える）。
+ */
+export function ShellTermsEditor({
   terms,
   max,
   busy,
   onChange,
   onCancel,
   onSave,
+  heading = "固有名詞と誤りやすい表記",
+  help = EDITOR_SETTINGS_TEXT.termsHelp,
+  name = "固有名詞",
 }: {
   terms: EditorSettingsTermDraft[];
   max: number;
@@ -327,6 +333,10 @@ function TermsEditor({
   onChange: (next: EditorSettingsTermDraft[]) => void;
   onCancel: () => void;
   onSave: () => void;
+  heading?: string;
+  help?: string;
+  /** ボタンのアクセシブル名に使う短い名前（「◯◯を保存」）。 */
+  name?: string;
 }) {
   const headingId = useId();
   const busyProps = busy ? { "aria-disabled": true as const, style: BUSY } : {};
@@ -334,9 +344,9 @@ function TermsEditor({
   return (
     <div style={STACK} role="group" aria-labelledby={headingId}>
       <h3 id={headingId} style={SUBHEAD}>
-        固有名詞と誤りやすい表記
+        {heading}
       </h3>
-      <p style={NOTE}>{EDITOR_SETTINGS_TEXT.termsHelp}</p>
+      <p style={NOTE}>{help}</p>
       {terms.length === 0 && <p style={EMPTY}>{EDITOR_SETTINGS_TEXT.empty}</p>}
       {terms.map((entry, index) => (
         <div key={index} style={CARD}>
@@ -360,10 +370,75 @@ function TermsEditor({
             行を追加
           </button>
         )}
-        <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-label="固有名詞の編集をやめる" onClick={onCancel}>
+        <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-label={`${name}の編集をやめる`} onClick={onCancel}>
           やめる
         </button>
-        <button type="button" className="es-btn es-btn--primary es-btn--sm" aria-label="固有名詞を保存" {...busyProps} onClick={() => !busy && onSave()}>
+        <button type="button" className="es-btn es-btn--primary es-btn--sm" aria-label={`${name}を保存`} {...busyProps} onClick={() => !busy && onSave()}>
+          保存
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** 登場人物の 1 行（フォルダの欄。#37）。固有名詞と違って区切りの欄が無いので、打ったままの文字列は持たない。 */
+export type EditorSettingsEntityDraft = { name: string; reading: string; role: string; note: string };
+
+/** 登場人物の編集（フォルダの欄。名前・よみ・役割・補足）。固有名詞の編集（`ShellTermsEditor`）と同じ形。 */
+export function ShellEntitiesEditor({
+  entities,
+  max,
+  busy,
+  onChange,
+  onCancel,
+  onSave,
+  heading = "登場人物",
+  help = "録音に出てくる人を書いておくと、文字起こしと AI の提案で名前の表記が揃います。",
+}: {
+  entities: EditorSettingsEntityDraft[];
+  max: number;
+  busy: boolean;
+  onChange: (next: EditorSettingsEntityDraft[]) => void;
+  onCancel: () => void;
+  onSave: () => void;
+  heading?: string;
+  help?: string;
+}) {
+  const headingId = useId();
+  const busyProps = busy ? { "aria-disabled": true as const, style: BUSY } : {};
+  const at = (index: number, patch: Partial<EditorSettingsEntityDraft>) => onChange(entities.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)));
+  return (
+    <div style={STACK} role="group" aria-labelledby={headingId}>
+      <h3 id={headingId} style={SUBHEAD}>
+        {heading}
+      </h3>
+      <p style={NOTE}>{help}</p>
+      {entities.length === 0 && <p style={EMPTY}>{EDITOR_SETTINGS_TEXT.empty}</p>}
+      {entities.map((entry, index) => (
+        <div key={index} style={CARD}>
+          <div className="es-form">
+            <ShellField label={`${index + 1} 行目の名前`} value={entry.name} onChange={(name) => at(index, { name })} />
+            <ShellField label={`${index + 1} 行目のよみ`} value={entry.reading} onChange={(reading) => at(index, { reading })} />
+            <ShellField label={`${index + 1} 行目の役割`} value={entry.role} onChange={(role) => at(index, { role })} />
+            <ShellField label={`${index + 1} 行目の補足`} value={entry.note} onChange={(note) => at(index, { note })} />
+          </div>
+          <div style={ROW}>
+            <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-label={`この行を削除（${index + 1} 行目）`} onClick={() => onChange(entities.filter((_, i) => i !== index))}>
+              この行を削除
+            </button>
+          </div>
+        </div>
+      ))}
+      <div style={ROW}>
+        {entities.length < max && (
+          <button type="button" className="es-btn es-btn--outline es-btn--sm" onClick={() => onChange([...entities, { name: "", reading: "", role: "", note: "" }])}>
+            行を追加
+          </button>
+        )}
+        <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-label={`${heading}の編集をやめる`} onClick={onCancel}>
+          やめる
+        </button>
+        <button type="button" className="es-btn es-btn--primary es-btn--sm" aria-label={`${heading}を保存`} {...busyProps} onClick={() => !busy && onSave()}>
           保存
         </button>
       </div>

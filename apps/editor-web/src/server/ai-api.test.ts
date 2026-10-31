@@ -40,7 +40,7 @@ function memoryStore() {
     writes,
     async createPage(owner: string, input: CreatePageInput = {}): Promise<Page> {
       const now = new Date().toISOString();
-      const page: Page = { id: randomUUID(), kind: input.kind ?? "note", title: input.title ?? "", lang: input.lang ?? "ja", blocks: input.blocks ?? [], cover: null, lead: null, parent: null, recipe: null, stepStatus: null, revision: 1, createdAt: now, updatedAt: now };
+      const page: Page = { id: randomUUID(), kind: input.kind ?? "note", title: input.title ?? "", lang: input.lang ?? "ja", blocks: input.blocks ?? [], cover: null, lead: null, parent: null, recipe: null, stepStatus: null, sortOrder: 0, revision: 1, createdAt: now, updatedAt: now };
       rows.set(page.id, { ...structuredClone(page), owner, deleted: false });
       return page;
     },

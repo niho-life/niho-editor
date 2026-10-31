@@ -4,7 +4,9 @@ import {
   type CreatePageInput,
   type Database,
   type DeleteResult,
+  type MoveOrderResult,
   type MovePageResult,
+  type OrderMove,
   type OwnerId,
   type Page,
   type PageChunk,
@@ -37,6 +39,15 @@ export const PAGE_LIST_LIMIT = 500;
  * 2＝録音のサブページ（手順の成果物）。これより深くすると、一覧も検索も辿り切れなくなる。
  */
 export const MAX_PAGE_DEPTH = 2;
+
+/**
+ * 同じ親の中の並び（docs/architecture/editor-recipes-and-folders.md §3）。手動の並び（`sort_order`。0 は並べ替えていない）が
+ * 先で、同じ値なら: 上の段は**更新の新しい順**（今までの一覧と同じ）、フォルダ・録音の中は**作った順**（手順のサブページが
+ * 段の順に並ぶ）。SQL と画面（apps/editor-web の sidebar-items.ts）で同じ規則にする。
+ */
+function orderOf(parent: string | null, prefix = ""): string {
+  return parent === null ? `${prefix}sort_order, ${prefix}updated_at DESC, ${prefix}id` : `${prefix}sort_order, ${prefix}created_at, ${prefix}id`;
+}
 /** 版の一覧で返す上限（新しい順）。 */
 export const VERSION_LIST_LIMIT = 100;
 /** 1 ページに残す版の数。超えたら古い autosave の版から捨てる（autosave 以外の版は捨てない）。公開版は別の表（publication_versions）。 */
@@ -94,12 +105,13 @@ type PageRow = {
   parent: string | null;
   recipe: string | null;
   step_status: StepStatus | null;
+  sort_order: number;
   revision: number;
   created_at: Date;
   updated_at: Date;
 };
 
-type SummaryRow = Pick<PageRow, "id" | "kind" | "title" | "lang" | "parent" | "step_status" | "created_at" | "updated_at"> & {
+type SummaryRow = Pick<PageRow, "id" | "kind" | "title" | "lang" | "parent" | "step_status" | "sort_order" | "created_at" | "updated_at"> & {
   pub_dest: PublishDest | null;
   pub_handle: string | null;
   pub_range: PublishRange | null;
@@ -107,7 +119,7 @@ type SummaryRow = Pick<PageRow, "id" | "kind" | "title" | "lang" | "parent" | "s
 };
 
 /** 一覧の列（pages を p、公開を LEFT JOIN した publications を pub として読む）。 */
-const SUMMARY_COLUMNS = `p.id, p.kind, p.title, p.lang, p.parent, p.step_status, p.created_at, p.updated_at,
+const SUMMARY_COLUMNS = `p.id, p.kind, p.title, p.lang, p.parent, p.step_status, p.sort_order, p.created_at, p.updated_at,
        pub.dest AS pub_dest, pub.handle AS pub_handle, pub.range AS pub_range, pub.stopped_at IS NOT NULL AS pub_stopped`;
 
 const SUMMARY_FROM = "pages p LEFT JOIN publications pub ON pub.page_id = p.id";
@@ -117,7 +129,7 @@ type ChunkRow = SummaryRow & { cursor_time: string };
 
 type VersionRow = { version: number; reason: VersionReason; created_at: Date; block_count: number };
 
-const PAGE_COLUMNS = "id, kind, title, lang, blocks, cover, lead, parent, recipe, step_status, revision, created_at, updated_at";
+const PAGE_COLUMNS = "id, kind, title, lang, blocks, cover, lead, parent, recipe, step_status, sort_order, revision, created_at, updated_at";
 
 function toPage(row: PageRow): Page {
   return {
@@ -131,6 +143,7 @@ function toPage(row: PageRow): Page {
     parent: row.parent,
     recipe: row.recipe,
     stepStatus: row.step_status,
+    sortOrder: row.sort_order,
     revision: row.revision,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
@@ -145,6 +158,7 @@ function toSummary(row: SummaryRow): PageSummary {
     lang: row.lang,
     parent: row.parent,
     stepStatus: row.step_status,
+    sortOrder: row.sort_order,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     publication:
@@ -405,6 +419,92 @@ export class EditorStore {
         return "moved";
       }),
     );
+  }
+
+  /**
+   * 同じ親の中の手動の並びを 1 つ動かす（上へ・下へ。docs/architecture/editor-recipes-and-folders.md §3）。
+   *
+   * - 並びは `sort_order` が小さいほど上。同じ値なら更新の新しい順（0 は「並べ替えていない」で、今までの一覧と同じ）。
+   * - 動かすと、同じ親の全ての行に 1 から振り直す（0 のままの行が混ざって並びが決まらなくなるのを防ぐ）。
+   * - もう端にいるときは `edge`（何も書かない）。ページが無いときは null（同じ 404）。
+   * - 変えるのは `sort_order` だけ（`revision`・`updated_at`・本文は動かさない）。
+   */
+  async movePageOrder(owner: OwnerId, id: string, move: OrderMove): Promise<MoveOrderResult | null> {
+    assertOwner(owner);
+    if (!isPageId(id)) return null;
+    return this.#orNull(() =>
+      this.#transaction(async (client): Promise<MoveOrderResult | null> => {
+        const current = await lockPage(client, owner, id);
+        if (!current) return null;
+        // 同じ親の行を今の並びで（親が無い行どうしも「同じ親」）
+        const siblings = await client.query<{ id: string }>(
+          `SELECT id
+             FROM pages
+            WHERE owner = $1 AND deleted_at IS NULL AND parent IS NOT DISTINCT FROM $2::uuid
+            ORDER BY ${orderOf(current.parent)}`,
+          [owner, current.parent],
+        );
+        const ids = siblings.rows.map((row) => row.id);
+        const at = ids.indexOf(id);
+        const to = move === "up" ? at - 1 : at + 1;
+        if (at < 0 || to < 0 || to >= ids.length) return "edge";
+        [ids[at], ids[to]] = [ids[to]!, ids[at]!];
+        // 1 から振り直す（0 は「並べ替えていない」に残しておく）
+        await client.query(
+          `UPDATE pages AS p
+              SET sort_order = next.ord
+             FROM unnest($2::uuid[], $3::int[]) AS next(id, ord)
+            WHERE p.owner = $1 AND p.id = next.id`,
+          [owner, ids, ids.map((_, index) => index + 1)],
+        );
+        return "moved";
+      }),
+    );
+  }
+
+  /**
+   * そのページの中の行（同じ親の並びの順）。フォルダの子を列挙する口（自動参考ページ・書き出し・画面が使う）。
+   * `parent` に null を渡すと上の段。ページが無い・別の人のものなら空（親が本人のものかは呼ぶ側が先に確かめる）。
+   */
+  async listPageChildren(owner: OwnerId, parent: string | null, options: { limit?: number } = {}): Promise<PageSummary[]> {
+    assertOwner(owner);
+    if (parent !== null && !isPageId(parent)) return [];
+    const limit = Math.max(1, Math.min(options.limit ?? PAGE_LIST_LIMIT, PAGE_LIST_LIMIT));
+    const result = await this.#db.query<SummaryRow>(
+      `SELECT ${SUMMARY_COLUMNS}
+         FROM ${SUMMARY_FROM}
+        WHERE p.owner = $1 AND p.deleted_at IS NULL AND p.parent IS NOT DISTINCT FROM $2::uuid
+        ORDER BY ${orderOf(parent, "p.")}
+        LIMIT $3`,
+      [owner, parent, limit],
+    );
+    return result.rows.map(toSummary);
+  }
+
+  /**
+   * そのページとその下のページ（本文つき。書き出しが使う）。並びは、親のすぐ後ろにその中の行（並びの順）。
+   * 段は `MAX_PAGE_DEPTH` まで（それより深い行は読まない）。ページが無い・別の人のものなら空。
+   */
+  async listPageTree(owner: OwnerId, rootId: string, options: { limit?: number } = {}): Promise<Page[]> {
+    assertOwner(owner);
+    if (!isPageId(rootId)) return [];
+    const limit = Math.max(1, Math.min(options.limit ?? PAGE_LIST_LIMIT, PAGE_LIST_LIMIT));
+    const result = await this.#db.query<PageRow & { depth: number }>(
+      `WITH RECURSIVE tree AS (
+         SELECT ${PAGE_COLUMNS}, 0 AS depth, ARRAY[]::text[] AS path
+           FROM pages
+          WHERE owner = $1 AND deleted_at IS NULL AND id = $2
+         UNION ALL
+         SELECT ${PAGE_COLUMNS.split(", ").map((column) => `c.${column}`).join(", ")}, t.depth + 1,
+                -- 中の行は「手動の並び → 作った順 → id」（orderOf の親ありと同じ規則）を 1 つの文字列に畳んで並べる
+                t.path || to_char(c.sort_order, 'FM0000000000') || to_char(c.created_at, 'YYYYMMDDHH24MISSUS') || c.id::text
+           FROM pages c JOIN tree t ON c.parent = t.id
+          WHERE c.owner = $1 AND c.deleted_at IS NULL AND t.depth < $3
+       )
+       SELECT ${PAGE_COLUMNS}, depth FROM tree ORDER BY path LIMIT $4`,
+      [owner, rootId, MAX_PAGE_DEPTH, limit],
+    );
+    return result.rows.map(toPage);
   }
 
   /**

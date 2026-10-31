@@ -8,13 +8,15 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageKind, PageLang, PageSummary, StepStatus } from "@niho/editor-store";
 import { EditorShell, ShellHeader, ShellMobileToolbar, ShellSheet, ShellSidebar, ShellTools, shellAccountItems, type NewPageKind, type ShellToolAction } from "niho-docs-ui/shell";
 import type { PageChromeTools } from "niho-docs-ui/page/PageChrome";
+import { folderExportUrl, movePageOrderRequest, recordPageOpenRequest } from "@/lib/folder-client";
 import { listPagesRequest, movePageRequest } from "@/lib/pages-client";
 import { headerStatus } from "@/lib/save-status";
 import { useShortcuts } from "@/lib/shortcuts";
-import { arrangeSidebarItems, folderOptions, searchRows, withoutPageTree, type SidebarPublication } from "@/lib/sidebar-items";
+import { arrangeSidebarItems, folderOptions, orderNeighbours, recentRows, reorderedPages, searchRows, withoutPageTree, type SidebarPublication } from "@/lib/sidebar-items";
 import { usePageHistory } from "@/lib/use-page-history";
-import { usePageMenu, type AttachedPage } from "@/lib/use-page-menu";
+import { clickDownload, usePageMenu, type AttachedPage } from "@/lib/use-page-menu";
 import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
+import { useFolderFields } from "@/lib/use-folder-fields";
 import { usePageShare } from "@/lib/use-page-share";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
 import { HistorySheet } from "./HistorySheet";
@@ -27,6 +29,9 @@ export type { AttachedPage };
 
 /** shell.css と同じ境目（これ以下は一覧・ページのどちらかを全画面で出す）。 */
 const NARROW_QUERY = "(max-width: 900px)";
+
+/** 「最近」に出す件数（サーバーの `RECENT_LIMIT` と同じ）。 */
+const RECENT_SHOWN = 10;
 
 const PAGE_PATH = /^\/p\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
@@ -42,6 +47,8 @@ export type FrameMe = { name: string; caption: string; initial: string };
 export type FrameInitial = {
   pages: PageSummary[];
   next: string | null;
+  /** 最近開いたページ（新しい順。#37。まだ何も開いていなければ空）。 */
+  recent: PageSummary[];
   /** サーバーで描いた時刻（一覧の「N分前」を、ブラウザの最初の描画でも同じにする）。 */
   now: number;
   me: FrameMe;
@@ -236,6 +243,12 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const [closedFolders, setClosedFolders] = useState<ReadonlySet<string>>(() => new Set());
   // フォルダへ入れられなかったときの一言（情報パネルのフォルダの下）
   const [moveNote, setMoveNote] = useState<string | null>(null);
+  // 「最近」（サーバーが読んだ分を、この画面で開いたページで前に出す）
+  const [recent, setRecent] = useState<PageSummary[]>(initial.recent);
+  const [recentOpen, setRecentOpen] = useState(true);
+  // 並べ替えが届かなかったときの一言と、送っているあいだ
+  const [orderNote, setOrderNote] = useState<string | null>(null);
+  const [ordering, setOrdering] = useState(false);
   // 狭い画面で一覧を出している path（path が変われば閉じる）
   const [listFor, setListFor] = useState<string | null>(null);
   // 情報パネル: デスクトップで開いているか（ページを替えても持つ）と、狭い画面で開いている path（path が変われば閉じる）
@@ -321,8 +334,12 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
 
   const api = useMemo<Omit<EditorFrameApi, "narrow">>(
     () => ({
-      pageOpened: (page, details = {}) =>
-        setList((current) => ({ ...current, opened: page, details: { id: page.id, recordingSec: details.recordingSec ?? null } })),
+      pageOpened: (page, details = {}) => {
+        setList((current) => ({ ...current, opened: page, details: { id: page.id, recordingSec: details.recordingSec ?? null } }));
+        // 「最近」はこの画面でも前に出す（サーバーにも記録する。届かなくても画面は止めない）
+        setRecent((current) => [page, ...current.filter((item) => item.id !== page.id)].slice(0, RECENT_SHOWN));
+        void recordPageOpenRequest(page.id).catch(() => undefined);
+      },
       pageTitleChanged: (id, title) =>
         setList((current) => ({
           ...current,
@@ -346,7 +363,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
       pageCreated: (id, title, kind = "note") => {
         const at = new Date().toISOString();
         // 作ったばかりのページは公開していない
-        const page: PageSummary = { id, kind, title, lang: "ja", parent: null, stepStatus: null, createdAt: at, updatedAt: at, publication: null };
+        const page: PageSummary = { id, kind, title, lang: "ja", parent: null, stepStatus: null, sortOrder: 0, createdAt: at, updatedAt: at, publication: null };
         setList((current) => ({ ...current, pages: toTop(current.pages, page) }));
       },
       registerPageSaver: (saveNow) => {
@@ -390,6 +407,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 lang: parent?.lang ?? "ja",
                 parent: parentId,
                 stepStatus: step.stepStatus,
+                // 手順のサブページは段の順（作った順）に並ぶので、手動の並びは持たない
+                sortOrder: 0,
                 createdAt: created,
                 updatedAt: created,
                 publication: null,
@@ -459,6 +478,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     () => (searching ? searchRows(hits, now) : arrangeSidebarItems(list.pages, { now, collapsed: closedFolders })),
     [searching, hits, list.pages, now, closedFolders],
   );
+  const recentItems = useMemo(() => recentRows(recent, now), [recent, now]);
   const toggleFolder = useCallback(
     (id: string) =>
       setClosedFolders((current) => {
@@ -513,6 +533,22 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           opened: current.opened?.id === id ? { ...current.opened, publication } : current.opened,
         };
       }),
+    [],
+  );
+  /** 手動の並びを 1 つ動かす（情報パネルの「並び」）。届いたら一覧を読み直さず、行の `sortOrder` を入れ替える。 */
+  const moveOrder = useCallback(
+    async (id: string, move: "up" | "down") => {
+      setOrderNote(null);
+      setOrdering(true);
+      try {
+        // 並びはサーバーが 1 から振り直すので、読み込んである行も同じ規則で作り直す（読み直さない）
+        if (await movePageOrderRequest(id, move)) setList((current) => ({ ...current, pages: reorderedPages(current.pages, id, move) }));
+      } catch {
+        setOrderNote("並びを変えられませんでした");
+      } finally {
+        setOrdering(false);
+      }
+    },
     [],
   );
   const saveFirst = useCallback(() => pageSaver.current?.() ?? Promise.resolve(true), []);
@@ -624,6 +660,12 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const railShown = railSummary !== undefined && (narrow ? railFor === pathname : railOpenWide);
   // 入れられるフォルダ（読み込んである上の段のページ）。入れ先が無く、いま上の段にいるなら「フォルダ」の節を出さない
   const railFolders = useMemo(() => (railSummary ? folderOptions(list.pages, railSummary.id) : []), [railSummary, list.pages]);
+  // フォルダ（＝子を持つ上の段のページ）でだけ「このフォルダの背景」とフォルダの書き出しを出す。
+  // 欄を読むのはレールを開いているあいだだけ（閉じているページで要求を出さない）
+  const railIsFolder = railSummary !== undefined && railSummary.parent === null && list.pages.some((page) => page.parent === railSummary.id);
+  const folderFields = useFolderFields(railShown && railIsFolder && railSummary ? railSummary.id : null);
+  // 「並び」は動かせるときだけ出す（同じ階層に 1 つしか無いページには出さない）
+  const railOrder = railSummary ? orderNeighbours(list.pages, railSummary.id) : { canUp: false, canDown: false };
   const toggleRail = () => {
     if (narrow) setRailFor(railShown ? null : pathname);
     else setRailOpenWide(!railShown);
@@ -645,6 +687,13 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 folders={railFolders.length > 0 || railSummary.parent !== null ? railFolders : undefined}
                 folderNote={moveNote}
                 onFolder={(parent) => void movePage(railSummary.id, parent)}
+                order={
+                  railOrder.canUp || railOrder.canDown
+                    ? { ...railOrder, busy: ordering, note: orderNote ?? undefined, onUp: () => void moveOrder(railSummary.id, "up"), onDown: () => void moveOrder(railSummary.id, "down") }
+                    : undefined
+                }
+                fields={railIsFolder ? folderFields : undefined}
+                onExportFolder={railIsFolder ? () => clickDownload(folderExportUrl(railSummary.id)) : undefined}
                 recordingSec={list.details?.id === railSummary.id ? list.details.recordingSec : null}
                 open={settingsOpen}
                 onToggle={() => setSettingsOpen((open) => !open)}
@@ -659,6 +708,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               currentId={currentId}
               onSelect={select}
               onToggleFolder={toggleFolder}
+              recent={searching || recentItems.length === 0 ? undefined : { items: recentItems, open: recentOpen, onToggle: () => setRecentOpen((open) => !open) }}
               onCollapse={collapse}
               newMenu={{ open: newMenuOpen, onToggle: () => setNewMenuOpen((open) => !open), onClose: () => setNewMenuOpen(false), onPick: pickNew }}
               search={{

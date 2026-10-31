@@ -117,15 +117,19 @@ export function exportFileBaseName(title: string): string {
   return name === "" ? "page" : name;
 }
 
-/** RFC 6266 / 5987。ASCII の filename は常に page.md、filename* に UTF-8 の題名。 */
-export function exportContentDisposition(title: string): string {
+/**
+ * RFC 6266 / 5987。ASCII の filename は常に `page.{拡張子}`、filename* に UTF-8 の題名。
+ * 拡張子は本文の書き出しが `md`、フォルダの書き出し（#37）が `zip`。
+ */
+export function exportContentDisposition(title: string, extension: "md" | "zip" = "md"): string {
+  const fallback = `page.${extension}`;
   let encoded: string;
   try {
-    encoded = encodeURIComponent(`${exportFileBaseName(title)}.md`).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+    encoded = encodeURIComponent(`${exportFileBaseName(title)}.${extension}`).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
   } catch {
-    encoded = "page.md";
+    encoded = fallback;
   }
-  return `attachment; filename="page.md"; filename*=UTF-8''${encoded}`;
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 /** GET /api/pages/{id}/export.md — 本文を niho-experience の Markdown サブセットで書き出す（最新の保存版）。 */

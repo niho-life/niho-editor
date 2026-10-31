@@ -7,7 +7,7 @@ import { arrangeSidebarItems, folderOptions, formatWhen, searchRows, withoutPage
 const NOW = Date.parse("2026-10-31T03:00:00.000Z");
 
 function page(id: string, over: Partial<PageSummary> = {}): PageSummary {
-  return { id, kind: "note", title: id, lang: "ja", parent: null, stepStatus: null, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z", publication: null, ...over };
+  return { id, kind: "note", title: id, lang: "ja", parent: null, stepStatus: null, sortOrder: 0, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z", publication: null, ...over };
 }
 
 describe("formatWhen", () => {

@@ -27,7 +27,7 @@ export default async function PageView(props: { params: Promise<{ id: string }> 
   return (
     <OpenPage
       key={page.id}
-      summary={{ id: page.id, kind, title, lang, parent, stepStatus, createdAt, updatedAt, publication: null }}
+      summary={{ id: page.id, kind, title, lang, parent, stepStatus, sortOrder: page.sortOrder, createdAt, updatedAt, publication: null }}
       blocks={page.blocks}
       revision={page.revision}
       shared={shared}

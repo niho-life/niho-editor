@@ -322,6 +322,59 @@ describe("ShellRail", () => {
     expect(withFolder).toContain('<p role="alert" class="es-upnote">このフォルダには入れられませんでした</p>');
   });
 
+  it("並び・このフォルダの背景・フォルダの書き出しは、渡したときだけ出る（#37）", () => {
+    const base = { lang: "ja" as const, author: { name: "Mika Sato", title: "", initial: "M" }, info: [] };
+    const plain = renderToStaticMarkup(<ShellPageSettings {...base} />);
+    for (const word of ["並び", "このフォルダの背景", "まとめて"]) expect(plain, word).not.toContain(word);
+
+    const full = renderToStaticMarkup(
+      <ShellPageSettings
+        {...base}
+        order={{ canUp: true, canDown: false, onUp: noop, onDown: noop }}
+        fields={{
+          entities: [{ name: "田中", reading: "たなか", role: "店主", note: "" }],
+          terms: [],
+          open: false,
+          busy: false,
+          max: { entities: 200, terms: 200 },
+          onOpen: noop,
+          onEntities: noop,
+          onTerms: noop,
+          onCancel: noop,
+          onSave: noop,
+        }}
+        onExportFolder={noop}
+      />,
+    );
+    // 並び: もう端のボタンは押せない
+    expect(full).toContain('aria-label="このページを 1 つ上へ"');
+    expect(full).toMatch(/aria-label="このページを 1 つ下へ" aria-disabled="true"/);
+    // 閉じているあいだは中身を並べ、「編集」で開く
+    expect(full).toContain("このフォルダの背景");
+    expect(full).toContain("田中");
+    expect(full).not.toContain("行を追加");
+    expect(full).toContain("このフォルダの中をまとめて（.zip）");
+
+    const open = renderToStaticMarkup(
+      <ShellPageSettings
+        {...base}
+        fields={{ entities: [], terms: [], open: true, busy: false, max: { entities: 200, terms: 200 }, onOpen: noop, onEntities: noop, onTerms: noop, onCancel: noop, onSave: noop }}
+      />,
+    );
+    expect(open).toContain('aria-label="登場人物を保存"');
+    expect(open).toContain('aria-label="このフォルダの固有名詞を保存"');
+  });
+
+  it("「最近」は一覧の木の上に出て、開閉のボタンを持つ（#37）", () => {
+    const withRecent = renderToStaticMarkup(sidebar({ recent: { items: [{ id: "r1", title: "昨日の録音", when: "昨日" }], open: true, onToggle: noop } }));
+    expect(withRecent).toContain("es-sb-group");
+    expect(withRecent).toContain('aria-expanded="true"');
+    expect(withRecent.indexOf("昨日の録音")).toBeLessThan(withRecent.indexOf("10月30日（木）"));
+    const closed = renderToStaticMarkup(sidebar({ recent: { items: [{ id: "r1", title: "昨日の録音", when: "昨日" }], open: false, onToggle: noop } }));
+    expect(closed).not.toContain("昨日の録音");
+    expect(renderToStaticMarkup(sidebar())).not.toContain("es-sb-group");
+  });
+
   it("状態の丸は公開中だけ（地球のマーク）。非公開は丸を出さず、読み上げのための文だけを置く", () => {
     const published = renderToStaticMarkup(<StatusDot {...shellStatus({ dest: "exp", range: "live", url: "experience.niho.life/stories/enoden" })} />);
     expect(published).toContain("es-st es-st--published");

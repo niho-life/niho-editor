@@ -16,6 +16,11 @@ export type ShellSidebarProps = {
   search?: { open: boolean; value: string; onOpen: () => void; onClose: () => void; onChange: (value: string) => void };
   /** 一覧の末尾（<ul> の直後、<nav> の中）に置くもの。段階読み込みの目印など。 */
   listEnd?: ReactNode;
+  /**
+   * 木の上に出す「最近」（旧 NIHO docs の `recent.json`）。開閉の状態は呼ぶ側が持つ。
+   * 渡さなければ出さない（検索しているあいだ・まだ何も開いていない人には出さない）。
+   */
+  recent?: { items: ShellListItem[]; open: boolean; onToggle: () => void };
   me: {
     /** 本人の名前。左下には出さず、メニューの中に出す（`shellAccountItems(…, …, name)`）。 */
     name: string;
@@ -122,7 +127,7 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder }: { node
  * 1行は題名と時刻。2行目は公開先・録音・作成中のときだけ。下は本人の行ひとつ。
  * 一覧は 1 本の木（フォルダ＝子を持てるページ）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
  */
-export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, listEnd, me }: ShellSidebarProps) {
+export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, listEnd, recent, me }: ShellSidebarProps) {
   const newButton = useRef<HTMLButtonElement | null>(null);
   const meButton = useRef<HTMLButtonElement | null>(null);
   return (
@@ -179,6 +184,15 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
         )}
       </div>
       <nav className="es-sb-list" aria-label="ページの一覧">
+        {recent && (
+          <div className="es-sb-group">
+            <button type="button" className="es-sb-grouphd" aria-expanded={recent.open} onClick={recent.onToggle}>
+              <span aria-hidden="true">{recent.open ? "▾" : "▸"}</span>
+              最近
+            </button>
+            {recent.open && <ShellSidebarRows nodes={nestListItems(recent.items)} currentId={currentId} onSelect={onSelect} />}
+          </div>
+        )}
         <ShellSidebarRows nodes={nestListItems(items)} currentId={currentId} onSelect={onSelect} onToggleFolder={onToggleFolder} />
         {listEnd}
       </nav>

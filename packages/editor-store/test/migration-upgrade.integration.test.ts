@@ -89,6 +89,15 @@ describe("migration 0002 on a database that already has pages and versions", { s
       });
       await assert.rejects(() => client.query("UPDATE pages SET revision = 0 WHERE id = $1", [pageId]), { code: "23514" });
 
+      // ここから先は store（今の schema を読む）で確かめるので、残りの migration も流す。0009 は 0001 の publications を
+      // 作り直す（行があれば止まる）ので、上で確かめ終えた公開の行だけ外してから流す
+      await client.query("DELETE FROM publications WHERE page_id = $1", [pageId]);
+      for (const name of await readdir(defaultMigrationsDir)) {
+        if (MIGRATION_FILE_PATTERN.test(name)) await copyFile(new URL(name, defaultMigrationsDir), join(onlyFirst, name));
+      }
+      const rest = await applyMigrations(client, pathToFileURL(`${onlyFirst}/`));
+      assert.ok(rest.applied.includes("0009_publications.sql"), "0009 から先も、既存の行を持つ DB に流せる");
+
       // 既存のページはそのまま store で読み書きでき、版の番号は既存の続きから
       const store = new EditorStore(pool, { autosaveVersionIntervalMs: 0 });
       const read = await store.getPage(OWNER, pageId);
