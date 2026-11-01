@@ -248,7 +248,11 @@ P00では専用のcontract CIだけを追加する。P13のshared file統合は�
 
 P08はcontractとadapterのpackageをmanifest＋full source SHA＋tarball SHA-256付きで配布する。P11はそれを固定して採用し、niho-editorの可変mainや隣のcheckoutを直接importしない。パッケージ採用時は両repoのPRを相互リンクする。P08の専用release生成器とfixture同期は自身の範囲で、host lockfileの変更はP13へ渡す。
 
-PWAはmanifest id/start_url/scopeを `/photo` に分け、既存文書PWAを変更しない。専用workerのscopeも `/photo` とし、個人写真や認証応答はcacheしない。既存root `public/sw.js` のactivateが他のcacheまで消す問題はP13がnamespace限定へ直す。photo worker追加と同じ受入で確認する。
+PWAはmanifest id/start_url/scopeを `/photo` に分け、既存文書PWAを変更しない。専用`public/photo-sw.js`のscopeも `/photo` とし、photo配下のmetadataとproduction限定登録を使う。root `public/sw.js`は`niho-editor-*`、写真workerは`niho-photo-*`の古いcacheだけを削除し、他namespaceを保持する。
+
+写真workerが保存するのは、同一originの`/_next/static/`のGETで、query/fragment/Authorizationがなく、200/basic/public/immutableかつJS・CSS・fontの応答だけ。件数128、保存量64MiB、単体8MiB、同時body copy 2本を実byteで制限する。quota・cache障害時もonline応答を返す。写真原本・派生物・API・認証・HTML・ticket・共有URL・SDK runtimeは保存せず、no-store/reload要求もcacheへ入れない。個人draftの端末保持、offline編集、iOS background upload完走はこの基盤では提供しない。
+
+写真APIの`Referrer-Policy: no-referrer`はNextのcatch-allにも上書きされないよう写真API pathへ限定して保つ。認証formのexactな`origin`例外は維持する。実iPhoneのSafari/ホーム画面PWAで、`/photo` scope外の固定callbackからの安全な復帰、本人切替・再起動・中断再開を受入するまでP10を完了扱いにしない。
 
 ## 10. 検証と出荷の境界
 

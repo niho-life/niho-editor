@@ -58,6 +58,16 @@ describe("noindex, nofollow", () => {
     expect(result.rules).toEqual({ userAgent: "*", allow: "/" });
   });
 
+  it("keeps photo API responses no-referrer without changing Docs or auth form origins", async () => {
+    for (const path of ["/api/photo/v1/auth/session", "/api/photo/v1/photos", "/api/photo/v1/photos/synthetic/media"]) {
+      expect((await configHeaders(path)).get("Referrer-Policy"), path).toBe("no-referrer");
+    }
+    expect((await configHeaders("/api/pages")).get("Referrer-Policy")).toBe("same-origin");
+    expect((await configHeaders("/photo/auth/start")).get("Referrer-Policy")).toBe("origin");
+    expect((await configHeaders("/auth/callback")).get("Referrer-Policy")).toBe("origin");
+    expect((await configHeaders("/photo-sw.js")).get("Cache-Control")).toBe("no-cache, must-revalidate");
+  });
+
   it("overrides Referrer-Policy only on the three exact auth form handlers", async () => {
     expect(AUTH_FORM_HEADERS).toEqual([{ key: "Referrer-Policy", value: "origin" }]);
     for (const path of ["/auth/login/start", "/auth/login/start?next=%2Fsettings", "/auth/callback", "/photo/auth/start", "/photo/auth/start?next=%2Fphoto%2Ftrash"]) {

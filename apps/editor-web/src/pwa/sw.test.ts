@@ -100,10 +100,12 @@ describe("service worker: install and activate", () => {
     await worker.fire("install");
     worker.stores.set("niho-editor-shell-v0", new Map());
     worker.stores.set("some-other-cache", new Map());
+    worker.stores.set("niho-photo-static-v1", new Map());
     await worker.fire("activate");
-    expect([...worker.stores.keys()].sort()).toEqual(["niho-editor-shell-v1", "niho-editor-static-v1"].filter((name) => worker.stores.has(name)).sort());
+    expect([...worker.stores.keys()].sort()).toEqual(["niho-editor-shell-v1", "niho-photo-static-v1", "some-other-cache"].sort());
     expect(worker.stores.has("niho-editor-shell-v0")).toBe(false);
-    expect(worker.stores.has("some-other-cache")).toBe(false);
+    expect(worker.stores.has("some-other-cache")).toBe(true);
+    expect(worker.stores.has("niho-photo-static-v1")).toBe(true);
     expect(worker.stores.has("niho-editor-shell-v1")).toBe(true);
     expect(worker.self.clients.claim).toHaveBeenCalled();
   });

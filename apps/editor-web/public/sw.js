@@ -21,11 +21,11 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
-  // 版が変わったら古い cache を捨てる
+  // 版が変わったら自分の古いcacheだけを捨てる（写真PWA等の別namespaceを保持）
   event.waitUntil(
     caches
       .keys()
-      .then((names) => Promise.all(names.filter((name) => name !== SHELL_CACHE && name !== STATIC_CACHE).map((name) => caches.delete(name))))
+      .then((names) => Promise.all(names.filter((name) => name.startsWith("niho-editor-") && name !== SHELL_CACHE && name !== STATIC_CACHE).map((name) => caches.delete(name))))
       .then(() => self.clients.claim()),
   );
 });
