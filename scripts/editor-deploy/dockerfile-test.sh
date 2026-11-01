@@ -81,6 +81,11 @@ fi
 
 # Route adapters and independent conformance tests import these production worker sources.
 # The image's TypeScript graph must have the same external source closure as the host.
+if printf '%s' "$before" | grep -qF 'npm -C packages/editor-store ci'; then
+  printf 'ok    editor-store source dependencies are installed for relative worker imports\n'
+else
+  fail "relative worker imports require editor-store's own pg/type dependencies"
+fi
 for path in workers/photo-purge workers/photo-media; do
   if printf '%s' "$before" | grep -qE "^COPY ${path}(/| )"; then
     printf 'ok    %s is copied before npm ci (relative worker import)\n' "$path"
