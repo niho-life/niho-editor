@@ -92,8 +92,12 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "photo_recipes",
       "photo_versions",
       "photo_media_jobs",
+      "photo_media_candidates",
+      "photo_media_outbox",
       "photo_purge_jobs",
       "photo_gc_objects",
+      "photo_request_journal",
+      "photo_write_receipts",
     ];
     assert.deepEqual(tables.rows.map((row) => row.table_name), [...documented, MIGRATIONS_TABLE].sort());
     for (const table of documented) {
