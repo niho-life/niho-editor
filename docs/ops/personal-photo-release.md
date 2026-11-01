@@ -37,6 +37,14 @@ SDKの既存release assetを上書きしない。公式release workflowをmain�
 
 実プロジェクト、origin、保存先、実行ID、資格情報、接続URLは公開repoへ置かない。配備は既存の[公式手順](editor-deploy.md)と非公開側の対応runbookを使い、対象serviceとexact sourceを照合する。
 
+### P02 workerのGCS能力を分離する
+
+`apps/editor-web/src/storage/photo-gcs-worker.ts` のfactoryは、P02 media worker用のgeneration固定read/create-only能力と、purge worker用のexact-generation delete-only能力を別々に返す。public routeやstorage modeの既定値には接続せず、候補環境でbucket・実行ID・IAMを照合したproduction compositionだけが明示的に構築する。media実行IDへdelete権限、purge実行IDへobject作成権限を持たせない。
+
+purgeは`DELETE`の204/404だけでは台帳を確定しない。同じkey・generationについてlive metadataと`softDeleted=true` metadataがともに404であることを確認してから容量を返す。soft delete、retention、権限不足、timeout、曖昧なprovider応答が残る間はjobをretry対象のままにする。このadapterの導入を、bucketのretention/soft-delete policyやIAMを変更する許可、実GCS・本番認証・decoderの受入完了とは扱わない。
+
+HTTP条件は[Objects: insert](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/insert)、[Objects: delete](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/delete)、[Objects: get](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/get)に従う。soft-deleted objectの不存在確認が使えない保存先では、安全側に停止し、削除完了や容量回復を返さない。
+
 ## 実機の必須シナリオ
 
 - 拠点権限のない同じNIHO本人でMac・Safari・ホーム画面PWAへ接続し、独立sessionが併存する。
