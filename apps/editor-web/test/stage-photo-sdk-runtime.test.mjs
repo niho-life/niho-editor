@@ -38,6 +38,7 @@ async function createFixture(root, options = {}) {
   const baselinePath = path.join(root, `baseline-${sdkVersion}-${options.fixtureName ?? "default"}.json`);
   const appPackagePath = path.join(root, `host-${sdkVersion}-${options.fixtureName ?? "default"}.json`);
   const appLockPath = path.join(root, `lock-${sdkVersion}-${options.fixtureName ?? "default"}.json`);
+  const photoLibraryPackagePath = path.join(root, `photo-library-${sdkVersion}-${options.fixtureName ?? "default"}.json`);
   await mkdir(engineRoot, { recursive: true });
   await writeJson(path.join(runtimePackageRoot, "package.json"), {
     name: "niho-photo-develop-engine-runtime",
@@ -108,11 +109,30 @@ async function createFixture(root, options = {}) {
     },
   };
   await writeJson(baselinePath, baseline);
-  const dependencies = Object.fromEntries(baseline.packages.map((entry) => [entry.name,
+  const sdkDependencies = Object.fromEntries(baseline.packages.map((entry) => [entry.name,
     `https://github.com/${baseline.repository}/releases/download/${releaseTag}/${entry.file}`]));
+  const photoLibraryDependencies = {
+    "@niho/photo-library-contract": "file:../photo-library-contract",
+    "niho-photo-contract": sdkDependencies["niho-photo-contract"],
+  };
+  const dependencies = {
+    ...sdkDependencies,
+    "@niho/photo-cloud-library": "file:../../packages/photo-cloud-library",
+    "@niho/photo-library-contract": "file:../../packages/photo-library-contract",
+  };
+  await writeJson(photoLibraryPackagePath, {
+    name: "@niho/photo-cloud-library",
+    version: "0.1.0",
+    dependencies: photoLibraryDependencies,
+  });
   await writeJson(appPackagePath, { dependencies });
   await writeJson(appLockPath, { lockfileVersion: 3, packages: {
     "": { dependencies },
+    "node_modules/@niho/photo-cloud-library": {
+      version: "0.1.0",
+      resolved: dependencies["@niho/photo-cloud-library"],
+      dependencies: photoLibraryDependencies,
+    },
     ...Object.fromEntries(baseline.packages.map((entry) => [`node_modules/${entry.name}`, {
       version: sdkVersion, resolved: dependencies[entry.name], integrity: entry.integrity,
     }])),
@@ -125,7 +145,18 @@ async function createFixture(root, options = {}) {
     "develop-engine",
     engineVersion,
   );
-  return { baseline, baselinePath, appPackagePath, appLockPath, engineRoot, manifestFile, namespace, publicRoot, runtimePackageRoot };
+  return {
+    baseline,
+    baselinePath,
+    appPackagePath,
+    appLockPath,
+    photoLibraryPackagePath,
+    engineRoot,
+    manifestFile,
+    namespace,
+    publicRoot,
+    runtimePackageRoot,
+  };
 }
 
 async function withTemp(t, run) {
@@ -169,10 +200,22 @@ test("is idempotent when the immutable namespace has identical bytes", (t) => wi
 }));
 
 test("rejects host dependency, lock and baseline pin drift before publishing", (t) => withTemp(t, async (root) => {
-  for (const mode of ["package-url", "lock-url", "version", "integrity", "nested", "baseline-sri"]) {
+  for (const mode of [
+    "package-url",
+    "lock-url",
+    "version",
+    "integrity",
+    "nested",
+    "baseline-sri",
+    "photo-library-package",
+    "photo-library-lock",
+    "photo-library-lock-extra-dependency",
+    "photo-library-nested-contract",
+  ]) {
     const fixture = await createFixture(root, { fixtureName: mode });
     const appPackage = JSON.parse(await readFile(fixture.appPackagePath, "utf8"));
     const lock = JSON.parse(await readFile(fixture.appLockPath, "utf8"));
+    const photoLibraryPackage = JSON.parse(await readFile(fixture.photoLibraryPackagePath, "utf8"));
     const name = "niho-photo-editing";
     const locked = lock.packages[`node_modules/${name}`];
     if (mode === "package-url") appPackage.dependencies[name] = "https://example.invalid/mutable.tgz";
@@ -180,13 +223,29 @@ test("rejects host dependency, lock and baseline pin drift before publishing", (
     if (mode === "version") locked.version = "0.1.4";
     if (mode === "integrity") locked.integrity = `sha256-${Buffer.alloc(32).toString("base64")}`;
     if (mode === "nested") lock.packages[`node_modules/other/node_modules/${name}`] = locked;
+    if (mode === "photo-library-package") {
+      photoLibraryPackage.dependencies["niho-photo-contract"] = "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.4/niho-photo-contract-0.1.4.tgz";
+    }
+    if (mode === "photo-library-lock") {
+      lock.packages["node_modules/@niho/photo-cloud-library"].dependencies["niho-photo-contract"] = "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.4/niho-photo-contract-0.1.4.tgz";
+    }
+    if (mode === "photo-library-lock-extra-dependency") {
+      lock.packages["node_modules/@niho/photo-cloud-library"].dependencies["unexpected-package"] = "1.0.0";
+    }
+    if (mode === "photo-library-nested-contract") {
+      lock.packages["node_modules/@niho/photo-cloud-library/node_modules/niho-photo-contract"] = {
+        ...locked,
+        version: "0.1.5",
+      };
+    }
     if (mode === "baseline-sri") {
       fixture.baseline.packages.find((entry) => entry.name === name).integrity = `sha256-${Buffer.alloc(32).toString("base64")}`;
       await writeJson(fixture.baselinePath, fixture.baseline);
     }
     await writeJson(fixture.appPackagePath, appPackage);
     await writeJson(fixture.appLockPath, lock);
-    await assert.rejects(stagePhotoSdkRuntime(fixture), /host URL|host lock|second host installation|baseline SRI/);
+    await writeJson(fixture.photoLibraryPackagePath, photoLibraryPackage);
+    await assert.rejects(stagePhotoSdkRuntime(fixture), /host URL|host lock|second host installation|baseline SRI|photo cloud library/);
     await assert.rejects(readdir(fixture.publicRoot), { code: "ENOENT" });
   }
 }));

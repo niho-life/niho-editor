@@ -16,6 +16,8 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const APP_DIR = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_BASELINE_PATH = path.resolve(APP_DIR, "../../packages/photo-library-contract/sdk-baseline.json");
 const DEFAULT_PUBLIC_ROOT = path.join(APP_DIR, "public");
+const PHOTO_LIBRARY_PACKAGE = "@niho/photo-cloud-library";
+const PHOTO_LIBRARY_FILE_SPEC = "file:../../packages/photo-cloud-library";
 const HOST_SDK_PACKAGES = Object.freeze([
   "niho-photo-ui",
   "niho-photo-editing",
@@ -125,7 +127,7 @@ function sdkVersionFromReleaseTag(releaseTag) {
   return match[1];
 }
 
-function verifyHostSdkPins(baseline, sdkVersion, appPackage, appLock) {
+function verifyHostSdkPins(baseline, sdkVersion, appPackage, appLock, photoLibraryPackage) {
   if (baseline.repository !== "niho-life/niho-photo") fail("baseline.repository is not the official Photo SDK repository");
   if (!Array.isArray(baseline.packages)) fail("baseline.packages must be an array");
   const dependencies = assertPlainObject(appPackage.dependencies, "host package dependencies");
@@ -148,6 +150,43 @@ function verifyHostSdkPins(baseline, sdkVersion, appPackage, appLock) {
     if (Object.keys(lockedPackages).some((key) => key.endsWith(`/node_modules/${name}`) && key !== `node_modules/${name}`)) {
       fail(`${name} has a second host installation`);
     }
+  }
+
+  if (dependencies[PHOTO_LIBRARY_PACKAGE] !== PHOTO_LIBRARY_FILE_SPEC
+    || lockedDependencies[PHOTO_LIBRARY_PACKAGE] !== PHOTO_LIBRARY_FILE_SPEC) {
+    fail("host photo cloud library file dependency does not match the monorepo package");
+  }
+  const photoLibrary = assertPlainObject(photoLibraryPackage, "photo cloud library package");
+  const photoLibraryDependencies = assertPlainObject(photoLibrary.dependencies, "photo cloud library dependencies");
+  const lockedPhotoLibrary = assertPlainObject(
+    lockedPackages[`node_modules/${PHOTO_LIBRARY_PACKAGE}`],
+    "photo cloud library host lock",
+  );
+  if (lockedPhotoLibrary.version !== photoLibrary.version || lockedPhotoLibrary.resolved !== PHOTO_LIBRARY_FILE_SPEC) {
+    fail("photo cloud library host lock identity does not match its package");
+  }
+  const lockedPhotoLibraryDependencies = assertPlainObject(
+    lockedPhotoLibrary.dependencies,
+    "photo cloud library host lock dependencies",
+  );
+  const photoLibraryDependencyNames = Object.keys(photoLibraryDependencies).sort();
+  const lockedPhotoLibraryDependencyNames = Object.keys(lockedPhotoLibraryDependencies).sort();
+  if (photoLibraryDependencyNames.length !== lockedPhotoLibraryDependencyNames.length
+    || photoLibraryDependencyNames.some((name, index) => name !== lockedPhotoLibraryDependencyNames[index])) {
+    fail("photo cloud library lock dependency set does not match its package");
+  }
+  for (const [name, spec] of Object.entries(photoLibraryDependencies)) {
+    if (lockedPhotoLibraryDependencies[name] !== spec) fail(`photo cloud library lock dependency does not match ${name}`);
+  }
+  const contract = baseline.packages.find((entry) => entry?.name === "niho-photo-contract");
+  const contractUrl = `https://github.com/${baseline.repository}/releases/download/${baseline.releaseTag}/${contract.file}`;
+  if (photoLibraryDependencies["niho-photo-contract"] !== contractUrl) {
+    fail("photo cloud library SDK dependency does not match the baseline");
+  }
+  if (Object.keys(lockedPackages).some((key) => (
+    key.endsWith("/node_modules/niho-photo-contract") && key !== "node_modules/niho-photo-contract"
+  ))) {
+    fail("niho-photo-contract has a second host installation");
   }
 }
 
@@ -238,6 +277,8 @@ export async function stagePhotoSdkRuntime(options = {}) {
   const baselinePath = options.baselinePath ?? DEFAULT_BASELINE_PATH;
   const publicRoot = options.publicRoot ?? DEFAULT_PUBLIC_ROOT;
   const runtimePackageRoot = options.runtimePackageRoot ?? runtimePackageRootFromInstall();
+  const photoLibraryPackagePath = options.photoLibraryPackagePath
+    ?? path.resolve(APP_DIR, "../../packages/photo-cloud-library/package.json");
   const appPackagePath = options.appPackagePath ?? path.join(APP_DIR, "package.json");
   const appLockPath = options.appLockPath ?? path.join(APP_DIR, "package-lock.json");
 
@@ -251,7 +292,8 @@ export async function stagePhotoSdkRuntime(options = {}) {
   const sdkVersion = sdkVersionFromReleaseTag(releaseTag);
   const appPackage = (await readJsonFile(appPackagePath, "host package.json")).value;
   const appLock = (await readJsonFile(appLockPath, "host package-lock.json")).value;
-  verifyHostSdkPins(baseline, sdkVersion, appPackage, appLock);
+  const photoLibraryPackage = (await readJsonFile(photoLibraryPackagePath, "photo cloud library package.json")).value;
+  verifyHostSdkPins(baseline, sdkVersion, appPackage, appLock, photoLibraryPackage);
   const baselineManifest = assertPlainObject(baseline.manifest, "baseline.manifest");
   const manifestSetHash = assertNamespacePart(baselineManifest.sha256, "baseline.manifest.sha256");
   if (!/^[a-f0-9]{64}$/.test(manifestSetHash)) fail("baseline.manifest.sha256 is invalid");

@@ -19,3 +19,4 @@
 **/.env*
 **/*.tsbuildinfo
 **/.DS_Store
+apps/editor-web/public/photo-runtime

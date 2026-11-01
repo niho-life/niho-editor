@@ -20,8 +20,8 @@ export const PACKAGE_DEFINITIONS = [
 export const EXPECTED_PEERS = new Map([
   ["@niho/photo-cloud-library", {
     "@niho/photo-library-contract": "0.1.1",
-    "niho-photo-contract": "0.1.5",
-    "niho-photo-editing": "0.1.5",
+    "niho-photo-contract": "0.1.6",
+    "niho-photo-editing": "0.1.6",
   }],
   ["@niho/photo-library-contract", {}],
 ]);
@@ -141,12 +141,12 @@ export function validateConfig(config) {
   if (JSON.stringify(config.packages) !== JSON.stringify(PACKAGE_DEFINITIONS)) fail("package source allowlistが不正です");
   const expectedUpstream = {
     baselinePath: "packages/photo-library-contract/sdk-baseline.json",
-    baselineSha256: "342ad046400466c633cbe0fc04af8788dbcd3b65b68faf964cb88b4bf02a51cf",
+    baselineSha256: "aa5defc1f64a28e80aeaa1ab1e146d3151ae6255f838ea17d0fc70f4318aeb2d",
     repository: "niho-life/niho-photo",
-    releaseTag: "photo-sdk-v0.1.5",
-    version: "0.1.5",
-    sourceCommit: "f78926d805b5f2c115349d8f15ac184fde453ad1",
-    manifestSha256: "99b1893eb4344aa524279c46a06b63132fd167d3c370be8d7ba30b9ea8caf7be",
+    releaseTag: "photo-sdk-v0.1.6",
+    version: "0.1.6",
+    sourceCommit: "bc95b2764b089dfd4bc7beaf3626c12c636f809a",
+    manifestSha256: "043f234ed28c765e0dd10d6c37e1a5a2d18dcc09f37d6060844c1716d40b3dc5",
   };
   exactObject(config.upstreamSdk, expectedUpstream, "upstream SDK pin");
   return config;

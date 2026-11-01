@@ -122,16 +122,16 @@ test("Git objectだけから2 packageを再現し、source/entry/upstream pinを
   t.after(() => { rmSync(data.root, { recursive: true, force: true }); rmSync(one.output, { recursive: true, force: true }); rmSync(two.output, { recursive: true, force: true }); });
   const verified = verifyReproducedReleaseSet(one.manifestPath, two.manifestPath, { expectedSource: data.sha, expectedVersion: "0.1.1", sourceRepositoryRoot: data.root });
   assert.equal(verified.releaseReady, true);
-  assert.equal(verified.upstreamSdk.version, "0.1.5");
-  assert.equal(verified.upstreamSdk.baselineSha256, "342ad046400466c633cbe0fc04af8788dbcd3b65b68faf964cb88b4bf02a51cf");
+  assert.equal(verified.upstreamSdk.version, "0.1.6");
+  assert.equal(verified.upstreamSdk.baselineSha256, "aa5defc1f64a28e80aeaa1ab1e146d3151ae6255f838ea17d0fc70f4318aeb2d");
   assert.equal(verified.packages.length, 2);
   const cloud = verified.packages.find(({ id }) => id === "cloud-library");
   const cloudEntries = readTarEntries(readFileSync(path.join(one.output, cloud.file)));
   const cloudManifest = JSON.parse(cloudEntries.get("package.json"));
   assert.deepEqual(cloudManifest.peerDependencies, {
     "@niho/photo-library-contract": "0.1.1",
-    "niho-photo-contract": "0.1.5",
-    "niho-photo-editing": "0.1.5",
+    "niho-photo-contract": "0.1.6",
+    "niho-photo-editing": "0.1.6",
   });
   assert.equal([...cloudEntries].some(([name]) => /(?:test|fixture|tsconfig|package-lock)/u.test(name)), false);
   const contract = verified.packages.find(({ id }) => id === "library-contract");

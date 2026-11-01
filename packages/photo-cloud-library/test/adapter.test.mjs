@@ -411,19 +411,21 @@ test("未知recipeでもdownloadOriginalはread-only raw経路で取得でき、
   assert.equal(downloaded.fileName, futureRecipePhoto.fileName);
 });
 
-test("SDK 0.1.5 release URL/version/SRIと実sourceのPhotoLibrary必須methodをbaselineへ固定する", async () => {
+test("SDK 0.1.6 release URL/version/SRIと実sourceのPhotoLibrary必須methodをbaselineへ固定する", async () => {
   const lock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
   const baseline = JSON.parse(await readFile(new URL("../../photo-library-contract/sdk-baseline.json", import.meta.url), "utf8"));
   const sdkConfig = JSON.parse(await readFile(new URL("../tsconfig.sdk.json", import.meta.url), "utf8"));
   assert.equal(sdkConfig.compilerOptions.strict, true);
   assert.equal(sdkConfig.compilerOptions.exactOptionalPropertyTypes, true);
-  assert.equal(sdkConfig.compilerOptions.noUncheckedIndexedAccess, false);
+  assert.equal(sdkConfig.compilerOptions.noUncheckedIndexedAccess, true);
+  assert.equal(sdkConfig.compilerOptions.verbatimModuleSyntax, true);
+  assert.equal(sdkConfig.compilerOptions.skipLibCheck, false);
   await assert.rejects(() => readFile(new URL("../src/photo-library-sdk.d.ts", import.meta.url)), (reason) => reason.code === "ENOENT");
   const ids = { "niho-photo-contract": "photo-contract", "niho-photo-editing": "photo-editing", "niho-photo-ui": "ui", "niho-photo-cloud-contract": "cloud-contract" };
   for (const [name, id] of Object.entries(ids)) {
     const locked = lock.packages[`node_modules/${name}`];
     const artifact = baseline.packages.find((item) => item.id === id);
-    assert.equal(locked.version, "0.1.5");
+    assert.equal(locked.version, "0.1.6");
     assert.equal(locked.resolved, `https://github.com/niho-life/niho-photo/releases/download/${baseline.releaseTag}/${artifact.file}`);
     assert.equal(locked.integrity, artifact.integrity);
   }
