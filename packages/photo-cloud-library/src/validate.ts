@@ -51,6 +51,7 @@ function recipe(value: unknown): boolean {
 
 function media(value: unknown): boolean {
   if (!isRecord(value) || !string(value.state)) return false;
+  if (value.state === "pending") return true;
   if (value.state === "queued" || value.state === "processing") return string(value.jobId);
   if (value.state === "failed" || value.state === "unsupported") {
     return ["decoder_failed", "renderer_unavailable", "unsupported_settings"].includes(String(value.code));

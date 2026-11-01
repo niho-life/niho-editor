@@ -3,11 +3,12 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import {
-  HASH, IDS, failedMediaPhoto, futureRecipePhoto, library as libraryFixture, mask, maskedPhoto, page, readyPhoto, responses,
+  HASH, IDS, failedMediaPhoto, futureRecipePhoto, library as libraryFixture, mask, maskedPhoto, page, pendingMediaPhoto, readyPhoto, responses,
   trashedPhoto, versions,
 } from "@niho/photo-library-contract/fixtures";
 import { PHOTO_LIMITS } from "@niho/photo-library-contract";
 import { BrowserPhotoSourceError, CloudPhotoError, createCloudPhotoLibrary } from "../src/index.ts";
+import { parsePage, parsePhoto } from "../src/validate.ts";
 
 const scope = { actorId: IDS.userA, libraryId: IDS.library, sessionEpoch: 1 };
 const runtime = {
@@ -24,6 +25,13 @@ const error = (code, status, extra = {}) => json({ error: { code, requestId: "sy
 const canonical = (value) => Array.isArray(value) ? value.map(canonical) :
   value !== null && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value;
 const canonicalSha256 = (value) => createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
+
+test("accepts pending media in photo details and list pages", () => {
+  const photo = structuredClone(pendingMediaPhoto);
+  assert.deepEqual(parsePhoto(photo, IDS.library, IDS.photo), photo);
+  const pendingPage = { ...structuredClone(page), items: [photo] };
+  assert.deepEqual(parsePage(pendingPage, IDS.library), pendingPage);
+});
 
 function fixtureFetch(overrides = {}) {
   const calls = [];
