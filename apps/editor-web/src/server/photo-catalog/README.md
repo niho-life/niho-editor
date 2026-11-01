@@ -11,6 +11,7 @@ PhotoCatalogStoreはP02唯一のDB writer境界に接続するread adapter。own
 - 4MiB以内へ切り詰める一覧。cursorは最後に返した写真から継続
 - owner別revision ETag、private/no-store response
 - asset/library capability/infoのallowlist serializer、working-copy meta 64KiB上限
+- 原本保存済み・outbox job未作成の写真はP00の`media.pending`として一覧/詳細へ返し、疑似job IDを作らない
 - owner-scoped lightweight hash lookup（最大100件）
 - P01 actorの有効期限をrouteで再確認し、認証・cursor鍵・能力設定・DBのどれかが未設定/不正なら503で閉じる
 - private runtime設定はEDITOR_PHOTO_CATALOG_ENABLED、hexのEDITOR_PHOTO_CATALOG_CURSOR_SECRET、EDITOR_PHOTO_CATALOG_CAPABILITIES、DATABASE_URL。秘密値は公開repoへ置かずP13の配備設定で管理する
