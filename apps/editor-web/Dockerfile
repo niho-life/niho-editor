@@ -11,6 +11,8 @@ COPY packages/docs-core packages/docs-core
 COPY packages/docs-ui packages/docs-ui
 COPY packages/ui packages/ui
 COPY packages/editor-store packages/editor-store
+# Workerの相対importからもpgと型宣言を解決する（app側のinstall-linksとは別のsource root）。
+RUN npm -C packages/editor-store ci --ignore-scripts --no-audit --no-fund
 # 写真の本人型を直接参照する。runtime importは無いがbuildの型検査には必要。
 COPY packages/photo-library-contract packages/photo-library-contract
 COPY packages/photo-cloud-library packages/photo-cloud-library
@@ -18,6 +20,7 @@ COPY packages/editor-publish-contract packages/editor-publish-contract
 COPY packages/editor-publish packages/editor-publish
 # The lifecycle adapter imports this worker executor into the server build graph.
 COPY workers/photo-purge workers/photo-purge
+COPY workers/photo-media workers/photo-media
 COPY apps/editor-web/package.json apps/editor-web/package-lock.json apps/editor-web/.npmrc apps/editor-web/
 RUN npm -C apps/editor-web ci --no-audit --no-fund
 COPY apps/editor-web apps/editor-web

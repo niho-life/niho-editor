@@ -1,9 +1,13 @@
 // @vitest-environment node
 import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { developSettingsEngineIdentifiers, supportedDevelopSettingsVersions } from "niho-photo-contract";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { library as fixtureLibrary, readyPhoto } from "../../../../../packages/photo-library-contract/fixtures/v1";
 import type { Json, JsonObject, Photo, RecipeDocument } from "../../../../../packages/photo-library-contract/src/v1";
+import { createPhotoCatalogRoutes } from "../photo-catalog/routes";
+import { createPhotoCatalogStore } from "../photo-catalog/store-adapter";
 import { createPhotoRecipesRoutes } from "../photo-recipes/routes";
 import { createPhotoRecipeStore } from "../photo-recipes/store-adapter";
 import type { PhotoRecipeValidator } from "../photo-recipes/types";
@@ -26,6 +30,7 @@ const databaseUrl = conformanceDatabaseUrl();
 const databaseDescribe = databaseUrl ? describe : describe.skip;
 const owner = (label: string) => `synthetic-recipes-${label}-${randomUUID()}`;
 const key = () => `synthetic_recipe_${randomUUID().replaceAll("-", "")}`;
+const securityCasesUrl = new URL("../../../../../packages/photo-library-contract/fixtures/security-cases.json", import.meta.url);
 
 function canonicalJson(value: Json): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -58,6 +63,15 @@ function routes(pool: Pool, user: string, validator: PhotoRecipeValidator) {
     }),
     verify: async () => actor(user),
     origins: [CONFORMANCE_ORIGIN],
+  });
+}
+
+function catalogRoutes(pool: Pool, user: string) {
+  return createPhotoCatalogRoutes({
+    enabled: true,
+    cursorSecret: Buffer.alloc(32, 23),
+    store: createPhotoCatalogStore(pool, fixtureLibrary.capabilities),
+    verify: async () => actor(user),
   });
 }
 
@@ -210,6 +224,74 @@ databaseDescribe("P12 recipe routes + production PostgreSQL adapter", () => {
     expect(response.status).toBe(422);
     expect(await response.json()).toMatchObject({ error: { code: "missing_mask_surface" } });
     expect(syntheticMaskExtractor.validate).toHaveBeenCalledOnce();
+    expect(await recipeDatabaseState(pool, user, photo.id)).toEqual(before);
+  });
+
+  it("unknown-recipe: P04はP00 future JSONをopaque保持し、P05 capability guardはvalidator前に拒否する", async () => {
+    const fixture = JSON.parse(await readFile(securityCasesUrl, "utf8")) as {
+      cases: Array<{
+        id: string;
+        request: {
+          expectedRevision: number;
+          settings: RecipeDocument["settings"];
+          baseVersion: string | null;
+        };
+        expected: { status: number; code: string };
+      }>;
+    };
+    const p00 = fixture.cases.find((item) => item.id === "unknown-recipe");
+    expect(p00).toBeDefined();
+    const user = owner("unknown");
+    const photo = await seed(pool, user);
+    const futureSettings = p00!.request.settings;
+    const futureHash = settingsSha256(futureSettings);
+
+    expect(fixtureLibrary.capabilities.renderer.settingsVersions).toEqual([...supportedDevelopSettingsVersions]);
+    expect(fixtureLibrary.capabilities.renderer.engines).toEqual([...developSettingsEngineIdentifiers]);
+    expect(supportedDevelopSettingsVersions).not.toContain(futureSettings.v);
+    expect(developSettingsEngineIdentifiers).not.toContain(futureSettings.engine);
+
+    // A dedicated newer-writer fixture replaces revision zero without passing through the older host validator.
+    const current = await pool.query(
+      `UPDATE photo_recipes
+          SET settings = $3::jsonb, settings_sha256 = $4, has_edits = true
+        WHERE owner = $1 AND photo_id = $2 AND revision = 0`,
+      [user, photo.id, JSON.stringify(futureSettings), futureHash],
+    );
+    const history = await pool.query(
+      `UPDATE photo_recipe_revisions
+          SET settings = $3::jsonb, settings_sha256 = $4, has_edits = true
+        WHERE owner = $1 AND photo_id = $2 AND revision = 0`,
+      [user, photo.id, JSON.stringify(futureSettings), futureHash],
+    );
+    expect({ current: current.rowCount, history: history.rowCount }).toEqual({ current: 1, history: 1 });
+
+    const read = await catalogRoutes(pool, user).photo(
+      new Request(`${CONFORMANCE_ORIGIN}/api/photo/v1/photos/${photo.id}`),
+      photo.id,
+    );
+    expect(read.status).toBe(200);
+    const readPhoto = await read.json() as Photo;
+    expect(readPhoto.recipe).toMatchObject({ revision: 0, settings: futureSettings, settingsSha256: futureHash });
+    expect(readPhoto.recipe.settings.futureField).toEqual({ keep: [1, "opaque"] });
+    expect(JSON.stringify(readPhoto)).not.toMatch(/objectKey|objectGeneration|photo\/final\//);
+
+    const syntheticValidator: PhotoRecipeValidator = {
+      validate: vi.fn(async () => ({ settingsSha256: futureHash, maskSurfaceIds: [] })),
+    };
+    const before = await recipeDatabaseState(pool, user, photo.id);
+    const response = await routes(pool, user, syntheticValidator).putRecipe(
+      request(photo.id, {
+        expectedRevision: p00!.request.expectedRevision,
+        settings: futureSettings,
+        baseVersion: p00!.request.baseVersion,
+      }, key()),
+      photo.id,
+    );
+
+    expect(response.status).toBe(p00!.expected.status);
+    expect(await response.json()).toMatchObject({ error: { code: p00!.expected.code } });
+    expect(syntheticValidator.validate).not.toHaveBeenCalled();
     expect(await recipeDatabaseState(pool, user, photo.id)).toEqual(before);
   });
 });

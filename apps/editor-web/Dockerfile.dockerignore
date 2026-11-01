@@ -13,6 +13,8 @@
 !workers/
 !workers/photo-purge/
 !workers/photo-purge/**
+!workers/photo-media/
+!workers/photo-media/**
 **/node_modules
 **/.next
 **/dist

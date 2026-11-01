@@ -1,18 +1,19 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { PHOTO_CONFORMANCE_CASES } from "./registry";
+import { PHOTO_CONFORMANCE_CASES, type ConformanceCase } from "./registry";
 
 const fixtureUrl = new URL("../../../../../packages/photo-library-contract/fixtures/security-cases.json", import.meta.url);
+const cases: readonly ConformanceCase[] = PHOTO_CONFORMANCE_CASES;
 
 describe("P00 photo conformance registry", () => {
   it("classifies every machine-readable case exactly once and never calls blocked evidence executed", async () => {
     const fixture = JSON.parse(await readFile(fixtureUrl, "utf8")) as { cases: Array<{ id: string }> };
     const fixtureIds = fixture.cases.map((item) => item.id).sort();
-    const registryIds = PHOTO_CONFORMANCE_CASES.map((item) => item.id).sort();
+    const registryIds = cases.map((item) => item.id).sort();
 
     expect(new Set(registryIds).size).toBe(34);
     expect(registryIds).toEqual(fixtureIds);
-    for (const item of PHOTO_CONFORMANCE_CASES) {
+    for (const item of cases) {
       if (item.evidence === "blocked") {
         expect(item.test).toBeNull();
         expect(item.remaining).not.toBeNull();
@@ -23,18 +24,28 @@ describe("P00 photo conformance registry", () => {
   });
 
   it("keeps partial coverage out of the complete evidence aggregate", () => {
-    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "db-handler")).toHaveLength(21);
-    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "handler-precondition")).toHaveLength(3);
-    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "partial")).toHaveLength(7);
-    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "blocked")).toHaveLength(3);
+    expect(cases.filter((item) => item.evidence === "db-handler")).toHaveLength(22);
+    expect(cases.filter((item) => item.evidence === "handler-precondition")).toHaveLength(3);
+    expect(cases.filter((item) => item.evidence === "partial")).toHaveLength(9);
+    expect(cases.filter((item) => item.evidence === "blocked")).toHaveLength(0);
 
-    for (const id of ["revoked-content", "format-spoof", "pixel-limit", "missing-mask", "pending-purge-retains-quota"]) {
-      expect(PHOTO_CONFORMANCE_CASES.find((item) => item.id === id)).toMatchObject({
+    for (const id of [
+      "revoked-content",
+      "format-spoof",
+      "pixel-limit",
+      "missing-mask",
+      "pending-purge-retains-quota",
+      "stale-preview",
+      "stored-media-failed",
+    ]) {
+      expect(cases.find((item) => item.id === id)).toMatchObject({
         evidence: "partial",
         remaining: expect.any(String),
       });
     }
-    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "blocked").map((item) => item.id).sort())
-      .toEqual(["stale-preview", "stored-media-failed", "unknown-recipe"]);
+    expect(cases.find((item) => item.id === "unknown-recipe")).toMatchObject({
+      evidence: "db-handler",
+      remaining: null,
+    });
   });
 });
