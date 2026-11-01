@@ -223,24 +223,29 @@ export function createPhotoCatalogApi(deps: {
       const safeItems = page.items.map(publicPhoto);
       for (const photo of safeItems) if (photo.media.state === "ready" && photo.media.workingCopy
         && jsonBytes(photo.media.workingCopy.meta) > PHOTO_LIMITS.maxWorkingCopyMetaBytes) fail("temporarily_unavailable");
+      const prefixItemBytes = [0];
+      for (const photo of safeItems) prefixItemBytes.push(prefixItemBytes[prefixItemBytes.length - 1]! + jsonBytes(photo));
       const etagInput = { owner, libraryId: page.library.id, revision: page.library.revision, filter: canonicalFilter(filter), watermark: page.watermark,
         after: decoded?.after ?? null, limit };
 
-      const envelope = (count: number): PhotoPage => {
+      const envelopeMetadata = (count: number) => {
         const hasMore = page.hasMore || count < safeItems.length;
         const nextCursor = hasMore && count > 0 ? encodeCursor(owner, filter, page.watermark, photoTuple(safeItems[count - 1]!, filter.sort)) : null;
-        return { items: safeItems.slice(0, count), nextCursor, libraryRevision: page.library.revision, usage: { ...page.library.usage } };
+        return { nextCursor, libraryRevision: page.library.revision, usage: { ...page.library.usage } };
       };
       if (safeItems.length === 0) {
-        const value = envelope(0);
+        const value: PhotoPage = { items: [], ...envelopeMetadata(0) };
         if (jsonBytes(value) <= PHOTO_LIMITS.maxPageBytes) {
           const etag = makeEtag({ ...etagInput, nextCursor: value.nextCursor });
           return matchesEtag(ifNoneMatch, etag) ? { status: 304, etag, value: null } : { status: 200, etag, value };
         }
       }
       for (let count = safeItems.length; count > 0; count--) {
-        const value = envelope(count);
-        if (jsonBytes(value) <= PHOTO_LIMITS.maxPageBytes) {
+        const metadata = envelopeMetadata(count);
+        const sizeEnvelope: PhotoPage = { items: [], ...metadata };
+        const itemArrayOverhead = prefixItemBytes[count]! + Math.max(0, count - 1);
+        if (jsonBytes(sizeEnvelope) + itemArrayOverhead <= PHOTO_LIMITS.maxPageBytes) {
+          const value: PhotoPage = { items: safeItems.slice(0, count), ...metadata };
           // The cursor expires relative to this response, so it is part of the representation's ETag.
           const etag = makeEtag({ ...etagInput, nextCursor: value.nextCursor });
           return matchesEtag(ifNoneMatch, etag) ? { status: 304, etag, value: null } : { status: 200, etag, value };

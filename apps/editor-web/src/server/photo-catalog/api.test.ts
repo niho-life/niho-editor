@@ -153,14 +153,19 @@ describe("photo catalog owner and pagination contract", () => {
 
   it("keeps the full response under 4 MiB by advancing from the last included row", async () => {
     const f = setup();
+    let settingsSerializations = 0;
+    const settings = { ...readyPhoto.recipe.settings };
+    Object.defineProperty(settings, "exposure", { enumerable: true, get: () => { settingsSerializations += 1; return 0; } });
     const many = Array.from({ length: 100 }, (_, index) => withLargeWorkingCopy({ ...readyPhoto,
-      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}` }, 58_000, `10000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`));
+      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, recipe: { ...readyPhoto.recipe, settings } },
+    58_000, `10000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`));
     vi.mocked(f.store.page).mockResolvedValue({ library, watermark: 100, items: many, hasMore: false });
     const result = await f.api.list(IDS.userA, new URL("https://editor.synthetic.invalid/?limit=100"));
     expect(result.value?.items.length).toBeGreaterThan(0);
     expect(result.value!.items.length).toBeLessThan(100);
     expect(result.value?.nextCursor).toBeTruthy();
     expect(Buffer.byteLength(JSON.stringify(result.value))).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(settingsSerializations).toBe(100 + result.value!.items.length);
     expect(result.value?.nextCursor).toBeTruthy();
   });
 
