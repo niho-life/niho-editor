@@ -19,7 +19,7 @@ const securityHeaders = [
   // 更新系の要求の Origin 検査のため same-origin（no-referrer だと Origin: null になる画面がある）
   { key: "Referrer-Policy", value: "same-origin" },
   { key: "X-Frame-Options", value: "DENY" },
-  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()" },
+  { key: "Permissions-Policy", value: "camera=(), microphone=(self), geolocation=(), payment=()" },
   // 常に https で開く（http で来た要求は Cloud Run の手前で https に回される）。サブドメインは他の用途があるので preload はしない
   { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
 ];

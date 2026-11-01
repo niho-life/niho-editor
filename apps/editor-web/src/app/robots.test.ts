@@ -25,6 +25,13 @@ describe("noindex, nofollow", () => {
     }
   });
 
+  it("allows microphone access only to this origin while keeping other device and payment policies denied", async () => {
+    for (const path of ["/", "/p/new", "/api/pages", "/v1/exp/published.json"]) {
+      expect((await configHeaders(path)).get("Permissions-Policy"), path)
+        .toBe("camera=(), microphone=(self), geolocation=(), payment=()");
+    }
+  });
+
   it("leaves the public API's contract headers to its handler (Next would drop the handler's value if config set one)", async () => {
     // Content-Type はどの規則も付けない（テストの応答は空の本文の text/plain になるので、規則そのものを見る）
     const rules = (await nextConfig.headers?.()) ?? [];
