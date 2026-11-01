@@ -186,7 +186,7 @@ library revisionをupload確定・recipe/history・media公開・trash/restore/p
 
 ## 8. SDKの再利用と新設範囲
 
-採用開始点は **SDK 0.1.4 / crate 0.27.0 / source `77508e53b20e4750190a9916bb5adc8f1ab0e04e`**。[`sdk-baseline.json`](../../packages/photo-library-contract/sdk-baseline.json) にrelease manifest/receipt/6 tarball/engine manifestのSHA-256を固定した。P08は取得したbytesをすべて照合してから取り込む。branch/tag名/latestだけに追従しない。これは採用基準の固定で、今回のPRでSDK依存をWebへ追加しない。
+採用版は **SDK 0.1.5 / crate 0.27.0 / source `f78926d805b5f2c115349d8f15ac184fde453ad1`**。[`sdk-baseline.json`](../../packages/photo-library-contract/sdk-baseline.json) に公式release manifest/receipt/6 tarball/engine manifestのSHA-256を固定した。公式workflow attestationとartifact identityを検証し、P08のpackage/lockは取得bytesのSRIへ固定する。branch/tag名/latestだけに追従しない。実hostへの接続と実機受入は別の完了条件である。
 
 | 既存資産 | 再利用 | P08〜P13で必要な差分 |
 | --- | --- | --- |
@@ -206,7 +206,7 @@ adapterはSDKの省略可能なexpectedRevisionを個人APIでは必須にし、
 
 新設は本人auth接続・quota/catalog/blob/recipe/media/lifecycle・個人API adapter・Web入口・配布接続。デスクトップ編集UIや数式を一式作り直す計画ではない。SDKの不足はniho-photoで直して新releaseを固定し、host内コピーで分岐させない。
 
-0.1.4のworkbenchとquery hookにはまだ `spotId` というscope propが残る。P08はniho-photo側に限定した先行PRを出し、`scopeKey`（`personal:<libraryId>:<actorId>`）を明示できる互換な接続口を追加する。既存の拠点利用は互換のまま保ち、個人のUIではrole/拠点rolloutを読まない。改修後の新SDK releaseとhashを両repoで固定してからP09/P11へ渡す。0.1.4は調査・数式の開始基準であり、そのまま全ての個人用scopeが完成しているとは扱わない。
+SDK 0.1.5のworkbenchとquery hookは `scopeKey`（`personal:<libraryId>:<actorId>`）を明示できる。既存の拠点用 `spotId` は互換のまま保ち、個人UIではrole/拠点rolloutを読まない。P09/P11は固定SDKと本人・library・session epochを組み合わせたhost接続を使い、アカウント切替時のcache破棄を実機で確認する。
 
 ## 9. writerとセッションの境界
 
