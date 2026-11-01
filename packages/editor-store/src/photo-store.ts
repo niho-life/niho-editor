@@ -1875,9 +1875,12 @@ export async function enqueuePhotoMediaJob(db: Database, owner: OwnerId, photoId
         [owner, photoId, identity.lifecycleGeneration, identity.original.generation, identity.baseVersion, identity.recipeRevision, identity.settingsSha256, identity.rendererManifestSha256, key, photoJsonHash(outputSpec)])).rows[0]?.id;
     }
     if (!id) throw new Error("editor-store: media convergence key mismatch");
-    await client.query("UPDATE photos SET current_media_job_id=$3 WHERE owner=$1 AND id=$2", [owner, photoId, id]);
+    const selected = await client.query<{ id: string }>(
+      "UPDATE photos SET current_media_job_id=$3 WHERE owner=$1 AND id=$2 AND current_media_job_id IS DISTINCT FROM $3 RETURNING id",
+      [owner, photoId, id],
+    );
     await client.query("UPDATE photo_media_outbox SET consumed_at=COALESCE(consumed_at,clock_timestamp()) WHERE owner=$1 AND photo_id=$2 AND lifecycle_epoch=$3 AND recipe_revision=$4 AND settings_sha256=$5", [owner, photoId, identity.lifecycleGeneration, identity.recipeRevision, identity.settingsSha256]);
-    if (inserted) await client.query("UPDATE photo_libraries SET revision=revision+1,updated_at=GREATEST(updated_at,clock_timestamp()) WHERE owner=$1", [owner]);
+    if (selected.rows.length > 0) await client.query("UPDATE photo_libraries SET revision=revision+1,updated_at=GREATEST(updated_at,clock_timestamp()) WHERE owner=$1", [owner]);
     return { id, key, created: Boolean(inserted) };
   });
 }

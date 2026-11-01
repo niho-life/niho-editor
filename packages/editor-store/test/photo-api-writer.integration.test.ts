@@ -202,6 +202,24 @@ describe("P02 API writer operations on PostgreSQL", { skip: databaseUrl === unde
     assert.equal(await getPhotoSnapshot(pool, `synthetic-foreign-${randomUUID()}`, id), null);
   });
 
+  it("bumps library revision when selecting an existing media job", async () => {
+    const owner = `synthetic-media-selection-${randomUUID()}`, made = await original(owner), id = made.snapshot.photo.id;
+    const firstSpec = spec, secondSpec = { ...spec, rendererManifestSha256: "d".repeat(64) };
+    const initialRevision = (await getPhotoLibrary(pool, owner)).revision;
+    const first = await enqueuePhotoMediaJob(pool, owner, id, firstSpec); assert.ok(first);
+    const afterFirst = (await getPhotoLibrary(pool, owner)).revision;
+    assert.equal(afterFirst, initialRevision + 1);
+    const second = await enqueuePhotoMediaJob(pool, owner, id, secondSpec); assert.ok(second);
+    const afterSecond = (await getPhotoLibrary(pool, owner)).revision;
+    assert.equal(afterSecond, afterFirst + 1);
+    const selectedAgain = await enqueuePhotoMediaJob(pool, owner, id, firstSpec); assert.ok(selectedAgain);
+    assert.deepEqual(selectedAgain, { ...first, created: false });
+    const afterReselect = (await getPhotoLibrary(pool, owner)).revision;
+    assert.equal(afterReselect, afterSecond + 1);
+    assert.deepEqual(await enqueuePhotoMediaJob(pool, owner, id, firstSpec), { ...first, created: false });
+    assert.equal((await getPhotoLibrary(pool, owner)).revision, afterReselect);
+  });
+
   it("fences late media after recipe changes and reconciles interrupted candidates", async () => {
     const owner = `synthetic-stale-${randomUUID()}`, made = await original(owner), id = made.snapshot.photo.id;
     const job = await enqueuePhotoMediaJob(pool, owner, id, spec); assert.ok(job); const claim = await claimPhotoMediaJob(pool, owner, job.id); assert.ok(claim);
