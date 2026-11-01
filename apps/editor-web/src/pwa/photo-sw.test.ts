@@ -424,7 +424,7 @@ describe("photo service worker storage budgets", () => {
     const worker = load(async (request) => {
       if (!new URL(request.url).pathname.includes("stalled")) return basic("recovered");
       const reader: SyntheticReader = {
-        read: vi.fn(() => new Promise(() => undefined)),
+        read: vi.fn<SyntheticReader["read"]>(() => new Promise(() => undefined)),
         cancel: vi.fn(() => new Promise(() => undefined)),
         releaseLock: vi.fn(),
       };
