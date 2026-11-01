@@ -143,7 +143,7 @@ describe("/photo/auth/*", () => {
       ["/settings", "/photo"],
       ["/photo/auth/login", "/photo"],
       ["//evil.invalid", "/photo"],
-    ]) {
+    ] as const) {
       const response = await startPhotoLogin(get(`/photo/auth/start?next=${encodeURIComponent(next)}`), scoped);
       expect(response.status).toBe(303);
       expect(response.headers.get("set-cookie")).toContain("HttpOnly");
