@@ -6,7 +6,7 @@ authors = ["NIHO"]
 license = "UNLICENSED"
 repository = "https://github.com/niho-coliving/niho-app"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.90"
 
 [lib]
 name = "niho_docs_lib"
@@ -46,7 +46,7 @@ niho-api-ai = { path = "../crates/api-ai" }
 # API キーを macOS Keychain の generic password に置く（lock に既にある版。rustls-native-certs と同じ）
 security-framework = "3.7"
 # お手本の文書（.docx）の中身を読むだけ（書き込み・暗号・deflate 以外の圧縮は使わないので既定の機能を切る）
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9.0", default-features = false, features = ["deflate-flate2"] }
 # zip の deflate の展開の backend（純 Rust の miniz_oxide。flate2 も miniz_oxide も lock に既にある）
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 # お手本の文書（.docx）の word/document.xml・styles.xml の流し読み（lock に既にある版）
