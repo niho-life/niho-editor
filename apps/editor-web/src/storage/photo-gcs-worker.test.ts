@@ -39,7 +39,7 @@ async function collect(iterable: AsyncIterable<Uint8Array>): Promise<Uint8Array>
   return new Uint8Array(found);
 }
 
-function media(fetcher: typeof fetch, accessToken = vi.fn(async () => TOKEN), timeoutMs = 30_000) {
+function media(fetcher: typeof fetch, accessToken: () => Promise<string> = vi.fn(async () => TOKEN), timeoutMs = 30_000) {
   return { storage: createGcsPhotoMediaStorage({ bucket: BUCKET, fetch: fetcher, accessToken, timeoutMs }), accessToken };
 }
 
@@ -111,14 +111,14 @@ describe("GCS P02 media worker storage", () => {
     const source: AsyncIterable<Uint8Array> = {
       [Symbol.asyncIterator]: () => ({ next: async () => new Promise<IteratorResult<Uint8Array>>(() => undefined), return: returned }),
     };
-    let requestSignal: AbortSignal | null = null;
+    const requestState: { signal: AbortSignal | null } = { signal: null };
     const fetcher = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      requestSignal = init?.signal ?? null;
+      requestState.signal = init?.signal ?? null;
       return responseMetadata();
     });
     await expect(media(fetcher as typeof fetch).storage.create({ key: KEY, bytes: source, sizeBytes: 4, contentType: "image/jpeg", ifGenerationMatch: 0 }, abortSignal())).rejects.toMatchObject({ code: "unavailable" });
     expect(returned).toHaveBeenCalledOnce();
-    expect(requestSignal?.aborted).toBe(true);
+    expect(requestState.signal?.aborted).toBe(true);
   });
 
   it("closes the create iterator when the caller aborts during upload", async () => {
@@ -151,9 +151,9 @@ describe("GCS P02 media worker storage", () => {
       [Symbol.asyncIterator]: () => ({ next: () => { entered(); return next; }, return: returned }),
     };
     let sentBytes = 0;
-    let requestSignal: AbortSignal | null = null;
+    const requestState: { signal: AbortSignal | null } = { signal: null };
     const fetcher = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      requestSignal = init?.signal ?? null;
+      requestState.signal = init?.signal ?? null;
       const reader = (init?.body as ReadableStream<Uint8Array>).getReader();
       try {
         const item = await reader.read();
@@ -167,7 +167,7 @@ describe("GCS P02 media worker storage", () => {
     await vi.advanceTimersByTimeAsync(10);
     await rejected;
     expect(returned).toHaveBeenCalledOnce();
-    expect(requestSignal?.aborted).toBe(true);
+    expect(requestState.signal?.aborted).toBe(true);
     resolveNext({ done: false, value: bytes });
     await Promise.resolve();
     await Promise.resolve();
@@ -182,14 +182,14 @@ describe("GCS P02 media worker storage", () => {
     const source: AsyncIterable<Uint8Array> = {
       [Symbol.asyncIterator]: () => ({ next: async () => await new Promise<IteratorResult<Uint8Array>>(() => undefined), return: returned }),
     };
-    let requestSignal: AbortSignal | null = null;
+    const requestState: { signal: AbortSignal | null } = { signal: null };
     const fetcher = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      requestSignal = init?.signal ?? null;
+      requestState.signal = init?.signal ?? null;
       return new Response(null, { status });
     });
     await expect(media(fetcher as typeof fetch).storage.create({ key: KEY, bytes: source, sizeBytes: 4, contentType: "image/png", ifGenerationMatch: 0 }, abortSignal())).rejects.toMatchObject({ code });
     expect(returned).toHaveBeenCalledOnce();
-    expect(requestSignal?.aborted).toBe(true);
+    expect(requestState.signal?.aborted).toBe(true);
   });
 
   it("maps 412 to conflict only after consuming the exact create body", async () => {
@@ -232,9 +232,9 @@ describe("GCS P02 media worker storage", () => {
       pull(controller) { controller.enqueue(bytes.subarray(0, 2)); },
       cancel: cancelled,
     }, { highWaterMark: 0 });
-    let requestSignal: AbortSignal | null = null;
+    const requestState: { signal: AbortSignal | null } = { signal: null };
     const fetcher = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      requestSignal = init?.signal ?? null;
+      requestState.signal = init?.signal ?? null;
       return new Response(body, { headers: { "Content-Length": "4" } });
     });
     const storage = media(fetcher as typeof fetch).storage;
@@ -250,7 +250,7 @@ describe("GCS P02 media worker storage", () => {
     await vi.advanceTimersByTimeAsync(10);
     await expect(winner).resolves.toBe("completed");
     expect(cancelled).toHaveBeenCalled();
-    expect(requestSignal?.aborted).toBe(true);
+    expect(requestState.signal?.aborted).toBe(true);
   });
 
   it("rejects all invalid namespaces, generations and create fields before credentials or network", async () => {
