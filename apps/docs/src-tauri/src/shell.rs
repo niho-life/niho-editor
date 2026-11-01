@@ -46,6 +46,13 @@ pub enum ShellMode {
   Dev,
 }
 
+impl ShellMode {
+  /// 旧 PC runner は同梱画面からだけ操作できる。
+  pub fn allows_pc_runner(self) -> bool {
+    matches!(self, Self::Local)
+  }
+}
+
 /// `NIHO_DOCS_SHELL` の値と、開発の起動かどうかから読む画面を決める。
 /// 配布版は未指定なら editor.niho.life。開発版は未指定なら同梱画面。未知の値と本番での `dev` は同梱画面へ閉じる。
 pub fn shell_mode(value: Option<&str>, dev: bool) -> ShellMode {
@@ -511,6 +518,13 @@ mod tests {
       remote_url(ShellMode::Remote).unwrap().as_str(),
       "https://editor.niho.life/"
     );
+  }
+
+  #[test]
+  fn pc_runner_is_only_available_to_the_bundled_screen() {
+    assert!(ShellMode::Local.allows_pc_runner());
+    assert!(!ShellMode::Remote.allows_pc_runner());
+    assert!(!ShellMode::Dev.allows_pc_runner());
   }
 
   #[test]

@@ -2711,7 +2711,11 @@ pub fn run() {
       }
       // この Mac で続きを受ける（#18804）: ON ならメニューバーとログイン時の起動を入れ、窓と関係なく裏で受け取りを始める
       app.manage(resident::Tray::default());
-      let pc = pc_runner::PcRunner::start(app.handle(), log.clone());
+      if !shell_mode.allows_pc_runner() {
+        // remote 画面には runner の状態確認・停止口がないため、古いログイン項目も動かさない。
+        resident::remove_launch_agent(dev, &log);
+      }
+      let pc = pc_runner::PcRunner::start(app.handle(), log.clone(), shell_mode);
       let resident_on = pc.enabled();
       app.manage(pc);
       if updates {
