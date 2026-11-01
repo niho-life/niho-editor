@@ -171,6 +171,9 @@ recipeのrevisionは0から始め、**全保存でexpectedRevision必須**。現
 
 `RecipeDocument.settings` はSDKのJSON全体を保つ。設定のhashはUTF-8のRFC 8785 canonical JSONのsha256。settings内のbaseとenvelopeのbaseVersionを照合し、work metadataとの互換性をSDKのruntime validatorで確認する。対応するv1〜v9/engineだけを書込可能にし、未知version/engine/描画featureはread-onlyにする。未知フィールドを捨てた再シリアライズ、初期値への置換、部分的に読めた値だけでの上書きをしない。既知versionでも未知の描画項目があれば同じ扱いにする。
 
+P13の`createPinnedPhotoRecipeValidator`は、固定SDKのmanifest/source/glue/WASMをhash・size・実versionで照合してから初期化し、SDKのstrict write gate、実WASMの数値検証、base/meta互換性を組み合わせる。互換性helperの返す補完済みJSONは保存せず、元JSONを共通canonical helperでhash化する。canonical baseにはreadyなworking-copy metadataを必須とし、無いときはpreviewや推定値で代用しない。null baseはSDKの直接読取上限内のJPEG/PNGだけを対象に、未指定contextで互換性を確認する。pending mediaのmetadata resolverと本番runtime配線は別の受入事項で、factory単体で書込口を有効化しない。
+
+
 surface画像はP03のmask uploadで先に保存し、P05がsettingsの参照を抽出して本人・同じphoto・digest・寸法・保存済みを照合してからrecipeをCASする。**宣言されたmaskSurfaceIdsを信用しない。** ブラシ・被写体・空の面は同じ経路を使い、画像のない参照を保存しない。v1のserverで新たに被写体を検出する機能は不要。sky検出などhostの道具は実engine capabilityがあるときだけ有効化する。
 
 別端末はrecipe内のsurface IDからmasks.getでasset metadataを引き、content.getで面のbytesを読む。全参照をphoto/ownerで再検証する。infoの撮影条件・位置情報は本人用の詳細routeだけに返し、一覧と派生物には含めない。

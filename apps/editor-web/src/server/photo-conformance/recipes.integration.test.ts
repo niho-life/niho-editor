@@ -1,8 +1,7 @@
 // @vitest-environment node
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { developSettingsEngineIdentifiers, isEditableDevelopSettings, readDevelopSettings, supportedDevelopSettingsVersions } from "niho-photo-contract";
-import { initSync, validateSettings, version } from "niho-photo-develop-engine-runtime/niho_develop_wasm-0.27.0.js";
+import { developSettingsEngineIdentifiers, supportedDevelopSettingsVersions } from "niho-photo-contract";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { library as fixtureLibrary, readyPhoto } from "../../../../../packages/photo-library-contract/fixtures/v1";
@@ -11,6 +10,7 @@ import { createPhotoCatalogRoutes } from "../photo-catalog/routes";
 import { createPhotoCatalogStore } from "../photo-catalog/store-adapter";
 import { createPhotoRecipesRoutes } from "../photo-recipes/routes";
 import { createPhotoRecipeStore } from "../photo-recipes/store-adapter";
+import { createPinnedPhotoRecipeValidator } from "../photo-recipes/pinned-validator";
 import type { PhotoRecipeValidator } from "../photo-recipes/types";
 import {
   CONFORMANCE_ORIGIN,
@@ -84,37 +84,6 @@ async function seed(pool: Pool, user: string): Promise<Photo> {
   return (await response.json() as { value: { result: { photo: Photo } } }).value.result.photo;
 }
 
-/** Test-only port: execute the immutable SDK; this does not enable the P13 production runtime. */
-const pinnedSdkValidator: PhotoRecipeValidator = {
-  validate: async (settings) => {
-    if (!readDevelopSettings(settings) || !isEditableDevelopSettings(settings)
-      || JSON.parse(validateSettings(JSON.stringify(settings))).length !== 0) return null;
-    const masks: readonly Json[] = Array.isArray(settings.masks) ? settings.masks : [];
-    const maskSurfaceIds = masks.flatMap((maskValue) => {
-      if (!maskValue || typeof maskValue !== "object" || Array.isArray(maskValue)) return [];
-      const surface = (maskValue as JsonObject).surface;
-      if (!surface || typeof surface !== "object" || Array.isArray(surface)) return [];
-      const id = (surface as JsonObject).id;
-      return typeof id === "string" ? [id] : [];
-    });
-    return { settingsSha256: settingsSha256(settings), maskSurfaceIds: [...new Set(maskSurfaceIds)].sort() };
-  },
-};
-
-async function loadPinnedValidator(): Promise<void> {
-  const baseline = JSON.parse(await readFile(new URL("../../../../../packages/photo-library-contract/sdk-baseline.json", import.meta.url), "utf8"));
-  const manifestBytes = await readFile(new URL(import.meta.resolve("niho-photo-develop-engine-runtime/manifest")));
-  expect(digest(manifestBytes)).toBe(baseline.engine.manifest.sha256);
-  const manifest = JSON.parse(manifestBytes.toString("utf8"));
-  expect(manifest.source.commit).toBe(baseline.sourceCommit);
-  const glue = await readFile(new URL(import.meta.resolve("niho-photo-develop-engine-runtime/niho_develop_wasm-0.27.0.js")));
-  expect({ sha256: digest(glue), bytes: glue.byteLength }).toEqual(manifest.files["niho_develop_wasm-0.27.0.js"]);
-  const wasm = await readFile(new URL(import.meta.resolve("niho-photo-develop-engine-runtime/niho_develop_wasm_bg-0.27.0.wasm")));
-  expect({ sha256: digest(wasm), bytes: wasm.byteLength }).toEqual(manifest.files["niho_develop_wasm_bg-0.27.0.wasm"]);
-  initSync({ module: wasm });
-  expect(version()).toBe(`niho-develop ${baseline.engine.crateVersion} (engine ${baseline.engine.version})`);
-}
-
 async function recipeDatabaseState(pool: Pool, user: string, photoId: string) {
   const recipe = (await pool.query<{
     photo_revision: string;
@@ -150,9 +119,10 @@ async function recipeDatabaseState(pool: Pool, user: string, photoId: string) {
 databaseDescribe("P12 recipe routes + production PostgreSQL adapter", () => {
   let pool: Pool;
   let close: (() => Promise<void>) | undefined;
+  let pinnedSdkValidator: PhotoRecipeValidator;
 
   beforeAll(async () => {
-    await loadPinnedValidator();
+    pinnedSdkValidator = await createPinnedPhotoRecipeValidator();
     ({ pool, close } = await openConformanceDatabase(databaseUrl!));
   });
   afterAll(async () => { await close?.(); });
