@@ -31,13 +31,14 @@ use crate::{AppState, CommandError, CommandResult};
 pub const EDITOR_URL: &str = "https://editor.niho.life";
 /// 開発の画面（`npm -C apps/editor-web run dev`）。開発・試験の起動でだけ使える。
 pub const DEV_EDITOR_URL: &str = "http://localhost:3000";
-/// どの画面を読むかの環境変数。`remote`＝editor.niho.life、`dev`＝開発の画面（開発の起動だけ）、それ以外＝今までの画面。
+/// どの画面を読むかの環境変数。配布版は既定で editor.niho.life、`local` は同梱画面への切り戻し、
+/// `dev` は開発起動だけで使える localhost。
 pub const SHELL_ENV: &str = "NIHO_DOCS_SHELL";
 
 /// 殻が読む画面。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShellMode {
-  /// 今までの画面（同梱の index.html。旧 NIHO docs。殻に置き換わるまでの既定）。
+  /// 同梱の画面。開発起動の既定か、配布版で明示的に切り戻すときに使う。
   Local,
   /// editor.niho.life。
   Remote,
@@ -45,11 +46,14 @@ pub enum ShellMode {
   Dev,
 }
 
-/// `NIHO_DOCS_SHELL` の値と、開発の起動かどうかから、読む画面を決める。知らない値・本番での `dev` は今までの画面。
+/// `NIHO_DOCS_SHELL` の値と、開発の起動かどうかから読む画面を決める。
+/// 配布版は未指定なら editor.niho.life。開発版は未指定なら同梱画面。未知の値と本番での `dev` は同梱画面へ閉じる。
 pub fn shell_mode(value: Option<&str>, dev: bool) -> ShellMode {
   match value.map(str::trim) {
     Some("remote") => ShellMode::Remote,
     Some("dev") if dev => ShellMode::Dev,
+    Some("local") => ShellMode::Local,
+    None if !dev => ShellMode::Remote,
     _ => ShellMode::Local,
   }
 }
@@ -500,6 +504,7 @@ mod tests {
 
   #[test]
   fn remote_is_the_production_editor_only() {
+    assert_eq!(shell_mode(None, false), ShellMode::Remote);
     assert_eq!(shell_mode(Some("remote"), false), ShellMode::Remote);
     assert_eq!(shell_mode(Some("remote"), true), ShellMode::Remote);
     assert_eq!(
@@ -510,6 +515,7 @@ mod tests {
 
   #[test]
   fn dev_editor_is_only_for_dev_launches() {
+    assert_eq!(shell_mode(None, true), ShellMode::Local);
     assert_eq!(shell_mode(Some("dev"), true), ShellMode::Dev);
     assert_eq!(remote_url(ShellMode::Dev).unwrap().as_str(), "http://localhost:3000/");
     // 本番の起動で dev を指定しても、開発の画面は読まない
@@ -518,14 +524,9 @@ mod tests {
 
   #[test]
   fn anything_else_keeps_the_bundled_screen() {
-    for value in [
-      None,
-      Some(""),
-      Some("local"),
-      Some("https://example.com"),
-      Some("REMOTE"),
-    ] {
-      assert_eq!(shell_mode(value, true), ShellMode::Local, "{value:?}");
+    for value in [Some(""), Some("local"), Some("https://example.com"), Some("REMOTE")] {
+      assert_eq!(shell_mode(value, true), ShellMode::Local, "dev: {value:?}");
+      assert_eq!(shell_mode(value, false), ShellMode::Local, "release: {value:?}");
     }
     assert_eq!(remote_url(ShellMode::Local), None);
   }
