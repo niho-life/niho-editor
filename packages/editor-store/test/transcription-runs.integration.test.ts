@@ -465,6 +465,26 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.equal(failed?.errorCode, "internal");
   });
 
+  it("does not overwrite edits made while a replace transcription is running", async () => {
+    const pageId = await uploadedRecording(pool);
+    const first = await claimed(pool, pageId);
+    assert.equal(await finishRun(pool, first.id, first.generation, { segments: RESULT, durationSec: 5 }), "succeeded");
+
+    const replacement = await claimed(pool, pageId, { replace: true });
+    const edited = await updateRecording(pool, OWNER, pageId, 2, (data) => ({
+      ...data,
+      segments: [{ ...data.segments[0]!, text: "実行中に利用者が直した段落" }, data.segments[1]!],
+    }));
+    assert.equal(edited?.status, "ok");
+    const before = await recordingRow(pool, pageId);
+
+    assert.equal(await finishRun(pool, replacement.id, replacement.generation, { segments: RESULT, durationSec: 5 }), "superseded");
+    assert.deepEqual(await recordingRow(pool, pageId), before, "the edit survives and the late result writes nothing");
+    const failed = await latestRun(pool, OWNER, pageId);
+    assert.equal(failed?.status, "failed");
+    assert.equal(failed?.errorCode, "internal");
+  });
+
   it("fails a run only for the current generation, or a queued run before it is claimed, and keeps the audio for another try", async () => {
     const pageId = await uploadedRecording(pool);
     const { id, generation } = await claimed(pool, pageId);
@@ -586,7 +606,7 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     // 作成の時刻は少し前にしておく（時刻の順の検査が、ここで見たい検査より先に断らないように）
     const earlier = new Date(now.getTime() - 60_000);
     const insert = (values: Record<string, unknown>) => {
-      const row = { owner: OWNER, page_id: pageId, engine: "fake", status: "queued", language: "ja", created_at: earlier, ...values };
+      const row = { owner: OWNER, page_id: pageId, engine: "fake", status: "queued", language: "ja", base_revision: 1, created_at: earlier, ...values };
       const columns = Object.keys(row);
       return pool.query(
         `INSERT INTO transcription_runs (${columns.join(", ")}) VALUES (${columns.map((_, index) => `$${index + 1}`).join(", ")})`,
@@ -598,6 +618,7 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
       { status: "canceled" },
       { language: "fr" },
       { generation: -1 },
+      { base_revision: -1 },
       { status: "failed", finished_at: now },
       { status: "failed", finished_at: now, error_code: "superseded" },
       { status: "succeeded", started_at: now, finished_at: now, error_code: "internal" },
