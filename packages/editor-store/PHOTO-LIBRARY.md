@@ -22,6 +22,14 @@
 
 `markPhotoLibraryDeleting` は新規予約を拒み、未完了の予約を解放し、accountと各photoの世代を進める。deleting中はP07が全原本を同じ台帳で消せるよう、active photoも `beginPhotoPurge` へ渡せる。active accountでこの省略は使えない。
 
-migrationには、現在のrecipeとrevision、named/auto versions、media job、purge job、canonical media metadataのowner付き保存先を用意した。初期recipeはSDKのneutralと揃え、RAWは `neutralDevelopSettings(null, { raw: true })` 相当の `niho-2`、ラスタは既存の `niho-14` を保存する。canonical base確定後の初期recipe整合はP05/P06で接続する。すでに保存された補正は自動昇格・自動置換しない。P05/P06はこの基盤に完全なCAS/worker操作を接続する。適用済みのmigrationを編集しない。
+migrationには、現在のrecipeとrevision、named/auto versions、media job、purge job、canonical media metadataのowner付き保存先を用意した。初期recipeはSDKのneutralと揃え、RAWは `neutralDevelopSettings(null, { raw: true })` 相当の `niho-2`、ラスタは既存の `niho-14` を保存する。canonical base確定後の初期recipe整合はdecoder接続後に行う。すでに保存された補正は自動昇格・自動置換しない。適用済みのmigrationを編集しない。
 
 重複を検出して容量予約なしで成功するstartも、同じ`photo_uploads`台帳にpayload hashと対象photo/assetを保存する。この行は`stored`・予約0・完了lease generation 0（新しい転送なし）で、再送のpayload照合と現在のphoto状態の再検証を通す。実転送の検証leaseは1以上なので区別でき、trash/purge後に同じキーからuploadを新設しない。
+
+## 後続API向けwriter operations（#171）
+
+追加migrationはupload request bindingと成功したrecipe/version write receipt、media outbox、生成中候補assetを保持する。`bindPhotoRequest` は本人・operation・resource・key・payload hashをtransaction内で結び、同じkeyの別payloadを拒む。`getPhotoUploadByStartKey` と `getPhotoMaskBySurfaceId` は owner を含めて照合する。
+
+`listPhotoCatalogPage` はrepeatable-read snapshotでlibrary watermark、filter、安定keysetを一緒に適用する。`getPhotoSnapshot`、`getPhotoVersions`、`listPhotoRecipeHistory`、`lookupPhotoHashes` はownerとphoto/lifecycleを再確認する。recipeとVersionSetは別々のexpected-revision CASで保存し、mask参照を同じtransactionで照合する。成功したwriteの再送は現在状態を返し、hash違いをconflictにする。recipe/lifecycle更新時のmedia outboxも同じDB transactionへ記録する。
+
+media writerはsource identityに収束するjob、lease generation付きclaim、候補objectのallocation/staging、publish・retry・supersede・cleanup照合を提供する。leaseが切れたclaimは失敗・supersede・公開を確定できず、purgeやrecipe更新後に古いworkerがassetを復活させない。ここはDB操作の境界までで、Next route、実decoder、ticket broker、worker runtime、物理削除executorは別の担当PRで接続する。

@@ -21,6 +21,13 @@ function withoutComments(sql: string): string {
   return sql.replace(/--[^\n]*/g, "");
 }
 
+/** Remove executable bodies so trigger/function code is not mistaken for migration seed data. */
+function withoutRoutineBodies(sql: string): string {
+  return sql
+    .replace(/\bCREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b[\s\S]*?\bAS\s+(\$[A-Za-z0-9_]*\$)[\s\S]*?\1\s*;/gi, "")
+    .replace(/\bDO\s+(\$[A-Za-z0-9_]*\$)[\s\S]*?\1\s*;/gi, "");
+}
+
 function tableBody(sql: string, table: string): string {
   return sql.match(new RegExp(`CREATE TABLE ${table} \\(([\\s\\S]*?)\\n\\);`))?.[1] ?? "";
 }
@@ -120,7 +127,7 @@ describe("migration files", () => {
     for (const file of await readMigrations()) {
       const sql = file.sql;
       // COPY は文としてだけ見る（0009 の値 'copy-on-import' は文ではない）
-      assert.doesNotMatch(sql, /\bINSERT\s+INTO\b|\bCOPY\s/i, `${file.name} must not carry records`);
+      assert.doesNotMatch(withoutRoutineBodies(sql), /\bINSERT\s+INTO\b|\bCOPY\s/i, `${file.name} must not carry records`);
       assert.doesNotMatch(sql, /-----BEGIN [A-Z ]*PRIVATE KEY-----/);
       assert.doesNotMatch(sql, /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i, "credential URL");
       assert.doesNotMatch(sql, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i, "e-mail address");
