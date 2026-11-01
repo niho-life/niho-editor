@@ -41,7 +41,9 @@ function childEnv(port, mode) {
   delete env.DATABASE_URL;
   // google の許可リストは渡さない（#47 google: 空なら起動しない）
   delete env.EDITOR_GOOGLE_ALLOWED_EMAILS;
+  delete env.EDITOR_NIHO_ORIGIN;
   if (mode !== undefined) env.EDITOR_AUTH_MODE = mode;
+  if (mode === "niho") env.EDITOR_NIHO_ORIGIN = "https://niho-auth.example.invalid";
   return env;
 }
 
@@ -100,7 +102,7 @@ describe("production start with the server entry (Dockerfile / npm start)", () =
     });
   }
 
-  it("starts with EDITOR_AUTH_MODE=niho and answers 401 while niho login is not implemented", async () => {
+  it("starts with configured EDITOR_AUTH_MODE=niho and answers 401 without a session", async () => {
     const port = await freePort();
     const child = spawn(process.execPath, ["scripts/server-entry.mjs", standaloneServer], { cwd: appDir, env: childEnv(port, "niho"), stdio: "ignore" });
     try {

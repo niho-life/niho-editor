@@ -1,5 +1,7 @@
 /** API の応答と要求の読み取り。エラーの本文は固定の短い code だけにする（内部の情報・SQL・stack を出さない）。 */
 
+import { AuthTemporarilyUnavailable } from "../auth/types";
+
 export const ROBOTS_HEADER_VALUE = "noindex, nofollow";
 
 /** 要求の本文の上限（1 MiB）。 */
@@ -120,6 +122,10 @@ export async function guarded(route: string, handler: () => Promise<Response>): 
   try {
     return await handler();
   } catch (error) {
+    if (error instanceof AuthTemporarilyUnavailable) {
+      console.error("editor-web: request failed", { route, name: error.name, category: "authentication_unavailable" });
+      return errorResponse("unavailable");
+    }
     const name = error instanceof Error ? error.name : "unknown";
     const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : undefined;
     console.error("editor-web: request failed", { route, name, code });

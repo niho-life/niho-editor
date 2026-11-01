@@ -39,7 +39,7 @@ fi
 CONNECTION="$(cloudsql_connection_name)"
 SERVICE_URL="$(service_url "$SERVICE")"
 
-# Login (#47, §13). niho is fail-closed until niho-app #19459; google lets the addresses in GOOGLE_ALLOWED_EMAILS in, and
+# Login (#47, §13). niho uses the dedicated NIHO editor session; google lets the addresses in GOOGLE_ALLOWED_EMAILS in, and
 # needs the OAuth client secret (set-google-oauth-secret.sh). Without an enabled newest version of that secret the service
 # still starts, but the login screen says it is unavailable, so the secret is attached only when it is there.
 google=0
@@ -52,7 +52,7 @@ if [[ "$EDITOR_AUTH_MODE" == google ]]; then
     log "login: google, but the newest version of $SECRET_GOOGLE_OAUTH is missing or not enabled: nobody can log in (run scripts/editor-deploy/set-google-oauth-secret.sh)"
   fi
 else
-  log "login: niho (fail-closed until the niho-app #19459 contract: nobody can log in)"
+  log "login: niho (dedicated editor session; upstream origin is configured)"
 fi
 
 # AI (#38): on only when the newest version of the key secret is enabled (set-ai-key.sh). Otherwise nothing is added for AI and

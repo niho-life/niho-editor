@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { MAX_BODY_BYTES, expectedOrigin, isSameOriginRequest, readJsonBody } from "./http";
+import { describe, expect, it, vi } from "vitest";
+import { AuthTemporarilyUnavailable } from "../auth/types";
+import { MAX_BODY_BYTES, expectedOrigin, guarded, isSameOriginRequest, readJsonBody } from "./http";
 
 function post(body: BodyInit | null, headers: Record<string, string> = {}) {
   return new Request("http://editor.test/api/pages", { method: "POST", body, headers: { "content-type": "application/json", ...headers } });
@@ -69,5 +70,18 @@ describe("same-origin check", () => {
     expect(expectedOrigin(forwarded, {})).toBe("https://editor.example.com");
     expect(isSameOriginRequest(forwarded, {})).toBe(true);
     expect(isSameOriginRequest(request({ host: "editor.test", origin: "http://editor.test" }), { EDITOR_ORIGIN: "https://editor.example.com" })).toBe(false);
+  });
+});
+
+describe("guarded", () => {
+  it("maps a temporary authentication outage to a sanitized 503 for every central-guarded route", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const response = await guarded("GET /api/pages", async () => {
+      throw new AuthTemporarilyUnavailable("provider response contained sensitive metadata");
+    });
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe('{"error":"unavailable"}');
+    expect(JSON.stringify(log.mock.calls)).not.toContain("sensitive");
+    log.mockRestore();
   });
 });

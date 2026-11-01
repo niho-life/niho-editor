@@ -35,3 +35,13 @@ export function logout(request: Request, deps: AuthRoutesDeps): Promise<Response
     return noStore(await deps.auth().logout(request));
   });
 }
+
+/** POST /auth/refresh — cookie更新は同じoriginのRoute Handlerからだけ。未対応providerは204のno-op。 */
+export function refresh(request: Request, deps: AuthRoutesDeps): Promise<Response> {
+  return guarded("POST /auth/refresh", async () => {
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const provider = deps.auth();
+    if (!provider.refresh) return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
+    return noStore(await provider.refresh(request));
+  });
+}
