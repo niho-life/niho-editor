@@ -95,6 +95,8 @@ migration は expand → contract（列の削除は配備の 1 つ後）。適�
 
 既存のproduction trafficが`google`を使っている間は、そのserviceの環境変数を直接`niho`へ切り替えない。まずtrafficを受けない候補service/revisionを作り、その候補だけのexact callbackをNIHO側へ登録し、同じcanonical IDになるiPhone/Mac往復と失効を受入する。認証transportはv2のform POSTだけを使い、開始・確認・login return・callbackの生成URLへcode/stateを載せない。候補で合成値をPOSTし、応答HTMLのactionと実際のrequest URLに合成値/query/fragmentがないことを確認する。request logのpositive controlと保存結果を照合し、POST本文・Cookie・Authorizationがapp/error/access logへ記録されないことも確認する。旧GET callbackはNIHOモードで拒否する。ログexclusionの有無だけを非保存の根拠とせず、既存production loggingへ広い除外を加えない。実際の応答のCSP・nonce・Referrer-Policy originと、SameSite=Lax Cookie付き同一origin再POSTまで確認する。この証跡とオーナーの切替判断が揃うまで、既存production service/revisionのtraffic・`EDITOR_AUTH_MODE=google`・Google所有者IDを変更しない。
 
+写真だけの接続では、Docsの既定方式とGoogle所有者IDを維持したまま、明示的な`EDITOR_NIHO_ORIGIN`で`/photo/auth/*`のNIHO providerを開ける。写真APIの実行依存は専用providerを参照し、未設定時はGoogle/stubへ落ちない。固定callbackのGETは既定Docs、POSTは写真NIHOに分岐する。`/photo/auth/start`にもstandalone formのexact CSP/referrer例外を適用する。写真のrefresh/logoutは`/photo/auth/refresh`・`/photo/auth/logout`で行い、Docs側のcookieを消さない。設定追加だけを利用可能の証拠にせず、両cookieが同居する受入で写真はNIHO本人、Docsは従来の本人になることを確認する。
+
 ## 6. 独自ドメインと TLS
 
 画面サービスに Cloud Run のドメインマッピングを付ける（証明書は Google が発行・更新。追加費用なし。プレビュー機能なので、止まったときは `run.app` の URL で動く）。

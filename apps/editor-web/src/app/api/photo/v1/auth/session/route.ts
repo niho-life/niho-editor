@@ -1,5 +1,5 @@
-import { getAuthProvider } from "@/auth";
 import { PhotoAuthError, verifyPhotoActor } from "@/server/photo-auth";
+import { photoAuthRuntimeDeps } from "@/server/photo-auth/runtime";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,7 @@ const SAFE_HEADERS = {
 
 export async function GET(request: Request): Promise<Response> {
   try {
-    const result = await verifyPhotoActor(request, { auth: () => getAuthProvider() });
+    const result = await verifyPhotoActor(request, photoAuthRuntimeDeps);
     return Response.json({
       sessionId: result.actor.sessionId,
       userId: result.actor.userId,

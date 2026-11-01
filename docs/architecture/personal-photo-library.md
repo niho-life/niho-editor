@@ -34,11 +34,19 @@ Epic #148 / P00 #149。2026-11-01の契約。本文と [`photo-library-contract`
 - browser sessionは毎要求NIHO introspectionを通し、canonical `User.id`、LOGIN/deleted、Firebase失効、auth time、親session、子credential世代、期限を再確認する。30日目安の親sessionと複数の10分grace世代でrefreshを線形化し、3並列refreshの応答が逆順に届いても有効にする。期限外世代の再利用は親sessionを失効する。
 - logoutはsession revokeとpending cancelの両方が成功するまでcookieを保持し、NIHOが確認不能なら再試行可能な503にする。新規接続では、そのブラウザが`replaceCredential`として提示した旧cookieだけを失効し、同じcanonical IDのiPhone Safari・PWA・別ブラウザsessionを一括失効しない。取消、交換、refresh、logoutはDB row lockで競合を閉じる。
 - Mac bearerは公開サーバーから固定のMac検証endpointへだけ渡す。NIHO側が`niho-camera`のnative ID tokenを署名・issuer・audience・期限・失効込みで検証し、active AppConnectionと同じcanonical `User.id`を返す。公開側はJWTをdecodeしただけでは本人にせず、browser cookieとbearerが同時なら曖昧な認証として拒否する。
-- `GET /api/photo/v1/auth/session`は`sessionId`、`userId`、`expiresAt`、`refreshRequired`だけをno-storeで返す。token、cookie値、email、roleは返さない。`POST /auth/refresh`だけがcookieを書き替え、同一origin以外を拒否する。
+- `GET /api/photo/v1/auth/session`は`sessionId`、`userId`、`expiresAt`、`refreshRequired`だけをno-storeで返す。token、cookie値、email、roleは返さない。写真は`POST /photo/auth/refresh`でcookieを書き替え、同一origin以外を拒否する。
 
-認証formのHTMLは要求と独立したnonce・送信先を限定したCSP・no-store・`Referrer-Policy: origin`を持つ。Originの欠落/null/不一致、重複/余分なfield、4KiB超、2秒の時間切れ、不正UTF-8を拒否する。長期credentialとPKCE verifierをHTML/JavaScriptへ出さない。Nextのdocument CSPとreferrer例外は`/auth/login/start`と`/auth/callback`だけで、通常画面とGoogle GET callbackの方式は維持する。
+認証formのHTMLは要求と独立したnonce・送信先を限定したCSP・no-store・`Referrer-Policy: origin`を持つ。Originの欠落/null/不一致、重複/余分なfield、4KiB超、2秒の時間切れ、不正UTF-8を拒否する。長期credentialとPKCE verifierをHTML/JavaScriptへ出さない。Nextのdocument CSPとreferrer例外は`/auth/login/start`、`/auth/callback`、`/photo/auth/start`のexact pathだけで、通常画面とGoogle GET callbackの方式は維持する。
 
 公開側の接続先は`EDITOR_NIHO_ORIGIN`にpath/query/fragment/credentialsのないexact HTTPS originを設定する。`EDITOR_AUTH_MODE=niho`で未設定・不正ならportを開く前に停止する。全server fetchはredirect拒否、no-store、時間切れ、応答byte上限、closed response shapeを持つ。公開リポジトリの例は`.invalid`だけとし、実origin、callback、project、identity、secretは置かない。NIHO editor sessionは写真本人確認専用で、Google Docs用の`apiToken`はnullのままにする。
+
+### Docsと写真の認証を同じoriginで併用する
+
+既存Docsは`EDITOR_AUTH_MODE=google`と既存Google cookie・所有者IDを維持できる。写真だけは明示された有効な`EDITOR_NIHO_ORIGIN`からNIHO providerを選び、`/photo/auth/login`・`/photo/auth/start`・`/photo/auth/refresh`・`/photo/auth/logout`を使う。未設定なら写真の接続は閉じ、Googleやstubの本人へフォールバックしない。別cookieのGoogle本人BとNIHO本人Aが同居しても、写真catalog/transfer/recipe/lifecycle/sessionの本人はAになる。メールによるID連結・所有者の移行はしない。
+
+固定callbackは既存の`/auth/callback`を使う。GETはDocsの既定provider、POSTは写真用NIHO providerへ渡す。戻り先は`/photo`、`/photo/trash`、`/photo/<UUID>`だけに閉じ、写真の認証routeやDocsへのループを許さない。写真のproviderが返す失敗・logoutのログイン先だけを写真ログインへ戻し、成功先・Cookie・CSPを保つ。Macのbearer検証はこのbrowser選択から独立する。
+
+この配線は写真storage/providerやPWA画面の有効化を意味しない。下記の実環境受入とP13のprovider・容量・失効確認は別に必要である。
 
 ### 実環境の受入（P13）
 

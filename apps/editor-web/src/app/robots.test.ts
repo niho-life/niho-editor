@@ -58,12 +58,12 @@ describe("noindex, nofollow", () => {
     expect(result.rules).toEqual({ userAgent: "*", allow: "/" });
   });
 
-  it("overrides Referrer-Policy only on the two exact auth form handlers", async () => {
+  it("overrides Referrer-Policy only on the three exact auth form handlers", async () => {
     expect(AUTH_FORM_HEADERS).toEqual([{ key: "Referrer-Policy", value: "origin" }]);
-    for (const path of ["/auth/login/start", "/auth/login/start?next=%2Fsettings", "/auth/callback"]) {
+    for (const path of ["/auth/login/start", "/auth/login/start?next=%2Fsettings", "/auth/callback", "/photo/auth/start", "/photo/auth/start?next=%2Fphoto%2Ftrash"]) {
       expect((await configHeaders(path)).get("Referrer-Policy"), path).toBe("origin");
     }
-    for (const path of ["/auth/login", "/auth/login/start/extra", "/auth/callback/extra", "/settings"]) {
+    for (const path of ["/auth/login", "/auth/login/start/extra", "/auth/callback/extra", "/photo", "/photo/auth/login", "/photo/auth/start/extra", "/photo/auth/logout", "/photo/auth/refresh", "/settings"]) {
       expect((await configHeaders(path)).get("Referrer-Policy"), path).toBe("same-origin");
     }
     expect((await configHeaders("/s/synthetic-token")).get("Referrer-Policy")).toBe("no-referrer");

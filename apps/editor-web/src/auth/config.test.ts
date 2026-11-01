@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AuthConfigError, isAllowedEmail, isTrustedNihoOrigin, parseAllowedEmails, resolveAuthMode } from "./config";
-import { getAuthProvider } from "./index";
+import { getAuthProvider, getPhotoAuthProvider } from "./index";
 import { STUB_USER_ID } from "./stub";
 
 const request = { headers: new Headers() };
@@ -126,8 +126,29 @@ describe("auth providers", () => {
   });
 
   it("selects the NIHO provider only with its trusted origin configured", () => {
-    const provider = getAuthProvider({ NODE_ENV: "production", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" });
+    const env = { NODE_ENV: "production", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" } as const;
+    const provider = getAuthProvider(env);
     expect(provider.mode).toBe("niho");
+    expect(getPhotoAuthProvider(env)).toBe(provider);
+  });
+
+  it("keeps the Docs provider while selecting NIHO only for photos with an explicit trusted origin", () => {
+    const hybrid = {
+      NODE_ENV: "production",
+      EDITOR_AUTH_MODE: "google",
+      EDITOR_GOOGLE_ALLOWED_EMAILS: ALLOWED_ONE,
+      EDITOR_NIHO_ORIGIN: "https://niho.example.invalid",
+    } as const;
+    expect(getAuthProvider(hybrid).mode).toBe("google");
+    expect(getPhotoAuthProvider(hybrid)?.mode).toBe("niho");
+    expect(getPhotoAuthProvider({ ...hybrid, EDITOR_NIHO_ORIGIN: undefined })).toBeNull();
+    expect(getPhotoAuthProvider({ NODE_ENV: "development", EDITOR_AUTH_MODE: "stub", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" })?.mode).toBe("niho");
+    expect(getPhotoAuthProvider({ NODE_ENV: "development", EDITOR_AUTH_MODE: "stub" })).toBeNull();
+  });
+
+  it("does not bypass the production global-mode guard while selecting photo auth", () => {
+    expect(() => getPhotoAuthProvider({ NODE_ENV: "production", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" })).toThrow(AuthConfigError);
+    expect(() => getPhotoAuthProvider({ NODE_ENV: "production", EDITOR_AUTH_MODE: "google", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" })).toThrow(AuthConfigError);
   });
 
   it("refuses to pick a provider in production unless the mode is niho or google", () => {

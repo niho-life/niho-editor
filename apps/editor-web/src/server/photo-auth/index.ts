@@ -23,6 +23,7 @@ export class PhotoAuthError extends Error {
 export type PhotoAuthResult = { actor: VerifiedPhotoActor; refreshRequired: boolean };
 export type PhotoAuthDeps = {
   auth: () => AuthProvider;
+  photoAuth?: () => AuthProvider | null;
   env?: Readonly<Record<string, string | undefined>>;
   fetch?: typeof fetch;
   now?: () => number;
@@ -147,9 +148,13 @@ export async function verifyPhotoActor(request: Request, deps: PhotoAuthDeps): P
     throw new PhotoAuthError(403, "origin_rejected");
   }
 
+  const provider = deps.photoAuth ? deps.photoAuth() : deps.auth();
+  if (!provider || provider.mode !== "niho") {
+    throw new PhotoAuthError(deps.photoAuth ? 503 : 401, deps.photoAuth ? "photo_auth_unavailable" : "unauthorized", deps.photoAuth !== undefined);
+  }
   let session;
   try {
-    session = await deps.auth().getSession({ headers: request.headers });
+    session = await provider.getSession({ headers: request.headers });
   } catch (error) {
     if (error instanceof AuthTemporarilyUnavailable) throw new PhotoAuthError(503, "photo_auth_unavailable", true);
     throw error;
