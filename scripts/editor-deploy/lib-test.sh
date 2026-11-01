@@ -62,7 +62,7 @@ check "the newest transcription key version disabled: engine off" "$(tr_ready)" 
 secret_exists=0
 check "no transcription key secret: engine off" "$(tr_ready)" 0
 
-base_env="EDITOR_AUTH_MODE=niho,EDITOR_ORIGIN=https://editor.example.com,EDITOR_STORAGE=gcs,EDITOR_ASSETS_BUCKET=my-gcp-project-editor-assets"
+base_env="EDITOR_AUTH_MODE=niho,EDITOR_ORIGIN=https://editor.example.com,EDITOR_STORAGE=gcs,EDITOR_ASSETS_BUCKET=my-gcp-project-editor-assets,EDITOR_NIHO_ORIGIN=https://niho-auth.example.invalid"
 check "secrets without AI: only the database URL" "$(service_secrets 0)" "DATABASE_URL=niho-editor-database-url:latest"
 check "secrets with AI: the database URL stays" "$(service_secrets 1)" \
   "DATABASE_URL=niho-editor-database-url:latest,ANTHROPIC_API_KEY=niho-editor-anthropic-key:latest"
@@ -195,8 +195,8 @@ check "niho: the transcription queue keeps the comma form" "$(transcribe_env_var
 # What load_deploy_env refuses for the login. Every value is written quoted, so a value with a space or a '|' is tested
 # as a value and not run by the shell that sources the file, and both google variables start empty on every case.
 refused_lines() {
-  grep -v '^AI_\|^GOOGLE_\|^EDITOR_AUTH_MODE' "$dir/deploy.env.example" > "$tmp/login.env"
-  printf "GOOGLE_OAUTH_CLIENT_ID=''\nGOOGLE_ALLOWED_EMAILS=''\n" >> "$tmp/login.env"
+  grep -v '^AI_\|^GOOGLE_\|^EDITOR_AUTH_MODE\|^EDITOR_NIHO_ORIGIN' "$dir/deploy.env.example" > "$tmp/login.env"
+  printf "GOOGLE_OAUTH_CLIENT_ID=''\nGOOGLE_ALLOWED_EMAILS=''\nEDITOR_NIHO_ORIGIN=''\n" >> "$tmp/login.env"
   local pair
   for pair in "$@"; do printf "%s='%s'\n" "${pair%%=*}" "${pair#*=}" >> "$tmp/login.env"; done
   if (DEPLOY_ENV="$tmp/login.env" load_deploy_env) 2> /dev/null; then printf 0; else printf 1; fi
@@ -204,7 +204,16 @@ refused_lines() {
 google_pair="GOOGLE_OAUTH_CLIENT_ID=$google_client"
 check "stub is refused in deploy.env" "$(refused_lines 'EDITOR_AUTH_MODE=stub')" 1
 check "an unknown mode is refused" "$(refused_lines 'EDITOR_AUTH_MODE=none')" 1
-check "niho needs neither a client id nor an allowlist" "$(refused_lines 'EDITOR_AUTH_MODE=niho')" 0
+check "niho without its trusted origin is refused" "$(refused_lines 'EDITOR_AUTH_MODE=niho')" 1
+check "niho accepts an exact synthetic HTTPS origin" \
+  "$(refused_lines 'EDITOR_AUTH_MODE=niho' 'EDITOR_NIHO_ORIGIN=https://niho-auth.example.invalid')" 0
+for bad_origin in 'http://niho-auth.example.invalid' 'https://niho-auth.example.invalid/' \
+  'https://user@niho-auth.example.invalid' 'https://niho-auth.example.invalid/connect' \
+  'https://niho-auth.example.invalid?x=1' 'https://niho-auth.example.invalid#x' \
+  'https://niho-auth.example.invalid:0' 'https://niho-auth.example.invalid:99999'; do
+  check "niho refuses a non-origin upstream: $bad_origin" \
+    "$(refused_lines 'EDITOR_AUTH_MODE=niho' "EDITOR_NIHO_ORIGIN=$bad_origin")" 1
+done
 check "google without a client id is refused" "$(refused_lines 'EDITOR_AUTH_MODE=google' "GOOGLE_ALLOWED_EMAILS=$google_list")" 1
 check "google with an empty allowlist is refused" "$(refused_lines 'EDITOR_AUTH_MODE=google' "$google_pair")" 1
 check "google with one address is accepted" "$(refused_lines 'EDITOR_AUTH_MODE=google' "$google_pair" 'GOOGLE_ALLOWED_EMAILS=owner@example.test')" 0
@@ -212,7 +221,8 @@ check "google with two addresses is accepted" "$(refused_lines 'EDITOR_AUTH_MODE
 # The redirect URI the app sends is https://<APP_DOMAIN>/auth/callback, and Google only accepts the registered one.
 check "google without APP_DOMAIN is refused" \
   "$(refused_lines 'EDITOR_AUTH_MODE=google' "$google_pair" "GOOGLE_ALLOWED_EMAILS=$google_list" 'APP_DOMAIN=')" 1
-check "niho without APP_DOMAIN is accepted (the run.app URL)" "$(refused_lines 'EDITOR_AUTH_MODE=niho' 'APP_DOMAIN=')" 0
+check "niho without APP_DOMAIN is accepted (the run.app URL)" \
+  "$(refused_lines 'EDITOR_AUTH_MODE=niho' 'EDITOR_NIHO_ORIGIN=https://niho-auth.example.invalid' 'APP_DOMAIN=')" 0
 for bad in 'owner@example.test, owner.second@example.invalid' 'owner@example.test|EDITOR_AUTH_MODE=stub' \
   'owner@example.test=x' 'example.test' '@example.test' 'owner@' 'owner@example' 'owner name@example.test' ' '; do
   check "an allowlist that is not addresses is refused: $bad" \

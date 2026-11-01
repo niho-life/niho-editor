@@ -24,6 +24,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 | --- | --- |
 | `DATABASE_URL` | ページの正本の PostgreSQL。未設定なら API は 503、画面は「保存先を使えません」 |
 | `EDITOR_AUTH_MODE` | `stub`（開発・CI だけ）・`niho`・`google` のどれか。開発では未設定で `stub` |
+| `EDITOR_NIHO_ORIGIN` | `niho` で必須。NIHO editor専用接続先のexact HTTPS origin。path・query・fragment・credentialsを含む値は起動時に拒否する。実値は配備設定だけに置く |
 | `EDITOR_GOOGLE_ALLOWED_EMAILS` | `google` で入れる人のアドレス（コンマ区切り。小文字に正規化して完全一致）。本番で空なら起動しない |
 | `EDITOR_GOOGLE_CLIENT_ID` | `google` の OAuth クライアント ID（`aud` の期待値）。空ならログインは `unavailable` |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | `google` の client secret。サーバーだけが読む（本番は Secret Manager から。[editor-deploy.md](../../docs/ops/editor-deploy.md) §13）。リポジトリ・ログに書かない |
@@ -55,7 +56,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 
 ## 決まっていること
 
-- **認証（#47）**: `NODE_ENV=production` で `EDITOR_AUTH_MODE` が `niho` でも `google` でもなければ（未設定を含む）起動しない。`google` は許可リスト（`EDITOR_GOOGLE_ALLOWED_EMAILS`）が空でも起動しない。本番の入口 `scripts/server-entry.mjs` が server を読み込む前（port を開く前）に `src/auth/config.ts` で検査し、`src/instrumentation.ts`（`next start` 用）と要求ごとの方式の選択でも同じ検査をする。`next build` の途中では検査しない。`niho` は `src/auth/niho.ts` の 1 ファイルに閉じ、niho-app #19459 の契約が出るまで fail-closed（いつも未認証）。stub は cookie も token も作らない。`google` は `src/auth/google.ts` の 1 ファイルに閉じた**一時的な**方式（Google のサインイン ＋ 許可リスト。[editor-deploy.md](../../docs/ops/editor-deploy.md) §13）で、契約が出たら `niho` に戻して外す。
+- **認証（#47 / #150）**: `NODE_ENV=production` で `EDITOR_AUTH_MODE` が `niho` でも `google` でもなければ（未設定を含む）起動しない。`niho` はexact HTTPSの `EDITOR_NIHO_ORIGIN` が無ければ起動せず、`google` は許可リスト（`EDITOR_GOOGLE_ALLOWED_EMAILS`）が空でも起動しない。本番の入口 `scripts/server-entry.mjs` が server を読み込む前（port を開く前）に `src/auth/config.ts` で検査し、`src/instrumentation.ts`（`next start` 用）と要求ごとの方式の選択でも同じ検査をする。`next build` の途中では検査しない。`niho` は `src/auth/niho.ts` の専用opaque sessionに閉じ、Secure/HttpOnly cookieを毎要求NIHOでintrospectする。stub はcookieもtokenも作らない。`google` は `src/auth/google.ts` の**一時的な**方式（Google のサインイン＋許可リスト。[editor-deploy.md](../../docs/ops/editor-deploy.md) §13）。NIHO接続は写真の本人確認だけで、Docs Drive用の広い `apiToken` は発行しない。
 - **ログイン（#32）**: `/auth/login`（枠の外の画面）、`/auth/login/start?next=`（GET）、`/auth/callback`（GET）、`/auth/logout`（POST。同じ origin でなければ 403）。route の応答は `Cache-Control: no-store`。未ログインで画面を開くと `/auth/login?next=…` へ移る（今の path は `src/proxy.ts` が header で渡すだけで、認証は読まない）。戻り先は `src/auth/return-to.ts` の `safeReturnTo` で editor の画面の path（`/`・`/p/new`・`/p/{uuid}`・`/destinations`・`/account`・`/settings` など）だけにし、それ以外（外の URL・`/auth/*`・`/api/*`）は `/`。stub はいつもログイン済みで、`/auth/login` は戻り先へ移る。
 - **画面（#32）**: 枠は `app/(editor)/layout.tsx`（niho-docs-ui の shell）。`/` はデスクトップでは最後に開いたページ（cookie `editor_last_page` の id。無い・消えたなら `/p/new`）へ移る。`/p/new` は題名か本文を入力した時点で POST して作り、`history.replaceState` で `/p/{id}` に替える（エディタは作り直さない）。`/p/new?from=recording` は開始の画面だけ。`/settings` は設定（#108）、`/destinations`・`/destinations/{id}` は発信先の設定（#41。どちらも下の節）、`/account` は題名だけ。900px 以下（shell.css と同じ）では `/` が一覧の画面で、ページと設定は全画面、ヘッダーの左のボタンで一覧を出す。
 - **一覧（#32）**: 更新順（同じ時刻は id の降順）で 100 件ずつ。layout が最初の 100 件を描き、末尾が近づいたら `GET /api/pages?limit=&cursor=` で続きを読む。cursor は `<updated_at（UTC・マイクロ秒まで）>_<id>`。読み込んだ親の下に子ページを作った順で並べる。検索はサイドバーの検索入力から（下の「検索（#35）」）。
@@ -307,4 +308,4 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 
 ## まだやらないこと
 
-見た目（#48）、版・履歴・オフライン・ブロックと「/」メニューの仕上げ・IME の扱い（#33）、プレビューを開く画面（token の発行は API だけ。#40 の後）、公開の知らせ（録音は公開版に含まれない、など）の表示と、公開のシートで本人のサイトが 2 つ以上のときの選び方（#39 の後）、録音の開始（#36）、検索の絞り込み（#35）、役割とつながりの中身（#42）、WordPress・Ghost への送信（#41 は入口だけ）、niho モードの実装（niho-app #19459）、GCS バケット・Cloud Run・Cloud SQL の実環境と secret。
+見た目（#48）、版・履歴・オフライン・ブロックと「/」メニューの仕上げ・IME の扱い（#33）、プレビューを開く画面（token の発行は API だけ。#40 の後）、公開の知らせ（録音は公開版に含まれない、など）の表示と、公開のシートで本人のサイトが 2 つ以上のときの選び方（#39 の後）、録音の開始（#36）、検索の絞り込み（#35）、役割とつながりの中身（#42）、WordPress・Ghost への送信（#41 は入口だけ）、GCS バケット・Cloud Run・Cloud SQL・NIHO接続の実環境設定と受入。

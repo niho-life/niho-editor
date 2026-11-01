@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { nihoAuthProvider } from "../auth/niho";
 import { stubAuthProvider } from "../auth/stub";
 import type { AuthProvider } from "../auth/types";
-import { finishLogin, logout, startLogin, type AuthRoutesDeps } from "./auth-routes";
+import { finishLogin, logout, refresh, startLogin, type AuthRoutesDeps } from "./auth-routes";
 
 const ORIGIN = "http://editor.test";
 const ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
@@ -77,15 +76,6 @@ describe("/auth/*", () => {
     expect([out.status, out.headers.get("location")]).toEqual([303, "/auth/login"]);
   });
 
-  it("niho (until #19459): start and callback come back to the login screen with an error, keeping next on start", async () => {
-    const start = await startLogin(get(`/auth/login/start?next=${encodeURIComponent(`/p/${ID}`)}`), deps(nihoAuthProvider));
-    expect([start.status, start.headers.get("location")]).toEqual([303, `/auth/login?next=%2Fp%2F${ID}&error=unavailable`]);
-    const callback = await finishLogin(get("/auth/callback?code=synthetic&state=synthetic"), deps(nihoAuthProvider));
-    expect([callback.status, callback.headers.get("location")]).toEqual([303, "/auth/login?error=unavailable"]);
-    const out = await logout(post("/auth/logout", ORIGIN), deps(nihoAuthProvider));
-    expect([out.status, out.headers.get("location")]).toEqual([303, "/auth/login"]);
-  });
-
   it("answers 403 to a logout from another origin or without an Origin, without calling the provider", async () => {
     const { provider } = recordingProvider();
     const spy = vi.spyOn(provider, "logout");
@@ -95,6 +85,19 @@ describe("/auth/*", () => {
       expect(await response.text()).toBe('{"error":"forbidden"}');
     }
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("refresh is same-origin only and keeps provider Set-Cookie headers", async () => {
+    const { provider } = recordingProvider();
+    provider.refresh = async () => new Response(null, {
+      status: 204,
+      headers: { "Set-Cookie": "__Host-editor-niho-session=synthetic; Secure; HttpOnly; Path=/" },
+    });
+    const ok = await refresh(post("/auth/refresh", ORIGIN), deps(provider));
+    expect(ok.status).toBe(204);
+    expect(ok.headers.get("set-cookie")).toContain("Secure");
+    const forbidden = await refresh(post("/auth/refresh", "https://evil.invalid"), deps(provider));
+    expect(forbidden.status).toBe(403);
   });
 
   it("answers 500 without internal details when the provider fails", async () => {
