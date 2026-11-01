@@ -12,6 +12,7 @@ import { EditorStore } from "../src/store.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const PHOTO_MIGRATION = "20261101155422_personal_photo_library.sql";
+const PHOTO_WRITER_MIGRATION = "20261101181722_photo_api_writer.sql";
 
 describe("personal photo schema upgrade on PostgreSQL", { skip: databaseUrl === undefined }, () => {
   const schema = `photo_upgrade_${randomUUID().replaceAll("-", "")}`;
@@ -24,7 +25,7 @@ describe("personal photo schema upgrade on PostgreSQL", { skip: databaseUrl === 
     await pool.query(`CREATE SCHEMA "${schema}"`);
     earlierDir = await mkdtemp(join(tmpdir(), "editor-photo-upgrade-"));
     for (const name of await readdir(defaultMigrationsDir)) {
-      if (name.endsWith(".sql") && name !== PHOTO_MIGRATION) await copyFile(new URL(name, defaultMigrationsDir), join(earlierDir, name));
+      if (name.endsWith(".sql") && name !== PHOTO_MIGRATION && name !== PHOTO_WRITER_MIGRATION) await copyFile(new URL(name, defaultMigrationsDir), join(earlierDir, name));
     }
   });
 
@@ -43,13 +44,15 @@ describe("personal photo schema upgrade on PostgreSQL", { skip: databaseUrl === 
       const before = await store.getPage("synthetic-existing-owner", page.id);
 
       await copyFile(new URL(PHOTO_MIGRATION, defaultMigrationsDir), join(earlierDir, PHOTO_MIGRATION));
+      await copyFile(new URL(PHOTO_WRITER_MIGRATION, defaultMigrationsDir), join(earlierDir, PHOTO_WRITER_MIGRATION));
       const result = await applyMigrations(client, pathToFileURL(`${earlierDir}/`));
-      assert.deepEqual(result.applied, [PHOTO_MIGRATION]);
+      assert.deepEqual(result.applied, [PHOTO_MIGRATION, PHOTO_WRITER_MIGRATION]);
       assert.deepEqual(await store.getPage("synthetic-existing-owner", page.id), before);
 
       const expected = [
         "photo_libraries", "photos", "photo_assets", "photo_uploads", "photo_mutations", "photo_recipe_revisions",
         "photo_recipes", "photo_versions", "photo_media_jobs", "photo_purge_jobs", "photo_gc_objects",
+        "photo_request_journal", "photo_write_receipts", "photo_media_outbox", "photo_media_candidates",
       ];
       const tables = await pool.query<{ table_name: string }>(
         "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_name = ANY($2::text[]) ORDER BY table_name",

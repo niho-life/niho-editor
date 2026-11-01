@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { assertOwner, rollback } from "./recordings.ts";
 import { isPageId } from "./store.ts";
@@ -52,6 +52,8 @@ export type PhotoStoreErrorCode =
   | "upload_expired"
   | "photo_trashed"
   | "account_deleting"
+  | "revision_conflict"
+  | "unsupported_settings"
   | "content_rejected";
 
 export class PhotoStoreError extends Error {
@@ -902,13 +904,13 @@ export async function completePhotoUpload(
         ? { settings: RAW_NEUTRAL_SETTINGS, settingsSha256: RAW_NEUTRAL_SETTINGS_SHA256 }
         : { settings: RASTER_NEUTRAL_SETTINGS, settingsSha256: RASTER_NEUTRAL_SETTINGS_SHA256 };
       await client.query(
-        `INSERT INTO photo_recipe_revisions (owner, photo_id, revision, settings, settings_sha256)
-         VALUES ($1, $2, 0, $3::jsonb, $4)`,
+        `INSERT INTO photo_recipe_revisions (owner, photo_id, revision, settings, settings_sha256, has_edits)
+         VALUES ($1, $2, 0, $3::jsonb, $4, false)`,
         [owner, photoId, JSON.stringify(initialRecipe.settings), initialRecipe.settingsSha256],
       );
       await client.query(
-        `INSERT INTO photo_recipes (owner, photo_id, revision, settings, settings_sha256)
-         VALUES ($1, $2, 0, $3::jsonb, $4)`,
+        `INSERT INTO photo_recipes (owner, photo_id, revision, settings, settings_sha256, has_edits)
+         VALUES ($1, $2, 0, $3::jsonb, $4, false)`,
         [owner, photoId, JSON.stringify(initialRecipe.settings), initialRecipe.settingsSha256],
       );
       await storeUploadResult(client, owner, current.id, verified.leaseGeneration, photoId, assetId, verified, false);
@@ -1421,5 +1423,564 @@ export async function markPhotoLibraryDeleting(db: Database, owner: OwnerId): Pr
     }
     const updated = (await client.query<LibraryRow>(`SELECT ${LIBRARY_COLUMNS} FROM photo_libraries WHERE owner = $1`, [owner])).rows[0]!;
     return toLibrary(updated);
+  });
+}
+
+// P02の公開可能な低層record。HTTP/SDK能力の組立てはserver adapterが担う。
+export type PhotoJson = null | boolean | number | string | readonly PhotoJson[] | PhotoJsonObject;
+export type PhotoJsonObject = { readonly [key: string]: PhotoJson };
+export type PhotoRecipeRecord = {
+  revision: number;
+  settings: PhotoJsonObject & { readonly v: number; readonly engine: string };
+  settingsSha256: string;
+  baseVersion: string | null;
+  maskSurfaceIds: readonly string[];
+  updatedAt: string;
+  hasEdits: boolean;
+};
+export type PhotoRecipeWrite = Omit<PhotoRecipeRecord, "revision" | "updatedAt" | "hasEdits"> & {
+  /** Trusted pinned-SDK neutrality result. Absent values use the exact known neutral hash, otherwise edited. */
+  hasEdits?: boolean;
+};
+export type PhotoVersionRecord = { id: string; name: string; kind: "named" | "auto"; recipe: PhotoRecipeRecord; createdAt: string };
+export type PhotoVersionWrite = Pick<PhotoVersionRecord, "id" | "name" | "kind"> & { recipe: PhotoRecipeWrite };
+export type PhotoVersionSetRecord = { revision: number; versions: PhotoVersionRecord[] };
+export type PhotoMediaProjection = {
+  id: string;
+  state: "queued" | "processing" | "ready" | "failed" | "unsupported";
+  recipeRevision: number;
+  rendererManifestSha256: string;
+  errorCode: "decoder_failed" | "renderer_unavailable" | "unsupported_settings" | null;
+  ready: PhotoJsonObject | null;
+  assets: PhotoAssetRecord[];
+};
+export type PhotoSnapshot = { library: PhotoLibraryRecord; photo: PhotoRecord; recipe: PhotoRecipeRecord; media: PhotoMediaProjection | null; hasEdits: boolean };
+export type PhotoCatalogAfter =
+  | { sort: "added-desc"; addedAt: string; id: string }
+  | { sort: "captured-desc"; capturedAt: string | null; addedAt: string; id: string };
+export type PhotoCatalogPageInput = {
+  filter: {
+    sort: "added-desc" | "captured-desc";
+    lifecycle: "active" | "trashed";
+    formats?: readonly PhotoFormat[];
+    edited?: boolean;
+    editable?: boolean;
+    /** Trusted runtime capabilities, never public query values. Empty arrays fail closed. */
+    editableEngines?: readonly string[];
+    editableSettingsVersions?: readonly number[];
+    editableBaseVersions?: readonly string[];
+    maskSurfaces?: boolean;
+  };
+  watermark: number | null;
+  after: PhotoCatalogAfter | null;
+  limit: number;
+};
+export type PhotoCatalogPage = { library: PhotoLibraryRecord; watermark: number; items: PhotoSnapshot[]; hasMore: boolean };
+export class PhotoRevisionConflictError extends PhotoStoreError {
+  readonly currentRevision: number;
+  constructor(currentRevision: number) { super("revision_conflict"); this.currentRevision = currentRevision; }
+}
+
+type RecipeRow = { revision: string; settings: PhotoRecipeRecord["settings"]; settings_sha256: string; base_version: string | null; mask_surface_ids: string[]; updated_at: Date; has_edits: boolean };
+const RECIPE_COLUMNS = "revision::text AS revision, settings, settings_sha256, base_version, mask_surface_ids, updated_at, has_edits";
+function toRecipe(row: RecipeRow): PhotoRecipeRecord {
+  return { revision: number(row.revision), settings: row.settings, settingsSha256: row.settings_sha256, baseVersion: row.base_version,
+    maskSurfaceIds: row.mask_surface_ids, updatedAt: row.updated_at.toISOString(), hasEdits: row.has_edits };
+}
+function photoCanonicalJson(value: PhotoJson): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(photoCanonicalJson).join(",")}]`;
+  const object = value as PhotoJsonObject;
+  return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${photoCanonicalJson(object[key]!)}`).join(",")}}`;
+}
+function photoJsonHash(value: PhotoJson): string { return createHash("sha256").update(photoCanonicalJson(value)).digest("hex"); }
+function assertPhotoJson(value: unknown, depth = 0): asserts value is PhotoJson {
+  if (depth > 32) throw new TypeError("editor-store: photo JSON depth exceeded");
+  if (value === null || typeof value === "boolean") return;
+  if (typeof value === "string") {
+    // jsonbはU+0000と対にならないsurrogateを保持できない。DB例外の前に拒否する。
+    if (value.includes("\u0000") || /[\ud800-\udfff]/u.test(value)) throw new TypeError("editor-store: invalid photo JSON scalar");
+    return;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return;
+  if (Array.isArray(value)) { for (const item of value) assertPhotoJson(item, depth + 1); return; }
+  if (typeof value !== "object" || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) throw new TypeError("editor-store: invalid photo JSON");
+  for (const [key, item] of Object.entries(value)) { assertPhotoJson(key, depth + 1); assertPhotoJson(item, depth + 1); }
+}
+function assertRecipeWrite(value: PhotoRecipeWrite): void {
+  assertPhotoJson(value.settings);
+  if (value.settings === null || Array.isArray(value.settings) || typeof value.settings !== "object"
+    || !Number.isSafeInteger(value.settings.v) || typeof value.settings.engine !== "string"
+    || !SHA256.test(value.settingsSha256) || photoJsonHash(value.settings) !== value.settingsSha256
+    || Buffer.byteLength(photoCanonicalJson(value.settings)) > 1024 ** 2
+    || !(value.baseVersion === null || (typeof value.baseVersion === "string" && value.baseVersion.length <= 512))
+    || !Array.isArray(value.maskSurfaceIds) || value.maskSurfaceIds.some((id) => !SHA256.test(id))
+    || new Set(value.maskSurfaceIds).size !== value.maskSurfaceIds.length || value.maskSurfaceIds.length > 16384
+    || (value.hasEdits !== undefined && typeof value.hasEdits !== "boolean")) throw new TypeError("editor-store: invalid photo recipe");
+}
+function recipeWriteHasEdits(format: PhotoFormat, recipe: PhotoRecipeWrite): boolean {
+  return recipe.hasEdits ?? recipe.settingsSha256 !== (format === "raw" ? RAW_NEUTRAL_SETTINGS_SHA256 : RASTER_NEUTRAL_SETTINGS_SHA256);
+}
+async function readPhotoSnapshot(client: Queryable, owner: OwnerId, photoId: string, library?: PhotoLibraryRecord): Promise<PhotoSnapshot | null> {
+  const libraryRow = library ? undefined : (await client.query<LibraryRow>(`SELECT ${LIBRARY_COLUMNS} FROM photo_libraries WHERE owner = $1 AND state = 'active'`, [owner])).rows[0];
+  if (!library && !libraryRow) return null;
+  const actualLibrary = library ?? toLibrary(libraryRow!);
+  if (actualLibrary.state !== "active") return null;
+  const photo = await getPhoto(client, owner, photoId);
+  if (!photo || photo.libraryId !== actualLibrary.id) return null;
+  const row = (await client.query<RecipeRow>(`SELECT ${RECIPE_COLUMNS} FROM photo_recipes WHERE owner = $1 AND photo_id = $2 AND revision = $3`, [owner, photoId, photo.recipeRevision])).rows[0];
+  if (!row) throw new Error("editor-store: photo current recipe missing");
+  const recipe = toRecipe(row);
+  const mediaRow = (await client.query<{ id: string; state: PhotoMediaProjection["state"]; recipe_revision: string; renderer_manifest_sha256: string; error_code: string | null; ready_media: PhotoJsonObject | null }>(
+    `SELECT j.id, j.state, j.recipe_revision::text AS recipe_revision, j.renderer_manifest_sha256, j.error_code, j.ready_media
+       FROM photos AS p JOIN photo_media_jobs AS j ON j.owner = p.owner AND j.id = p.current_media_job_id
+      WHERE p.owner = $1 AND p.id = $2 AND j.lifecycle_epoch = p.lifecycle_epoch AND j.recipe_revision = p.recipe_revision
+        AND j.settings_sha256 = $3 AND j.original_generation = $4 AND j.original_sha256 = $5 AND j.terminal_reason IS NULL`,
+    [owner, photoId, recipe.settingsSha256, photo.original.objectGeneration, photo.original.sha256],
+  )).rows[0];
+  let media: PhotoMediaProjection | null = null;
+  if (mediaRow) {
+    const assetRows = mediaRow.state === "ready" ? (await client.query<AssetRow>(
+      `SELECT ${ASSET_COLUMNS} FROM photo_assets WHERE owner = $1 AND photo_id = $2 AND id IN
+         (SELECT id FROM photo_media_candidates WHERE owner = $1 AND job_id = $3 AND state = 'published') AND deletion_state = 'retained'`,
+      [owner, photoId, mediaRow.id],
+    )).rows : [];
+    const publicCode = ["decoder_failed", "renderer_unavailable", "unsupported_settings"].includes(mediaRow.error_code ?? "") ? mediaRow.error_code as NonNullable<PhotoMediaProjection["errorCode"]> : null;
+    media = { id: mediaRow.id, state: mediaRow.state, recipeRevision: number(mediaRow.recipe_revision), rendererManifestSha256: mediaRow.renderer_manifest_sha256,
+      errorCode: publicCode, ready: mediaRow.ready_media, assets: assetRows.map(toAsset) };
+  }
+  return { library: actualLibrary, photo, recipe, media, hasEdits: recipe.hasEdits };
+}
+async function photoReadTransaction<T>(db: Database, run: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await db.connect();
+  try { await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"); try { const value = await run(client); await client.query("COMMIT"); return value; } catch (error) { await rollback(client); throw error; } }
+  finally { client.release(); }
+}
+export async function getPhotoSnapshot(db: Database, owner: OwnerId, photoId: string): Promise<PhotoSnapshot | null> {
+  assertOwner(owner); if (!validUuid(photoId)) return null;
+  return photoReadTransaction(db, (client) => readPhotoSnapshot(client, owner, photoId.toLowerCase()));
+}
+export async function getPhotoInfo(db: Database, owner: OwnerId, photoId: string): Promise<{ capturedAt: string | null; width: number; height: number } | null> {
+  const snapshot = await getPhotoSnapshot(db, owner, photoId);
+  return snapshot ? { capturedAt: snapshot.photo.capturedAt, width: snapshot.photo.width, height: snapshot.photo.height } : null;
+}
+export async function lookupPhotoHashes(db: Queryable, owner: OwnerId, sha256s: readonly string[]): Promise<{ sha256: string; photoId: string; recipeRevision: number }[]> {
+  assertOwner(owner);
+  if (!Array.isArray(sha256s) || sha256s.length > 100 || sha256s.some((hash) => !SHA256.test(hash))) throw new TypeError("editor-store: invalid photo hash lookup");
+  return (await db.query<{ sha256: string; id: string; recipe_revision: string }>(
+    `SELECT a.sha256, p.id, p.recipe_revision::text AS recipe_revision FROM photo_assets AS a
+       JOIN photos AS p ON p.owner = a.owner AND p.id = a.photo_id AND p.original_asset_id = a.id
+       JOIN photo_libraries AS l ON l.owner = p.owner AND l.id = p.library_id
+      WHERE a.owner = $1 AND a.sha256 = ANY($2::text[]) AND a.deletion_state = 'retained' AND p.lifecycle = 'active' AND l.state = 'active' ORDER BY a.sha256`,
+    [owner, [...new Set(sha256s)]],
+  )).rows.map((row) => ({ sha256: row.sha256, photoId: row.id, recipeRevision: number(row.recipe_revision) }));
+}
+export async function getPhotoUploadByStartKey(db: Queryable, owner: OwnerId, operation: PhotoUploadOperation, key: string): Promise<PhotoUploadRecord | null> {
+  assertOwner(owner);
+  if (!["original", "mask"].includes(operation) || !IDEMPOTENCY_KEY.test(key)) throw new TypeError("editor-store: invalid photo upload lookup");
+  const row = (await db.query<UploadRow>(`SELECT ${UPLOAD_COLUMNS} FROM photo_uploads WHERE owner = $1 AND operation = $2 AND idempotency_key = $3 AND EXISTS (SELECT 1 FROM photo_libraries WHERE owner = $1 AND state = 'active')`, [owner, operation, key])).rows[0];
+  return row ? toUpload(row) : null;
+}
+export async function getPhotoMaskBySurfaceId(db: Queryable, owner: OwnerId, photoId: string, surfaceId: string): Promise<PhotoAssetRecord | null> {
+  assertOwner(owner); if (!validUuid(photoId) || !SHA256.test(surfaceId)) return null;
+  const row = (await db.query<AssetRow>(
+    `SELECT a.id, a.photo_id, a.kind, a.sha256, a.size_bytes::text AS size_bytes, a.content_type, a.width, a.height, a.object_key, a.object_generation, a.deletion_state, a.created_at
+       FROM photo_assets AS a JOIN photos AS p ON p.owner = a.owner AND p.id = a.photo_id JOIN photo_libraries AS l ON l.owner = p.owner AND l.id = p.library_id
+      WHERE a.owner = $1 AND a.photo_id = $2 AND a.sha256 = $3 AND a.kind = 'mask' AND a.deletion_state = 'retained' AND p.lifecycle IN ('active','trashed') AND l.state = 'active'`,
+    [owner, photoId.toLowerCase(), surfaceId],
+  )).rows[0]; return row ? toAsset(row) : null;
+}
+export async function bindPhotoRequest(db: Database, owner: OwnerId, input: { operation: "uploads.start" | "uploads.complete" | "uploads.cancel"; resourceId: string; key: string; requestHash: string }): Promise<boolean> {
+  assertOwner(owner); assertIdempotency(input.key, input.requestHash);
+  if (!["uploads.start", "uploads.complete", "uploads.cancel"].includes(input.operation)
+    || (input.operation === "uploads.start" ? !["original", "mask"].includes(input.resourceId) : !validUuid(input.resourceId))) throw new TypeError("editor-store: invalid photo request journal resource");
+  return transaction(db, async (client) => {
+    assertLibraryActive(await lockLibrary(client, owner));
+    if (input.operation !== "uploads.start" && !(await client.query("SELECT 1 FROM photo_uploads WHERE owner = $1 AND id = $2", [owner, input.resourceId])).rowCount) return false;
+    const inserted = await client.query(`INSERT INTO photo_request_journal(owner, operation, resource_id, idempotency_key, request_hash) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, [owner, input.operation, input.resourceId.toLowerCase(), input.key, input.requestHash]);
+    const row = (await client.query<{ request_hash: string }>("SELECT request_hash FROM photo_request_journal WHERE owner=$1 AND operation=$2 AND resource_id=$3 AND idempotency_key=$4", [owner, input.operation, input.resourceId.toLowerCase(), input.key])).rows[0]!;
+    if (row.request_hash !== input.requestHash) throw new PhotoStoreError("idempotency_conflict");
+    return inserted.rowCount === 0;
+  });
+}
+export async function listPhotoCatalogPage(db: Database, owner: OwnerId, input: PhotoCatalogPageInput): Promise<PhotoCatalogPage | null> {
+  assertOwner(owner);
+  const f = input.filter;
+  if (!["added-desc", "captured-desc"].includes(f.sort) || !["active", "trashed"].includes(f.lifecycle)
+    || !Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100
+    || (input.watermark !== null && (!Number.isSafeInteger(input.watermark) || input.watermark < 0))
+    || (f.formats && (f.formats.length > 6 || f.formats.some((format) => !PHOTO_FORMATS.includes(format))))
+    || (f.edited !== undefined && typeof f.edited !== "boolean") || (f.editable !== undefined && typeof f.editable !== "boolean")
+    || (f.editableEngines && (f.editableEngines.length > 100 || f.editableEngines.some((engine) => typeof engine !== "string" || engine.length > 128)))
+    || (f.editableSettingsVersions && (f.editableSettingsVersions.length > 100 || f.editableSettingsVersions.some((version) => !Number.isSafeInteger(version) || version < 0)))
+    || (f.editableBaseVersions && (f.editableBaseVersions.length > 100 || f.editableBaseVersions.some((base) => typeof base !== "string" || base.length > 512)))
+    || (input.after && (input.after.sort !== f.sort || !validUuid(input.after.id) || !Number.isFinite(Date.parse(input.after.addedAt))
+      || (input.after.sort === "captured-desc" && input.after.capturedAt !== null && !Number.isFinite(Date.parse(input.after.capturedAt)))))) throw new TypeError("editor-store: invalid photo catalog query");
+  return photoReadTransaction(db, async (client) => {
+    const lib = (await client.query<LibraryRow>(`SELECT ${LIBRARY_COLUMNS} FROM photo_libraries WHERE owner=$1 AND state='active'`, [owner])).rows[0];
+    if (!lib) return null;
+    const library = toLibrary(lib), watermark = Math.min(input.watermark ?? library.nextPhotoSequence - 1, library.nextPhotoSequence - 1);
+    const values: unknown[] = [owner, f.lifecycle, watermark];
+    const where = ["p.owner=$1", "p.lifecycle=$2", "p.creation_sequence <= $3", "a.deletion_state='retained'"];
+    const bind = (value: unknown) => { values.push(value); return `$${values.length}`; };
+    if (f.formats) where.push(`p.format = ANY(${bind(f.formats)}::text[])`);
+    if (f.edited !== undefined) where.push(`r.has_edits = ${bind(f.edited)}`);
+    if (f.editable !== undefined) {
+      const engines = bind(f.editableEngines ?? []), versions = bind((f.editableSettingsVersions ?? []).map(String)), bases = bind(f.editableBaseVersions ?? []), masks = bind(f.maskSurfaces === true);
+      where.push(`((r.settings->>'engine') = ANY(${engines}::text[]) AND (r.settings->>'v') = ANY(${versions}::text[]) AND (r.base_version IS NULL OR r.base_version = ANY(${bases}::text[])) AND (${masks}::boolean OR jsonb_array_length(r.mask_surface_ids)=0)) = ${bind(f.editable)}`);
+    }
+    const addedSort = "date_trunc('milliseconds', p.added_at AT TIME ZONE 'UTC')";
+    const capturedSort = "date_trunc('milliseconds', p.captured_at AT TIME ZONE 'UTC')";
+    if (input.after) {
+      const added = bind(input.after.addedAt), id = bind(input.after.id.toLowerCase());
+      const tail = `(${addedSort}, p.id) < (${added}::timestamptz AT TIME ZONE 'UTC', ${id}::uuid)`;
+      if (input.after.sort === "added-desc") where.push(tail);
+      else if (input.after.capturedAt === null) where.push(`p.captured_at IS NULL AND ${tail}`);
+      else { const captured = bind(input.after.capturedAt); where.push(`(p.captured_at IS NULL OR ${capturedSort} < ${captured}::timestamptz AT TIME ZONE 'UTC' OR (${capturedSort} = ${captured}::timestamptz AT TIME ZONE 'UTC' AND ${tail}))`); }
+    }
+    const order = f.sort === "added-desc" ? `${addedSort} DESC, p.id DESC` : `${capturedSort} DESC NULLS LAST, ${addedSort} DESC, p.id DESC`;
+    const rows = (await client.query<{ id: string }>(`SELECT p.id FROM photos AS p JOIN photo_assets AS a ON a.owner=p.owner AND a.photo_id=p.id AND a.id=p.original_asset_id JOIN photo_recipes AS r ON r.owner=p.owner AND r.photo_id=p.id AND r.revision=p.recipe_revision WHERE ${where.join(" AND ")} ORDER BY ${order} LIMIT ${bind(input.limit + 1)}`, values)).rows;
+    const items: PhotoSnapshot[] = [];
+    for (const row of rows.slice(0, input.limit)) { const snapshot = await readPhotoSnapshot(client, owner, row.id, library); if (snapshot) items.push(snapshot); }
+    return { library, watermark, items, hasMore: rows.length > input.limit };
+  });
+}
+async function readPhotoVersions(client: Queryable, owner: OwnerId, photo: PhotoRecord): Promise<PhotoVersionSetRecord> {
+  const rows = (await client.query<{ id: string; name: string; kind: PhotoVersionRecord["kind"]; recipe: PhotoRecipeRecord; created_at: Date }>("SELECT id,name,kind,recipe,created_at FROM photo_versions WHERE owner=$1 AND photo_id=$2 AND set_revision=$3 ORDER BY created_at,id", [owner, photo.id, photo.versionsRevision])).rows;
+  return { revision: photo.versionsRevision, versions: rows.map((row) => ({ id: row.id, name: row.name, kind: row.kind, recipe: row.recipe, createdAt: row.created_at.toISOString() })) };
+}
+export async function getPhotoVersions(db: Database, owner: OwnerId, photoId: string): Promise<(PhotoSnapshot & { versions: PhotoVersionSetRecord }) | null> {
+  assertOwner(owner); if (!validUuid(photoId)) return null;
+  return photoReadTransaction(db, async (client) => { const snapshot = await readPhotoSnapshot(client, owner, photoId.toLowerCase()); return snapshot ? { ...snapshot, versions: await readPhotoVersions(client, owner, snapshot.photo) } : null; });
+}
+export async function listPhotoRecipeHistory(db: Database, owner: OwnerId, photoId: string, limit = 100): Promise<PhotoRecipeRecord[] | null> {
+  assertOwner(owner); if (!validUuid(photoId)) return null;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new TypeError("editor-store: invalid photo history limit");
+  return photoReadTransaction(db, async (client) => { if (!(await readPhotoSnapshot(client, owner, photoId.toLowerCase()))) return null;
+    return (await client.query<RecipeRow>(`SELECT revision::text AS revision,settings,settings_sha256,base_version,mask_surface_ids,created_at AS updated_at,has_edits FROM photo_recipe_revisions WHERE owner=$1 AND photo_id=$2 ORDER BY revision DESC LIMIT $3`, [owner, photoId, limit])).rows.map(toRecipe); });
+}
+async function photoWriteReplay(client: Queryable, owner: OwnerId, photoId: string, operation: "recipe" | "versions", key: string, requestHash: string): Promise<boolean> {
+  const row = (await client.query<{ request_hash: string }>("SELECT request_hash FROM photo_write_receipts WHERE owner=$1 AND photo_id=$2 AND operation=$3 AND idempotency_key=$4", [owner, photoId, operation, key])).rows[0];
+  if (!row) return false; if (row.request_hash !== requestHash) throw new PhotoStoreError("idempotency_conflict"); return true;
+}
+export async function replayPhotoWrite(db: Database, owner: OwnerId, photoId: string, operation: "recipe" | "versions", input: { key: string; requestHash: string }): Promise<(PhotoSnapshot & { versions: PhotoVersionSetRecord }) | null> {
+  assertOwner(owner); assertIdempotency(input.key, input.requestHash); if (!validUuid(photoId)) return null;
+  if (!["recipe", "versions"].includes(operation)) throw new TypeError("editor-store: invalid photo write operation");
+  return photoReadTransaction(db, async (client) => { if (!(await photoWriteReplay(client, owner, photoId, operation, input.key, input.requestHash))) return null; const snapshot = await readPhotoSnapshot(client, owner, photoId); return snapshot ? { ...snapshot, versions: await readPhotoVersions(client, owner, snapshot.photo) } : null; });
+}
+async function assertPhotoMasks(client: Queryable, owner: OwnerId, photoId: string, ids: readonly string[]): Promise<void> {
+  if (!ids.length) return;
+  const count = (await client.query<{ count: number }>("SELECT count(DISTINCT sha256)::int AS count FROM photo_assets WHERE owner=$1 AND photo_id=$2 AND kind='mask' AND deletion_state='retained' AND sha256=ANY($3::text[])", [owner, photoId, ids])).rows[0]!.count;
+  if (count !== ids.length) throw new PhotoStoreError("unsupported_settings");
+}
+export type PhotoRecipeMutationInput = { expectedRevision: number; key: string; requestHash: string; recipe: PhotoRecipeWrite };
+export async function putPhotoRecipe(db: Database, owner: OwnerId, photoId: string, input: PhotoRecipeMutationInput): Promise<{ snapshot: PhotoSnapshot; replayed: boolean } | null> {
+  return writePhotoRecipe(db, owner, photoId, input);
+}
+/** Trusted decoder only: establish a canonical base before any edit/version exists. Never exposed as a public recipe write. */
+export async function bindPhotoCanonicalBase(db: Database, owner: OwnerId, photoId: string, input: PhotoRecipeMutationInput & {
+  original: { assetId: string; generation: string; sha256: string };
+}): Promise<{ snapshot: PhotoSnapshot; replayed: boolean } | null> {
+  if (!validUuid(input.original.assetId) || !SHA256.test(input.original.sha256) || typeof input.original.generation !== "string"
+    || input.original.generation.length < 1 || input.original.generation.length > 255) throw new TypeError("editor-store: invalid canonical base source");
+  return writePhotoRecipe(db, owner, photoId, input, input.original);
+}
+async function writePhotoRecipe(db: Database, owner: OwnerId, photoId: string, input: PhotoRecipeMutationInput,
+  canonicalSource?: { assetId: string; generation: string; sha256: string }): Promise<{ snapshot: PhotoSnapshot; replayed: boolean } | null> {
+  assertOwner(owner); assertIdempotency(input.key, input.requestHash); assertRecipeWrite(input.recipe); if (!validUuid(photoId)) return null;
+  if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) throw new TypeError("editor-store: invalid expected recipe revision");
+  return transaction(db, async (client) => {
+    const library = await lockLibrary(client, owner); assertLibraryActive(library);
+    const photo = (await client.query<{ lifecycle: string; recipe_revision: string }>("SELECT lifecycle,recipe_revision::text AS recipe_revision FROM photos WHERE owner=$1 AND id=$2 FOR UPDATE", [owner, photoId])).rows[0]; if (!photo) return null;
+    if (canonicalSource) {
+      const source = await getPhoto(client, owner, photoId); if (!source) return null;
+      if (canonicalSource.assetId.toLowerCase() !== source.original.id || canonicalSource.generation !== source.original.objectGeneration || canonicalSource.sha256 !== source.original.sha256) throw new PhotoStoreError("upload_state_conflict");
+    }
+    if (await photoWriteReplay(client, owner, photoId, "recipe", input.key, input.requestHash)) { const snapshot = await readPhotoSnapshot(client, owner, photoId); return snapshot ? { snapshot, replayed: true } : null; }
+    if (photo.lifecycle === "trashed") throw new PhotoStoreError("photo_trashed"); if (photo.lifecycle !== "active") return null;
+    if (number(photo.recipe_revision) !== input.expectedRevision) throw new PhotoRevisionConflictError(number(photo.recipe_revision));
+    const current = (await client.query<RecipeRow>(`SELECT ${RECIPE_COLUMNS} FROM photo_recipes WHERE owner=$1 AND photo_id=$2`, [owner, photoId])).rows[0]!;
+    const currentPhoto = (await getPhoto(client, owner, photoId))!;
+    if (canonicalSource) {
+      if (input.expectedRevision !== 0 || current.has_edits || currentPhoto.versionsRevision !== 0 || current.base_version !== null
+        || !["raw", "heic", "heif", "tiff"].includes(currentPhoto.format) || input.recipe.hasEdits !== false
+        || typeof input.recipe.baseVersion !== "string" || input.recipe.baseVersion.length < 1 || input.recipe.maskSurfaceIds.length !== 0) throw new PhotoStoreError("unsupported_settings");
+    } else if (input.recipe.baseVersion !== current.base_version) throw new PhotoStoreError("unsupported_settings");
+    await assertPhotoMasks(client, owner, photoId, input.recipe.maskSurfaceIds);
+    const revision = input.expectedRevision + 1; if (!Number.isSafeInteger(revision)) throw new TypeError("editor-store: photo revision overflow");
+    const values = [owner, photoId, revision, JSON.stringify(input.recipe.settings), input.recipe.settingsSha256, input.recipe.baseVersion, JSON.stringify(input.recipe.maskSurfaceIds), recipeWriteHasEdits(currentPhoto.format, input.recipe)];
+    await client.query("INSERT INTO photo_recipe_revisions(owner,photo_id,revision,settings,settings_sha256,base_version,mask_surface_ids,has_edits) VALUES($1,$2,$3,$4::jsonb,$5,$6,$7::jsonb,$8)", values);
+    await client.query("UPDATE photos SET recipe_revision=$3 WHERE owner=$1 AND id=$2", [owner, photoId, revision]);
+    await client.query("UPDATE photo_recipes SET revision=$3,settings=$4::jsonb,settings_sha256=$5,base_version=$6,mask_surface_ids=$7::jsonb,has_edits=$8,updated_at=clock_timestamp() WHERE owner=$1 AND photo_id=$2", values);
+    await client.query("INSERT INTO photo_write_receipts(owner,photo_id,operation,idempotency_key,request_hash,result_revision) VALUES($1,$2,'recipe',$3,$4,$5)", [owner, photoId, input.key, input.requestHash, revision]);
+    await client.query("UPDATE photo_libraries SET revision=revision+1,updated_at=GREATEST(updated_at,clock_timestamp()) WHERE owner=$1", [owner]);
+    return { snapshot: (await readPhotoSnapshot(client, owner, photoId))!, replayed: false };
+  });
+}
+export async function putPhotoVersions(db: Database, owner: OwnerId, photoId: string, input: { expectedRevision: number; key: string; requestHash: string; versions: readonly PhotoVersionWrite[] }): Promise<{ versions: PhotoVersionSetRecord; replayed: boolean } | null> {
+  assertOwner(owner); assertIdempotency(input.key, input.requestHash); if (!validUuid(photoId)) return null;
+  if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0 || !Array.isArray(input.versions) || input.versions.length > 100 || new Set(input.versions.map((version) => version.id.toLowerCase())).size !== input.versions.length) throw new TypeError("editor-store: invalid photo version set");
+  for (const version of input.versions) { if (!validUuid(version.id) || !["named", "auto"].includes(version.kind) || typeof version.name !== "string" || Buffer.byteLength(version.name) < 1 || Buffer.byteLength(version.name) > 255) throw new TypeError("editor-store: invalid photo version"); assertRecipeWrite(version.recipe); }
+  if (Buffer.byteLength(JSON.stringify(input.versions)) > 4 * 1024 ** 2) throw new TypeError("editor-store: photo version set too large");
+  return transaction(db, async (client) => {
+    const library = await lockLibrary(client, owner); assertLibraryActive(library);
+    const photo = await getPhoto(client, owner, photoId); if (!photo) return null;
+    await client.query("SELECT 1 FROM photos WHERE owner=$1 AND id=$2 FOR UPDATE", [owner, photoId]);
+    if (await photoWriteReplay(client, owner, photoId, "versions", input.key, input.requestHash)) return { versions: await readPhotoVersions(client, owner, photo), replayed: true };
+    if (photo.lifecycle !== "active") throw new PhotoStoreError("photo_trashed");
+    if (photo.versionsRevision !== input.expectedRevision) throw new PhotoRevisionConflictError(photo.versionsRevision);
+    const current = (await client.query<RecipeRow>(`SELECT ${RECIPE_COLUMNS} FROM photo_recipes WHERE owner=$1 AND photo_id=$2`, [owner, photoId])).rows[0]!;
+    const maskIds = new Set<string>(); for (const version of input.versions) { if (version.recipe.baseVersion !== current.base_version) throw new PhotoStoreError("unsupported_settings"); for (const id of version.recipe.maskSurfaceIds) maskIds.add(id); }
+    await assertPhotoMasks(client, owner, photoId, [...maskIds]);
+    const previous = await readPhotoVersions(client, owner, photo), revision = input.expectedRevision + 1;
+    if (!Number.isSafeInteger(revision)) throw new TypeError("editor-store: photo versions revision overflow");
+    await client.query("DELETE FROM photo_versions WHERE owner=$1 AND photo_id=$2", [owner, photoId]);
+    for (const version of input.versions) {
+      const prior = previous.versions.find((item) => item.id === version.id.toLowerCase());
+      const recipe: PhotoRecipeRecord = { ...version.recipe, revision: photo.recipeRevision, updatedAt: new Date().toISOString(), hasEdits: recipeWriteHasEdits(photo.format, version.recipe) };
+      await client.query("INSERT INTO photo_versions(owner,photo_id,set_revision,id,name,kind,recipe,settings_sha256,base_version,mask_surface_ids,created_at) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10::jsonb,COALESCE($11::timestamptz,clock_timestamp()))", [owner, photoId, revision, version.id.toLowerCase(), version.name, version.kind, JSON.stringify(recipe), version.recipe.settingsSha256, version.recipe.baseVersion, JSON.stringify(version.recipe.maskSurfaceIds), prior?.createdAt ?? null]);
+    }
+    await client.query("UPDATE photos SET versions_revision=$3 WHERE owner=$1 AND id=$2", [owner, photoId, revision]);
+    await client.query("INSERT INTO photo_write_receipts(owner,photo_id,operation,idempotency_key,request_hash,result_revision) VALUES($1,$2,'versions',$3,$4,$5)", [owner, photoId, input.key, input.requestHash, revision]);
+    await client.query("UPDATE photo_libraries SET revision=revision+1,updated_at=GREATEST(updated_at,clock_timestamp()) WHERE owner=$1", [owner]);
+    return { versions: await readPhotoVersions(client, owner, { ...photo, versionsRevision: revision }), replayed: false };
+  });
+}
+
+export type PhotoMediaSource = {
+  ownerId: string; photoId: string; lifecycle: "active" | "trashed" | "purged"; lifecycleGeneration: number;
+  original: { assetId: string; generation: string; sha256: string; sizeBytes: number };
+  format: PhotoFormat; width: number; height: number; baseVersion: string | null; recipe: PhotoRecipeRecord;
+};
+export type PhotoMediaIdentity = Omit<PhotoMediaSource, "lifecycle" | "recipe"> & {
+  recipeRevision: number; settingsSha256: string; rendererManifestSha256: string;
+  thumbnailMaxEdge: number; previewMaxEdge: number; workingCopyMaxEdge: number;
+};
+export type PhotoMediaClaim = { jobId: string; key: string; identity: PhotoMediaIdentity; generation: number; attempt: number; expiresAt: number };
+export type PhotoMediaOutputSpec = { rendererManifestSha256: string; thumbnailMaxEdge: number; previewMaxEdge: number; workingCopyMaxEdge: number };
+export type PhotoMediaAttemptFailure = "renderer_unavailable" | "unsupported_settings" | "decoder_failed" | "original_changed" | "timeout" | "cancelled" | "invalid_output" | "infrastructure_unavailable";
+export type PhotoMediaCandidate = {
+  owner: string; id: string; jobId: string; claimGeneration: number; kind: "thumbnail" | "preview" | "working-copy";
+  sha256: string; sizeBytes: number; contentType: "image/jpeg" | "image/png"; width: number; height: number;
+  objectKey: string; objectGeneration: string | null; state: "allocated" | "staged" | "published" | "abandoned" | "deleted";
+};
+export type PhotoMediaReadyWrite = {
+  thumbnailId: string; previewId: string;
+  workingCopy: { assetId: string; baseVersion: string; encoding: "png16" | "jpeg8"; meta: PhotoJsonObject } | null;
+};
+type MediaJobRow = {
+  owner: string; id: string; photo_id: string; state: PhotoMediaProjection["state"]; lifecycle_epoch: string; library_lifecycle_epoch: string;
+  original_asset_id: string; original_generation: string; original_sha256: string; original_size_bytes: string;
+  source_format: PhotoFormat; source_width: number; source_height: number; base_version: string | null;
+  recipe_revision: string; settings_sha256: string; renderer_manifest_sha256: string;
+  output_spec: { thumbnailMaxEdge: number; previewMaxEdge: number; workingCopyMaxEdge: number }; output_spec_sha256: string;
+  job_key: string; claim_generation: string; attempt_count: number; lease_until: Date | null; retry_at: Date | null;
+  terminal_reason: string | null; error_code: string | null; now: Date;
+};
+const MEDIA_JOB_COLUMNS = `owner,id,photo_id,state,lifecycle_epoch::text AS lifecycle_epoch,library_lifecycle_epoch::text AS library_lifecycle_epoch,
+  original_asset_id,original_generation,original_sha256,original_size_bytes::text AS original_size_bytes,source_format,source_width,source_height,
+  base_version,recipe_revision::text AS recipe_revision,settings_sha256,renderer_manifest_sha256,output_spec,output_spec_sha256,
+  job_key,claim_generation::text AS claim_generation,attempt_count,lease_until,retry_at,terminal_reason,error_code,clock_timestamp() AS now`;
+function mediaSource(snapshot: PhotoSnapshot): PhotoMediaSource {
+  const p = snapshot.photo;
+  return { ownerId: snapshot.library.owner, photoId: p.id, lifecycle: p.lifecycle, lifecycleGeneration: p.lifecycleEpoch,
+    original: { assetId: p.original.id, generation: p.original.objectGeneration, sha256: p.original.sha256, sizeBytes: p.original.sizeBytes },
+    format: p.format, width: p.width, height: p.height, baseVersion: snapshot.recipe.baseVersion, recipe: snapshot.recipe };
+}
+function mediaIdentity(source: PhotoMediaSource, spec: PhotoMediaOutputSpec): PhotoMediaIdentity {
+  return { ownerId: source.ownerId, photoId: source.photoId, lifecycleGeneration: source.lifecycleGeneration, original: source.original,
+    format: source.format, width: source.width, height: source.height, baseVersion: source.baseVersion, recipeRevision: source.recipe.revision,
+    settingsSha256: source.recipe.settingsSha256, ...spec };
+}
+function jobIdentity(row: MediaJobRow): PhotoMediaIdentity {
+  return { ownerId: row.owner, photoId: row.photo_id, lifecycleGeneration: number(row.lifecycle_epoch),
+    original: { assetId: row.original_asset_id, generation: row.original_generation, sha256: row.original_sha256, sizeBytes: number(row.original_size_bytes) },
+    format: row.source_format, width: row.source_width, height: row.source_height, baseVersion: row.base_version,
+    recipeRevision: number(row.recipe_revision), settingsSha256: row.settings_sha256, rendererManifestSha256: row.renderer_manifest_sha256, ...row.output_spec };
+}
+function mediaIdentityKey(identity: PhotoMediaIdentity): string { return photoJsonHash(identity as unknown as PhotoJson); }
+function toMediaClaim(row: MediaJobRow): PhotoMediaClaim {
+  return { jobId: row.id, key: row.job_key, identity: jobIdentity(row), generation: number(row.claim_generation), attempt: row.attempt_count, expiresAt: row.lease_until!.getTime() };
+}
+function assertMediaSpec(spec: PhotoMediaOutputSpec): void {
+  if (!SHA256.test(spec.rendererManifestSha256) || !validPositiveSafeInteger(spec.thumbnailMaxEdge) || spec.thumbnailMaxEdge > 512
+    || !validPositiveSafeInteger(spec.previewMaxEdge) || spec.previewMaxEdge > 1280
+    || !validPositiveSafeInteger(spec.workingCopyMaxEdge) || spec.workingCopyMaxEdge > 2560) throw new TypeError("editor-store: invalid photo media output spec");
+}
+function assertMediaClaim(claim: PhotoMediaClaim): void {
+  if (!validUuid(claim.jobId) || !SHA256.test(claim.key) || !validPositiveSafeInteger(claim.generation) || !validPositiveSafeInteger(claim.attempt)
+    || !Number.isSafeInteger(claim.expiresAt) || claim.key !== mediaIdentityKey(claim.identity)) throw new TypeError("editor-store: invalid photo media claim");
+}
+async function sourceMatchesJob(client: Queryable, library: LibraryRow, row: MediaJobRow): Promise<boolean> {
+  if (library.state !== "active" || library.lifecycle_epoch !== row.library_lifecycle_epoch) return false;
+  const snapshot = await readPhotoSnapshot(client, row.owner, row.photo_id, toLibrary(library));
+  if (!snapshot || snapshot.photo.lifecycle !== "active") return false;
+  const current = (await client.query<{ current_media_job_id: string | null }>("SELECT current_media_job_id FROM photos WHERE owner=$1 AND id=$2", [row.owner, row.photo_id])).rows[0];
+  return current?.current_media_job_id === row.id && mediaIdentityKey(mediaIdentity(mediaSource(snapshot), { rendererManifestSha256: row.renderer_manifest_sha256, ...row.output_spec })) === row.job_key;
+}
+async function currentClaimRow(client: Queryable, owner: OwnerId, claim: PhotoMediaClaim, requireLease: boolean): Promise<{ library: LibraryRow; row: MediaJobRow } | null> {
+  const library = await lockLibrary(client, owner);
+  const row = (await client.query<MediaJobRow>(`SELECT ${MEDIA_JOB_COLUMNS} FROM photo_media_jobs WHERE owner=$1 AND id=$2 FOR UPDATE`, [owner, claim.jobId])).rows[0];
+  if (!row || row.job_key !== claim.key || row.state !== "processing" || row.terminal_reason !== null || number(row.claim_generation) !== claim.generation
+    || row.attempt_count !== claim.attempt || row.owner !== claim.identity.ownerId || row.lease_until?.getTime() !== claim.expiresAt
+    || (requireLease && row.lease_until.getTime() <= row.now.getTime())) return null;
+  return { library, row };
+}
+export async function getPhotoMediaSource(db: Database, owner: OwnerId, photoId: string): Promise<PhotoMediaSource | null> {
+  const snapshot = await getPhotoSnapshot(db, owner, photoId); return snapshot ? mediaSource(snapshot) : null;
+}
+export async function listPhotoMediaOutbox(db: Queryable, owner: OwnerId, limit = 100): Promise<{ photoId: string; lifecycleGeneration: number; recipeRevision: number; settingsSha256: string }[]> {
+  assertOwner(owner); if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new TypeError("editor-store: invalid media outbox limit");
+  return (await db.query<{ photo_id: string; lifecycle_epoch: string; recipe_revision: string; settings_sha256: string }>(
+    `SELECT o.photo_id,o.lifecycle_epoch::text AS lifecycle_epoch,o.recipe_revision::text AS recipe_revision,o.settings_sha256
+       FROM photo_media_outbox AS o JOIN photos AS p ON p.owner=o.owner AND p.id=o.photo_id
+       JOIN photo_libraries AS l ON l.owner=p.owner AND l.id=p.library_id JOIN photo_recipes AS r ON r.owner=p.owner AND r.photo_id=p.id
+      WHERE o.owner=$1 AND o.consumed_at IS NULL AND l.state='active' AND p.lifecycle='active'
+        AND o.lifecycle_epoch=p.lifecycle_epoch AND o.recipe_revision=r.revision AND o.settings_sha256=r.settings_sha256
+      ORDER BY o.created_at,o.photo_id LIMIT $2`, [owner, limit],
+  )).rows.map((row) => ({ photoId: row.photo_id, lifecycleGeneration: number(row.lifecycle_epoch), recipeRevision: number(row.recipe_revision), settingsSha256: row.settings_sha256 }));
+}
+export async function enqueuePhotoMediaJob(db: Database, owner: OwnerId, photoId: string, spec: PhotoMediaOutputSpec): Promise<{ id: string; key: string; created: boolean } | null> {
+  assertOwner(owner); assertMediaSpec(spec); if (!validUuid(photoId)) return null;
+  return transaction(db, async (client) => {
+    const library = await lockLibrary(client, owner); assertLibraryActive(library);
+    const snapshot = await readPhotoSnapshot(client, owner, photoId, toLibrary(library)); if (!snapshot) return null;
+    if (snapshot.photo.lifecycle !== "active") throw new PhotoStoreError("photo_trashed");
+    const identity = mediaIdentity(mediaSource(snapshot), spec), key = mediaIdentityKey(identity);
+    const outputSpec = { thumbnailMaxEdge: spec.thumbnailMaxEdge, previewMaxEdge: spec.previewMaxEdge, workingCopyMaxEdge: spec.workingCopyMaxEdge };
+    const inserted = (await client.query<{ id: string }>(
+      `INSERT INTO photo_media_jobs(owner,photo_id,state,lifecycle_epoch,library_lifecycle_epoch,original_asset_id,original_generation,original_sha256,original_size_bytes,
+        source_format,source_width,source_height,base_version,recipe_revision,settings_sha256,renderer_manifest_sha256,output_spec,output_spec_sha256,job_key)
+       VALUES($1,$2,'queued',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18) ON CONFLICT DO NOTHING RETURNING id`,
+      [owner, photoId, identity.lifecycleGeneration, library.lifecycle_epoch, identity.original.assetId, identity.original.generation, identity.original.sha256, identity.original.sizeBytes,
+        identity.format, identity.width, identity.height, identity.baseVersion, identity.recipeRevision, identity.settingsSha256, identity.rendererManifestSha256,
+        JSON.stringify(outputSpec), photoJsonHash(outputSpec), key],
+    )).rows[0];
+    let id = inserted?.id ?? (await client.query<{ id: string }>("SELECT id FROM photo_media_jobs WHERE owner=$1 AND job_key=$2", [owner, key])).rows[0]?.id;
+    if (!id) {
+      // 初期schema時代のjobにも同じconvergence identityを適用する。
+      id = (await client.query<{ id: string }>(`UPDATE photo_media_jobs SET job_key=$9,state='queued',error_code=NULL,terminal_reason=NULL,ready_media=NULL
+        WHERE owner=$1 AND photo_id=$2 AND lifecycle_epoch=$3 AND original_generation=$4 AND base_version IS NOT DISTINCT FROM $5
+          AND recipe_revision=$6 AND settings_sha256=$7 AND renderer_manifest_sha256=$8 AND output_spec_sha256=$10 RETURNING id`,
+        [owner, photoId, identity.lifecycleGeneration, identity.original.generation, identity.baseVersion, identity.recipeRevision, identity.settingsSha256, identity.rendererManifestSha256, key, photoJsonHash(outputSpec)])).rows[0]?.id;
+    }
+    if (!id) throw new Error("editor-store: media convergence key mismatch");
+    await client.query("UPDATE photos SET current_media_job_id=$3 WHERE owner=$1 AND id=$2", [owner, photoId, id]);
+    await client.query("UPDATE photo_media_outbox SET consumed_at=COALESCE(consumed_at,clock_timestamp()) WHERE owner=$1 AND photo_id=$2 AND lifecycle_epoch=$3 AND recipe_revision=$4 AND settings_sha256=$5", [owner, photoId, identity.lifecycleGeneration, identity.recipeRevision, identity.settingsSha256]);
+    if (inserted) await client.query("UPDATE photo_libraries SET revision=revision+1,updated_at=GREATEST(updated_at,clock_timestamp()) WHERE owner=$1", [owner]);
+    return { id, key, created: Boolean(inserted) };
+  });
+}
+export async function listPendingPhotoMediaJobs(db: Queryable, owner: OwnerId, limit = 100): Promise<string[]> {
+  assertOwner(owner); if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new TypeError("editor-store: invalid media job limit");
+  return (await db.query<{ id: string }>(`SELECT j.id FROM photo_media_jobs AS j JOIN photos AS p ON p.owner=j.owner AND p.current_media_job_id=j.id JOIN photo_libraries AS l ON l.owner=p.owner
+    WHERE j.owner=$1 AND l.state='active' AND p.lifecycle='active' AND j.terminal_reason IS NULL
+      AND ((j.state='queued' AND j.attempt_count<3 AND (j.retry_at IS NULL OR j.retry_at<=clock_timestamp())) OR (j.state='processing' AND j.lease_until<=clock_timestamp()))
+    ORDER BY j.created_at,j.id LIMIT $2`, [owner, limit])).rows.map((row) => row.id);
+}
+export async function claimPhotoMediaJob(db: Database, owner: OwnerId, jobId: string, leaseSeconds = 300): Promise<PhotoMediaClaim | null> {
+  assertOwner(owner); if (!validUuid(jobId)) return null;
+  if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 1 || leaseSeconds > 900) throw new TypeError("editor-store: invalid photo media lease");
+  return transaction(db, async (client) => {
+    const library = await lockLibrary(client, owner);
+    const row = (await client.query<MediaJobRow>(`SELECT ${MEDIA_JOB_COLUMNS} FROM photo_media_jobs WHERE owner=$1 AND id=$2 FOR UPDATE`, [owner, jobId])).rows[0];
+    if (!row || row.terminal_reason !== null || !["queued", "processing"].includes(row.state) || (row.state === "processing" && row.lease_until && row.lease_until > row.now) || (row.retry_at && row.retry_at > row.now)) return null;
+    if (!(await sourceMatchesJob(client, library, row))) { await client.query("UPDATE photo_media_jobs SET state='failed',terminal_reason='superseded',claim_generation=claim_generation+1,lease_until=NULL,updated_at=clock_timestamp() WHERE owner=$1 AND id=$2", [owner, jobId]); return null; }
+    if (row.attempt_count >= 3) { await client.query("UPDATE photo_media_jobs SET state='failed',error_code='renderer_unavailable',lease_until=NULL,updated_at=clock_timestamp() WHERE owner=$1 AND id=$2", [owner, jobId]);
+      await client.query("UPDATE photo_libraries SET revision=revision+1,updated_at=GREATEST(updated_at,clock_timestamp()) WHERE owner=$1", [owner]); return null; }
+    await client.query("UPDATE photo_media_candidates SET state='abandoned',updated_at=clock_timestamp() WHERE owner=$1 AND job_id=$2 AND state IN ('allocated','staged')", [owner, jobId]);
+    const claimed = (await client.query<MediaJobRow>(`UPDATE photo_media_jobs SET state='processing',claim_generation=claim_generation+1,attempt_count=attempt_count+1,lease_until=clock_timestamp()+$3::int*interval '1 second',retry_at=NULL,error_code=NULL,updated_at=clock_timestamp() WHERE owner=$1 AND id=$2 RETURNING ${MEDIA_JOB_COLUMNS}`, [owner, jobId, leaseSeconds])).rows[0]!;
+    await client.query("UPDATE photo_libraries SET revision=revision+1,updated_at=GREATEST(updated_at,clock_timestamp()) WHERE owner=$1", [owner]);
+    return toMediaClaim(claimed);
+  });
+}
+type CandidateRow = { owner: string; id: string; job_id: string; claim_generation: string; kind: PhotoMediaCandidate["kind"]; sha256: string; size_bytes: string; content_type: PhotoMediaCandidate["contentType"]; width: number; height: number; object_key: string; object_generation: string | null; state: PhotoMediaCandidate["state"] };
+const CANDIDATE_COLUMNS = "owner,id,job_id,claim_generation::text AS claim_generation,kind,sha256,size_bytes::text AS size_bytes,content_type,width,height,object_key,object_generation,state";
+function toCandidate(row: CandidateRow): PhotoMediaCandidate { return { owner: row.owner, id: row.id, jobId: row.job_id, claimGeneration: number(row.claim_generation), kind: row.kind, sha256: row.sha256, sizeBytes: number(row.size_bytes), contentType: row.content_type, width: row.width, height: row.height, objectKey: row.object_key, objectGeneration: row.object_generation, state: row.state }; }
+export async function allocatePhotoMediaCandidate(db: Database, owner: OwnerId, claim: PhotoMediaClaim, input: Pick<PhotoMediaCandidate, "kind" | "sha256" | "sizeBytes" | "contentType" | "width" | "height" | "objectKey">): Promise<PhotoMediaCandidate | null> {
+  assertOwner(owner); assertMediaClaim(claim);
+  const maxEdge = input.kind === "thumbnail" ? claim.identity.thumbnailMaxEdge : input.kind === "preview" ? claim.identity.previewMaxEdge : claim.identity.workingCopyMaxEdge;
+  if (!["thumbnail", "preview", "working-copy"].includes(input.kind) || !SHA256.test(input.sha256) || !validPositiveSafeInteger(input.sizeBytes) || input.sizeBytes > PHOTO_MAX_ORIGINAL_BYTES
+    || !["image/jpeg", "image/png"].includes(input.contentType) || !validPositiveSafeInteger(input.width) || !validPositiveSafeInteger(input.height)
+    || Math.max(input.width, input.height) > maxEdge || !validObjectLocator(input.objectKey, "pending")) throw new TypeError("editor-store: invalid media candidate");
+  return transaction(db, async (client) => { const locked = await currentClaimRow(client, owner, claim, true); if (!locked || !(await sourceMatchesJob(client, locked.library, locked.row))) return null;
+    const row = (await client.query<CandidateRow>(`INSERT INTO photo_media_candidates(owner,job_id,claim_generation,kind,sha256,size_bytes,content_type,width,height,object_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING ${CANDIDATE_COLUMNS}`, [owner, claim.jobId, claim.generation, input.kind, input.sha256, input.sizeBytes, input.contentType, input.width, input.height, input.objectKey])).rows[0]!; return toCandidate(row); });
+}
+export async function stagePhotoMediaCandidate(db: Database, owner: OwnerId, claim: PhotoMediaClaim, candidateId: string, generation: string): Promise<PhotoMediaCandidate | null> {
+  assertOwner(owner); assertMediaClaim(claim); if (!validUuid(candidateId)) return null;
+  if (typeof generation !== "string" || generation.length < 1 || generation.length > 255) throw new TypeError("editor-store: invalid media object generation");
+  return transaction(db, async (client) => { const library = await lockLibrary(client, owner);
+    const row = (await client.query<CandidateRow>(`SELECT ${CANDIDATE_COLUMNS} FROM photo_media_candidates WHERE owner=$1 AND id=$2 AND job_id=$3 AND claim_generation=$4 FOR UPDATE`, [owner, candidateId, claim.jobId, claim.generation])).rows[0];
+    if (!row || (row.object_generation !== null && row.object_generation !== generation) || ["published", "deleted"].includes(row.state)) return row?.state === "published" && row.object_generation === generation ? toCandidate(row) : null;
+    const job = (await client.query<MediaJobRow>(`SELECT ${MEDIA_JOB_COLUMNS} FROM photo_media_jobs WHERE owner=$1 AND id=$2 FOR UPDATE`, [owner, claim.jobId])).rows[0];
+    const active = row.state !== "abandoned" && job && job.job_key === claim.key && number(job.claim_generation) === claim.generation && job.state === "processing" && job.lease_until && job.lease_until > job.now && await sourceMatchesJob(client, library, job);
+    const updated = (await client.query<CandidateRow>(`UPDATE photo_media_candidates SET object_generation=$3,state=$4,updated_at=clock_timestamp() WHERE owner=$1 AND id=$2 RETURNING ${CANDIDATE_COLUMNS}`, [owner, candidateId, generation, active ? "staged" : "abandoned"])).rows[0]!; return toCandidate(updated); });
+}
+export async function abandonPhotoMediaCandidates(db: Database, owner: OwnerId, claim: PhotoMediaClaim, candidateIds?: readonly string[]): Promise<number> {
+  assertOwner(owner); assertMediaClaim(claim); if (candidateIds && (candidateIds.length > 3 || candidateIds.some((id) => !validUuid(id)))) throw new TypeError("editor-store: invalid media candidate ids");
+  return transaction(db, async (client) => { await lockLibrary(client, owner); return (await client.query(`UPDATE photo_media_candidates SET state='abandoned',updated_at=clock_timestamp() WHERE owner=$1 AND job_id=$2 AND claim_generation=$3 AND state IN ('allocated','staged') ${candidateIds ? "AND id=ANY($4::uuid[])" : ""}`, candidateIds ? [owner, claim.jobId, claim.generation, candidateIds] : [owner, claim.jobId, claim.generation])).rowCount ?? 0; });
+}
+export async function listPhotoMediaCandidateCleanup(db: Queryable, owner: OwnerId, limit = 100): Promise<PhotoMediaCandidate[]> {
+  assertOwner(owner); if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new TypeError("editor-store: invalid media cleanup limit");
+  return (await db.query<CandidateRow>(`SELECT ${CANDIDATE_COLUMNS} FROM photo_media_candidates AS c WHERE c.owner=$1 AND c.state='abandoned' AND NOT EXISTS (SELECT 1 FROM photo_assets AS a WHERE a.object_key=c.object_key AND a.object_generation=c.object_generation) ORDER BY c.created_at,c.id LIMIT $2`, [owner, limit])).rows.map(toCandidate);
+}
+export async function confirmPhotoMediaCandidateDeleted(db: Database, owner: OwnerId, id: string, generation: string): Promise<boolean> {
+  assertOwner(owner); if (!validUuid(id)) return false;
+  return transaction(db, async (client) => { await lockLibrary(client, owner); return (await client.query("UPDATE photo_media_candidates AS c SET state='deleted',updated_at=clock_timestamp() WHERE owner=$1 AND id=$2 AND object_generation=$3 AND state='abandoned' AND NOT EXISTS (SELECT 1 FROM photo_assets AS a WHERE a.object_key=c.object_key AND a.object_generation=c.object_generation)", [owner, id, generation])).rowCount === 1; });
+}
+export async function publishPhotoMediaJob(db: Database, owner: OwnerId, claim: PhotoMediaClaim, media: PhotoMediaReadyWrite, objects: readonly { id: string; generation: string }[], deadlineAt: number): Promise<boolean> {
+  assertOwner(owner); assertMediaClaim(claim);
+  const ids = [media.thumbnailId, media.previewId, ...(media.workingCopy ? [media.workingCopy.assetId] : [])];
+  if (!Number.isSafeInteger(deadlineAt) || deadlineAt > claim.expiresAt || ids.some((id) => !validUuid(id)) || new Set(ids).size !== ids.length
+    || objects.length !== ids.length || new Set(objects.map((item) => item.id)).size !== objects.length || objects.some((item) => !ids.includes(item.id) || typeof item.generation !== "string" || item.generation.length < 1 || item.generation.length > 255)) throw new TypeError("editor-store: invalid photo media publication");
+  if (!["jpeg", "png"].includes(claim.identity.format) && !media.workingCopy) throw new TypeError("editor-store: working copy required for photo format");
+  if (media.workingCopy) { assertPhotoJson(media.workingCopy.meta); if (!['png16','jpeg8'].includes(media.workingCopy.encoding) || media.workingCopy.baseVersion !== claim.identity.baseVersion || Buffer.byteLength(photoCanonicalJson(media.workingCopy.meta)) > 64 * 1024) throw new TypeError("editor-store: invalid working copy publication"); }
+  return transaction(db, async (client) => {
+    const locked = await currentClaimRow(client, owner, claim, true); if (!locked || locked.row.now.getTime() >= deadlineAt || !(await sourceMatchesJob(client, locked.library, locked.row))) return false;
+    const candidates = (await client.query<CandidateRow>(`SELECT ${CANDIDATE_COLUMNS} FROM photo_media_candidates WHERE owner=$1 AND job_id=$2 AND claim_generation=$3 AND id=ANY($4::uuid[]) ORDER BY id FOR UPDATE`, [owner, claim.jobId, claim.generation, ids])).rows;
+    if (candidates.length !== ids.length || candidates.some((row) => row.state !== "staged" || row.object_generation !== objects.find((item) => item.id === row.id)?.generation
+      || row.kind !== (row.id === media.thumbnailId ? "thumbnail" : row.id === media.previewId ? "preview" : "working-copy"))) return false;
+    for (const row of candidates) {
+      const locator = await lockObjectLocator(client, row.object_key, row.object_generation!); if (locator.retired || locator.asset) return false;
+    }
+    for (const row of candidates) await client.query(`INSERT INTO photo_assets(owner,id,library_id,photo_id,kind,sha256,size_bytes,content_type,width,height,object_key,object_generation,counts_toward_quota) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,false)`, [owner, row.id, locked.library.id, claim.identity.photoId, row.kind, row.sha256, row.size_bytes, row.content_type, row.width, row.height, row.object_key, row.object_generation]);
+    await client.query("UPDATE photo_media_candidates SET state='published',updated_at=clock_timestamp() WHERE owner=$1 AND id=ANY($2::uuid[])", [owner, ids]);
+    await client.query("UPDATE photo_media_jobs SET state='ready',ready_media=$3::jsonb,canonical_metadata=$4::jsonb,error_code=NULL,lease_until=NULL,updated_at=clock_timestamp() WHERE owner=$1 AND id=$2", [owner, claim.jobId, JSON.stringify(media), media.workingCopy ? JSON.stringify(media.workingCopy.meta) : null]);
+    await client.query("UPDATE photo_libraries SET revision=revision+1,updated_at=GREATEST(updated_at,clock_timestamp()) WHERE owner=$1", [owner]);
+    return true;
+  });
+}
+export async function supersedePhotoMediaJob(db: Database, owner: OwnerId, claim: PhotoMediaClaim): Promise<boolean> {
+  assertOwner(owner); assertMediaClaim(claim);
+  return transaction(db, async (client) => { const locked = await currentClaimRow(client, owner, claim, true); if (!locked) return false;
+    await client.query("UPDATE photo_media_jobs SET state='failed',terminal_reason='superseded',lease_until=NULL,updated_at=clock_timestamp() WHERE owner=$1 AND id=$2", [owner, claim.jobId]);
+    await client.query("UPDATE photo_media_candidates SET state='abandoned',updated_at=clock_timestamp() WHERE owner=$1 AND job_id=$2 AND claim_generation=$3 AND state IN ('allocated','staged')", [owner, claim.jobId, claim.generation]); return true; });
+}
+export async function failPhotoMediaJob(db: Database, owner: OwnerId, claim: PhotoMediaClaim, code: PhotoMediaAttemptFailure, retryAt: number | null): Promise<boolean> {
+  assertOwner(owner); assertMediaClaim(claim);
+  const retryable = ["renderer_unavailable", "timeout", "infrastructure_unavailable"].includes(code);
+  if (!["renderer_unavailable", "unsupported_settings", "decoder_failed", "original_changed", "timeout", "cancelled", "invalid_output", "infrastructure_unavailable"].includes(code)
+    || (retryAt !== null && (!retryable || !Number.isSafeInteger(retryAt) || Math.abs(retryAt) > 8.64e15))) throw new TypeError("editor-store: invalid media attempt failure");
+  return transaction(db, async (client) => { const locked = await currentClaimRow(client, owner, claim, true); if (!locked || !(await sourceMatchesJob(client, locked.library, locked.row))) return false;
+    const retry = retryAt !== null && locked.row.attempt_count < 3;
+    const publicCode = code === "unsupported_settings" ? code : code === "decoder_failed" ? code : "renderer_unavailable";
+    await client.query("UPDATE photo_media_jobs SET state=$3,error_code=$4,attempt_error=$5,retry_at=$6::timestamptz,lease_until=NULL,updated_at=clock_timestamp() WHERE owner=$1 AND id=$2", [owner, claim.jobId, retry ? "queued" : code === "unsupported_settings" ? "unsupported" : "failed", retry ? null : publicCode, code, retry ? new Date(Math.max(retryAt!, locked.row.now.getTime())).toISOString() : null]);
+    await client.query("UPDATE photo_media_candidates SET state='abandoned',updated_at=clock_timestamp() WHERE owner=$1 AND job_id=$2 AND claim_generation=$3 AND state IN ('allocated','staged')", [owner, claim.jobId, claim.generation]);
+    await client.query("UPDATE photo_libraries SET revision=revision+1,updated_at=GREATEST(updated_at,clock_timestamp()) WHERE owner=$1", [owner]); return true; });
+}
+
+/** Fence interrupted writes before the cleanup executor examines physical objects. A null generation requires provider reconciliation. */
+export async function reconcilePhotoMediaCandidates(db: Database, owner: OwnerId, limit = 100): Promise<number> {
+  assertOwner(owner); if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new TypeError("editor-store: invalid media reconcile limit");
+  return transaction(db, async (client) => { await lockLibrary(client, owner);
+    return (await client.query(`WITH stale AS (
+      SELECT c.id FROM photo_media_candidates AS c JOIN photo_media_jobs AS j ON j.owner=c.owner AND j.id=c.job_id
+        JOIN photos AS p ON p.owner=j.owner AND p.id=j.photo_id JOIN photo_libraries AS l ON l.owner=p.owner
+       WHERE c.owner=$1 AND c.state IN ('allocated','staged') AND (l.state<>'active' OR p.lifecycle<>'active'
+         OR p.current_media_job_id IS DISTINCT FROM j.id OR j.state<>'processing' OR j.terminal_reason IS NOT NULL
+         OR j.claim_generation<>c.claim_generation OR j.lease_until IS NULL OR j.lease_until<=clock_timestamp()
+         OR p.lifecycle_epoch<>j.lifecycle_epoch OR p.recipe_revision<>j.recipe_revision)
+       ORDER BY c.created_at,c.id LIMIT $2 FOR UPDATE OF c)
+      UPDATE photo_media_candidates AS c SET state='abandoned',updated_at=clock_timestamp() FROM stale WHERE c.owner=$1 AND c.id=stale.id`, [owner, limit])).rowCount ?? 0;
   });
 }
