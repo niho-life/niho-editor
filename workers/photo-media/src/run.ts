@@ -32,12 +32,14 @@ function assertActive(signal: AbortSignal, expiresAt: number, now: () => number)
 }
 
 async function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) throw signal.reason;
   let abort: () => void = () => {};
   try {
     return await Promise.race([promise, new Promise<never>((_resolve, reject) => {
       abort = () => reject(signal.reason);
-      signal.addEventListener("abort", abort, { once: true });
+      // The port may abort synchronously while creating its promise. Always adopt that
+      // promise in the race so a later rejection stays observed even after cancellation.
+      if (signal.aborted) abort();
+      else signal.addEventListener("abort", abort, { once: true });
     })]);
   } finally { signal.removeEventListener("abort", abort); }
 }
