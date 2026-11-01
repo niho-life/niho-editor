@@ -1,0 +1,782 @@
+{
+  "contractVersion": 1,
+  "syntheticOnly": true,
+  "cases": [
+    {
+      "id": "unauthenticated-library",
+      "operation": "library.get",
+      "actor": "none",
+      "request": {},
+      "arrange": {},
+      "expected": {
+        "status": 401,
+        "invariants": [
+          "no_side_effects"
+        ],
+        "code": "unauthenticated"
+      }
+    },
+    {
+      "id": "owner-in-request",
+      "operation": "uploads.start",
+      "actor": "user-a",
+      "request": {
+        "target": {
+          "kind": "original",
+          "fileName": "synthetic-photo.jpg",
+          "format": "jpeg"
+        },
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sizeBytes": 1048576,
+        "contentType": "image/jpeg",
+        "ownerId": "synthetic-user-b"
+      },
+      "arrange": {},
+      "expected": {
+        "status": 400,
+        "invariants": [
+          "no_side_effects",
+          "owner_from_session_only"
+        ],
+        "code": "invalid_request"
+      }
+    },
+    {
+      "id": "foreign-photo",
+      "operation": "photos.get",
+      "actor": "user-b",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222"
+      },
+      "arrange": {
+        "owner": "user-a"
+      },
+      "expected": {
+        "status": 404,
+        "invariants": [
+          "same_as_missing",
+          "no_side_effects"
+        ],
+        "code": "not_found"
+      }
+    },
+    {
+      "id": "foreign-original",
+      "operation": "content.get",
+      "actor": "user-b",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222",
+        "assetId": "33333333-3333-4333-8333-333333333333"
+      },
+      "arrange": {
+        "owner": "user-a"
+      },
+      "expected": {
+        "status": 404,
+        "invariants": [
+          "same_as_missing",
+          "no_side_effects"
+        ],
+        "code": "not_found"
+      }
+    },
+    {
+      "id": "foreign-upload",
+      "operation": "uploads.complete",
+      "actor": "user-b",
+      "request": {
+        "uploadId": "44444444-4444-4444-8444-444444444444"
+      },
+      "arrange": {
+        "owner": "user-a"
+      },
+      "expected": {
+        "status": 404,
+        "invariants": [
+          "same_as_missing",
+          "no_side_effects"
+        ],
+        "code": "not_found"
+      }
+    },
+    {
+      "id": "foreign-purge-job",
+      "operation": "jobs.get",
+      "actor": "user-b",
+      "request": {
+        "jobId": "55555555-5555-4555-8555-555555555555"
+      },
+      "arrange": {
+        "owner": "user-a"
+      },
+      "expected": {
+        "status": 404,
+        "invariants": [
+          "same_as_missing",
+          "no_side_effects"
+        ],
+        "code": "not_found"
+      }
+    },
+    {
+      "id": "foreign-hash",
+      "operation": "photos.lookup",
+      "actor": "user-b",
+      "request": {
+        "sha256s": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ]
+      },
+      "arrange": {
+        "owner": "user-a"
+      },
+      "expected": {
+        "status": 200,
+        "invariants": [
+          "empty_matches",
+          "no_cross_owner_dedup"
+        ]
+      }
+    },
+    {
+      "id": "foreign-cursor",
+      "operation": "photos.list",
+      "actor": "user-b",
+      "request": {
+        "cursor": "synthetic-owner-a-cursor"
+      },
+      "arrange": {
+        "cursorOwner": "user-a"
+      },
+      "expected": {
+        "status": 400,
+        "invariants": [
+          "same_as_invalid_cursor",
+          "no_side_effects"
+        ],
+        "code": "invalid_cursor"
+      }
+    },
+    {
+      "id": "cookie-origin",
+      "operation": "photos.trash",
+      "actor": "user-a",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222"
+      },
+      "arrange": {
+        "transport": "browser-session",
+        "origin": "https://untrusted.example.test"
+      },
+      "expected": {
+        "status": 403,
+        "invariants": [
+          "no_side_effects"
+        ],
+        "code": "origin_rejected"
+      }
+    },
+    {
+      "id": "revoked-content",
+      "operation": "content.get",
+      "actor": "revoked",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222",
+        "assetId": "33333333-3333-4333-8333-333333333333"
+      },
+      "arrange": {},
+      "expected": {
+        "status": 401,
+        "invariants": [
+          "no_content_bytes"
+        ],
+        "code": "unauthenticated"
+      }
+    },
+    {
+      "id": "quota-boundary",
+      "operation": "uploads.start",
+      "actor": "user-a",
+      "request": {
+        "target": {
+          "kind": "original",
+          "fileName": "synthetic-photo.jpg",
+          "format": "jpeg"
+        },
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sizeBytes": 1048576,
+        "contentType": "image/jpeg"
+      },
+      "arrange": {
+        "quotaBytes": 5368709120,
+        "usedBytes": 5367660544,
+        "reservedBytes": 0
+      },
+      "expected": {
+        "status": 201,
+        "invariants": [
+          "used_plus_reserved_equals_quota"
+        ]
+      }
+    },
+    {
+      "id": "quota-concurrent-loser",
+      "operation": "uploads.start",
+      "actor": "user-a",
+      "request": {
+        "target": {
+          "kind": "original",
+          "fileName": "synthetic-photo.jpg",
+          "format": "jpeg"
+        },
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sizeBytes": 1048576,
+        "contentType": "image/jpeg"
+      },
+      "arrange": {
+        "quotaBytes": 5368709120,
+        "usedBytes": 5367660544,
+        "reservedBytes": 1048576
+      },
+      "expected": {
+        "status": 409,
+        "invariants": [
+          "one_reservation_wins",
+          "no_negative_balance"
+        ],
+        "code": "quota_exceeded"
+      }
+    },
+    {
+      "id": "same-owner-existing",
+      "operation": "uploads.start",
+      "actor": "user-a",
+      "request": {
+        "target": {
+          "kind": "original",
+          "fileName": "synthetic-photo.jpg",
+          "format": "jpeg"
+        },
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sizeBytes": 1048576,
+        "contentType": "image/jpeg"
+      },
+      "arrange": {
+        "existingStoredOriginal": true,
+        "quotaBytes": 5368709120,
+        "usedBytes": 5368709120
+      },
+      "expected": {
+        "status": 200,
+        "invariants": [
+          "existing_photo_id",
+          "zero_quota_delta",
+          "keep_existing_recipe"
+        ]
+      }
+    },
+    {
+      "id": "duplicate-complete",
+      "operation": "uploads.complete",
+      "actor": "user-a",
+      "request": {
+        "uploadId": "44444444-4444-4444-8444-444444444444"
+      },
+      "arrange": {
+        "uploadState": "stored",
+        "sameIdempotencyKey": true
+      },
+      "expected": {
+        "status": 200,
+        "invariants": [
+          "replayed_true",
+          "same_photo_id",
+          "zero_quota_delta"
+        ]
+      }
+    },
+    {
+      "id": "complete-in-progress",
+      "operation": "uploads.complete",
+      "actor": "user-a",
+      "request": {
+        "uploadId": "44444444-4444-4444-8444-444444444444"
+      },
+      "arrange": {
+        "uploadState": "verifying"
+      },
+      "expected": {
+        "status": 202,
+        "invariants": [
+          "no_stored_photo_yet",
+          "reservation_held"
+        ]
+      }
+    },
+    {
+      "id": "cancel-verification",
+      "operation": "uploads.cancel",
+      "actor": "user-a",
+      "request": {
+        "uploadId": "44444444-4444-4444-8444-444444444444"
+      },
+      "arrange": {
+        "uploadState": "verifying",
+        "workerLease": "old"
+      },
+      "expected": {
+        "status": 200,
+        "invariants": [
+          "cancel_fences_worker",
+          "no_late_commit",
+          "reservation_released_once"
+        ]
+      }
+    },
+    {
+      "id": "complete-after-cancel",
+      "operation": "uploads.complete",
+      "actor": "user-a",
+      "request": {
+        "uploadId": "44444444-4444-4444-8444-444444444444"
+      },
+      "arrange": {
+        "uploadState": "cancelled"
+      },
+      "expected": {
+        "status": 409,
+        "invariants": [
+          "no_late_commit",
+          "no_side_effects"
+        ],
+        "code": "upload_state_conflict"
+      }
+    },
+    {
+      "id": "complete-after-expiry",
+      "operation": "uploads.complete",
+      "actor": "user-a",
+      "request": {
+        "uploadId": "44444444-4444-4444-8444-444444444444"
+      },
+      "arrange": {
+        "uploadState": "expired"
+      },
+      "expected": {
+        "status": 410,
+        "invariants": [
+          "no_late_commit",
+          "no_side_effects"
+        ],
+        "code": "upload_expired"
+      }
+    },
+    {
+      "id": "changed-idempotency-payload",
+      "operation": "uploads.start",
+      "actor": "user-a",
+      "request": {
+        "target": {
+          "kind": "original",
+          "fileName": "synthetic-photo.jpg",
+          "format": "jpeg"
+        },
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sizeBytes": 1048576,
+        "contentType": "image/jpeg"
+      },
+      "arrange": {
+        "sameIdempotencyKey": true,
+        "previousSizeBytes": 524288
+      },
+      "expected": {
+        "status": 409,
+        "invariants": [
+          "no_side_effects"
+        ],
+        "code": "idempotency_conflict"
+      }
+    },
+    {
+      "id": "generation-race",
+      "operation": "uploads.complete",
+      "actor": "user-a",
+      "request": {
+        "uploadId": "44444444-4444-4444-8444-444444444444"
+      },
+      "arrange": {
+        "verifiedGeneration": "synthetic-1",
+        "scratchOverwrittenGeneration": "synthetic-2",
+        "copyPreconditionFailed": true
+      },
+      "expected": {
+        "status": 422,
+        "invariants": [
+          "no_unverified_generation_commit",
+          "reservation_released_once"
+        ],
+        "code": "content_rejected"
+      }
+    },
+    {
+      "id": "recipe-stale",
+      "operation": "recipes.put",
+      "actor": "user-a",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222",
+        "expectedRevision": 3,
+        "settings": {
+          "v": 1,
+          "engine": "niho-14",
+          "look": "niho-standard-1",
+          "base": null,
+          "exposure": 0,
+          "contrast": 0,
+          "saturation": 0,
+          "relativeTemperature": 0,
+          "relativeTint": 0,
+          "whiteBalance": {
+            "mode": "asShot"
+          }
+        },
+        "baseVersion": null
+      },
+      "arrange": {
+        "currentRevision": 4
+      },
+      "expected": {
+        "status": 409,
+        "invariants": [
+          "current_revision_4",
+          "no_lost_update"
+        ],
+        "code": "revision_conflict"
+      }
+    },
+    {
+      "id": "missing-mask",
+      "operation": "recipes.put",
+      "actor": "user-a",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222",
+        "expectedRevision": 0,
+        "settings": {
+          "v": 5,
+          "engine": "niho-14",
+          "look": "niho-standard-1",
+          "base": null,
+          "exposure": 0,
+          "contrast": 0,
+          "saturation": 0,
+          "relativeTemperature": 0,
+          "relativeTint": 0,
+          "whiteBalance": {
+            "mode": "asShot"
+          },
+          "masks": [
+            {
+              "id": "synthetic-sky",
+              "kind": "sky",
+              "surface": {
+                "id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "width": 1024,
+                "height": 683
+              },
+              "adjust": {
+                "exposure": -0.5
+              }
+            }
+          ]
+        },
+        "baseVersion": null
+      },
+      "arrange": {
+        "referencedMaskOwner": "user-b"
+      },
+      "expected": {
+        "status": 422,
+        "invariants": [
+          "no_recipe_commit",
+          "no_cross_owner_surface"
+        ],
+        "code": "missing_mask_surface"
+      }
+    },
+    {
+      "id": "unknown-recipe",
+      "operation": "recipes.put",
+      "actor": "user-a",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222",
+        "expectedRevision": 0,
+        "settings": {
+          "v": 10,
+          "engine": "synthetic-future-engine",
+          "look": "niho-standard-1",
+          "base": null,
+          "exposure": 0,
+          "contrast": 0,
+          "saturation": 0,
+          "relativeTemperature": 0,
+          "relativeTint": 0,
+          "whiteBalance": {
+            "mode": "asShot"
+          },
+          "futureField": {
+            "keep": [
+              1,
+              "opaque"
+            ]
+          }
+        },
+        "baseVersion": null
+      },
+      "arrange": {},
+      "expected": {
+        "status": 422,
+        "invariants": [
+          "opaque_read_preserved",
+          "no_downgrade"
+        ],
+        "code": "unsupported_settings"
+      }
+    },
+    {
+      "id": "stale-preview",
+      "operation": "media.ensure",
+      "actor": "user-a",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222",
+        "recipeRevision": 3
+      },
+      "arrange": {
+        "currentRevision": 4
+      },
+      "expected": {
+        "status": 409,
+        "invariants": [
+          "never_label_old_preview_current"
+        ],
+        "code": "revision_conflict"
+      }
+    },
+    {
+      "id": "stored-media-failed",
+      "operation": "photos.get",
+      "actor": "user-a",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222"
+      },
+      "arrange": {
+        "originalStored": true,
+        "mediaState": "failed"
+      },
+      "expected": {
+        "status": 200,
+        "invariants": [
+          "storage_state_stored",
+          "original_download_available",
+          "retry_media_only"
+        ]
+      }
+    },
+    {
+      "id": "trash-retains-quota",
+      "operation": "photos.trash",
+      "actor": "user-a",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222"
+      },
+      "arrange": {
+        "originalStored": true
+      },
+      "expected": {
+        "status": 200,
+        "invariants": [
+          "same_used_bytes",
+          "trash_30_days",
+          "hidden_from_active_list"
+        ]
+      }
+    },
+    {
+      "id": "pending-purge-retains-quota",
+      "operation": "photos.purge",
+      "actor": "user-a",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222"
+      },
+      "arrange": {
+        "lifecycle": "trashed",
+        "storageDeleteConfirmed": false
+      },
+      "expected": {
+        "status": 202,
+        "invariants": [
+          "hidden_immediately",
+          "used_bytes_held",
+          "pending_purge_bytes_in_used"
+        ]
+      }
+    },
+    {
+      "id": "restore-after-purge",
+      "operation": "photos.restore",
+      "actor": "user-a",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222"
+      },
+      "arrange": {
+        "purgeTombstone": true
+      },
+      "expected": {
+        "status": 404,
+        "invariants": [
+          "no_resurrection"
+        ],
+        "code": "not_found"
+      }
+    },
+    {
+      "id": "account-deleting",
+      "operation": "uploads.start",
+      "actor": "user-a",
+      "request": {
+        "target": {
+          "kind": "original",
+          "fileName": "synthetic-photo.jpg",
+          "format": "jpeg"
+        },
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sizeBytes": 1048576,
+        "contentType": "image/jpeg"
+      },
+      "arrange": {
+        "accountState": "deleting"
+      },
+      "expected": {
+        "status": 409,
+        "invariants": [
+          "no_side_effects",
+          "no_new_reservation"
+        ],
+        "code": "account_deleting"
+      }
+    },
+    {
+      "id": "format-spoof",
+      "operation": "uploads.complete",
+      "actor": "user-a",
+      "request": {
+        "uploadId": "44444444-4444-4444-8444-444444444444"
+      },
+      "arrange": {
+        "declaredFormat": "jpeg",
+        "detectedFormat": "png"
+      },
+      "expected": {
+        "status": 422,
+        "invariants": [
+          "no_stored_photo_yet",
+          "reservation_released_once"
+        ],
+        "code": "content_rejected"
+      }
+    },
+    {
+      "id": "file-limit",
+      "operation": "uploads.start",
+      "actor": "user-a",
+      "request": {
+        "target": {
+          "kind": "original",
+          "fileName": "synthetic-photo.jpg",
+          "format": "jpeg"
+        },
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sizeBytes": 268435457,
+        "contentType": "image/jpeg"
+      },
+      "arrange": {},
+      "expected": {
+        "status": 413,
+        "invariants": [
+          "no_reservation"
+        ],
+        "code": "request_too_large"
+      }
+    },
+    {
+      "id": "negative-size",
+      "operation": "uploads.start",
+      "actor": "user-a",
+      "request": {
+        "target": {
+          "kind": "original",
+          "fileName": "synthetic-photo.jpg",
+          "format": "jpeg"
+        },
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sizeBytes": -1,
+        "contentType": "image/jpeg"
+      },
+      "arrange": {},
+      "expected": {
+        "status": 400,
+        "invariants": [
+          "no_reservation",
+          "no_negative_balance"
+        ],
+        "code": "invalid_request"
+      }
+    },
+    {
+      "id": "pixel-limit",
+      "operation": "uploads.complete",
+      "actor": "user-a",
+      "request": {
+        "uploadId": "44444444-4444-4444-8444-444444444444"
+      },
+      "arrange": {
+        "decodedWidth": 10001,
+        "decodedHeight": 10000
+      },
+      "expected": {
+        "status": 422,
+        "invariants": [
+          "no_decoder_allocation_above_limit",
+          "no_stored_photo_yet"
+        ],
+        "code": "pixel_limit_exceeded"
+      }
+    },
+    {
+      "id": "start-replay-verifying",
+      "operation": "uploads.start",
+      "actor": "user-a",
+      "request": {
+        "target": {
+          "kind": "original",
+          "fileName": "synthetic-photo.jpg",
+          "format": "jpeg"
+        },
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sizeBytes": 1048576,
+        "contentType": "image/jpeg"
+      },
+      "arrange": {
+        "uploadState": "verifying",
+        "sameIdempotencyKey": true
+      },
+      "expected": {
+        "status": 200,
+        "invariants": [
+          "same_upload_id",
+          "ticket_null",
+          "replayed_true",
+          "reservation_held"
+        ]
+      }
+    }
+  ]
+}

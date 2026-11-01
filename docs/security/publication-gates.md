@@ -85,6 +85,18 @@ contract は認証 context、resource owner / tenant / workspace、upload / down
 
 editor.niho.life の公開版を発信先（NIHO Experience、NIHO、本人のサイト）が読む API の正本は [`packages/editor-publish-contract`](../../packages/editor-publish-contract/) で、外部 observable behavior は [`editor-publish-api-v1.md`](editor-publish-api-v1.md) に置く。型・検証器・Markdown の投影・参照モデル・負例を同じ version の下で管理し、認可の最終判断と鍵の保管はサーバー側で行う。互換性を壊す変更は新しい major version とする。
 
+## 本人の写真ライブラリ v1（Epic #148）
+
+2026-11-01追記。本人専用の写真保存は、上の共通共有contractと別に [`packages/photo-library-contract`](../../packages/photo-library-contract/) を正本とする。[設計・実装先・writer境界](../architecture/personal-photo-library.md) に従い、次のowner-scoped処理はNIHO editor側の公開実装に含めてよい。この節は「API実装を非公開に残す」原則に対する明示した例外で、P00自体は型とfixtureだけを追加する。
+
+- `/api/photo/v1/*` のhandler、個人写真のDB schema/migration、容量予約/CAS/状態機械、storage接続口、media/purge workerのコードと合成データの検証。
+- 本人の認証済みcontextを受け取った後のowner絞り込み、原本のgeneration固定、quotaとcontent検証、trash/purgeの一般的なアルゴリズム。公開コードにも毎requestの認証・所有権検証を必須にする。
+- 写真のWeb/PWAとAPI adapter、niho-photo SDKのpublic releaseのSHA/hash採用記録。本人用のUIを拠点IDの読み替えで作らない。
+
+非公開に残すのは、NIHO本人確認と失効・退会イベントの最終接続、実token/鍵、DB/storage/workerの実行権限と実値、ユーザーの原本・EXIF・mask・recipe・実ログ、backupの実設定、本番配備と署名の権限。公開fixtureは合成metadataだけとし、HEIC/RAWの成功fixtureを本番decoderの受入証跡にしない。
+
+本人の写真を公開するshare APIはv1に含めない。既存の文書共有リンクや拠点共有APIへ転送しない。privateな認証接続が完成するまでfail-closedを維持し、公開CIは本番データ・秘密・実運用endpointに触れない。写真APIの公開・mergeと、利用者向け有効化・配布は別のgateで判定する。
+
 ## CI と成果物
 
 公開 CI は標準 GitHub-hosted runner で動かし、fork の PR に secrets を渡さない。`pull_request_target` で未信頼コードを実行しない。permissions は必要最小限にし、契約の負例を合成データで検証する。
