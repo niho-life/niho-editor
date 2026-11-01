@@ -33,6 +33,7 @@ test("frozen installでもadapterの実runtimeが同じSDKへ解決する", () =
     "console.log(JSON.stringify({url:import.meta.resolve('niho-photo-contract'),exports:Object.keys(await import('niho-photo-contract'))}))",
   ], { cwd: fileURLToPath(new URL(".", installed)), encoding: "utf8" }));
   assert.ok(resolved.exports.includes("readDevelopSettings"));
+  assert.ok(resolved.exports.includes("supportsDevelopSettingsWrite"));
   let directory = path.dirname(fileURLToPath(resolved.url));
   const root = path.parse(directory).root;
   while (directory !== root) {

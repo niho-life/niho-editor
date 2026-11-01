@@ -2,8 +2,8 @@
 
 `@niho/photo-cloud-library` の TypeScript source は、配布物へ同梱しない次の peer package の公開 API / 型を参照します。
 
-- `niho-photo-contract` 0.1.6
-- `niho-photo-editing` 0.1.6
+- `niho-photo-contract` 0.1.7
+- `niho-photo-editing` 0.1.7
 
 各 peer package のライセンス条件と著作権表示は、その package に同梱される notice を参照してください。
 

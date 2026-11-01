@@ -4,21 +4,25 @@
   "private": true,
   "type": "module",
   "description": "本人用PhotoLibrary adapter（段階1は共通fixtureで先行検証）",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.sdk.json",
     "test": "node --test test/*.test.mjs",
     "check": "npm run typecheck && npm test"
   },
-  "engines": { "node": "24.x" },
+  "engines": {
+    "node": "24.x"
+  },
   "dependencies": {
     "@niho/photo-library-contract": "file:../photo-library-contract",
-    "niho-photo-contract": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.6/niho-photo-contract-0.1.6.tgz"
+    "niho-photo-contract": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.7/niho-photo-contract-0.1.7.tgz"
   },
   "devDependencies": {
-    "niho-photo-editing": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.6/niho-photo-editing-0.1.6.tgz",
-    "niho-photo-ui": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.6/niho-photo-ui-0.1.6.tgz",
-    "niho-photo-cloud-contract": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.6/niho-photo-cloud-contract-0.1.6.tgz",
+    "niho-photo-editing": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.7/niho-photo-editing-0.1.7.tgz",
+    "niho-photo-ui": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.7/niho-photo-ui-0.1.7.tgz",
+    "niho-photo-cloud-contract": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.7/niho-photo-cloud-contract-0.1.7.tgz",
     "@types/node": "24.19.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",

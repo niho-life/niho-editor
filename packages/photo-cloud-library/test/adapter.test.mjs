@@ -411,7 +411,7 @@ test("未知recipeでもdownloadOriginalはread-only raw経路で取得でき、
   assert.equal(downloaded.fileName, futureRecipePhoto.fileName);
 });
 
-test("SDK 0.1.6 release URL/version/SRIと実sourceのPhotoLibrary必須methodをbaselineへ固定する", async () => {
+test("SDK 0.1.7 release URL/version/SRIと実sourceのPhotoLibrary必須methodをbaselineへ固定する", async () => {
   const lock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
   const baseline = JSON.parse(await readFile(new URL("../../photo-library-contract/sdk-baseline.json", import.meta.url), "utf8"));
   const sdkConfig = JSON.parse(await readFile(new URL("../tsconfig.sdk.json", import.meta.url), "utf8"));
@@ -425,7 +425,7 @@ test("SDK 0.1.6 release URL/version/SRIと実sourceのPhotoLibrary必須method�
   for (const [name, id] of Object.entries(ids)) {
     const locked = lock.packages[`node_modules/${name}`];
     const artifact = baseline.packages.find((item) => item.id === id);
-    assert.equal(locked.version, "0.1.6");
+    assert.equal(locked.version, "0.1.7");
     assert.equal(locked.resolved, `https://github.com/niho-life/niho-photo/releases/download/${baseline.releaseTag}/${artifact.file}`);
     assert.equal(locked.integrity, artifact.integrity);
   }
