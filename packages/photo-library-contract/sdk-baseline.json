@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "repository": "niho-life/niho-photo",
+  "releaseTag": "photo-sdk-v0.1.4",
+  "sourceCommit": "77508e53b20e4750190a9916bb5adc8f1ab0e04e",
+  "manifest": {
+    "file": "niho-photo-sdk-0.1.4-77508e53b20e4750190a9916bb5adc8f1ab0e04e.json",
+    "sha256": "883d60d5d09967ba4ca1c57df9cb81e6bed26379a22f8ddc87ad82624547316f"
+  },
+  "receipt": {
+    "file": "photo-sdk-artifact-receipt.json",
+    "sha256": "03ff4b8e845927c26543e9af0ef24650749bd11277f105348c3bd3ce86d49bd9"
+  },
+  "packages": [
+    {
+      "id": "ui",
+      "name": "niho-photo-ui",
+      "file": "niho-photo-ui-0.1.4.tgz",
+      "sha256": "e89731c973d4e715978d542fb199239d6727b8b4e7020b1090f0421471c4053f",
+      "integrity": "sha256-6JcxyXPU5xWXjVQvsZkjnWcnuLTnAgsQkPBCFHHEBT8=",
+      "size": 64007
+    },
+    {
+      "id": "photo-editing",
+      "name": "niho-photo-editing",
+      "file": "niho-photo-editing-0.1.4.tgz",
+      "sha256": "ebaa25dc794fd638a2a3a926897cdc0abe4995548de2d75f3f252a6a9b9dfe3c",
+      "integrity": "sha256-66ol3HlP1jiio6kmiXzcCr5JlVSN4tdfPyUqapud/jw=",
+      "size": 759759
+    },
+    {
+      "id": "cloud-contract",
+      "name": "niho-photo-cloud-contract",
+      "file": "niho-photo-cloud-contract-0.1.4.tgz",
+      "sha256": "a62be2206eb846182a3a0dddd49795fa143e40b26c64e5896eb4cae81292042a",
+      "integrity": "sha256-piviIG64RhgqOg3d1JeV+hQ+QLJsZOWJbrTK6BKSBCo=",
+      "size": 5231
+    },
+    {
+      "id": "photo-contract",
+      "name": "niho-photo-contract",
+      "file": "niho-photo-contract-0.1.4.tgz",
+      "sha256": "f15fa54542b6fefc727e86ec74531846c902e6bab26ae35f4be5635446478142",
+      "integrity": "sha256-8V+lRUK2/vxyfobsdFMYRskC5rqyauNfS+VjVEZHgUI=",
+      "size": 102349
+    },
+    {
+      "id": "develop-engine-source",
+      "name": "niho-photo-develop-engine-source",
+      "file": "niho-photo-develop-engine-source-0.1.4.tgz",
+      "sha256": "fe81427ee1c6ddaa951dabcab7c34ae4052ead7bc07c9e01635ffff9f96ba71f",
+      "integrity": "sha256-/oFCfuHG3aqVHavKt8NK5AUurXvAfJ4BY1//+flrpx8=",
+      "size": 2892472
+    },
+    {
+      "id": "develop-engine-runtime",
+      "name": "niho-photo-develop-engine-runtime",
+      "file": "niho-photo-develop-engine-runtime-0.1.4.tgz",
+      "sha256": "b8fbe03c3c90e8ea78b71e19543d87c361480fbbdb34f193f3c6c8c7cd417260",
+      "integrity": "sha256-uPvgPDyQ6Op4tx4ZVD2Hw2FID7vbNPGT88bIx81BcmA=",
+      "size": 8865197
+    }
+  ],
+  "engine": {
+    "version": "niho-14",
+    "crateVersion": "0.27.0",
+    "manifest": {
+      "file": "manifest-0.27.0.json",
+      "sha256": "1a69b66cc1667b58126c396d212d6808b14f5cd6d6ed4cd5b3c6c160e3531bd9",
+      "integrity": "sha256-Gmm2bMFme1gSbDltIS1oCLFPXNbW7UzVs8bBYONTG9k=",
+      "size": 2548
+    }
+  },
+  "recipeCompatibility": {
+    "format": "javascript-esm-with-declarations",
+    "supportedVersions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "engineIdentifiers": [
+      "niho-1",
+      "niho-2",
+      "niho-3",
+      "niho-4",
+      "niho-6",
+      "niho-7",
+      "niho-10",
+      "niho-11",
+      "niho-12",
+      "niho-13",
+      "niho-14"
+    ],
+    "nodeRuntimeValidator": true,
+    "package": "niho-photo-contract",
+    "export": "."
+  },
+  "uiSingleton": {
+    "package": "niho-photo-ui",
+    "hostExport": "niho-photo-editing/sdk-dialog-host",
+    "requirement": "Render PhotoEditingDialogHost from this export so editor dialogs and the host share one appDialog store instance."
+  }
+}

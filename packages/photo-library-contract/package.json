@@ -1,0 +1,20 @@
+{
+  "name": "@niho/photo-library-contract",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "本人の写真ライブラリv1の契約と合成fixture（API実装・認証実装を含まない）",
+  "exports": {
+    ".": "./src/v1.ts",
+    "./fixtures": "./fixtures/v1.ts",
+    "./cases": "./fixtures/security-cases.json",
+    "./sdk-baseline": "./sdk-baseline.json"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.mjs",
+    "check": "npm run typecheck && npm test"
+  },
+  "engines": { "node": "24.x" },
+  "devDependencies": { "typescript": "6.0.3" }
+}

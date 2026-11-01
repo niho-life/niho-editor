@@ -1,0 +1,29 @@
+name: Photo library contract CI
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  photo-library-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packages/photo-library-contract/package-lock.json
+      - run: npm -C packages/photo-library-contract ci --ignore-scripts --no-audit --no-fund
+      - run: npm -C packages/photo-library-contract run check
+      - run: node scripts/ci/public-boundary-guard.mjs
