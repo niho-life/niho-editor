@@ -3,7 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import nextConfig, { ALL_BUT_PUBLIC_API } from "../../next.config";
 import { metadata, viewport } from "./layout";
-import manifest from "./manifest";
+import manifest from "../pwa/editor-manifest";
+import { GET as getEditorManifest } from "./manifest.webmanifest/route";
 
 const publicDir = new URL("../../public/", import.meta.url);
 
@@ -25,6 +26,13 @@ describe("web app manifest", () => {
     expect(data.name).toBe("NIHO editor");
     expect(data.theme_color).toMatch(/^#[0-9a-f]{6}$/);
     expect(data.background_color).toMatch(/^#[0-9a-f]{6}$/);
+  });
+
+  it("serves the existing root manifest URL with unchanged app identity", async () => {
+    const response = getEditorManifest();
+    expect(response.headers.get("content-type")).toContain("application/manifest+json");
+    expect(await response.json()).toEqual(data);
+    expect(metadata.manifest).toBe("/manifest.webmanifest");
   });
 
   it("lists icons that exist, have the size they declare, and cover any and maskable", () => {

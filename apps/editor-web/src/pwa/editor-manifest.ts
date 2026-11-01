@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next";
 
 /**
- * インストールできる Web アプリの manifest（#49）。`/manifest.webmanifest` で配り、`<link rel="manifest">` は Next が入れる。
+ * インストールできる Web アプリの manifest（#49）。`/manifest.webmanifest` の明示GETで配り、root metadataからlinkする。写真の別manifestをNextのroot file優先で上書きしない。
  * アイコンは NIHO docs の icon.svg から作る（scripts/build-icons.mjs）。インストール後も全ページ noindex（next.config.ts の header と meta）。
  */
 export default function manifest(): MetadataRoute.Manifest {

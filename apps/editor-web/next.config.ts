@@ -1,5 +1,11 @@
 import type { NextConfig } from "next";
+import { readFileSync } from "node:fs";
 import { API_CSP } from "./src/security/csp";
+
+// manifestはCSS変数を解決しないため、共有の面tokenをbuild時だけ読み、色だけをbundleへ埋め込む。
+const editorTokens = readFileSync(new URL("../../packages/ui/src/styles/editor-tokens.css", import.meta.url), "utf8");
+const photoCanvasColor = /^\s*--ed-canvas:\s*(#[0-9a-f]{6});/im.exec(editorTokens)?.[1];
+if (!photoCanvasColor) throw new Error("shared editor canvas token is missing");
 
 /**
  * editor.niho.life は全ページ・全 API の応答を索引に載せない（設計 §2）。
@@ -38,6 +44,7 @@ export const SHARED_PAGE_HEADERS = [
 export const AUTH_FORM_HEADERS = [{ key: "Referrer-Policy", value: "origin" }];
 
 const nextConfig: NextConfig = {
+  env: { PHOTO_PWA_CANVAS_COLOR: photoCanvasColor },
   // Cloud Run の container 用の自己完結の server（Dockerfile）
   output: "standalone",
   // packages/* は TypeScript のまま（install-links で node_modules に複製される）
@@ -60,6 +67,9 @@ const nextConfig: NextConfig = {
       { source: "/v1/:path*", headers: [...securityHeaders, { key: "Content-Security-Policy", value: API_CSP }] },
       // service worker は更新がすぐ届くよう、ブラウザの HTTP cache に残さない（#49）
       { source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }] },
+      { source: "/photo-sw.js", headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }] },
+      // 写真APIのprivate応答をcatch-allのsame-originへ戻さず、handlerのno-referrer契約を保つ。
+      { source: "/api/photo/:path*", headers: [{ key: "Referrer-Policy", value: "no-referrer" }] },
       // catch-all の same-origin より後で standalone form の exact handler 3 箇所だけを上書きする
       { source: "/auth/login/start", headers: AUTH_FORM_HEADERS },
       { source: "/auth/callback", headers: AUTH_FORM_HEADERS },
