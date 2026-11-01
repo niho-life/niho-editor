@@ -110,7 +110,12 @@ describe("photo recipe HTTP routes", () => {
 
   it("fails closed when production recipe wiring is absent, after authenticating", async () => {
     const verify = vi.fn(async () => ACTOR);
-    const routes = createPhotoRecipesRoutes({ recipes: () => null, verify, origins: [] });
+    const routes = createPhotoRecipesRoutes({
+      recipes: () => null,
+      verify,
+      origins: [],
+      now: () => Date.parse("2026-11-01T12:00:00.000Z"),
+    });
     const response = await routes.getVersions(request("GET", "https://editor.niho.life/api/photo/v1/photos/photo/versions"), IDS.photo);
     expect(response.status).toBe(503);
     expect(verify).toHaveBeenCalledOnce();
