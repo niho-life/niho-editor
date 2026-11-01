@@ -135,6 +135,8 @@ reserved/verifying -> cancelled | expired | rejected
 
 予約の有効期間は24時間、PUT ticketは最大15分。再開時はuploadIdを読み直し、storageで確認したoffsetからrenewする。端末に保存してよいのは本人にscopeしたuploadId・digest・サイズ等の再開情報までで、bearer URLや元の絶対pathは保存しない。元ファイルを失ったiPhoneでは選び直してdigestを確認する。バックグラウンド中の完走は約束しない。
 
+GCSのresumable session URIは最大1週間有効なbearerなので、端末へ渡さない（[公式仕様](https://docs.cloud.google.com/storage/docs/resumable-uploads)）。`storage/photo-upload-session.ts`は非公開URIの宛先を固定し、GCSのstatus/ACKからoffsetを確認して最大4MiBずつ送るserver専用driverである。`photo-session-cipher.ts`はowner・upload・library世代等をAADにしたAES-256-GCM envelopeだけを永続化可能にする。実際の鍵はオーナーがSecret Managerへ設定する。brokerのDB台帳・期限/失効・インスタンス間排他・P01本人認証付きbyte routeへの接続は別途必要であり、このdriver/codecだけでは15分期限もクラウド転送も有効にならない。公開routeはupload IDだけを含め、短期capabilityはNIHOの認証用Authorizationと衝突しない専用headerへ置く。
+
 PUTは**一時領域だけ**を指す。完了時にサーバーがsize・sha256・magic bytes・形式・寸法を検証し、検証したgenerationだけを条件付きでimmutableな確定領域へ移す。クライアントに確定領域の上書き権限を渡さない。PUT再送や期限内ticketの再利用が確定後の原本を変えない。サーバーが全byteのsha256を計算し、providerのstat/MIME宣言だけで確定しない。
 
 P03は既存の音声用ObjectStorageを変更せず、photo専用portを作る。staging ticket/offset、generation指定のstat/read/copy/delete、size/content検証の結果を扱える形にする。既存portはsize/contentTypeだけをstatし、実行権限もcreate/readだけなので、そのままphotoの確定や削除に使わない。写真原本へ音声用の30日lifecycleを適用しない。
@@ -202,7 +204,7 @@ library revisionをupload確定・recipe/history・media公開・trash/restore/p
 
 ## 8. SDKの再利用と新設範囲
 
-採用版は **SDK 0.1.5 / crate 0.27.0 / source `f78926d805b5f2c115349d8f15ac184fde453ad1`**。[`sdk-baseline.json`](../../packages/photo-library-contract/sdk-baseline.json) に公式release manifest/receipt/6 tarball/engine manifestのSHA-256を固定した。公式workflow attestationとartifact identityを検証し、P08のpackage/lockは取得bytesのSRIへ固定する。branch/tag名/latestだけに追従しない。実hostへの接続と実機受入は別の完了条件である。
+採用版は **SDK 0.1.7 / crate 0.27.0 / source `5ff21a28ae5f7a0e3a64a98b1ef31a7ca523b2a6`**。[`sdk-baseline.json`](../../packages/photo-library-contract/sdk-baseline.json) に公式release manifest/receipt/6 tarball/engine manifestのSHA-256を固定した。公式workflow attestationとartifact identityを検証し、P08のpackage/lockは取得bytesのSRIへ固定する。branch/tag名/latestだけに追従しない。実hostへの接続と実機受入は別の完了条件である。
 
 | 既存資産 | 再利用 | P08〜P13で必要な差分 |
 | --- | --- | --- |
