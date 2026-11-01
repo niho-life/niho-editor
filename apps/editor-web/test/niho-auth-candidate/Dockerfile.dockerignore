@@ -1,0 +1,10 @@
+*
+!apps/editor-web/test/niho-auth-candidate
+!apps/editor-web/src/auth
+!apps/editor-web/src/server/http.ts
+!apps/editor-web/src/server/auth-routes.ts
+!apps/editor-web/src/server/photo-auth/index.ts
+**/node_modules
+**/dist
+**/.env*
+**/.DS_Store
