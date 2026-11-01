@@ -10,8 +10,15 @@ import { buildCsp, newNonce } from "@/security/csp";
  *    （外から戻り先を差し込ませない。戻り先は layout でも safeReturnTo を通す）。
  */
 export function proxy(request: NextRequest) {
-  const csp = buildCsp({ nonce: newNonce(), dev: process.env.NODE_ENV === "development" });
   const requestHeaders = new Headers(request.headers);
+  // この2つのRoute Handlerだけが、独立nonceと送信先限定CSPを持つform HTMLを返す。
+  // 通常のNext文書用CSPで上書きせず、外から来たCSP/pathも下流へ信用させない。
+  if (request.nextUrl.pathname === "/auth/login/start" || request.nextUrl.pathname === "/auth/callback") {
+    requestHeaders.delete("Content-Security-Policy");
+    requestHeaders.delete(EDITOR_PATH_HEADER);
+    return NextResponse.next({ request: { headers: requestHeaders } });
+  }
+  const csp = buildCsp({ nonce: newNonce(), dev: process.env.NODE_ENV === "development" });
   requestHeaders.set("Content-Security-Policy", csp);
   requestHeaders.set(EDITOR_PATH_HEADER, `${request.nextUrl.pathname}${request.nextUrl.search}`);
   const response = NextResponse.next({ request: { headers: requestHeaders } });

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { unstable_getResponseFromNextConfig } from "next/experimental/testing/server";
 import { describe, expect, it } from "vitest";
-import nextConfig, { ALL_BUT_PUBLIC_API, ROBOTS_HEADERS } from "../../next.config";
+import nextConfig, { ALL_BUT_PUBLIC_API, AUTH_FORM_HEADERS, ROBOTS_HEADERS } from "../../next.config";
 import { metadata } from "./layout";
 import robots from "./robots";
 
@@ -49,5 +49,16 @@ describe("noindex, nofollow", () => {
     const result = robots();
     expect(JSON.stringify(result).toLowerCase()).not.toContain("disallow");
     expect(result.rules).toEqual({ userAgent: "*", allow: "/" });
+  });
+
+  it("overrides Referrer-Policy only on the two exact auth form handlers", async () => {
+    expect(AUTH_FORM_HEADERS).toEqual([{ key: "Referrer-Policy", value: "origin" }]);
+    for (const path of ["/auth/login/start", "/auth/login/start?next=%2Fsettings", "/auth/callback"]) {
+      expect((await configHeaders(path)).get("Referrer-Policy"), path).toBe("origin");
+    }
+    for (const path of ["/auth/login", "/auth/login/start/extra", "/auth/callback/extra", "/settings"]) {
+      expect((await configHeaders(path)).get("Referrer-Policy"), path).toBe("same-origin");
+    }
+    expect((await configHeaders("/s/synthetic-token")).get("Referrer-Policy")).toBe("no-referrer");
   });
 });

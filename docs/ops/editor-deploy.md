@@ -93,7 +93,7 @@ migration は expand → contract（列の削除は配備の 1 つ後）。適�
 
 実origin、NIHO側の固定callback、feature flagは非公開の配備設定へ運用手順に従って投入する。鍵・secret値の投入はAGENTSのオーナー専用手順に従う。設定と実アカウント受入が済むまでは`EDITOR_AUTH_MODE=google`（Googleのサインイン＋許可リスト）を一時的に使える（§13）。`stub`を本番で開ける案は却下した（認証なしの固定ユーザーで、URLを知った誰でも全ページを書ける。noindexはアクセス制御ではない）。
 
-既存のproduction trafficが`google`を使っている間は、そのserviceの環境変数を直接`niho`へ切り替えない。まずtrafficを受けない候補service/revisionを作り、その候補だけのexact callbackをNIHO側へ登録し、同じcanonical IDになるiPhone/Mac往復と失効を受入する。さらに、Cloud Runのrequest access logが`/auth/callback?code=...&state=...`を保存しないよう、候補を起動する前に対象serviceのcallback request logを`_Default` bucketのexclusionへ入れ、合成callbackでqueryが保存されないことを確認する。app log・error logにもrequest URL/queryを出さない。この2つを満たした証跡とオーナーの切替判断が揃うまで、既存production service/revisionのtraffic・`EDITOR_AUTH_MODE=google`・Google所有者IDを変更しない。
+既存のproduction trafficが`google`を使っている間は、そのserviceの環境変数を直接`niho`へ切り替えない。まずtrafficを受けない候補service/revisionを作り、その候補だけのexact callbackをNIHO側へ登録し、同じcanonical IDになるiPhone/Mac往復と失効を受入する。認証transportはv2のform POSTだけを使い、開始・確認・login return・callbackの生成URLへcode/stateを載せない。候補で合成値をPOSTし、応答HTMLのactionと実際のrequest URLに合成値/query/fragmentがないことを確認する。request logのpositive controlと保存結果を照合し、POST本文・Cookie・Authorizationがapp/error/access logへ記録されないことも確認する。旧GET callbackはNIHOモードで拒否する。ログexclusionの有無だけを非保存の根拠とせず、既存production loggingへ広い除外を加えない。実際の応答のCSP・nonce・Referrer-Policy originと、SameSite=Lax Cookie付き同一origin再POSTまで確認する。この証跡とオーナーの切替判断が揃うまで、既存production service/revisionのtraffic・`EDITOR_AUTH_MODE=google`・Google所有者IDを変更しない。
 
 ## 6. 独自ドメインと TLS
 
@@ -309,7 +309,7 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 
 ### 実地の確認（2026-11-02、一時的な Google 許可リスト）
 
-**短尺・1時間の合成音声による本番アップロードと Deepgram 文字起こしは完了しました。** ログインには許可リストを絞った一時的な Google 認証を使いました。これは音声処理の機能受入であり、NIHO 認証の接続受入ではありません。NIHO 専用接続は、feature flag、候補環境専用の固定 callback、公開側 origin、callback access log exclusion を設定したうえで、traffic を受けない候補環境で別途受け入れます。未設定の間は `/auth/login/start` が `/auth/login?error=unavailable` へ戻ります。`stub` へ落とす経路は本番にはありません。
+**短尺・1時間の合成音声による本番アップロードと Deepgram 文字起こしは完了しました。** ログインには許可リストを絞った一時的な Google 認証を使いました。これは音声処理の機能受入であり、NIHO 認証の接続受入ではありません。NIHO 専用接続は、feature flag、候補環境専用の固定 callback・公開側 originとPOST transportを対向配備し、code/stateを生成URLやログへ残さない合成受入を済ませたうえで、trafficを受けない候補環境で別途受け入れます。未設定の間は `/auth/login/start` が `/auth/login?error=unavailable` へ戻ります。`stub` へ落とす経路は本番にはありません。
 
 **実環境の基盤確認**（2026-11-01 の配備、revision `niho-editor-00004-ntd`）:
 

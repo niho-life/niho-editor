@@ -9,7 +9,7 @@ const sourceRoot = path.resolve(root, "../../src");
 const output = path.join(root, "dist");
 const sourceCommit = process.env.SOURCE_COMMIT;
 if (!/^[a-f0-9]{40}$/.test(sourceCommit ?? "")) throw new Error("SOURCE_COMMIT must be an exact SHA");
-const sources = ["auth/config.ts", "auth/types.ts", "auth/return-to.ts", "auth/niho.ts", "server/http.ts", "server/auth-routes.ts", "server/photo-auth/index.ts"];
+const sources = ["auth/auto-form.ts", "auth/config.ts", "auth/types.ts", "auth/return-to.ts", "auth/niho.ts", "server/http.ts", "server/auth-routes.ts", "server/photo-auth/index.ts"];
 const hashes = {};
 for (const relative of sources) {
   const source = await readFile(path.join(sourceRoot, relative), "utf8");

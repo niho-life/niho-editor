@@ -23,9 +23,19 @@ export function startLogin(request: Request, deps: AuthRoutesDeps): Promise<Resp
   });
 }
 
-/** GET /auth/callback — NIHO から戻ったところ。 */
+function methodNotAllowed(allow: "GET" | "POST"): Response {
+  return new Response(null, { status: 405, headers: { Allow: allow, "Cache-Control": "no-store" } });
+}
+
+/** GET（Google）/ POST（NIHO） /auth/callback。方式と異なる transport は provider へ渡さない。 */
 export function finishLogin(request: Request, deps: AuthRoutesDeps): Promise<Response> {
-  return guarded("GET /auth/callback", async () => noStore(await deps.auth().completeLogin(request)));
+  return guarded(`${request.method} /auth/callback`, async () => {
+    const provider = deps.auth();
+    if (request.method === "GET" && provider.mode === "niho") return methodNotAllowed("POST");
+    if (request.method === "POST" && provider.mode !== "niho") return methodNotAllowed("GET");
+    if (request.method !== "GET" && request.method !== "POST") return methodNotAllowed(provider.mode === "niho" ? "POST" : "GET");
+    return noStore(await provider.completeLogin(request));
+  });
 }
 
 /** POST /auth/logout — 同じ origin の画面からだけ（それ以外は 403）。 */

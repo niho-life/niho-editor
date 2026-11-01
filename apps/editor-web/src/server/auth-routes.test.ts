@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { stubAuthProvider } from "../auth/stub";
+import type { AuthMode } from "../auth/config";
 import type { AuthProvider } from "../auth/types";
 import { finishLogin, logout, refresh, startLogin, type AuthRoutesDeps } from "./auth-routes";
 
@@ -19,12 +20,12 @@ function post(path: string, origin: string | null): Request {
 }
 
 /** 渡した戻り先と要求を覚え、合成の cookie を付けて返す方式（route が header を落とさないかを見る）。 */
-function recordingProvider() {
+function recordingProvider(mode: AuthMode = "niho") {
   const calls: { returnTo: string; url: string }[] = [];
   const respond = (location: string) =>
     new Response(null, { status: 303, headers: { Location: location, "Set-Cookie": "editor_login=synthetic; HttpOnly; Path=/auth" } });
   const provider: AuthProvider = {
-    mode: "niho",
+    mode,
     getSession: async () => null,
     beginLogin: async ({ request, returnTo }) => {
       calls.push({ returnTo, url: request.url });
@@ -54,7 +55,7 @@ describe("/auth/*", () => {
   });
 
   it("keeps the provider's headers and marks every answer no-store", async () => {
-    const { provider } = recordingProvider();
+    const { provider } = recordingProvider("google");
     const responses = [
       await startLogin(get("/auth/login/start"), deps(provider)),
       await finishLogin(get("/auth/callback?code=synthetic&state=synthetic"), deps(provider)),
@@ -65,6 +66,22 @@ describe("/auth/*", () => {
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(response.headers.get("set-cookie")).toContain("HttpOnly");
     }
+  });
+
+  it("dispatches NIHO only by POST, while Google GET stays unchanged", async () => {
+    const niho = recordingProvider("niho").provider;
+    const nihoComplete = vi.spyOn(niho, "completeLogin");
+    expect((await finishLogin(get("/auth/callback"), deps(niho))).status).toBe(405);
+    expect(nihoComplete).not.toHaveBeenCalled();
+    expect((await finishLogin(post("/auth/callback", "https://niho.example.invalid"), deps(niho))).status).toBe(303);
+    expect(nihoComplete).toHaveBeenCalledOnce();
+
+    const google = recordingProvider("google").provider;
+    const googleComplete = vi.spyOn(google, "completeLogin");
+    expect((await finishLogin(get("/auth/callback?code=synthetic&state=synthetic"), deps(google))).status).toBe(303);
+    expect(googleComplete).toHaveBeenCalledOnce();
+    expect((await finishLogin(post("/auth/callback", ORIGIN), deps(google))).status).toBe(405);
+    expect(googleComplete).toHaveBeenCalledOnce();
   });
 
   it("stub: start goes straight to the return path, callback to /, logout to the login screen", async () => {
