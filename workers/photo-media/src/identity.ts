@@ -9,7 +9,7 @@ const positive = (n: number) => Number.isSafeInteger(n) && n > 0;
 
 export function mediaIdentity(source: MediaSource): MediaIdentity {
   if (!source.ownerId || source.ownerId.length > 512 || !UUID.test(source.photoId) || !UUID.test(source.original.assetId)
-    || !positive(source.lifecycleGeneration) || !HASH.test(source.original.sha256)
+    || !Number.isSafeInteger(source.lifecycleGeneration) || source.lifecycleGeneration < 0 || !HASH.test(source.original.sha256)
     || !source.original.generation || source.original.generation.length > 128
     || !positive(source.original.sizeBytes) || source.original.sizeBytes > PHOTO_LIMITS.maxFileBytes
     || !positive(source.width) || !positive(source.height) || source.width * source.height > PHOTO_LIMITS.maxPixels
@@ -28,14 +28,15 @@ export function mediaIdentity(source: MediaSource): MediaIdentity {
   };
 }
 
-/** Fixed-order scalar tuple; includes owner to prevent cross-owner deduplication. Never log this key's input. */
+/** P02 hashes the canonical identity object; property insertion order must not change the durable job key. */
 export function mediaJobKey(identity: MediaIdentity): string {
-  const i = identity;
-  return createHash("sha256").update(JSON.stringify([
-    i.ownerId, i.photoId, i.lifecycleGeneration, i.original.assetId, i.original.generation, i.original.sha256, i.original.sizeBytes,
-    i.format, i.width, i.height, i.baseVersion, i.recipeRevision, i.settingsSha256, i.rendererManifestSha256,
-    i.thumbnailMaxEdge, i.previewMaxEdge, i.workingCopyMaxEdge,
-  ])).digest("hex");
+  const canonical = (value: unknown): string => {
+    if (value === null || typeof value !== "object") return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonical(object[key])}`).join(",")}}`;
+  };
+  return createHash("sha256").update(canonical(identity)).digest("hex");
 }
 
 export function matchesSource(identity: MediaIdentity, source: MediaSource | null): source is MediaSource {
