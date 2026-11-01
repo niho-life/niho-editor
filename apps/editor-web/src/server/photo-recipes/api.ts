@@ -1,6 +1,6 @@
 import "server-only";
-import { createHash } from "node:crypto";
-import { PHOTO_LIMITS, type Json, type JsonObject, type PhotoErrorCode, type Photo, type RecipeDocument, type VersionSet } from "../../../../../packages/photo-library-contract/src/v1";
+import { PHOTO_LIMITS, type Json, type PhotoErrorCode, type Photo, type RecipeDocument, type VersionSet } from "../../../../../packages/photo-library-contract/src/v1";
+import { clonePhotoJson, photoJsonBytes, photoJsonSha256 } from "./json";
 import type { PhotoRecipeDeps, PhotoRecipeSnapshot, ValidatedRecipeWrite, ValidatedVersionWrite } from "./types";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -31,35 +31,11 @@ function scalarString(value: string): boolean {
 }
 
 function cloneJson(value: unknown, depth = 0): Json {
-  if (depth > PHOTO_LIMITS.maxJsonDepth) fail("invalid_request");
-  if (value === null || typeof value === "boolean") return value;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) fail("invalid_request");
-    return value;
-  }
-  if (typeof value === "string") {
-    if (!scalarString(value)) fail("invalid_request");
-    return value;
-  }
-  if (Array.isArray(value)) return value.map((item) => cloneJson(item, depth + 1));
-  if (!record(value) || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) fail("invalid_request");
-  const result: Record<string, Json> = Object.create(null) as Record<string, Json>;
-  for (const [key, child] of Object.entries(value)) {
-    if (!scalarString(key)) fail("invalid_request");
-    result[key] = cloneJson(child, depth + 1);
-  }
-  return result;
+  try { return clonePhotoJson(value, depth); } catch { fail("invalid_request"); }
 }
 
-function canonicalJson(value: Json): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const object = value as JsonObject;
-  return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key]!)}`).join(",")}}`;
-}
-
-function hash(value: Json): string { return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex"); }
-function jsonBytes(value: Json): number { return Buffer.byteLength(canonicalJson(value), "utf8"); }
+function hash(value: Json): string { return photoJsonSha256(value); }
+function jsonBytes(value: Json): number { return photoJsonBytes(value); }
 function validInstant(value: unknown): value is string { return typeof value === "string" && Number.isFinite(Date.parse(value)); }
 
 function safePhoto(photo: Photo): Photo {
