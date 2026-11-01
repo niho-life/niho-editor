@@ -82,6 +82,18 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "recipes",
       "page_fields",
       "page_opens",
+      // P02: 本人所有の写真、容量予約、補正・版・mediaと物理削除の台帳
+      "photo_libraries",
+      "photos",
+      "photo_assets",
+      "photo_uploads",
+      "photo_mutations",
+      "photo_recipe_revisions",
+      "photo_recipes",
+      "photo_versions",
+      "photo_media_jobs",
+      "photo_purge_jobs",
+      "photo_gc_objects",
     ];
     assert.deepEqual(tables.rows.map((row) => row.table_name), [...documented, MIGRATIONS_TABLE].sort());
     for (const table of documented) {
