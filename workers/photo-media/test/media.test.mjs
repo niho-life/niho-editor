@@ -232,6 +232,21 @@ test("timeout and cancellation fence late results, cap retries and clean scratch
   assert.equal(fenced.state.failures.length, 0);
 });
 
+test("cancellation during a port call observes its later rejection", async (t) => {
+  const current = await fixture(t);
+  const abort = new AbortController();
+  current.jobs.current = async () => {
+    abort.abort();
+    throw new Error("synthetic rejected port after cancellation");
+  };
+  assert.equal(await current.execute(IDS.job, abort.signal), "cancelled");
+  // Node's test runner fails on an unhandled rejection; let that event run before this test ends.
+  await delay(0);
+  assert.equal(current.state.staged.length, 0);
+  assert.equal(current.state.failures[0].code, "cancelled");
+  assert.deepEqual(await readdir(current.root), []);
+});
+
 test("new lease generation is not modified by old worker failure or terminal CAS", async (t) => {
   const { execute, state } = await fixture(t, { render: state => { state.generation++; throw new MediaProviderError("decoder_failed"); } });
   assert.equal(await execute(IDS.job), "decoder_failed");
