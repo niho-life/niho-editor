@@ -86,7 +86,7 @@ describe("deepgramListenUrl", () => {
     expect(get("language")).toEqual(["ja"]);
     expect(get("smart_format")).toEqual(["false"]);
     expect(get("punctuate")).toEqual(["true"]);
-    expect(get("diarize")).toEqual(["true"]);
+    expect(get("diarize")).toEqual([]);
     expect(get("diarize_model")).toEqual(["latest"]);
     expect(get("utterances")).toEqual(["true"]);
     expect(get("paragraphs")).toEqual(["false"]);
@@ -96,7 +96,7 @@ describe("deepgramListenUrl", () => {
 
     const solo = new URL(deepgramListenUrl({ language: "en", diarize: false, terms: [] }));
     expect(solo.searchParams.get("language")).toBe("en");
-    expect(solo.searchParams.get("diarize")).toBe("false");
+    expect(solo.searchParams.has("diarize")).toBe(false);
     expect(solo.searchParams.has("diarize_model")).toBe(false);
     expect(solo.searchParams.has("keyterm")).toBe(false);
 
