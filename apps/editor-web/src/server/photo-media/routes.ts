@@ -108,7 +108,8 @@ async function readJsonBody(request: Request): Promise<unknown> {
     return value;
   })();
   try {
-    signal.throwIfAborted();
+    // 中断済みでもconsumeの拒否をraceへ接続してから終了し、未処理のrejectionを残さない。
+    if (signal.aborted) onAbort();
     return await Promise.race([consume, aborted]);
   } finally {
     signal.removeEventListener("abort", onAbort);

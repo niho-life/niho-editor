@@ -57,10 +57,10 @@ describe("photo media API", () => {
   });
 
   it("collapses missing and foreign results to not_found", async () => {
-    const missing: PhotoMediaStore = { ensure: vi.fn(async () => null) };
+    const missing: PhotoMediaStore = { ensure: vi.fn<PhotoMediaStore["ensure"]>(async () => null) };
     await expect(createPhotoMediaApi({ store: missing }).ensure(OWNER, PHOTO_ID, { recipeRevision: 0 }, KEY))
       .rejects.toMatchObject({ code: "not_found" });
-    const foreign: PhotoMediaStore = { ensure: vi.fn(async () => ({
+    const foreign: PhotoMediaStore = { ensure: vi.fn<PhotoMediaStore["ensure"]>(async () => ({
       snapshot: { ownerId: "foreign", photoId: PHOTO_ID, media: { state: "pending" } }, replayed: false,
     })) };
     await expect(createPhotoMediaApi({ store: foreign }).ensure(OWNER, PHOTO_ID, { recipeRevision: 0 }, KEY))
@@ -68,7 +68,7 @@ describe("photo media API", () => {
   });
 
   it("preserves typed revision conflicts", async () => {
-    const mediaStore: PhotoMediaStore = { ensure: vi.fn(async () => { throw new PhotoMediaError("revision_conflict", 9); }) };
+    const mediaStore: PhotoMediaStore = { ensure: vi.fn<PhotoMediaStore["ensure"]>(async () => { throw new PhotoMediaError("revision_conflict", 9); }) };
     await expect(createPhotoMediaApi({ store: mediaStore }).ensure(OWNER, PHOTO_ID, { recipeRevision: 8 }, KEY))
       .rejects.toMatchObject({ code: "revision_conflict", currentRevision: 9 });
   });

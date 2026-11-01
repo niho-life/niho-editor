@@ -28,7 +28,7 @@ function request(body: BodyInit = JSON.stringify({ recipeRevision: 0 }), options
 }
 
 function fixture(overrides: { actor?: VerifiedPhotoActor; store?: PhotoMediaStore; media?: null; origins?: readonly string[] } = {}) {
-  const store: PhotoMediaStore = overrides.store ?? { ensure: vi.fn(async (owner, photoId) => ({
+  const store: PhotoMediaStore = overrides.store ?? { ensure: vi.fn<PhotoMediaStore["ensure"]>(async (owner, photoId) => ({
     snapshot: { ownerId: owner, photoId, media: { state: "queued", jobId: randomUUID() } }, replayed: false,
   })) };
   const verify = vi.fn(async () => overrides.actor ?? actor());
@@ -115,12 +115,12 @@ describe("photo media routes", () => {
   });
 
   it("returns canonical revision, foreign and unavailable errors only after verification", async () => {
-    const conflict = fixture({ store: { ensure: vi.fn(async () => { throw new PhotoMediaError("revision_conflict", 4); }) } });
+    const conflict = fixture({ store: { ensure: vi.fn<PhotoMediaStore["ensure"]>(async () => { throw new PhotoMediaError("revision_conflict", 4); }) } });
     const conflictResponse = await conflict.routes.ensure(request(), PHOTO_ID);
     expect(conflictResponse.status).toBe(409);
     expect(await error(conflictResponse)).toEqual({ code: "revision_conflict", requestId: expect.any(String), retryable: false, currentRevision: 4 });
 
-    const foreign = fixture({ store: { ensure: vi.fn(async () => null) } });
+    const foreign = fixture({ store: { ensure: vi.fn<PhotoMediaStore["ensure"]>(async () => null) } });
     const foreignResponse = await foreign.routes.ensure(request(), PHOTO_ID);
     expect(foreignResponse.status).toBe(404);
     expect(await error(foreignResponse)).toMatchObject({ code: "not_found", retryable: false });
@@ -134,11 +134,27 @@ describe("photo media routes", () => {
   });
 
   it("does not leak thrown messages, stacks or paths", async () => {
-    const f = fixture({ store: { ensure: vi.fn(async () => { throw new Error("secret /tmp/original-path token"); }) } });
+    const f = fixture({ store: { ensure: vi.fn<PhotoMediaStore["ensure"]>(async () => { throw new Error("secret /tmp/original-path token"); }) } });
     const response = await f.routes.ensure(request(), PHOTO_ID);
     const text = await response.text();
     expect(response.status).toBe(503);
     expect(text).not.toMatch(/secret|original-path|stack|token/i);
+  });
+
+  it("closes a request aborted before body reading without an unhandled rejection", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      pull: () => new Promise<void>(() => undefined),
+      cancel: () => new Promise<void>(() => undefined),
+    });
+    const cancelled = new Request(`${ORIGIN}/api/photo/v1/photos/${PHOTO_ID}/media`, {
+      method: "POST",
+      headers: { origin: ORIGIN, "content-type": "application/json", "idempotency-key": KEY },
+      body: stream, duplex: "half", signal: AbortSignal.abort(),
+    } as RequestInit & { duplex: "half" });
+    const f = fixture();
+    const response = await f.routes.ensure(cancelled, PHOTO_ID);
+    expect(response.status).toBe(503);
+    expect(f.store.ensure).not.toHaveBeenCalled();
   });
 
   it("returns within the two-second deadline even when stream cancellation never settles", async () => {
