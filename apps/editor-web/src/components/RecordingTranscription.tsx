@@ -3,13 +3,13 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { RecordingAudio } from "@niho/editor-store";
 import {
-  EXTERNAL_ENGINE_NOTE,
   audioExpiryLabel,
   canRetry,
   failureReason,
   isAudioExpired,
   runStatusLabel,
 } from "@/lib/transcription-view";
+import { canDiscloseTranscriptionEngine, transcriptionServiceNote } from "@/recording/candidate-names";
 import { useTranscription } from "@/lib/use-transcription";
 
 const ROW_STYLE: CSSProperties = { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 8 };
@@ -20,17 +20,19 @@ const ROW_STYLE: CSSProperties = { display: "flex", alignItems: "center", flexWr
  * - 段落があるときに始める（「もう一度文字起こしする」・失敗の「もう一度」）は、置き換えることを 1 回確かめてから `replace: true`。
  *   文字起こしするのはこのページの音声だけなので、あとから足した分（RecordingAppend）も置き換えで消える。確かめる欄でそう言う。
  * - 音声の期限（30 日で削除）を小さく出し、過ぎていたら「音声は削除されました」（段落は残る）。
- * - 外部のエンジンに音声が渡ることは、始めるボタンの近くに 1 行だけ（文言はオーナー確認待ちの仮置き。transcription-view.ts）。
+ * - 音声を送る先は、始める・置き換える前にサービス名まで表示する。送信先が分からない場合は開始させない。
  */
 export function RecordingTranscription({
   pageId,
   audio,
+  engine,
   hasTranscript,
   onSucceeded,
   onHasTranscript,
 }: {
   pageId: string;
   audio: RecordingAudio;
+  engine: string | null;
   hasTranscript: boolean;
   /** 実行が済んだ（録音を読み直す）。 */
   onSucceeded: () => void;
@@ -63,7 +65,7 @@ export function RecordingTranscription({
 
   const { phase, run } = state;
   const starting = phase === "starting";
-  const canStart = uploaded && !expired && (phase === "idle" || phase === "starting" || (phase === "failed" && canRetry(run)));
+  const canStart = canDiscloseTranscriptionEngine(engine) && uploaded && !expired && (phase === "idle" || phase === "starting" || (phase === "failed" && canRetry(run)));
   const label = phase === "failed" ? "もう一度" : hasTranscript ? "もう一度文字起こしする" : "文字起こしをはじめる";
   const statusText = starting ? "始めています" : phase === "active" ? runStatusLabel(run) : null;
   const expiry = audioExpiryLabel(audio, now);
@@ -98,6 +100,7 @@ export function RecordingTranscription({
       )}
       {state.startError && <p role="alert">{state.startError}</p>}
       {!uploaded && <p className="es-note">音声の取り込みが終わっていません</p>}
+      {uploaded && !canDiscloseTranscriptionEngine(engine) && <p className="es-note">{transcriptionServiceNote(engine)}</p>}
       {canStart && !confirming && (
         <div style={ROW_STYLE}>
           <button
@@ -110,7 +113,7 @@ export function RecordingTranscription({
             {label}
           </button>
           {/* 段落があるときは、送る前の確かめる欄に出す */}
-          {!hasTranscript && <span className="es-note">{EXTERNAL_ENGINE_NOTE}</span>}
+          {!hasTranscript && <span className="es-note">{transcriptionServiceNote(engine)}</span>}
         </div>
       )}
       {canStart && confirming && (
@@ -139,7 +142,7 @@ export function RecordingTranscription({
           <button ref={cancelRef} type="button" className="es-btn es-btn--quiet es-btn--sm" onClick={closeConfirm}>
             やめる
           </button>
-          <span className="es-note">{EXTERNAL_ENGINE_NOTE}</span>
+          <span className="es-note">{transcriptionServiceNote(engine)}</span>
         </div>
       )}
       {expiry && <p className="es-note">{expiry}</p>}

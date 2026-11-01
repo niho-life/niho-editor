@@ -24,6 +24,27 @@ export function candidateEngineLabel(engine: string | null): string {
   return ENGINE_LABELS[engine] ?? engine;
 }
 
+/** 音声をどこへ送るか、実行前に使う短い表示。未知の provider は推測しない。 */
+export function transcriptionServiceNote(engine: string | null): string {
+  switch (engine) {
+    case "deepgram":
+      return "文字起こしを始めると、音声は Deepgram に送られます";
+    case "gemini":
+      return "文字起こしを始めると、音声は Google Gemini に送られます";
+    case "fake":
+      return "開発用エンジンで文字起こしします。音声は外部サービスへ送られません";
+    case "this-mac":
+      return "この Mac で文字起こしします。音声は外部サービスへ送られません";
+    default:
+      return "文字起こしの送信先を確認できません。現在、文字起こしを開始できません";
+  }
+}
+
+/** 設定された送信先を表示できる engine か。未知の id は開始前に止める。 */
+export function canDiscloseTranscriptionEngine(engine: string | null | undefined): engine is "deepgram" | "gemini" | "fake" | "this-mac" {
+  return engine === "deepgram" || engine === "gemini" || engine === "fake" || engine === "this-mac";
+}
+
 /** 1 つ目の案（いまの文字起こし）に付ける名前。何で作ったか分からない録音は「はじめの案」。 */
 export function primaryCandidateName(engine: string | null): string {
   return engine === null ? "はじめの案" : candidateEngineLabel(engine);

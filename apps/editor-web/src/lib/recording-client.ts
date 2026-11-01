@@ -49,6 +49,8 @@ export type RecordingSnapshot = {
   candidates?: RecordingCandidateSummary[];
   /** いま使えるエンジン（2 つ以上あれば、案のエンジンを選べる）。 */
   engines?: string[];
+  /** 通常の文字起こしの送信先。画面に正確な送信先を示す。 */
+  defaultEngine?: string | null;
 };
 /** 取り込みで作った録音ページ。 */
 export type ImportedRecordingPage = { id: string; title: string; lang: "ja" | "en" };
@@ -124,6 +126,7 @@ function snapshotOf(data: unknown): RecordingSnapshot | null {
   if (Array.isArray(data.audios)) snapshot.audios = data.audios.filter(isAudioPart);
   if (Array.isArray(data.candidates)) snapshot.candidates = data.candidates.filter(isCandidate);
   if (Array.isArray(data.engines)) snapshot.engines = data.engines.filter((engine): engine is string => typeof engine === "string");
+  if (data.defaultEngine === null || typeof data.defaultEngine === "string") snapshot.defaultEngine = data.defaultEngine;
   return snapshot;
 }
 
