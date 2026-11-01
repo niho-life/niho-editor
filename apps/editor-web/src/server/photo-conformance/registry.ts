@@ -37,7 +37,7 @@ export const PHOTO_CONFORMANCE_CASES = [
   { id: "changed-idempotency-payload", evidence: "db-handler", test: "completion replay and dedup", remaining: null },
   { id: "generation-race", evidence: "partial", test: "owner-scoped content", remaining: "実 GCS の generation precondition race" },
   { id: "recipe-stale", evidence: "db-handler", test: "recipe-stale", remaining: null },
-  { id: "missing-mask", evidence: "partial", test: "missing-mask", remaining: "accepted SDK validator" },
+  { id: "missing-mask", evidence: "partial", test: "missing-mask", remaining: "実SDKでknown maskを検証済み。本番validatorの全書込能力ゲートとruntime接続" },
   { id: "unknown-recipe", evidence: "db-handler", test: "unknown-recipe", remaining: null },
   { id: "stale-preview", evidence: "partial", test: "stale-preview", remaining: "media.ensure HTTP routeの409契約" },
   { id: "stored-media-failed", evidence: "partial", test: "stored-media-failed", remaining: "retry_media_onlyのmedia.ensure HTTP route" },

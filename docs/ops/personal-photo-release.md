@@ -67,4 +67,6 @@ SDKの既存release assetを上書きしない。公式release workflowをmain�
 
 配置先が同一bytesなら再実行できるが、異なるbytesは上書きしない。別releaseのnamespaceも削除しない。WASM/Rustを再buildせず、networkからruntimeを追加取得しない。生成される `apps/editor-web/public/photo-runtime/` はGit管理外であり、Docker/standaloneへprebuild成果物をコピーする。
 
-`src/photo-sdk/runtime-assets.ts` は固定runtimeのdescriptorを提供する。0.1.5はTypeScript sourceをexportしており、hostのstrict型検査とReact 19でSDK内部の不整合が出るため、編集UIのre-exportはまだ追加しない。公式declarationsを含む0.1.6のimmutable Release公開、P00 baseline・P08 package・host lockの固定採用後に、hostの型設定を弱めずNext/React 19の型検査とbuildを通して接続する。この追加だけでは認証、API、provider、写真UI、PWA、token、実配備を有効化しない。
+`src/photo-sdk/runtime-assets.ts` は固定runtimeのdescriptorを提供する。公式declarationsを含む0.1.6のimmutable Releaseを検証し、P00 baseline・P08 package・host lockへ固定採用済みである。`src/photo-sdk/host-sdk.ts` は編集UI、provider、単一dialog hostのclient exportをまとめ、hostのstrict/noUncheckedIndexedAccessを弱めずNext/React 19の型検査とbuildを通した。これらのexportだけでは認証、API、provider、写真UI、PWA、token、実配備を有効化しない。
+
+P12はSDK0.1.6のNode契約とcrate0.27.0の実WASM validatorをtest-only portからP05 route/P02 DBへつないでいる。本番用validatorは、known settingsの妥当性に加え、未知の描画featureのread-only、work base/meta、maskの本人・写真・世代・寸法を含む書込能力を受け入れてから接続する。WASMの`validateSettings`が`[]`を返すことだけでは未知fieldの書込許可を判断できない。conformanceのportをそのままproductionへ採用しない。

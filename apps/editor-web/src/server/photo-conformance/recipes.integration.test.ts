@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { developSettingsEngineIdentifiers, supportedDevelopSettingsVersions } from "niho-photo-contract";
+import { developSettingsEngineIdentifiers, isEditableDevelopSettings, readDevelopSettings, supportedDevelopSettingsVersions } from "niho-photo-contract";
+import { initSync, validateSettings, version } from "niho-photo-develop-engine-runtime/niho_develop_wasm-0.27.0.js";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { library as fixtureLibrary, readyPhoto } from "../../../../../packages/photo-library-contract/fixtures/v1";
@@ -83,9 +84,36 @@ async function seed(pool: Pool, user: string): Promise<Photo> {
   return (await response.json() as { value: { result: { photo: Photo } } }).value.result.photo;
 }
 
-const compatibleValidator: PhotoRecipeValidator = {
-  validate: async (settings) => ({ settingsSha256: settingsSha256(settings), maskSurfaceIds: [] }),
+/** Test-only port: execute the immutable SDK; this does not enable the P13 production runtime. */
+const pinnedSdkValidator: PhotoRecipeValidator = {
+  validate: async (settings) => {
+    if (!readDevelopSettings(settings) || !isEditableDevelopSettings(settings)
+      || JSON.parse(validateSettings(JSON.stringify(settings))).length !== 0) return null;
+    const masks: readonly Json[] = Array.isArray(settings.masks) ? settings.masks : [];
+    const maskSurfaceIds = masks.flatMap((maskValue) => {
+      if (!maskValue || typeof maskValue !== "object" || Array.isArray(maskValue)) return [];
+      const surface = (maskValue as JsonObject).surface;
+      if (!surface || typeof surface !== "object" || Array.isArray(surface)) return [];
+      const id = (surface as JsonObject).id;
+      return typeof id === "string" ? [id] : [];
+    });
+    return { settingsSha256: settingsSha256(settings), maskSurfaceIds: [...new Set(maskSurfaceIds)].sort() };
+  },
 };
+
+async function loadPinnedValidator(): Promise<void> {
+  const baseline = JSON.parse(await readFile(new URL("../../../../../packages/photo-library-contract/sdk-baseline.json", import.meta.url), "utf8"));
+  const manifestBytes = await readFile(new URL(import.meta.resolve("niho-photo-develop-engine-runtime/manifest")));
+  expect(digest(manifestBytes)).toBe(baseline.engine.manifest.sha256);
+  const manifest = JSON.parse(manifestBytes.toString("utf8"));
+  expect(manifest.source.commit).toBe(baseline.sourceCommit);
+  const glue = await readFile(new URL(import.meta.resolve("niho-photo-develop-engine-runtime/niho_develop_wasm-0.27.0.js")));
+  expect({ sha256: digest(glue), bytes: glue.byteLength }).toEqual(manifest.files["niho_develop_wasm-0.27.0.js"]);
+  const wasm = await readFile(new URL(import.meta.resolve("niho-photo-develop-engine-runtime/niho_develop_wasm_bg-0.27.0.wasm")));
+  expect({ sha256: digest(wasm), bytes: wasm.byteLength }).toEqual(manifest.files["niho_develop_wasm_bg-0.27.0.wasm"]);
+  initSync({ module: wasm });
+  expect(version()).toBe(`niho-develop ${baseline.engine.crateVersion} (engine ${baseline.engine.version})`);
+}
 
 async function recipeDatabaseState(pool: Pool, user: string, photoId: string) {
   const recipe = (await pool.query<{
@@ -123,13 +151,16 @@ databaseDescribe("P12 recipe routes + production PostgreSQL adapter", () => {
   let pool: Pool;
   let close: (() => Promise<void>) | undefined;
 
-  beforeAll(async () => { ({ pool, close } = await openConformanceDatabase(databaseUrl!)); });
+  beforeAll(async () => {
+    await loadPinnedValidator();
+    ({ pool, close } = await openConformanceDatabase(databaseUrl!));
+  });
   afterAll(async () => { await close?.(); });
 
   it("recipe-stale: 同じexpectedRevisionの2 route writeは一方だけcommitし、replayとpayload conflictをDBで直列化する", async () => {
     const user = owner("stale");
     const photo = await seed(pool, user);
-    const recipeRoutes = routes(pool, user, compatibleValidator);
+    const recipeRoutes = routes(pool, user, pinnedSdkValidator);
     const before = await recipeDatabaseState(pool, user, photo.id);
     const bodies = [
       { expectedRevision: 0, settings: { ...readyPhoto.recipe.settings, exposure: 0.25 }, baseVersion: null },
@@ -175,7 +206,7 @@ databaseDescribe("P12 recipe routes + production PostgreSQL adapter", () => {
     expect(await recipeDatabaseState(pool, user, photo.id)).toEqual(after);
   });
 
-  it("missing-mask: 合成validatorはsurface ID抽出だけを担い、foreign surfaceを実P02 writerがcommitしない", async () => {
+  it("missing-mask: 固定SDKの実WASMで検証したforeign surfaceを実P02 writerがcommitしない", async () => {
     const user = owner("mask-a");
     const foreign = owner("mask-b");
     const photo = await seed(pool, user);
@@ -193,19 +224,7 @@ databaseDescribe("P12 recipe routes + production PostgreSQL adapter", () => {
       [foreign, foreignPhoto.id, surfaceId],
     )).rowCount).toBe(1);
 
-    const syntheticMaskExtractor: PhotoRecipeValidator = {
-      validate: vi.fn(async (settings) => {
-        const masks: readonly Json[] = Array.isArray(settings.masks) ? settings.masks : [];
-        const maskSurfaceIds = masks.flatMap((maskValue: Json) => {
-          if (!maskValue || typeof maskValue !== "object" || Array.isArray(maskValue)) return [];
-          const surface = (maskValue as JsonObject).surface;
-          if (!surface || typeof surface !== "object" || Array.isArray(surface)) return [];
-          const surfaceId = (surface as JsonObject).id;
-          return typeof surfaceId === "string" ? [surfaceId] : [];
-        });
-        return { settingsSha256: settingsSha256(settings), maskSurfaceIds };
-      }),
-    };
+    const validator = { validate: vi.fn(pinnedSdkValidator.validate) };
     const settings = {
       ...readyPhoto.recipe.settings,
       v: 5,
@@ -218,12 +237,33 @@ databaseDescribe("P12 recipe routes + production PostgreSQL adapter", () => {
     };
     const body = { expectedRevision: 0, settings, baseVersion: null };
     const before = await recipeDatabaseState(pool, user, photo.id);
-    const response = await routes(pool, user, syntheticMaskExtractor)
+    expect(await pinnedSdkValidator.validate(settings, { photo, library: fixtureLibrary })).toEqual({
+      settingsSha256: settingsSha256(settings), maskSurfaceIds: [surfaceId],
+    });
+    const response = await routes(pool, user, validator)
       .putRecipe(request(photo.id, body, key()), photo.id);
 
     expect(response.status).toBe(422);
     expect(await response.json()).toMatchObject({ error: { code: "missing_mask_surface" } });
-    expect(syntheticMaskExtractor.validate).toHaveBeenCalledOnce();
+    expect(validator.validate).toHaveBeenCalledOnce();
+    expect(await recipeDatabaseState(pool, user, photo.id)).toEqual(before);
+  });
+
+  it.each([
+    { name: "out-of-range exposure", change: { exposure: 1_000_000 } },
+    { name: "invalid mask shape", change: { v: 5, masks: [{ id: "bad-sky", kind: "sky", surface: { id: "bad", width: -1, height: 1 } }] } },
+  ])("実SDKが拒否する$nameはrecipe/receipt/outboxを変更しない", async ({ change }) => {
+    const user = owner("invalid-sdk");
+    const photo = await seed(pool, user);
+    const before = await recipeDatabaseState(pool, user, photo.id);
+    const settings = { ...readyPhoto.recipe.settings, ...change };
+    const validator = { validate: vi.fn(pinnedSdkValidator.validate) };
+    const response = await routes(pool, user, validator).putRecipe(request(photo.id, {
+      expectedRevision: 0, settings, baseVersion: null,
+    }, key()), photo.id);
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ error: { code: "unsupported_settings" } });
+    expect(validator.validate).toHaveBeenCalledOnce();
     expect(await recipeDatabaseState(pool, user, photo.id)).toEqual(before);
   });
 

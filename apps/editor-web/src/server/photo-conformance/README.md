@@ -11,7 +11,7 @@ P00 の `security-cases.json` 34件を、P03 transfer handler core、P04 catalog
 - P04の本番route factoryとDB adapterで、写真詳細・hash lookup・cursorのowner境界とcreation watermarkを保つこと（能力と認証portは合成fixture）
 - P07の本番route factoryとDB adapterで、browser/Mac Origin境界、trash/restoreのquota保持とidempotency、purge 202後のpending bytes保持、purge後のrestore拒否、jobのowner境界を保つこと
 - P05の本番route factoryとDB adapterで、recipe CASを直列化し、勝者だけをrecipe・receipt・media outboxへcommitすること。同一payloadのreplayと同一keyの変更payload拒否も含む
-- `missing-mask` では合成validatorをmask surface ID抽出portとしてだけ使い、別ownerに実在するmaskをP02 writerがcommitしないこと。これはaccepted SDK validatorの証拠ではない
+- recipe CASと`missing-mask`では、固定SDK0.1.6のNode reader/editability判定とcrate0.27.0の実WASM `validateSettings`をtest-only portへ接続する。manifest/source/WASM hashとruntime版を照合し、別ownerに実在するmaskをP02 writerがcommitしないことを確認する。範囲外の露光量と壊れたmaskも422となり、recipe/receipt/outboxが変わらない
 - `unknown-recipe` ではP00のv10/future engine/future fieldを専用schemaのnewer-writer fixtureとして配置し、P04がopaque JSONを保持して読むことと、SDK 0.1.6/P00 capabilities外のversion/engineをP05 capability guardがvalidatorより先に422で拒否してrecipe/outboxを変えないこと
 - `stored-media-failed` ではP03 upload、P02 enqueue/adapter、本番media executor、P04 route/storeを接続し、合成providerが明示的に返す`decoder_failed`をcurrent jobへ記録した後もoriginal bytes・quota・owner境界を保つこと
 - `stale-preview` ではP02の古いclaim generationと合成storage上のcandidateを保持し、P05 recipe CAS後の本番P02 publishを拒否してP04 snapshotが古いpreviewをcurrentにしないこと
@@ -25,10 +25,12 @@ P02の本番用snapshot、mask/start-key lookup、永続request journal、recipe
 - 実Cookie／bearerの検証・失効、実認証provider（route factoryには合成actorを注入する）
 - 実decoderが画像全体を安全にdecodeできること。probe fixture、合成`decoder_failed` provider、opaque derivative bytesはいずれもdecoderの代用品ではない
 - 実GCSの署名URL、resumable upload、generation precondition、IAM、provider error
-- catalog/recipe/lifecycleの実NIHO認証runtime、accepted SDK recipe validator、実media provider/storage、実purge worker/object delete provider
+- catalog/recipe/lifecycleの実NIHO認証runtime、本番用SDK recipe validatorの全書込能力ゲート、実media provider/storage、実purge worker/object delete provider
 - 未接続の`media.ensure` HTTP route。`stale-preview`のP00期待409と`stored-media-failed`の`retry_media_only`は偽装せず、両caseを`partial`に保つ
 - ブラウザ／Mac実機、実画像、性能、ネットワーク障害時の受入
 
-`missing-mask` ではP02 writerのowner不一致・不存在に対し、P00期待どおりstatus 422と`missing_mask_surface`、recipe/revision/outbox不変を確認する。accepted SDK validatorが未接続のため、このcase全体は`partial`のままにする。`unknown-recipe`はcapability guardだけで具体的なP00期待を満たすため`db-handler`とするが、合成validatorが呼ばれないことを確認し、accepted SDK validator全体の受入完了とは扱わない。
+`missing-mask` では実SDKでknown maskの形を検証した後、P02 writerのowner不一致・不存在に対し、P00期待どおりstatus 422と`missing_mask_surface`、recipe/revision/outbox不変を確認する。本番用validator接続は未完のため、このcase全体は`partial`のままにする。`unknown-recipe`はcapability guardだけで具体的なP00期待を満たすため`db-handler`とするが、合成validatorが呼ばれないことを確認し、SDK validator全体の受入完了とは扱わない。
+
+このtest-only portを本番へ転用しない。SDK0.1.6では、known versionのneutral settingsへ未知の合成fieldを追加してもWASMが`[]`、Nodeのeditability判定が`true`を返すことを独立計測した。未知JSONの保全と、未知の描画featureを書き込めることは別である。P13はP00どおり未知featureのread-onlyとwork base/meta互換性を確認できる書込ゲートを接続するまで、production recipe runtimeを閉じたままにする。
 
 合成fixtureだけを使い、実URL、cookie、token、provider error本文は出力しない。
