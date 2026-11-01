@@ -379,7 +379,8 @@ describe("GET /api/pages/{id}/recording with the transcription", () => {
   it("adds the latest run (only the documented fields), or null", async () => {
     const withRun = await (await get(recordingsStore(run))).json();
     // 音声の列・文字起こしの案・使えるエンジン（#36 段 3b-4）も同じ応答に入る
-    expect(Object.keys(withRun).sort()).toEqual(["audios", "candidates", "engines", "recording", "speakers", "transcription"]);
+    expect(Object.keys(withRun).sort()).toEqual(["audios", "candidates", "defaultEngine", "engines", "recording", "speakers", "transcription"]);
+    expect(withRun.defaultEngine).toBeNull();
     expect(withRun.transcription).toEqual(run);
     expect((await (await get(recordingsStore(null))).json()).transcription).toBeNull();
     expect((await get(recordingsStore(run), "user-b")).status).toBe(404);
