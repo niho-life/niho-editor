@@ -3,7 +3,7 @@ import { access, readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { PhotoAssetRecord, PhotoUploadRecord } from "@niho/editor-store";
 import type { StartUploadRequest, VerifiedPhotoActor } from "../../../../../packages/photo-library-contract/src/v1";
-import { IDS, storedPhoto } from "../../../../../packages/photo-library-contract/fixtures/v1";
+import { IDS, pendingMediaPhoto, storedPhoto } from "../../../../../packages/photo-library-contract/fixtures/v1";
 import { createFakePhotoStorage } from "../../storage/photo-fake";
 import { PhotoStorageError } from "../../storage/photo-types";
 import { createPhotoTransferApi } from "./api";
@@ -189,6 +189,14 @@ describe("photo upload lifecycle", () => {
     const replay = await f.api.start(post(start), actor); expect((await replay.json()).replayed).toBe(true);
     vi.mocked(f.store.photo).mockResolvedValue(null);
     expect((await f.api.start(post(start), actor)).status).toBe(404);
+  });
+  it("preserves pending media on an existing-original receipt", async () => {
+    const f = arrange();
+    vi.mocked(f.store.reserve).mockResolvedValue({ status: "existing", photoId: IDS.photo, assetId: IDS.original });
+    vi.mocked(f.store.photo).mockResolvedValue(pendingMediaPhoto);
+    const response = await f.api.start(post(start), actor);
+    expect(response.status).toBe(200);
+    expect((await response.json()).value.photo.media).toEqual({ state: "pending" });
   });
   it("records a known copy generation before rejecting inconsistent copy metadata", async () => {
     const f = arrange(); await f.reserve();

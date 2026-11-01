@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { HASH, IDS, library, readyPhoto } from "../../../../../packages/photo-library-contract/fixtures/v1";
+import { HASH, IDS, library, pendingMediaPhoto, readyPhoto } from "../../../../../packages/photo-library-contract/fixtures/v1";
 import type { NamedVersion, Photo, VersionSet } from "../../../../../packages/photo-library-contract/src/v1";
 import { createPhotoRecipesApi, PhotoRecipeError } from "./api";
 import type { PhotoRecipeDeps, PhotoRecipeSnapshot, PhotoRecipeStore } from "./types";
@@ -48,6 +48,13 @@ function version(id: string = IDS.job): NamedVersion {
 }
 
 describe("photo recipe CAS contract", () => {
+  it("preserves pending media in a recipe receipt", async () => {
+    const f = arrange();
+    f.setPhoto(pendingMediaPhoto);
+    const receipt = await f.api.putRecipe(IDS.userA, IDS.photo, recipeBody(), KEY);
+    expect(receipt.value.media).toEqual({ state: "pending" });
+  });
+
   it("validates with the pinned SDK port and commits only server-computed recipe metadata", async () => {
     const f = arrange();
     const receipt = await f.api.putRecipe(IDS.userA, IDS.photo, recipeBody(), KEY);

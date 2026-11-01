@@ -15,7 +15,8 @@ function asset(record: PhotoAssetRecord): PhotoAsset {
 }
 
 function media(record: PhotoMediaProjection | null): Photo["media"] {
-  if (!record) unavailable();
+  // A durable original can precede the outbox-created worker job.
+  if (!record) return { state: "pending" };
   if (record.state === "queued" || record.state === "processing") return { state: record.state, jobId: record.id };
   if (record.state === "failed" || record.state === "unsupported") {
     if (!record.errorCode) unavailable();
@@ -41,7 +42,7 @@ function media(record: PhotoMediaProjection | null): Photo["media"] {
     recipeRevision: record.recipeRevision, rendererManifestSha256: record.rendererManifestSha256 };
 }
 
-function photo(snapshot: PhotoSnapshot): Photo {
+export function photoFromSnapshot(snapshot: PhotoSnapshot): Photo {
   const p = snapshot.photo, r = snapshot.recipe;
   if (p.libraryId !== snapshot.library.id || p.original.kind !== "original" || p.original.deletionState !== "retained") unavailable();
   return { id: p.id, libraryId: p.libraryId, storageState: "stored", lifecycle: p.lifecycle,
@@ -67,11 +68,11 @@ export function createPhotoCatalogStore(db: Database, capabilities: PhotoCapabil
         editableBaseVersions: [], maskSurfaces: capabilities.maskSurfaces,
       } });
       return result && { library: library(result.library, capabilities), watermark: result.watermark,
-        items: result.items.map(photo), hasMore: result.hasMore };
+        items: result.items.map(photoFromSnapshot), hasMore: result.hasMore };
     },
     photo: async (owner, id) => {
       const result = await getPhotoSnapshot(db, owner, id);
-      return result && { photo: photo(result), library: { id: result.library.id,
+      return result && { photo: photoFromSnapshot(result), library: { id: result.library.id,
         owner: { type: "user" as const, userId: result.library.owner }, state: result.library.state, revision: result.library.revision } };
     },
     info: async (owner, id) => (await getPhotoInfo(db, owner, id)) ?? null,

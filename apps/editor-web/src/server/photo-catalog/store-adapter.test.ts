@@ -59,4 +59,14 @@ describe("P02 catalog adapter", () => {
     const store = createPhotoCatalogStore(db, publicLibrary.capabilities);
     await expect(store.photo(IDS.userA, IDS.photo)).rejects.toThrow("projection unavailable");
   });
+
+  it("returns pending media for durable originals before the outbox job exists", async () => {
+    const pending = { ...snapshot, media: null };
+    vi.mocked(listPhotoCatalogPage).mockResolvedValue({ library: rawLibrary, watermark: 1, items: [pending], hasMore: false });
+    vi.mocked(getPhotoSnapshot).mockResolvedValue(pending);
+    const store = createPhotoCatalogStore(db, publicLibrary.capabilities);
+    const page = await store.page(IDS.userA, { filter: { sort: "added-desc", lifecycle: "active" }, watermark: null, after: null, limit: 10 });
+    expect(page?.items[0]?.media).toEqual({ state: "pending" });
+    expect((await store.photo(IDS.userA, IDS.photo))?.photo.media).toEqual({ state: "pending" });
+  });
 });
