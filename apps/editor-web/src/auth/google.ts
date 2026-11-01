@@ -6,7 +6,7 @@ import { verifyGoogleIdToken } from "../server/google-oidc";
 import { expectedOrigin } from "../server/http";
 
 /**
- * Google のサインインでの認証（`EDITOR_AUTH_MODE=google`）。niho-app #19459 の契約が出るまでの**一時的な方式**で、
+ * Google のサインインでの認証（`EDITOR_AUTH_MODE=google`）。NIHO editor専用接続を有効化・受入するまでの**一時的な方式**で、
  * 出たら `niho` に戻してこのファイルを使わなくする（docs/ops/editor-deploy.md §13）。形は src/auth/niho.ts の設計に合わせる:
  *
  * - beginLogin: PKCE の state と verifier を、戻り先（returnTo）と一緒に短い期限の HttpOnly cookie に入れてから Google へ 303。

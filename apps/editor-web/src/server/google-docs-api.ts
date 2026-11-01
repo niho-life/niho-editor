@@ -20,7 +20,7 @@ import { errorResponse, guarded, isSameOriginRequest, jsonResponse, notFoundResp
  * （src/google-docs/niho.ts）。本人の token はこの層から外へ出さず、ブラウザへ返すのは接続の状態・`documentId`・短い code だけ。
  *
  * - 本人のものだけ。未認証は 401、他人のページ・存在しない id は 404（同じ応答）。更新系は同じ origin からだけ（違えば 403）。
- * - 方式が閉じている・本人の token が出せない（app-connect の契約 #19459 待ち）ときは 503 `google_docs_unavailable`。
+ * - 方式が閉じている・本人のDocs用tokenが出せないときは 503 `google_docs_unavailable`。
  * - **本文はサーバーが保存済みの blocks から作る**（ブラウザから本文を受け取らない）。題名はページの題名。
  * - 同じ `exportId` の書き出しは、同じ内容の再試行だけ（二重に文書を作らない仕掛けは API 側にある）。
  */
@@ -42,7 +42,7 @@ export type GoogleDocsApiDeps = {
 type ErrorCode = GoogleDocsFailureCode | "google_docs_unavailable";
 
 const STATUS: Record<ErrorCode, number> = {
-  // 方式が閉じている・本人の token が出せない（niho-app #19459 待ち）
+  // NIHO editor認証は写真本人確認専用でapiTokenを発行しない。Docs用の最小権限credentialが無い間は閉じる。
   google_docs_unavailable: 503,
   signed_out: 401,
   // niho-app が editor からの呼び出しを許していない（API の niho_docs_app_required）

@@ -2,8 +2,8 @@
  * 認証の方式（#47）。`EDITOR_AUTH_MODE=stub|niho|google`。
  *
  * - stub: 固定の合成ユーザー 1 人。開発と CI だけ。
- * - niho: NIHO の app-connect（niho-app #19459 の契約待ち。src/auth/niho.ts）。
- * - google: Google のサインイン ＋ 許可リスト（src/auth/google.ts）。niho の契約が出るまでの一時的な方式で、
+ * - niho: NIHO editor専用のopaque browser session（src/auth/niho.ts）。
+ * - google: Google のサインイン ＋ 許可リスト（src/auth/google.ts）。niho の実環境接続を受入するまでの一時的な方式で、
  *   `EDITOR_GOOGLE_ALLOWED_EMAILS` に挙げたアドレスだけが入れる（docs/ops/editor-deploy.md §13）。
  *
  * 本番の守り：NODE_ENV=production で niho・google 以外（未設定を含む）は stub へ落とさずに throw する。
@@ -25,10 +25,29 @@ export type AuthEnv = {
   readonly NODE_ENV?: string | undefined;
   readonly EDITOR_AUTH_MODE?: string | undefined;
   readonly EDITOR_GOOGLE_ALLOWED_EMAILS?: string | undefined;
+  readonly EDITOR_NIHO_ORIGIN?: string | undefined;
 };
 
 export class AuthConfigError extends Error {
   override readonly name = "AuthConfigError";
+}
+
+/** NIHO接続先はpath/query/fragment/credentialsを持たないexact HTTPS originだけ。 */
+export function isTrustedNihoOrigin(value: string | undefined): boolean {
+  if (typeof value !== "string" || value.length === 0 || value.trim() !== value) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  return parsed.protocol === "https:"
+    && parsed.username === ""
+    && parsed.password === ""
+    && parsed.pathname === "/"
+    && parsed.search === ""
+    && parsed.hash === ""
+    && parsed.origin === value;
 }
 
 function isAuthMode(value: string): value is AuthMode {
@@ -73,6 +92,9 @@ export function resolveAuthMode(env: AuthEnv): AuthMode {
   // 許可リストが空なら誰も入れないが、その設定の誤りを本番で動かさない（port を開く前に落とす）
   if (raw === "google" && env.NODE_ENV === "production" && parseAllowedEmails(env.EDITOR_GOOGLE_ALLOWED_EMAILS).length === 0) {
     throw new AuthConfigError(`${GOOGLE_ALLOWED_EMAILS_ENV} must list at least one address when EDITOR_AUTH_MODE=google and NODE_ENV=production`);
+  }
+  if (raw === "niho" && !isTrustedNihoOrigin(env.EDITOR_NIHO_ORIGIN)) {
+    throw new AuthConfigError("EDITOR_NIHO_ORIGIN must be an exact HTTPS origin when EDITOR_AUTH_MODE=niho");
   }
   return raw === "" ? "stub" : raw;
 }

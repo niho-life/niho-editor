@@ -28,6 +28,7 @@
 | 変数 | 値 | 内容 |
 | --- | --- | --- |
 | `EDITOR_AUTH_MODE` | `deploy.env` の `EDITOR_AUTH_MODE`（既定 `niho`） | ログインの方式。本番は `niho` か `google` 以外だと起動しない（[apps/editor-web/README.md](../../apps/editor-web/README.md)）。`google` は §13 の一時的な方式 |
+| `EDITOR_NIHO_ORIGIN` | `deploy.env` の同名設定 | `niho`のときだけ渡す専用接続先。exact HTTPS originだけを許し、未設定・不正なら配備前とアプリ起動時の両方で止める。実値はgit管理外 |
 | `EDITOR_GOOGLE_CLIENT_ID` | `GOOGLE_OAUTH_CLIENT_ID` | `EDITOR_AUTH_MODE=google` のときだけ渡す。OAuth クライアント ID（§13） |
 | `EDITOR_GOOGLE_ALLOWED_EMAILS` | `GOOGLE_ALLOWED_EMAILS` | 同上。入れる人のアドレス（コンマ区切り）。空では起動しない |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Secret | 同上。`niho-editor-google-oauth-secret` の最新の版が有効なときだけ渡す（§13） |
@@ -86,11 +87,13 @@ migration は expand → contract（列の削除は配備の 1 つ後）。適�
 既存の連番がすべて先に走る。**既にある連番のファイルは名前を変えない**（適用済みの名前が記録の主キーで、
 変えると未適用に見えるうえ checksum も合わなくなる）。
 
-## 5. ログイン（`niho` モード）が入るまでの状態
+## 5. `niho`ログインの有効化境界
 
-`niho` モードは niho-app #19459 の契約が出るまで fail-closed（いつも未認証）。それまで本番の `niho-editor` は起動して noindex を返すが、API は常に 401、画面はログインの前の状態のまま。つまり **誰もページを作れない**。これが想定した状態で、`stub` へ落とす経路は無い（`NODE_ENV=production` で `EDITOR_AUTH_MODE` が `niho`・`google` 以外だと port を開く前に終了する）。
+`niho`モードはNIHO editor専用のopaque browser sessionを使う。`EDITOR_NIHO_ORIGIN`が未設定・不正ならportを開く前に終了し、NIHO側のfeature flagまたは固定callbackが無効ならログイン開始は利用不能のまま閉じる。`stub`へ落とす経路は無い（`NODE_ENV=production`で`EDITOR_AUTH_MODE`が`niho`・`google`以外でも起動しない）。
 
-契約が出るまでに本番で試したいときは、`EDITOR_AUTH_MODE=google`（Google のサインイン ＋ 許可リスト）に替える（§13）。`stub` を本番で開ける案は却下した（認証なしの固定ユーザーで、URL を知った誰でも全ページを書ける。noindex はアクセス制御ではない）。
+実origin、NIHO側の固定callback、feature flagは非公開の配備設定へ運用手順に従って投入する。鍵・secret値の投入はAGENTSのオーナー専用手順に従う。設定と実アカウント受入が済むまでは`EDITOR_AUTH_MODE=google`（Googleのサインイン＋許可リスト）を一時的に使える（§13）。`stub`を本番で開ける案は却下した（認証なしの固定ユーザーで、URLを知った誰でも全ページを書ける。noindexはアクセス制御ではない）。
+
+既存のproduction trafficが`google`を使っている間は、そのserviceの環境変数を直接`niho`へ切り替えない。まずtrafficを受けない候補service/revisionを作り、その候補だけのexact callbackをNIHO側へ登録し、同じcanonical IDになるiPhone/Mac往復と失効を受入する。さらに、Cloud Runのrequest access logが`/auth/callback?code=...&state=...`を保存しないよう、候補を起動する前に対象serviceのcallback request logを`_Default` bucketのexclusionへ入れ、合成callbackでqueryが保存されないことを確認する。app log・error logにもrequest URL/queryを出さない。この2つを満たした証跡とオーナーの切替判断が揃うまで、既存production service/revisionのtraffic・`EDITOR_AUTH_MODE=google`・Google所有者IDを変更しない。
 
 ## 6. 独自ドメインと TLS
 
@@ -304,9 +307,9 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 5. `scripts/editor-deploy/deploy.sh --no-build` — `DEEPGRAM_API_KEY`（Secret の `latest`）・`EDITOR_TRANSCRIBE_ENGINE=deepgram` と、呼び出し口の 4 つの環境変数が付く。要求の上限も時間切れに合わせて上がる。smoke で worker の route が OIDC トークンなしで 401 を返すことを確かめる。
 6. 短い音声を 1 つ起こして、段落と話者が出ることを確かめる。**これは今できない**（下の「実地の確認」）。
 
-### 実地の確認（niho-app #19459 の接続が出てから）
+### 実地の確認（NIHO editor接続の実環境設定後）
 
-**本番で音声を 1 本通した確認は、まだ取れていません。** 画面から音声を上げるには本人のセッションが要りますが、`niho` モードは niho-app [#19459](https://github.com/niho-coliving/niho-app/issues/19459) の接続の契約が出るまで fail-closed で、**誰もログインできません**（§5 のとおり。`/auth/login/start` は `/auth/login?error=unavailable` へ戻る）。`stub` へ落とす経路は本番にはありません。ブラウザを変えても同じで、API を直に叩くにもセッションが要ります。
+**本番で音声を1本通した確認は、まだ取れていません。** 画面から音声を上げるには本人のsessionが要るため、NIHO側feature flag、候補環境専用の固定callback、公開側origin、callback access log exclusionを設定したうえで、trafficを受けない候補環境で実アカウントの接続受入を先に行う。未設定の間は`/auth/login/start`が`/auth/login?error=unavailable`へ戻る。`stub`へ落とす経路は本番にはない。
 
 **代わりに取れている確認**（2026-11-01 の配備、revision `niho-editor-00004-ntd`）:
 
@@ -403,7 +406,7 @@ Cloud Scheduler niho-editor-transcribe-sweep ── 5 分おき POST /api/intern
 
 ## 13. Google のログイン（#47。**一時的**）
 
-`niho` モード（NIHO アカウントでのログイン）は niho-app #19459 の接続の契約が出るまで fail-closed で、本番では誰も入れない（§5）。それまで本番で試せるようにするための**一時的な**方式が `EDITOR_AUTH_MODE=google`：Google のサインインで本人を確かめ、**許可リストに挙げたアドレスだけ**を入れる。契約が出たら `niho` に戻す（下の「`niho` に戻す」）。
+NIHO editor専用接続の実環境設定と受入が済むまで本番を試せるようにする**一時的な**方式が`EDITOR_AUTH_MODE=google`：Googleのサインインで本人を確かめ、**許可リストに挙げたアドレスだけ**を入れる。受入後は`niho`に戻す（下の「`niho`に戻す」）。
 
 - 入れるのは `GOOGLE_ALLOWED_EMAILS` のアドレスだけ（小文字に正規化して**完全一致**。部分一致・ドメイン一致では通らない）。許可リストが空なら、本番のサービスは port を開く前に終了する（誰でも入れる状態で動かさないため）。
 - 取る権限は `openid email` だけ（Drive などは足さない）。Google の token（code・access token・ID トークン）はサーバーの中だけで使い、cookie にもブラウザの JavaScript・storage にも渡さない。残すのは Google の `sub`（アドレスが変わっても変わらない id）とアドレスだけ。
@@ -440,9 +443,9 @@ editor を動かしているのと同じ GCP プロジェクトで行う（別�
 4. `scripts/editor-deploy/deploy.sh --no-build` — ログに `login: google (...)` が出て、`EDITOR_AUTH_MODE=google`・`EDITOR_GOOGLE_CLIENT_ID`・`EDITOR_GOOGLE_ALLOWED_EMAILS` と Secret `GOOGLE_OAUTH_CLIENT_SECRET` が付く。シークレットの版が無い・最新の版が無効なら、その旨をログに出して Secret を付けずに配備する（サービスは動くが、ログインは「ログインできませんでした」のまま）。
 5. `https://<APP_DOMAIN>/` を開く → ログインの画面 → Google のサインイン → 戻って編集できることを確かめる。許可リストに無いアカウントで試すと「このアカウントでは入れません」になる。
 
-### `niho` に戻す（接続の契約が出たとき）
+### `niho` に戻す（専用接続を受入したとき）
 
-1. `deploy.env` の `EDITOR_AUTH_MODE` を `niho` に戻す（`GOOGLE_OAUTH_CLIENT_ID`・`GOOGLE_ALLOWED_EMAILS` は消してよい。`niho` では渡らない）。
+1. `deploy.env`の`EDITOR_AUTH_MODE`を`niho`に戻し、`EDITOR_NIHO_ORIGIN`へレビュー済みのexact HTTPS originを設定する（実値はcommitしない）。`GOOGLE_OAUTH_CLIENT_ID`・`GOOGLE_ALLOWED_EMAILS`は消してよい（`niho`では渡らない）。
 2. `scripts/editor-deploy/deploy.sh --no-build` — ログに `login: niho (...)`。`--set-env-vars`・`--set-secrets` は毎回の全量なので、Google の環境変数と Secret は前の revision の分も残らない。これで出ているセッションの cookie も読めなくなる（方式が変わると誰も入れない）。
 3. Secret の有効な版をすべて無効にする: `gcloud secrets versions list niho-editor-google-oauth-secret --filter='state:ENABLED'` で版を見て、それぞれ `gcloud secrets versions disable <版> --secret niho-editor-google-oauth-secret`。
 4. Google Cloud のコンソールで OAuth クライアントを削除する（または無効にする）。テストユーザーの登録も消す。

@@ -21,7 +21,7 @@ import {
   type VersionReason,
 } from "@niho/editor-store";
 import { stubAuthProvider } from "../auth/stub";
-import type { AuthProvider } from "../auth/types";
+import { AuthTemporarilyUnavailable, type AuthProvider } from "../auth/types";
 import { MAX_BODY_BYTES } from "./http";
 import { createPage, deletePage, getPage, listPages, movePage, patchPage, type PagesApiDeps, type PagesStore } from "./pages-api";
 import { listTrash, restoreFromTrash } from "./trash-api";
@@ -435,6 +435,20 @@ describe("/api/pages", () => {
     expect((await getPage(request("GET", `/api/pages/${id}`), id, deps("user-a", null))).status).toBe(503);
     expect((await listTrash(request("GET", "/api/trash"), deps("user-a", null))).status).toBe(503);
     expect((await listVersions(request("GET", `/api/pages/${id}/versions`), id, deps("user-a", null))).status).toBe(503);
+
+    const unavailableAuth: AuthProvider = {
+      ...stubAuthProvider,
+      getSession: async () => { throw new AuthTemporarilyUnavailable("provider secret"); },
+    };
+    const authLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const authUnavailable = await listPages(request("GET", "/api/pages"), {
+      auth: () => unavailableAuth,
+      store: () => memoryStore(),
+    });
+    expect(authUnavailable.status).toBe(503);
+    expect(await authUnavailable.text()).toBe('{"error":"unavailable"}');
+    expect(JSON.stringify(authLog.mock.calls)).not.toContain("secret");
+    authLog.mockRestore();
 
     const store = memoryStore();
     const failure = () => Object.assign(new Error('relation "pages" does not exist at SELECT secret_column FROM pages'), { code: "42P01" });

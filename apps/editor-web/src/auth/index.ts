@@ -19,4 +19,5 @@ export function getAuthProvider(env: AuthEnv = process.env): AuthProvider {
   return PROVIDERS[resolveAuthMode(env)];
 }
 
+export { AuthTemporarilyUnavailable } from "./types";
 export type { AuthProvider, Session, SessionRequest } from "./types";
