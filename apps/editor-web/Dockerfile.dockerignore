@@ -6,6 +6,7 @@
 !packages/docs-ui
 !packages/ui
 !packages/editor-store
+!packages/photo-library-contract
 !packages/editor-publish-contract
 !packages/editor-publish
 **/node_modules
