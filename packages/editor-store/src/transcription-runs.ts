@@ -29,7 +29,7 @@ import type { OwnerId, PageLang, Queryable } from "./types.ts";
  * 掃除が積み直すときも世代を進める（requeueRun）。実行の口（Cloud Tasks）の task の名前に世代が入るので、消えた task の名前
  * （Cloud Tasks は最大 24 時間は同じ名前を作らせない）とぶつからず、取りこぼした run をすぐ積み直せる。
  * 1 つのページで有効な run（queued・running）は 1 つだけ（部分 unique index と、録音の行の FOR UPDATE）。
- * 段落を書くのは replace の run か、段落が空の録音だけ（直した文章を失わせない）。
+ * 段落を書くのは開始時revisionが変わっていないrunだけ。replaceで段落があっても、開始後の編集があれば結果を捨てる。
  * 音声が複数ある録音（#36 段 3b-4）は、**すべての音声**を順に文字起こしして 1 本につなぐ（claim が音声の列を渡し、実行する側が
  * 前の音声の長さだけ時刻をずらす）。run の `candidate` が入っていれば、結果は正本ではなくその案に書く（見比べる別案）。
  * 読み書きは全て本人の・ゴミ箱でないページだけ（claimRun・finishRun・failRun は実行する側が run の id で呼ぶ）。
@@ -130,7 +130,7 @@ export type ClaimedTranscription = {
 export type TranscriptionOutput = { segments: readonly RecordingSegment[]; durationSec: number | null };
 
 /**
- * succeeded: 段落を書いて run を確定した / superseded: replace でない run で、その間に段落が入っていた（書かずに run を failed（internal）にした）/
+ * succeeded: 段落を書いて run を確定した / superseded: 開始後に録音が変わった、replaceでないrunに段落が入った、または案が消えた（書かずに失敗）/
  * stale: 世代が古い・running でない（掃除・別の実行のあと）。何も書いていない。
  */
 export type FinishTranscriptionResult = "succeeded" | "superseded" | "stale";
@@ -192,6 +192,7 @@ function assertEnqueueInput(input: EnqueueTranscriptionInput): void {
 }
 
 type LockRow = {
+  base_revision: number;
   language: PageLang;
   audio_status: "none" | "uploading" | "uploaded";
   expired: boolean;
@@ -205,7 +206,7 @@ type LockRow = {
 // 本人の・ゴミ箱でないページの録音を押さえる（同じページの開始を直列にする）。$1 owner / $2 page id。
 // 期限は DB の時計で比べる（期限が無い行は、期限切れとしない。消えていれば実行のときに audio_missing になる）。
 const LOCK_RECORDING_SQL = `
-SELECT r.language, r.audio_status,
+SELECT r.language, r.audio_status, r.revision AS base_revision,
        COALESCE(r.audio_expires_at <= clock_timestamp(), false) AS expired,
        jsonb_array_length(r.segments) > 0 AS has_segments,
        EXISTS (
@@ -227,10 +228,10 @@ SELECT ${RUN_COLUMNS}
   FROM transcription_runs AS t
  WHERE t.owner = $1 AND t.page_id = $2 AND t.status IN ('queued', 'running')`;
 
-// $1 owner / $2 page id / $3 engine / $4 language / $5 diarize / $6 replace / $7 terms（JSON の配列）/ $8 candidate
+// $1 owner / $2 page id / $3 engine / $4 language / $5 diarize / $6 replace / $7 terms（JSON の配列）/ $8 candidate / $9 base revision
 const INSERT_RUN_SQL = `
-INSERT INTO transcription_runs AS t (owner, page_id, engine, status, language, diarize, replace, terms, candidate)
-VALUES ($1, $2, $3, 'queued', $4, $5, $6, $7::jsonb, $8::uuid)
+INSERT INTO transcription_runs AS t (owner, page_id, engine, status, language, diarize, replace, terms, candidate, base_revision)
+VALUES ($1, $2, $3, 'queued', $4, $5, $6, $7::jsonb, $8::uuid, $9)
 RETURNING ${RUN_COLUMNS}`;
 
 // $1 owner / $2 page id / $3 candidate id。案がこのページのものか（案に書く run だけ）。
@@ -317,6 +318,7 @@ export async function enqueueTranscription(
         input.replace,
         JSON.stringify([...input.terms]),
         candidate,
+        recording.base_revision,
       ]);
       const row = inserted.rows[0];
       if (!row) throw new Error("editor-store: insert returned no transcription run");
@@ -379,6 +381,7 @@ export async function claimRun(db: Queryable, runId: string): Promise<ClaimedTra
 }
 
 type FinishLockRow = {
+  base_revision: number;
   owner: string;
   page_id: string;
   status: TranscriptionRunStatus;
@@ -388,11 +391,11 @@ type FinishLockRow = {
   candidate: string | null;
 };
 
-const LOCK_RUN_SQL = "SELECT owner, page_id, status, generation, replace, engine, candidate FROM transcription_runs WHERE id = $1 FOR UPDATE";
+const LOCK_RUN_SQL = "SELECT owner, page_id, status, generation, replace, engine, candidate, base_revision FROM transcription_runs WHERE id = $1 FOR UPDATE";
 
 // 録音の行を押さえる（run → 録音 の順に lock を取る。開始は録音の行だけを押さえて run の行を lock しないので、順が逆転しない）
 const LOCK_SEGMENTS_SQL = `
-SELECT jsonb_array_length(segments) > 0 AS has_segments
+SELECT jsonb_array_length(segments) > 0 AS has_segments, revision AS current_revision
   FROM page_recordings
  WHERE owner = $1 AND page_id = $2
    FOR UPDATE`;
@@ -445,7 +448,7 @@ function cleanOutput(output: TranscriptionOutput): { segments: RecordingSegment[
  * 実行の結果を確定する。1 つの transaction で、run の行を FOR UPDATE で押さえ、世代が一致して running のときだけ:
  * - 案に書く run（candidate つき）: その案に段落・長さ・エンジンを書いて succeeded（正本は触らないので、開いている画面の
  *   revision は変わらない）。案が消えていたら書かずに failed（superseded）
- * - replace でない run で、その間に段落が入っていた: 書かずに run を failed（internal）にする（superseded）
+ * - 正本へ書くrunで開始時revisionと現在revisionが違う: replace指定でも書かずに run を failed（internal）にする（superseded）
  * - それ以外: page_recordings の段落・話者名（空）・エンジン・長さを書いて revision を 1 進め、ページの更新時刻も進め、run を succeeded にする
  * 世代が違う・running でない・不正な id は何もしない（stale）。結果の形が規則に合わなければ InvalidRecordingError（何も書かない）。
  */
@@ -478,9 +481,9 @@ export async function finishRun(pool: Connectable, runId: string, generation: nu
         await client.query("COMMIT");
         return "succeeded";
       }
-      const recording = (await client.query<{ has_segments: boolean }>(LOCK_SEGMENTS_SQL, [run.owner, run.page_id])).rows[0];
-      if (!recording || (recording.has_segments && !run.replace)) {
-        // 誰かが先に段落を書いた（または録音が無くなった）: 上書きしない
+      const recording = (await client.query<{ has_segments: boolean; current_revision: number }>(LOCK_SEGMENTS_SQL, [run.owner, run.page_id])).rows[0];
+      if (!recording || recording.current_revision !== run.base_revision || (recording.has_segments && !run.replace)) {
+        // 開始後に録音・段落が変わった（または録音が無くなった）: replace指定でも利用者の編集を上書きしない
         await client.query(FAIL_SQL, [runId, generation, "internal"]);
         await client.query("COMMIT");
         return "superseded";
