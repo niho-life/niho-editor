@@ -62,6 +62,10 @@ export const storedPhoto: Photo = {
   width: 3000, height: 2000, original, recipe,
   media: { state: "processing", jobId: IDS.job }, trashedAt: null, purgeAfter: null,
 };
+/** Original is durable while a worker job is still waiting to be created from the outbox. */
+export const pendingMediaPhoto: Photo = {
+  ...storedPhoto, media: { state: "pending" },
+};
 export const readyPhoto: Photo = {
   ...storedPhoto,
   media: {
