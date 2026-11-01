@@ -42,7 +42,7 @@ function recipeBody(expectedRevision = 0) {
   return { expectedRevision, settings: { ...readyPhoto.recipe.settings, exposure: 0.25 }, baseVersion: null };
 }
 
-function version(id = IDS.job): NamedVersion {
+function version(id: string = IDS.job): NamedVersion {
   return { id, name: "Before edit", kind: "named", createdAt: "2026-10-31T00:00:00.000Z",
     recipe: { ...readyPhoto.recipe, revision: 0, settingsSha256: "e".repeat(64), maskSurfaceIds: ["f".repeat(64)] } };
 }
@@ -146,6 +146,19 @@ describe("photo recipe version CAS contract", () => {
     }));
   });
 
+  it("rejects an oversized combined VersionSet before the P02 write", async () => {
+    const f = arrange();
+    const settings = { ...readyPhoto.recipe.settings, note: "x".repeat(900_000) };
+    const versions = Array.from({ length: 5 }, (_, index) => {
+      const id: string = `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`;
+      return { ...version(id), recipe: { ...version().recipe, settings } };
+    });
+
+    await expect(f.api.putVersions(IDS.userA, IDS.photo, { expectedRevision: 7, versions }, KEY))
+      .rejects.toMatchObject({ code: "request_too_large" });
+    expect(f.store.putVersions).not.toHaveBeenCalled();
+  });
+
   it("returns version revision conflicts and rejects duplicate IDs/unsupported recipes before write", async () => {
     const stale = arrange();
     vi.mocked(stale.store.putVersions).mockRejectedValue(new PhotoRecipeError("revision_conflict", 9));
@@ -157,6 +170,12 @@ describe("photo recipe version CAS contract", () => {
     await expect(duplicate.api.putVersions(IDS.userA, IDS.photo, { expectedRevision: 7, versions: [version(), version()] }, KEY))
       .rejects.toMatchObject({ code: "invalid_request" });
     expect(duplicate.store.putVersions).not.toHaveBeenCalled();
+
+    const emptyName = arrange();
+    await expect(emptyName.api.putVersions(IDS.userA, IDS.photo, {
+      expectedRevision: 7, versions: [{ ...version(), name: "" }],
+    }, KEY)).rejects.toMatchObject({ code: "invalid_request" });
+    expect(emptyName.store.putVersions).not.toHaveBeenCalled();
 
     const future = arrange(); vi.mocked(future.validator.validate).mockResolvedValue(null);
     await expect(future.api.putVersions(IDS.userA, IDS.photo, { expectedRevision: 7, versions: [version()] }, KEY))

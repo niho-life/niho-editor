@@ -94,6 +94,29 @@ function safeVersionSet(set: VersionSet): VersionSet {
   })) };
 }
 
+function assertVersionSetFits(versions: readonly ValidatedVersionWrite[]): void {
+  // Use the largest safe revision and fixed-width ISO timestamps so the check bounds the
+  // persisted response, not just the smaller client request. This must run before the writer.
+  const upperBound: VersionSet = {
+    revision: Number.MAX_SAFE_INTEGER,
+    versions: versions.map((version) => ({
+      id: version.id,
+      name: version.name,
+      kind: version.kind,
+      createdAt: "9999-12-31T23:59:59.999Z",
+      recipe: {
+        revision: Number.MAX_SAFE_INTEGER,
+        settings: version.recipe.settings,
+        settingsSha256: version.recipe.settingsSha256,
+        baseVersion: version.recipe.baseVersion,
+        maskSurfaceIds: version.recipe.maskSurfaceIds,
+        updatedAt: "9999-12-31T23:59:59.999Z",
+      },
+    })),
+  };
+  if (jsonBytes(cloneJson(safeVersionSet(upperBound))) > PHOTO_LIMITS.maxVersionsBytes) fail("request_too_large");
+}
+
 function assertSnapshot(owner: string, photoId: string, snapshot: PhotoRecipeSnapshot | null): asserts snapshot is PhotoRecipeSnapshot {
   if (!snapshot || snapshot.library.owner.userId !== owner || snapshot.library.id !== snapshot.photo.libraryId
     || snapshot.photo.id.toLowerCase() !== photoId.toLowerCase()) fail("not_found");
@@ -132,6 +155,7 @@ async function validateRecipe(deps: PhotoRecipeDeps, recipe: RecipeDocument["set
 }
 
 function parseVersionInput(value: unknown, currentBase: string | null): Omit<ValidatedVersionWrite, "recipe"> & { readonly inputSettings: RecipeDocument["settings"] } {
+  if (record(value) && typeof value.name === "string" && Buffer.byteLength(value.name, "utf8") < 1) fail("invalid_request");
   if (!record(value) || !exactKeys(value, VERSION_KEYS) || typeof value.id !== "string" || !UUID.test(value.id)
     || typeof value.name !== "string" || !scalarString(value.name) || Buffer.byteLength(value.name, "utf8") > PHOTO_LIMITS.maxVersionNameBytes
     || (value.kind !== "named" && value.kind !== "auto") || !validInstant(value.createdAt) || !record(value.recipe)
@@ -216,6 +240,7 @@ export function createPhotoRecipesApi(deps: PhotoRecipeDeps) {
         const recipe = await validateRecipe(deps, version.inputSettings, found);
         versions.push({ id: version.id, name: version.name, kind: version.kind, recipe });
       }
+      assertVersionSetFits(versions);
       const receipt = await deps.store.putVersions(owner, photoId.toLowerCase(), {
         expectedRevision, key: idempotency, requestHash, versions,
       });
