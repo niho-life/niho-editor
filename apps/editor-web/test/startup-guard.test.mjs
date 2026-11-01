@@ -3,7 +3,7 @@
 // stub へ落とさずに起動が失敗し、port を開かないこと。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import net from "node:net";
 import { request as httpRequest } from "node:http";
 import { describe, it } from "node:test";
@@ -263,9 +263,16 @@ describe("production start with the server entry (Dockerfile / npm start)", () =
       assert.match(loginHtml, /rel="manifest"[^>]*href="\/photo\/manifest.webmanifest"/);
       const photoManifest = await fetch(`http://127.0.0.1:${port}/photo/manifest.webmanifest`);
       assert.equal(photoManifest.status, 200);
-      assert.deepEqual(await photoManifest.json().then(({ id, name, start_url, scope }) => ({ id, name, start_url, scope })), {
+      const photoManifestBody = await photoManifest.json();
+      const { id, name, start_url, scope } = photoManifestBody;
+      assert.deepEqual({ id, name, start_url, scope }, {
         id: "/photo", name: "NIHO photo", start_url: "/photo", scope: "/photo",
       });
+      const sharedTokens = readFileSync(new URL("../../../packages/ui/src/styles/editor-tokens.css", import.meta.url), "utf8");
+      const canvasColor = /^\s*--ed-canvas:\s*([^;]+);/m.exec(sharedTokens)?.[1];
+      assert.ok(canvasColor);
+      assert.equal(photoManifestBody.theme_color, canvasColor);
+      assert.equal(photoManifestBody.background_color, canvasColor);
       const docsManifest = await fetch(`http://127.0.0.1:${port}/manifest.webmanifest`);
       assert.equal(docsManifest.status, 200);
       assert.deepEqual(await docsManifest.json().then(({ id, name, scope }) => ({ id, name, scope })), {

@@ -1,12 +1,18 @@
 // @vitest-environment node
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import nextConfig from "../../../next.config";
 import rootManifest from "../../pwa/editor-manifest";
 import { metadata } from "./layout";
 import photoManifest from "../../pwa/photo-manifest";
 import { GET as getManifest } from "./manifest.webmanifest/route";
 
 const publicDir = new URL("../../../public/", import.meta.url);
+const sharedTokens = readFileSync(new URL("../../../../../packages/ui/src/styles/editor-tokens.css", import.meta.url), "utf8");
+const canvasColor = /^\s*--ed-canvas:\s*([^;]+);/m.exec(sharedTokens)?.[1];
+
+beforeEach(() => vi.stubEnv("PHOTO_PWA_CANVAS_COLOR", nextConfig.env?.PHOTO_PWA_CANVAS_COLOR as string));
+afterEach(() => vi.unstubAllEnvs());
 
 function pngSize(path: string) {
   const bytes = readFileSync(new URL(path.replace(/^\//, ""), publicDir));
@@ -24,8 +30,8 @@ describe("NIHO photo manifest", () => {
       short_name: "NIHO photo",
       lang: "ja",
       display: "standalone",
-      theme_color: "#fcfbf8",
-      background_color: "#fcfbf8",
+      theme_color: canvasColor,
+      background_color: canvasColor,
     });
   });
 

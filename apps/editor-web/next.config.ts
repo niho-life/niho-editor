@@ -1,5 +1,11 @@
 import type { NextConfig } from "next";
+import { readFileSync } from "node:fs";
 import { API_CSP } from "./src/security/csp";
+
+// manifestはCSS変数を解決しないため、共有の面tokenをbuild時だけ読み、色だけをbundleへ埋め込む。
+const editorTokens = readFileSync(new URL("../../packages/ui/src/styles/editor-tokens.css", import.meta.url), "utf8");
+const photoCanvasColor = /^\s*--ed-canvas:\s*(#[0-9a-f]{6});/im.exec(editorTokens)?.[1];
+if (!photoCanvasColor) throw new Error("shared editor canvas token is missing");
 
 /**
  * editor.niho.life は全ページ・全 API の応答を索引に載せない（設計 §2）。
@@ -38,6 +44,7 @@ export const SHARED_PAGE_HEADERS = [
 export const AUTH_FORM_HEADERS = [{ key: "Referrer-Policy", value: "origin" }];
 
 const nextConfig: NextConfig = {
+  env: { PHOTO_PWA_CANVAS_COLOR: photoCanvasColor },
   // Cloud Run の container 用の自己完結の server（Dockerfile）
   output: "standalone",
   // packages/* は TypeScript のまま（install-links で node_modules に複製される）
