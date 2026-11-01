@@ -1769,6 +1769,7 @@ export type PhotoMediaReadyWrite = {
   thumbnailId: string; previewId: string;
   workingCopy: { assetId: string; baseVersion: string; encoding: "png16" | "jpeg8"; meta: PhotoJsonObject } | null;
 };
+export type EnsurePhotoMediaInput = { recipeRevision: number; key: string; requestHash: string };
 type MediaJobRow = {
   owner: string; id: string; photo_id: string; state: PhotoMediaProjection["state"]; lifecycle_epoch: string; library_lifecycle_epoch: string;
   original_asset_id: string; original_generation: string; original_sha256: string; original_size_bytes: string;
@@ -1851,12 +1852,14 @@ export async function listPhotoMediaOutbox(db: Queryable, owner: OwnerId, limit 
       ORDER BY pending.queued_at,pending.photo_id LIMIT $2`, [owner, limit],
   )).rows.map((row) => ({ photoId: row.photo_id, lifecycleGeneration: number(row.lifecycle_epoch), recipeRevision: number(row.recipe_revision), settingsSha256: row.settings_sha256 }));
 }
-export async function enqueuePhotoMediaJob(db: Database, owner: OwnerId, photoId: string, spec: PhotoMediaOutputSpec): Promise<{ id: string; key: string; created: boolean } | null> {
-  assertOwner(owner); assertMediaSpec(spec); if (!validUuid(photoId)) return null;
-  return transaction(db, async (client) => {
-    const library = await lockLibrary(client, owner); assertLibraryActive(library);
-    const snapshot = await readPhotoSnapshot(client, owner, photoId, toLibrary(library)); if (!snapshot) return null;
-    if (snapshot.photo.lifecycle !== "active") throw new PhotoStoreError("photo_trashed");
+async function enqueuePhotoMediaJobLocked(
+  client: Queryable,
+  library: LibraryRow,
+  snapshot: PhotoSnapshot,
+  spec: PhotoMediaOutputSpec,
+  retryFailed: boolean,
+): Promise<{ id: string; key: string; created: boolean }> {
+    const owner = snapshot.library.owner, photoId = snapshot.photo.id;
     const identity = mediaIdentity(mediaSource(snapshot), spec), key = mediaIdentityKey(identity);
     const outputSpec = { thumbnailMaxEdge: spec.thumbnailMaxEdge, previewMaxEdge: spec.previewMaxEdge, workingCopyMaxEdge: spec.workingCopyMaxEdge };
     const inserted = (await client.query<{ id: string }>(
@@ -1884,13 +1887,75 @@ export async function enqueuePhotoMediaJob(db: Database, owner: OwnerId, photoId
        WHERE owner=$1 AND id=$2 AND terminal_reason='superseded' RETURNING id`,
       [owner, id],
     );
+    const retried = retryFailed ? await client.query<{ id: string }>(
+      `UPDATE photo_media_jobs SET state='queued',terminal_reason=NULL,error_code=NULL,attempt_error=NULL,
+         ready_media=NULL,attempt_count=0,claim_generation=claim_generation+1,lease_until=NULL,retry_at=NULL,updated_at=clock_timestamp()
+       WHERE owner=$1 AND id=$2 AND state='failed' AND terminal_reason IS NULL RETURNING id`,
+      [owner, id],
+    ) : { rows: [] as { id: string }[] };
     const selected = await client.query<{ id: string }>(
       "UPDATE photos SET current_media_job_id=$3 WHERE owner=$1 AND id=$2 AND current_media_job_id IS DISTINCT FROM $3 RETURNING id",
       [owner, photoId, id],
     );
     await client.query("UPDATE photo_media_outbox SET consumed_at=COALESCE(consumed_at,clock_timestamp()) WHERE owner=$1 AND photo_id=$2 AND lifecycle_epoch=$3 AND recipe_revision=$4 AND settings_sha256=$5", [owner, photoId, identity.lifecycleGeneration, identity.recipeRevision, identity.settingsSha256]);
-    if (selected.rows.length > 0 || requeued.rows.length > 0) await client.query("UPDATE photo_libraries SET revision=revision+1,updated_at=GREATEST(updated_at,clock_timestamp()) WHERE owner=$1", [owner]);
+    if (selected.rows.length > 0 || requeued.rows.length > 0 || retried.rows.length > 0) await client.query("UPDATE photo_libraries SET revision=revision+1,updated_at=GREATEST(updated_at,clock_timestamp()) WHERE owner=$1", [owner]);
     return { id, key, created: Boolean(inserted) };
+}
+
+export async function enqueuePhotoMediaJob(db: Database, owner: OwnerId, photoId: string, spec: PhotoMediaOutputSpec): Promise<{ id: string; key: string; created: boolean } | null> {
+  assertOwner(owner); assertMediaSpec(spec); if (!validUuid(photoId)) return null;
+  photoId = photoId.toLowerCase();
+  return transaction(db, async (client) => {
+    const library = await lockLibrary(client, owner); assertLibraryActive(library);
+    const snapshot = await readPhotoSnapshot(client, owner, photoId, toLibrary(library)); if (!snapshot) return null;
+    if (snapshot.photo.lifecycle !== "active") throw new PhotoStoreError("photo_trashed");
+    return enqueuePhotoMediaJobLocked(client, library, snapshot, spec, false);
+  });
+}
+
+export async function ensurePhotoMediaJob(
+  db: Database,
+  owner: OwnerId,
+  photoId: string,
+  input: EnsurePhotoMediaInput,
+  spec: PhotoMediaOutputSpec,
+): Promise<{ snapshot: PhotoSnapshot; replayed: boolean } | null> {
+  assertOwner(owner); assertIdempotency(input.key, input.requestHash); assertMediaSpec(spec);
+  if (!validUuid(photoId)) return null;
+  if (!Number.isSafeInteger(input.recipeRevision) || input.recipeRevision < 0) throw new TypeError("editor-store: invalid media recipe revision");
+  photoId = photoId.toLowerCase();
+  return transaction(db, async (client) => {
+    const library = await lockLibrary(client, owner); assertLibraryActive(library);
+    const photo = (await client.query<{ lifecycle: string; recipe_revision: string }>(
+      "SELECT lifecycle,recipe_revision::text AS recipe_revision FROM photos WHERE owner=$1 AND id=$2 FOR UPDATE",
+      [owner, photoId],
+    )).rows[0];
+    if (!photo) return null;
+    if (photo.lifecycle === "trashed") throw new PhotoStoreError("photo_trashed");
+    if (photo.lifecycle !== "active") return null;
+
+    const receipt = (await client.query<{ request_hash: string }>(
+      "SELECT request_hash FROM photo_media_ensure_receipts WHERE owner=$1 AND photo_id=$2 AND idempotency_key=$3",
+      [owner, photoId, input.key],
+    )).rows[0];
+    if (receipt) {
+      if (receipt.request_hash !== input.requestHash) throw new PhotoStoreError("idempotency_conflict");
+      const snapshot = await readPhotoSnapshot(client, owner, photoId, toLibrary(library));
+      return snapshot ? { snapshot, replayed: true } : null;
+    }
+    const currentRevision = number(photo.recipe_revision);
+    if (currentRevision !== input.recipeRevision) throw new PhotoRevisionConflictError(currentRevision);
+    const snapshot = await readPhotoSnapshot(client, owner, photoId, toLibrary(library));
+    if (!snapshot || snapshot.photo.lifecycle !== "active") return null;
+    await enqueuePhotoMediaJobLocked(client, library, snapshot, spec, true);
+    await client.query(
+      "INSERT INTO photo_media_ensure_receipts(owner,photo_id,idempotency_key,request_hash) VALUES($1,$2,$3,$4)",
+      [owner, photoId, input.key, input.requestHash],
+    );
+    // enqueue may advance the library revision; reload it rather than projecting the pre-enqueue lock row.
+    const latest = await readPhotoSnapshot(client, owner, photoId);
+    if (!latest) throw new Error("editor-store: media ensure snapshot disappeared");
+    return { snapshot: latest, replayed: false };
   });
 }
 export async function listPendingPhotoMediaJobs(db: Queryable, owner: OwnerId, limit = 100): Promise<string[]> {
