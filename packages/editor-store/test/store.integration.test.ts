@@ -93,6 +93,7 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "photo_versions",
       "photo_media_jobs",
       "photo_media_candidates",
+      "photo_media_ensure_receipts",
       "photo_media_outbox",
       "photo_purge_jobs",
       "photo_gc_objects",

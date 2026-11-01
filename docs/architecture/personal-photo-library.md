@@ -163,6 +163,8 @@ capabilityのingest/workingCopyは、実行中providerが処理できる範囲�
 
 media jobはowner/photo/original generation/baseVersion/settings hash/recipe revision/engine manifest hash/出力寸法に束縛する。古いrevisionのpreviewを現在の補正済み画像として公開しない。原本・working-copy・previewは別asset。jobは重複enqueueしても同じキーへ収束し、結果公開前にowner・現revision・非削除状態を再確認する。mediaの状態はphoto再取得で読み、purge用jobs.getと混ぜない。
 
+`POST /photos/{photoId}/media`は閉じた`{recipeRevision}`とIdempotency-Keyを必須にする。owner lock/transaction内で現在版・成功receipt・job収束と再試行を確定し、古い版は409/currentRevisionを返す。同じkeyと本文の成功replayは現在状態を返し、jobや試行予算を更新しない。同じkeyで本文を変えれば409 idempotency_conflictとなる。新しいkeyでfailed jobを明示再試行するときだけ予算を戻して旧claimをfenceし、原本・容量を再登録しない。queued/processing/ready/unsupportedを新しいkeyだけで初期化しない。
+
 ## 6. 補正・マスク・複数端末の競合
 
 recipeのrevisionは0から始め、**全保存でexpectedRevision必須**。現在値が一致するときだけ+1し、409 `revision_conflict` ではcurrentRevisionを返す。adapterが最新photoを読み直してSDKの`stale`へ対応する。last-write-winsや自動のengine昇格を使わない。Macの未送信編集は本人＋写真hash＋generationに結び付け、競合時に利用者が選べる状態で残す。
