@@ -84,6 +84,9 @@ export function createPhotoTransferApi(deps: PhotoTransferDeps) {
     try {
       const verified = authorize(request, actor, deps.origins, now(), method === "POST");
       if (request.method !== method) fail("invalid_request");
+      if (method === "GET" && (request.body !== null
+        || (request.headers.has("content-length") && request.headers.get("content-length") !== "0")
+        || request.headers.has("transfer-encoding"))) fail("invalid_request");
       const signal = AbortSignal.any([request.signal, AbortSignal.timeout(timeoutMs)]);
       signal.throwIfAborted();
       return await action(verified.userId, signal);
