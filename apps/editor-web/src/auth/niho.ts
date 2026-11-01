@@ -201,7 +201,11 @@ async function callNiho(fetchFn: typeof fetch, origin: string, path: string, bod
     throw new UpstreamResponseError(response.status);
   }
   if (response.status === 204) return null;
-  return readJsonResponse(response);
+  try {
+    return await readJsonResponse(response);
+  } catch {
+    throw new AuthTemporarilyUnavailable("niho_response_invalid");
+  }
 }
 
 function parseSessionPayload(value: unknown): SessionPayload | null {

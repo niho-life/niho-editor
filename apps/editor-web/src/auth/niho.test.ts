@@ -200,3 +200,20 @@ describe("NIHO auth provider", () => {
     expect(fake.calls).toHaveLength(0);
   });
 });
+
+
+it.each(["malformed-json", "wrong-content-type", "read-error", "oversized-body"])(
+  "normalizes a successful upstream response body failure: %s", async (failure) => {
+    const fetch = vi.fn(async () => {
+      if (failure === "read-error") return new Response(new ReadableStream({
+        start(controller) { controller.error(new Error("untrusted provider detail")); },
+      }), { headers: { "content-type": "application/json" } });
+      if (failure === "wrong-content-type") return new Response("upstream html", { headers: { "content-type": "text/html" } });
+      if (failure === "oversized-body") return new Response("x".repeat(16 * 1024 + 1), { headers: { "content-type": "application/json" } });
+      return new Response("{broken-json", { headers: { "content-type": "application/json" } });
+    }) as typeof globalThis.fetch;
+    const auth = createNihoAuthProvider({ env: () => ({ EDITOR_NIHO_ORIGIN: NIHO }), fetch, now: () => NOW });
+    await expect(auth.getSession({ headers: new Headers({ cookie: `${NIHO_SESSION_COOKIE}=${CREDENTIAL}` }) }))
+      .rejects.toBeInstanceOf(AuthTemporarilyUnavailable);
+  },
+);
