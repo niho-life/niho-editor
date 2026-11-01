@@ -1,16 +1,18 @@
-# P04 photo catalog core
+# P04 photo catalog API
 
-Issue #153 のhandler core。HTTP routeとP01 actor resolverは接続していない。各メソッドの`owner`には、routeが認証・失効確認済みのactorから得たuser IDだけを渡す。queryやbodyでownerを受け取らない。
+Issue #153 のhandler coreとHTTP route。/api/photo/v1/library、/photos、/photos/{photoId}、/photos/{photoId}/info、/photos/lookupを、P01 VerifiedPhotoActorから得た本人IDでP02 store adapterへ接続する。queryやbodyからownerを受け取らない。
 
-`PhotoCatalogStore`はP02唯一のwriter境界に接続する必須port。owner、photo/library relation、lifecycle、filter、stable order、creation watermarkを同じDB snapshotで強制する。現行P02にcatalog page/filter/cursorとrecipe/mediaを含む完全なPhoto projectionは未exportなので、このPRでschema/storeやSQLは変更しない。
+PhotoCatalogStoreはP02唯一のDB writer境界に接続するread adapter。owner、photo/library relation、lifecycle、filter、stable order、creation watermarkをDB snapshotで強制する。このPRではmigrationやSQLを追加しない。
 
-coreに含むもの:
+含むもの:
 
-- 閉じたquery parser、最大100件、repeated `formats`、edited/editable/lifecycle filter
+- 閉じたquery parser、最大100件、repeated formats、edited/editable/lifecycle filter
 - owner/filter/sort/watermark/after/expiryをAES-256-GCMで暗号化・認証する15分opaque cursor
 - 4MiB以内へ切り詰める一覧。cursorは最後に返した写真から継続
-- owner別revision ETag、認証済みrouteから使うprivate/no-store response
+- owner別revision ETag、private/no-store response
 - asset/library capability/infoのallowlist serializer、working-copy meta 64KiB上限
 - owner-scoped lightweight hash lookup（最大100件）
+- P01 actorの有効期限をrouteで再確認し、認証・cursor鍵・能力設定・DBのどれかが未設定/不正なら503で閉じる
+- private runtime設定はEDITOR_PHOTO_CATALOG_ENABLED、hexのEDITOR_PHOTO_CATALOG_CURSOR_SECRET、EDITOR_PHOTO_CATALOG_CAPABILITIES、DATABASE_URL。秘密値は公開repoへ置かずP13の配備設定で管理する
 
-P01 verified actor route、P02 catalog store API、P05 recipe projection、P06 media projectionの接続後にroute受入を行うまでIssue #153はopenのまま。
+route/unit/DB contract検査は含む。P01の実NIHO runtime認証、P06 workerによる全outbox消化、Mac/iPhone同一ownerの実受入が残るのでIssue #153はopenのまま。
