@@ -142,7 +142,7 @@ describe("P02 API writer operations on PostgreSQL", { skip: databaseUrl === unde
     const owner = `synthetic-mask-${randomUUID()}`, made = await original(owner), other = await original(owner), id = made.snapshot.photo.id;
     await mask(owner, other.snapshot.photo.id, SHA);
     const recipe = { ...write(made.snapshot, 1), maskSurfaceIds: [SHA] };
-    await assert.rejects(putPhotoRecipe(pool, owner, id, { expectedRevision: 0, ...cas(), recipe }), (e: unknown) => e instanceof PhotoStoreError && e.code === "unsupported_settings");
+    await assert.rejects(putPhotoRecipe(pool, owner, id, { expectedRevision: 0, ...cas(), recipe }), (e: unknown) => e instanceof PhotoStoreError && e.code === "missing_mask_surface");
     await mask(owner, id, SHA);
     const saved = await putPhotoRecipe(pool, owner, id, { expectedRevision: 0, ...cas(), recipe }); assert.ok(saved);
     await trashPhoto(pool, owner, id, mutation());

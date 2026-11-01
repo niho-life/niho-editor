@@ -23,16 +23,18 @@ describe("P00 photo conformance registry", () => {
   });
 
   it("keeps partial coverage out of the complete evidence aggregate", () => {
-    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "db-handler")).toHaveLength(16);
+    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "db-handler")).toHaveLength(21);
     expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "handler-precondition")).toHaveLength(3);
-    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "partial")).toHaveLength(6);
-    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "blocked")).toHaveLength(9);
+    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "partial")).toHaveLength(7);
+    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "blocked")).toHaveLength(3);
 
-    for (const id of ["revoked-content", "format-spoof", "pixel-limit"]) {
+    for (const id of ["revoked-content", "format-spoof", "pixel-limit", "missing-mask", "pending-purge-retains-quota"]) {
       expect(PHOTO_CONFORMANCE_CASES.find((item) => item.id === id)).toMatchObject({
         evidence: "partial",
         remaining: expect.any(String),
       });
     }
+    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "blocked").map((item) => item.id).sort())
+      .toEqual(["stale-preview", "stored-media-failed", "unknown-recipe"]);
   });
 });

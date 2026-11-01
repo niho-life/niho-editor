@@ -11,7 +11,7 @@ Mac が本人用写真 library の contract と cloud adapter を source tree �
 - `@niho/photo-cloud-library` 0.1.1: `package.json`、`README.md`、`src/**` のみを選択する。
 - `@niho/photo-library-contract` 0.1.1: 上記に `sdk-baseline.json` を加える。公開 export は `.` と `./sdk-baseline` だけで、fixture は配布しない。
 
-pack staging で `private`、script、開発用 dependency を除き、必要な外部 import だけを exact peer にする。package 間 peer は 0.1.1、Photo SDK peer は検証済み baseline の 0.1.5 に固定する。両 package は TS source 配布であり、consumer が TypeScript 6 / Node 24 の解決規則で読む。
+pack staging で `private`、script、開発用 dependency を除き、必要な外部 import だけを exact peer にする。package 間 peer は 0.1.1、Photo SDK peer は検証済み baseline の 0.1.6 に固定する。両 package は TS source 配布であり、consumer が TypeScript 6 / Node 24 の解決規則で読む。
 
 各 tarball には repository の公開 `LICENSE` と専用 `PHOTO_CLOUD_THIRD_PARTY_NOTICES.md` を同梱する。native code、Next、Tauri、Firebase、秘密、fixture、test、設定、CI は含めない。
 

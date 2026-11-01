@@ -108,6 +108,8 @@ jobs:
       - run: npm -C apps/editor-web run typecheck
       - run: npm -C apps/editor-web run lint
       - run: npm -C apps/editor-web test
+      - name: Verify immutable Photo SDK runtime staging
+        run: npm -C apps/editor-web run test:photo-runtime
       - name: Build (NODE_ENV=production, no EDITOR_AUTH_MODE)
         run: npm -C apps/editor-web run build
       - name: Production start guard (stub and unset refuse to start)

@@ -13,6 +13,7 @@ COPY packages/ui packages/ui
 COPY packages/editor-store packages/editor-store
 # 写真の本人型を直接参照する。runtime importは無いがbuildの型検査には必要。
 COPY packages/photo-library-contract packages/photo-library-contract
+COPY packages/photo-cloud-library packages/photo-cloud-library
 COPY packages/editor-publish-contract packages/editor-publish-contract
 COPY packages/editor-publish packages/editor-publish
 # The lifecycle adapter imports this worker executor into the server build graph.

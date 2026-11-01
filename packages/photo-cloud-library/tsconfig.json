@@ -8,10 +8,10 @@
     "moduleResolution": "NodeNext",
     "allowImportingTsExtensions": true,
     "strict": true,
-    "noUncheckedIndexedAccess": false,
+    "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
-    "verbatimModuleSyntax": false,
-    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": false,
     "noEmit": true
   },
   "include": ["src/**/*.ts"]

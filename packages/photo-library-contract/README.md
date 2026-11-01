@@ -20,7 +20,7 @@ const response: PhotoOperationMap["photos.list"]["response"] = structuredClone(r
 - `src/v1.ts`: 型、公開上限、20 operationのmethod/path/idempotency、errorとstatus。
 - `fixtures/v1.ts`: 本人A/Bのsynthetic ID、quota、派生job作成前のpending/処理中/失敗/ready/trash/未知recipe、uploadの予約/検証/完了、全JSON operationの応答。assetのhash/sizeは**metadata fixture用のダミー**で、実decodeやcontentのchecksum検証には使わない。
 - `fixtures/security-cases.json`: 認証・所有権・容量・並行予約・再送・lease・CAS・削除の入力/前提/期待statusとcode。P12がcase IDを実HTTP/DB検証へ接続する。現時点では期待値であり、backendが合格したという記録ではない。
-- `sdk-baseline.json`: SDK 0.1.5 / crate 0.27.0 のpublic releaseから取得したmanifestをsha256で照合し、6 tarballとreceiptのhashを固定。P08が取得bytesを検査して採用する。ここにSDK本体をvendorしない。
+- `sdk-baseline.json`: SDK 0.1.6 / crate 0.27.0 のpublic releaseから取得したmanifestをsha256で照合し、6 tarballとreceiptのhashを固定。P08が取得bytesを検査して採用する。ここにSDK本体をvendorしない。
 
 `content.get` はbyte streamなのでJSON fixtureに含めない。転送テストは権利安全なメモリ生成画像を独自に用意し、このpackageのID・状態・期待errorを共用する。成功fixtureのHEIC/RAW capabilityは完成後のUIを作るための合成値で、本番のprovider対応を証明しない。
 
