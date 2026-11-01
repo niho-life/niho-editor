@@ -29,13 +29,18 @@ export interface PhotoMutationJournal {
 export type ProbeResult = {
   format: "jpeg" | "png" | "heic" | "heif" | "tiff" | "raw";
   contentType: string;
+  /** Dimensions after applying EXIF orientation once. */
   width: number;
   height: number;
+  /** Dimensions encoded in the file before orientation is applied. */
+  encodedWidth: number;
+  encodedHeight: number;
   bitDepth?: number;
   channels?: "gray" | "rgb" | "rgba" | "other";
 };
 /** Trusted accepted decoder: validates the complete file, magic and actual encoded format;
- * checks dimensions BEFORE allocation, applies EXIF orientation once, rejects malformed/truncated
+ * checks encoded dimensions BEFORE allocation, reports both encoded and EXIF-oriented dimensions,
+ * applies EXIF orientation once, rejects malformed/truncated
  * images and decompression bombs. Must respect signal and never buffer the whole original.
  * No default provider is enabled until P06/P13 installs and accepts one.
  */

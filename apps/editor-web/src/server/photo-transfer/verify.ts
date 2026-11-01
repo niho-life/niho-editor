@@ -14,7 +14,7 @@ function checkMagic(header: Buffer, result: ProbeResult) {
   if (result.format === "png") {
     if (header.length < 33 || !header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
       || header.readUInt32BE(8) !== 13 || header.toString("ascii", 12, 16) !== "IHDR"
-      || header.readUInt32BE(16) !== result.width || header.readUInt32BE(20) !== result.height) fail("content_rejected");
+      || header.readUInt32BE(16) !== result.encodedWidth || header.readUInt32BE(20) !== result.encodedHeight) fail("content_rejected");
   } else if (result.format === "jpeg") {
     if (header.length < 3 || header[0] !== 255 || header[1] !== 216 || header[2] !== 255) fail("content_rejected");
   } else if (result.format === "heic" || result.format === "heif") {
@@ -62,7 +62,9 @@ export async function verifyPhotoObject(storage: PhotoStorage, probe: PhotoProbe
     if (size !== upload.sizeBytes || hash.digest("hex") !== upload.sha256) fail("content_rejected");
     const result = await probe.inspect(path, { maxPixels: PHOTO_LIMITS.maxPixels, maxEdge: upload.operation === "mask" ? PHOTO_LIMITS.maxMaskEdge : null }, signal);
     signal.throwIfAborted();
-    if (!Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width < 1 || result.height < 1) fail("content_rejected");
+    if (![result.width, result.height, result.encodedWidth, result.encodedHeight].every((dimension) => Number.isSafeInteger(dimension) && dimension > 0)
+      || !((result.width === result.encodedWidth && result.height === result.encodedHeight)
+        || (result.width === result.encodedHeight && result.height === result.encodedWidth))) fail("content_rejected");
     if (result.width > PHOTO_LIMITS.maxPixels || result.height > PHOTO_LIMITS.maxPixels || result.width * result.height > PHOTO_LIMITS.maxPixels) fail("pixel_limit_exceeded");
     checkMagic(header.subarray(0, headerLength), result);
     if (result.contentType !== upload.contentType) fail("content_rejected");

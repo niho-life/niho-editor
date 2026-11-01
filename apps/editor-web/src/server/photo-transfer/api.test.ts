@@ -25,7 +25,7 @@ function arrange() {
   const fake = createFakePhotoStorage(() => NOW);
   let upload: PhotoUploadRecord | null = null;
   let asset: PhotoAssetRecord | null = null;
-  let probeResult: ProbeResult = { format: "jpeg", contentType: "image/jpeg", width: 2, height: 1 };
+  let probeResult: ProbeResult = { format: "jpeg", contentType: "image/jpeg", width: 2, height: 1, encodedWidth: 2, encodedHeight: 1 };
   let probePath = "";
   const store: PhotoTransferStore = {
     reserve: vi.fn<PhotoTransferStore["reserve"]>(async (owner, input) => {
@@ -204,8 +204,8 @@ describe("photo upload lifecycle", () => {
     if (kind === "magic") { bytes = Buffer.alloc(jpeg.length); body.sha256 = digest(bytes); }
     await f.reserve(body, bytes);
     if (kind === "size") f.upload.sizeBytes++;
-    if (kind === "type") f.probe({ format: "png", contentType: "image/png", width: 2, height: 1 });
-    if (kind === "pixels") f.probe({ format: "jpeg", contentType: "image/jpeg", width: 100001, height: 1000 });
+    if (kind === "type") f.probe({ format: "png", contentType: "image/png", width: 2, height: 1, encodedWidth: 2, encodedHeight: 1 });
+    if (kind === "pixels") f.probe({ format: "jpeg", contentType: "image/jpeg", width: 100001, height: 1000, encodedWidth: 100001, encodedHeight: 1000 });
     const copy = vi.spyOn(f.deps.storage, "copy");
     const response = await f.api.complete(post(), actor, IDS.upload); expect(response.status).toBe(422);
     expect((await response.json()).error.code).toBe(kind === "pixels" ? "pixel_limit_exceeded" : "content_rejected");
@@ -252,7 +252,8 @@ describe("mask surface and private content reads", () => {
   it.each([[0, 8, 2, 200], [2, 8, 2, 422], [0, 16, 2, 422], [0, 8, 4097, 422]])("enforces PNG gray8 and mask edge limits (%s,%s,%s)", async (color, depth, width, status) => {
     const f = arrange(); const bytes = png(color, depth, width);
     const body: StartUploadRequest = { target: { kind: "mask", photoId: IDS.photo }, sizeBytes: bytes.length, sha256: digest(bytes), contentType: "image/png" };
-    f.probe({ format: "png", contentType: "image/png", width, height: 1, bitDepth: depth, channels: color === 0 ? "gray" : "rgb" });
+    f.probe({ format: "png", contentType: "image/png", width, height: 1, encodedWidth: width, encodedHeight: 1,
+      bitDepth: depth, channels: color === 0 ? "gray" : "rgb" });
     await f.reserve(body, bytes); const response = await f.api.complete(post(), actor, IDS.upload); expect(response.status).toBe(status);
     if (status === 200) {
       const meta = await f.api.mask(get(), actor, IDS.photo, digest(bytes)); expect(meta.status).toBe(200); const publicAsset = await meta.json(); expect(publicAsset.sha256).toBe(digest(bytes)); expect(publicAsset.objectKey).toBeUndefined();
@@ -260,10 +261,18 @@ describe("mask surface and private content reads", () => {
       expect((await f.api.mask(get(), actor, IDS.photo, "bad")).status).toBe(404);
     }
   });
+  it("accepts EXIF-oriented PNG dimensions when IHDR matches encoded dimensions", async () => {
+    const f = arrange(); const bytes = png();
+    const body: StartUploadRequest = { target: { kind: "mask", photoId: IDS.photo }, sizeBytes: bytes.length, sha256: digest(bytes), contentType: "image/png" };
+    f.probe({ format: "png", contentType: "image/png", width: 1, height: 2, encodedWidth: 2, encodedHeight: 1, bitDepth: 8, channels: "gray" });
+    await f.reserve(body, bytes);
+    expect((await f.api.complete(post(), actor, IDS.upload)).status).toBe(200);
+    expect(f.asset).toMatchObject({ width: 1, height: 2 });
+  });
   it("returns a mask dedup's stored upload rather than an unrelated original existing result", async () => {
     const f = arrange(); const bytes = png();
     const body: StartUploadRequest = { target: { kind: "mask", photoId: IDS.photo }, sizeBytes: bytes.length, sha256: digest(bytes), contentType: "image/png" };
-    f.probe({ format: "png", contentType: "image/png", width: 2, height: 1, bitDepth: 8, channels: "gray" });
+    f.probe({ format: "png", contentType: "image/png", width: 2, height: 1, encodedWidth: 2, encodedHeight: 1, bitDepth: 8, channels: "gray" });
     await f.reserve(body, bytes); await f.api.complete(post(), actor, IDS.upload);
     vi.mocked(f.store.reserve).mockResolvedValue({ status: "existing", photoId: IDS.photo, assetId: IDS.mask });
     const response = await f.api.start(post(body), actor); const visible = await response.json();
