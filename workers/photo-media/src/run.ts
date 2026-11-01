@@ -207,7 +207,7 @@ export function createMediaExecutor(deps: { jobs: MediaJobs; objects: MediaObjec
     } catch (error) {
       const code: MediaAttemptFailure = controller.signal.aborted ? (controller.signal.reason as RunError).code : error instanceof RunError || error instanceof MediaProviderError ? error.code : "infrastructure_unavailable";
       if (claim) {
-        const retryable = ["decoder_failed", "timeout", "cancelled", "infrastructure_unavailable"].includes(code) && claim.attempt < MEDIA_WORKER_LIMITS.maxAttempts;
+        const retryable = ["timeout", "cancelled", "infrastructure_unavailable"].includes(code) && claim.attempt < MEDIA_WORKER_LIMITS.maxAttempts;
         try { await abortable(deps.jobs.fail(claim, code, retryable ? now() + Math.min(60_000, 1000 * 2 ** (claim.attempt - 1)) : null), AbortSignal.timeout(5000)); }
         catch { return "infrastructure_unavailable"; }
       }
