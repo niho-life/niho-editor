@@ -14,8 +14,8 @@ export const metadata: Metadata = { title: "設定" };
 
 /**
  * 設定（#108）。AI の提案の言語・固有名詞・手順は変えられ（`PATCH /api/settings`）、
- * 文字起こしのエンジンと保存先は読むだけ（サーバーの設定と NIHO から毎回読む値。設計 §2.1）。
- * 最初の値はここで読む（画面を開いたときに空から始めない）。使用量は画面が `GET /api/ai/usage` を読む。
+ * 文字起こしのエンジンはサーバー側の設定を読む。保存先はNIHOクラウド固定。
+ * 最初の値はここで読む（画面を開いたときに空から始めない）。AI とメディアの使用量は画面が各 API を読む。
  */
 export default async function SettingsPage() {
   const session = await requireSession("/settings");
@@ -24,7 +24,7 @@ export default async function SettingsPage() {
   const [settings, recipes, facts] = await Promise.all([
     getEditorSettings(pool, session.userId),
     ownerRecipes(pool, session.userId),
-    settingsFacts(session),
+    settingsFacts(),
   ]);
-  return <SettingsView initial={settingsDto(settings, recipes)} facts={facts} />;
+  return <SettingsView key={session.userId} initial={settingsDto(settings, recipes)} facts={facts} />;
 }

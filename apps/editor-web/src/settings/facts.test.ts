@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { Session } from "../auth/types";
 import { AUDIO_MAX_BYTES, AUDIO_MAX_DURATION_SEC, AUDIO_RETENTION_DAYS } from "../recording/audio-limits";
 import { settingsFacts, transcriptionFact } from "./facts";
 
-// 合成の値だけを使う（鍵の形だけが要るところは、鍵でない文字列を使う）
-const SESSION: Session = { userId: "synthetic-owner-a", mode: "stub" };
+// 鍵の形だけが要るところは、鍵でない文字列を使う
 const KEY = "synthetic-deepgram-key";
 
 describe("transcriptionFact", () => {
@@ -43,10 +41,8 @@ describe("transcriptionFact", () => {
 });
 
 describe("settingsFacts", () => {
-  it("reads the 保存先 with the same reader the publish sheet uses (NIHO から毎回。設計 §2.1)", async () => {
-    const facts = await settingsFacts(SESSION, { NODE_ENV: "test" });
-    // NIHO から読む契約が出るまでは未選択（クラウドと同じ扱い）
-    expect(facts.storage).toBe("UNSET");
+  it("returns server-owned transcription facts", () => {
+    const facts = settingsFacts({ NODE_ENV: "test" });
     expect(facts.transcription.engine).toBe("fake");
   });
 });

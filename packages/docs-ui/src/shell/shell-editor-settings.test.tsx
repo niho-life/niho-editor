@@ -44,7 +44,8 @@ function props(patch: Partial<EditorSettingsPageProps> = {}): EditorSettingsPage
     usage: { month: "2026-10", inputTokens: 128400, outputTokens: 12900, costUsd: 0.42, limitUsd: 5, nearLimit: false },
     usageNote: null,
     transcription: { engine: "deepgram", timeoutSec: 1200, maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30, extensions: ["m4a", "mp3"] },
-    storage: "CLOUD",
+    storageUsage: { imageBytes: "1073741824", audioBytes: "4096", totalBytes: "1073745920" },
+    storageUsageNote: null,
     limits: { glossary: 200, recipes: 20, steps: 12, aboutChars: 2_000 },
     ...patch,
   };
@@ -83,7 +84,7 @@ describe("EditorSettingsPage", () => {
     const shown = text();
     expect(shown).toContain("Deepgram");
     expect(shown).toContain(EDITOR_SETTINGS_TEXT.engineFixed);
-    expect(shown).toContain("2 GB");
+    expect(shown).toContain("2 GiB");
     expect(shown).toContain("6 時間");
     expect(shown).toContain("20 分");
     expect(shown).toContain("30 日で消えます");
@@ -92,11 +93,21 @@ describe("EditorSettingsPage", () => {
     expect(text({ transcription: { ...props().transcription, engine: "off", timeoutSec: null } })).toContain(EDITOR_SETTINGS_TEXT.engineOff);
   });
 
-  it("shows the 保存先 and says it cannot be chosen on the web (設計 §2.1)", () => {
-    expect(text()).toContain("NIHO クラウド");
-    expect(text()).toContain(EDITOR_SETTINGS_TEXT.storageFixed);
-    expect(text({ storage: "LOCAL" })).toContain("この Mac だけ");
-    expect(text({ storage: "UNSET" })).toContain("NIHO クラウド（未選択）");
+  it("shows the fixed NIHO cloud destination and media capacity with no quota", () => {
+    const shown = text();
+    expect(shown).toContain("NIHO クラウド");
+    expect(shown).toContain("Web と Mac アプリで共通");
+    expect(shown).toContain("1 GiB");
+    expect(shown).toContain("画像 1 GiB・音声 4 KiB");
+    expect(shown).toContain(EDITOR_SETTINGS_TEXT.cloudStorageFixed);
+    expect(shown).toContain("容量上限は未設定です");
+    expect(shown).not.toContain("この Mac だけ");
+  });
+
+  it("shows an error instead of retaining a stale storage value", () => {
+    const shown = text({ storageUsage: null, storageUsageNote: "メディア容量を読み込めませんでした" });
+    expect(shown).toContain("メディア容量を読み込めませんでした");
+    expect(shown).not.toContain("画像 1 GiB");
   });
 
   it("shows the month's usage, and warns only when it is close to or past the limit", () => {

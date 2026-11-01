@@ -4,16 +4,16 @@ import { useEffect, useState } from "react";
 import type { EditorSettingsPatch, SettingsRecipe, SettingsTerm } from "@niho/editor-store";
 import { formatVariants, parseVariants } from "@niho/docs-core";
 import { EditorSettingsPage, type EditorSettingsRecipe, type EditorSettingsTermDraft } from "niho-docs-ui/shell";
-import { loadAiUsage, saveSettings, type SettingsDto, type UsageSummary } from "@/lib/settings-client";
+import { loadAiUsage, loadStorageUsage, saveSettings, type MediaStorageUsage, type SettingsDto, type UsageSummary } from "@/lib/settings-client";
 import type { SettingsFacts } from "@/settings/facts";
 import { SETTINGS_MESSAGES } from "@/settings/messages";
 
 /**
  * 設定（`/settings`。Issue #108）。画面は docs-ui の `EditorSettingsPage`（モック v6 の V.settings）で、
- * ここは状態・下書き・`PATCH /api/settings`・`GET /api/ai/usage` だけを持つ。
+ * ここは状態・下書き・`PATCH /api/settings`・使用量 API の読み出しを持つ。
  *
  * 保存は項目ごとに送り、応答の設定で画面を置き換える（サーバーが整えた値・既定に戻った手順がそのまま出る）。
- * 失敗したときは画面の値を変えず、一言だけ出す（`role="status"` は EditorSettingsPage が持つ）。
+ * 失敗したときは設定を変えず、一言だけ出す（`role="status"` は EditorSettingsPage が持つ）。
  */
 
 /** 手順と段階の新しい id（owner の中で一意ならよい。形は editor-store の SETTINGS_ID_PATTERN）。 */
@@ -42,6 +42,8 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
   const [recipeDraft, setRecipeDraft] = useState<EditorSettingsRecipe | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [usageNote, setUsageNote] = useState<string | null>(null);
+  const [storageUsage, setStorageUsage] = useState<MediaStorageUsage | null>(null);
+  const [storageUsageNote, setStorageUsageNote] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -49,6 +51,11 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
       if (!alive) return;
       if (result.ok) setUsage(result.usage);
       else setUsageNote(result.message);
+    });
+    void loadStorageUsage().then((result) => {
+      if (!alive) return;
+      if (result.ok) setStorageUsage(result.usage);
+      else setStorageUsageNote(result.message);
     });
     return () => {
       alive = false;
@@ -155,6 +162,8 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
       newStepId={() => newId("s")}
       usage={usage}
       usageNote={usageNote}
+      storageUsage={storageUsage}
+      storageUsageNote={storageUsageNote}
       transcription={{
         engine: facts.transcription.engine,
         timeoutSec: facts.transcription.timeoutSec,
@@ -163,7 +172,6 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
         retentionDays: facts.transcription.audio.retentionDays,
         extensions: [...facts.transcription.audio.extensions],
       }}
-      storage={facts.storage}
       limits={settings.limits}
     />
   );

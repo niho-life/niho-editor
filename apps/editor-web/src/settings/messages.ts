@@ -14,4 +14,5 @@ export const SETTINGS_MESSAGES = {
   unavailable: "いまは保存できません",
   network: "通信できませんでした。もう一度お試しください",
   usageFailed: "使用量を読めませんでした",
+  storageUsageFailed: "メディア容量を読み込めませんでした",
 } as const;

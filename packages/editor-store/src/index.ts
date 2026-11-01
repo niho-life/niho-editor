@@ -1,5 +1,6 @@
 export * from "./types.ts";
 export * from "./photo-store.ts";
+export * from "./storage-usage.ts";
 export * from "./ai-usage.ts";
 export {
   CONVERSATION_LIST_LIMIT,

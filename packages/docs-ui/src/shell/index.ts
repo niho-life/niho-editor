@@ -95,7 +95,7 @@ export {
   type EditorSettingsPageProps,
   type EditorSettingsRecipe,
   type EditorSettingsStep,
-  type EditorSettingsStorage,
+  type EditorSettingsStorageUsage,
   type EditorSettingsTerm,
   type EditorSettingsTermDraft,
   type EditorSettingsTranscription,

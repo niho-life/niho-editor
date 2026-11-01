@@ -234,7 +234,8 @@ export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: bo
         usage={{ month: "2026-10", inputTokens: 128_400, outputTokens: 12_900, costUsd: 4.21, limitUsd: 5, nearLimit: true }}
         usageNote={null}
         transcription={{ engine: "deepgram", timeoutSec: 1200, maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30, extensions: ["m4a", "mp3", "wav", "aac", "ogg", "flac"] }}
-        storage="CLOUD"
+        storageUsage={{ totalBytes: "0", imageBytes: "0", audioBytes: "0" }}
+        storageUsageNote={null}
         limits={{ glossary: 200, recipes: 20, steps: 12, aboutChars: 2_000 }}
       />
     </SettingsFrame>

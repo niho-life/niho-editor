@@ -6,8 +6,7 @@ import { ShellField, ShellKv, ShellKvs, ShellPills, ShellSection, ShellSettingsP
  * editor.niho.life の設定（Issue #108。モック v6 の V.settings を、Web で本当に出せる項目に合わせたもの）。
  * props 駆動の表示部品で、通信・保存・下書きの持ち方は呼ぶ側（apps/editor-web の SettingsView）が持つ。
  *
- * 変えられるのは AI の提案の言語・固有名詞・手順の 3 つ。文字起こしのエンジンと保存先はサーバー側が決めるので
- * 読むだけで、ここでは変えられない理由を一言添える（設計 §2.1・§12）。
+ * 変えられるのは AI の提案の言語・固有名詞・手順の 3 つ。文字起こしのエンジンと保存先は固定のため読み取りだけ。
  * 固有名詞と手順の編集は、この画面の中で開く（別のシートにしない。狭い画面でも並びが同じで、戻る先が画面のまま）。
  *
  * モック v6 のプロフィールの節は持たない（NIHO アカウントの値で、editor では変えられない。役割とつながりは #42）。
@@ -24,9 +23,6 @@ export type EditorSettingsAiLang = "same" | "ja" | "en";
 
 /** 文字起こしの方式。`fake` は開発・CI の偽物、`off` は使わない設定。 */
 export type EditorSettingsEngine = "deepgram" | "fake" | "gemini" | "off";
-
-/** 保存先（`DocsStorageMode`。`UNSET` は未選択＝クラウドと同じ扱い）。 */
-export type EditorSettingsStorage = "UNSET" | "CLOUD" | "CLOSING" | "LOCAL";
 
 export type EditorSettingsTerm = { term: string; reading: string; variants: string[]; note: string };
 
@@ -69,6 +65,9 @@ export type EditorSettingsTranscription = {
   retentionDays: number;
   extensions: string[];
 };
+
+/** 保存メディアの容量（byte 数は bigint の十進文字列）。 */
+export type EditorSettingsStorageUsage = { totalBytes: string; imageBytes: string; audioBytes: string };
 
 export type EditorSettingsPageProps = {
   /** 保存の状態の一言（`role="status"` で読み上げる。空なら何も言わない）。 */
@@ -118,7 +117,8 @@ export type EditorSettingsPageProps = {
   usageNote: string | null;
 
   transcription: EditorSettingsTranscription;
-  storage: EditorSettingsStorage;
+  storageUsage: EditorSettingsStorageUsage | null;
+  storageUsageNote: string | null;
 
   limits: { glossary: number; recipes: number; steps: number; aboutChars: number };
 };
@@ -136,7 +136,6 @@ const BUSY = { opacity: 0.4, cursor: "progress" } as const;
 export const EDITOR_SETTINGS_TEXT = {
   aiLang: { same: "書いた言語のまま", ja: "日本語", en: "English" },
   engine: { deepgram: "Deepgram", fake: "偽物（開発・CI）", gemini: "Gemini", off: "使わない" },
-  storage: { UNSET: "NIHO クラウド（未選択）", CLOUD: "NIHO クラウド", CLOSING: "クラウドから移行中", LOCAL: "この Mac だけ" },
   empty: "まだありません",
   loading: "読み込んでいます…",
   engineFixed: "エンジンはサーバーの設定で決まります（Web からは選べません）",
@@ -144,8 +143,8 @@ export const EDITOR_SETTINGS_TEXT = {
   engineFake: "開発と CI の偽物です（本番では使いません）",
   geminiLater: "Gemini は、長い音声の区切りをサーバー側に持っていないので、まだ選べません",
   overLimitSize: "超えるものは保存の前に断ります",
-  storageFixed:
-    "保存先は Mac アプリの設定で選びます（ブラウザの保存領域は消えることがあるので、Web からは「この Mac だけ」を選べません）。クラウド以外では、公開・リンクで共有・サーバーへの保存ができません。",
+  cloudStorageFixed:
+    "ページとメディアはNIHOクラウドに保存され、WebとMacアプリで同じデータを使います。表示はアップロード済み画像と保持期限内の音声が対象です。ゴミ箱内の項目も完全削除まで含みます。ページ本文・版履歴・NIHO Photoのライブラリは含みません。容量上限は未設定です。",
   nearLimit: "今月の上限に近づいています。上限に届くと、月が替わるまで AI の提案を使えません",
   overLimit: "今月の上限に届いたので、月が替わるまで AI の提案を使えません",
   termsHelp: "AI の提案に、この表記のとおりに書くよう渡します。表記のない行は保存できません。",
@@ -154,10 +153,22 @@ export const EDITOR_SETTINGS_TEXT = {
   fixedSteps: "既定の手順は、段階の数を変えられません（できあがったページがその段階に結んでいます）。段階を足すには、複製してから編集してください。",
 } as const;
 
-/** 容量（上限は GB の切りのよい値）。 */
+/** 音声ファイルの容量（上限は GiB の切りのよい値）。 */
 function gigabytes(bytes: number): string {
   const value = bytes / 1024 ** 3;
-  return `${Number.isInteger(value) ? value : value.toFixed(1)} GB`;
+  return `${Number.isInteger(value) ? value : value.toFixed(1)} GiB`;
+}
+
+/** bigint の使用量を安全に表示する（Number へ変換して精度を落とさない）。 */
+function mediaBytes(value: string): string {
+  const bytes = BigInt(value);
+  if (bytes < 1024n) return `${bytes.toLocaleString("en-US")} bytes`;
+  const units = [[1024n ** 3n, "GiB"], [1024n ** 2n, "MiB"], [1024n, "KiB"]] as const;
+  const [divisor, unit] = units.find(([scale]) => bytes >= scale)!;
+  const tenths = (bytes * 10n + divisor / 2n) / divisor;
+  const whole = (tenths / 10n).toLocaleString("en-US");
+  const fraction = tenths % 10n;
+  return `${whole}${fraction === 0n ? "" : `.${fraction}`} ${unit}`;
 }
 
 function hours(seconds: number): string {
@@ -172,7 +183,7 @@ function usd(value: number): string {
 }
 
 export function EditorSettingsPage(props: EditorSettingsPageProps) {
-  const { busy, glossary, termsDraft, recipes, recipeDraft, usage, transcription, storage, limits } = props;
+  const { busy, glossary, termsDraft, recipes, recipeDraft, usage, transcription, storageUsage, limits } = props;
   // gallery は型で守られていないので、渡されなかったときも落ちないようにする（編集中なのは文字のときだけ）
   const about = props.about ?? "";
   const aboutDraft = typeof props.aboutDraft === "string" ? props.aboutDraft : null;
@@ -334,11 +345,21 @@ export function EditorSettingsPage(props: EditorSettingsPageProps) {
       <ShellSection id="es-s-save" title="保存">
         <ShellKvs>
           <ShellKv label="保存先">
-            <span>{EDITOR_SETTINGS_TEXT.storage[storage]}</span>
-            <span className="es-kvs-note">Web からは選べません</span>
+            <span>NIHO クラウド</span>
+            <span className="es-kvs-note">Web と Mac アプリで共通</span>
+          </ShellKv>
+          <ShellKv label="メディア容量">
+            {storageUsage ? (
+              <>
+                <span>{mediaBytes(storageUsage.totalBytes)}</span>
+                <span className="es-kvs-note">画像 {mediaBytes(storageUsage.imageBytes)}・音声 {mediaBytes(storageUsage.audioBytes)}</span>
+              </>
+            ) : (
+              <span style={EMPTY}>{props.storageUsageNote ?? EDITOR_SETTINGS_TEXT.loading}</span>
+            )}
           </ShellKv>
         </ShellKvs>
-        <p style={NOTE}>{EDITOR_SETTINGS_TEXT.storageFixed}</p>
+        <p style={NOTE}>{EDITOR_SETTINGS_TEXT.cloudStorageFixed}</p>
       </ShellSection>
     </ShellSettingsPage>
   );
