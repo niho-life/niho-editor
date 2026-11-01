@@ -153,6 +153,7 @@ export function useChat(props: {
   const sendingRef = useRef(false);
   const stopRef = useRef(false);
   const flushTimer = useRef<number | null>(null);
+  const mountedRef = useRef(false);
   // App の関数（showToast・reloadView・refreshProjects・setDrafts）は最新のものを使う
   const hostRef = useRef(props);
   hostRef.current = props;
@@ -163,6 +164,17 @@ export function useChat(props: {
   conversationsRef.current = conversations;
   conversationStatusRef.current = conversationStatus;
   selectionRef.current = selection;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (flushTimer.current !== null) {
+        window.clearTimeout(flushTimer.current);
+        flushTimer.current = null;
+      }
+    };
+  }, []);
 
   const target = props.target ?? null;
   const viewId = view ? `${view.key}::chat:${target?.candidateId ?? "shared"}` : null;
@@ -210,10 +222,11 @@ export function useChat(props: {
   }, [runningViewId, props.activeRun?.stepId]);
 
   const publishLive = useCallback((next: LiveChat | null, immediate: boolean) => {
+    if (!mountedRef.current) return;
     liveRef.current = next;
     const flush = () => {
       flushTimer.current = null;
-      setLive(liveRef.current);
+      if (mountedRef.current) setLive(liveRef.current);
     };
     if (immediate || next === null) {
       if (flushTimer.current !== null) window.clearTimeout(flushTimer.current);
