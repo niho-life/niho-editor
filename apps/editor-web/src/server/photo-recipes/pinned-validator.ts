@@ -15,9 +15,9 @@ import {
   version,
 } from "niho-photo-develop-engine-runtime/niho_develop_wasm-0.27.0.js";
 import baseline from "../../../../../packages/photo-library-contract/sdk-baseline.json";
-import { PHOTO_LIMITS, type PhotoAsset, type RecipeDocument } from "../../../../../packages/photo-library-contract/src/v1";
+import { PHOTO_LIMITS, type PhotoAsset, type RecipeDocument, type WorkingCopy } from "../../../../../packages/photo-library-contract/src/v1";
 import { clonePhotoJson, photoJsonBytes, photoJsonSha256 } from "./json";
-import type { PhotoRecipeValidator, PhotoRecipeSnapshot } from "./types";
+import type { PhotoCanonicalContextResolver, PhotoRecipeValidator, PhotoRecipeSnapshot } from "./types";
 
 const ENGINE = "niho-14";
 const CRATE_VERSION = "0.27.0";
@@ -27,6 +27,8 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const JPEG_DIRECT_MAX_BYTES = 64 * 1024 ** 2;
 const OTHER_DIRECT_MAX_BYTES = 10 * 1024 ** 2;
 const UNAVAILABLE = "photo recipe validator unavailable";
+
+class CanonicalContextUnavailableError extends Error {}
 
 const ASSET_SPECIFIERS = {
   manifest: "niho-photo-develop-engine-runtime/manifest",
@@ -141,11 +143,8 @@ function validNullBase(snapshot: PhotoRecipeSnapshot, settings: DevelopSettings)
   return true;
 }
 
-function validWorkingCopy(snapshot: PhotoRecipeSnapshot, settings: DevelopSettings, baseVersion: string): boolean {
-  const { photo } = snapshot;
-  if (photo.media.state !== "ready" || photo.media.rendererManifestSha256 !== baseline.engine.manifest.sha256
-    || !photo.media.workingCopy || photo.media.workingCopy.baseVersion !== baseVersion) return false;
-  const working = photo.media.workingCopy;
+function validWorkingCopy(working: WorkingCopy, settings: DevelopSettings, baseVersion: string): boolean {
+  if (working.baseVersion !== baseVersion) return false;
   const contentType = working.encoding === "png16" ? "image/png" : working.encoding === "jpeg8" ? "image/jpeg" : null;
   if (!contentType || !validAsset(working.asset, "working-copy", contentType, PHOTO_LIMITS.maxFileBytes, PHOTO_LIMITS.workingCopyMaxEdge)) return false;
 
@@ -159,7 +158,40 @@ function validWorkingCopy(snapshot: PhotoRecipeSnapshot, settings: DevelopSettin
   return true;
 }
 
-function createValidator(runtime: RuntimePort, sdkVersion: string): PhotoRecipeValidator {
+function currentWorkingCopy(snapshot: PhotoRecipeSnapshot): WorkingCopy | null {
+  const media = snapshot.photo.media;
+  return media.state === "ready" && media.rendererManifestSha256 === baseline.engine.manifest.sha256
+    ? media.workingCopy : null;
+}
+
+async function canonicalWorkingCopy(
+  resolver: PhotoCanonicalContextResolver,
+  snapshot: PhotoRecipeSnapshot,
+  baseVersion: string,
+): Promise<WorkingCopy | null> {
+  const expected = {
+    ownerId: snapshot.library.owner.userId,
+    libraryId: snapshot.library.id,
+    photoId: snapshot.photo.id,
+    originalAssetId: snapshot.photo.original.id,
+    originalSha256: snapshot.photo.original.sha256,
+    baseVersion,
+    rendererManifestSha256: baseline.engine.manifest.sha256,
+  } as const;
+  let context: Awaited<ReturnType<PhotoCanonicalContextResolver>>;
+  try {
+    context = await resolver(expected);
+  } catch {
+    throw new CanonicalContextUnavailableError();
+  }
+  if (!context || context.ownerId !== expected.ownerId || context.libraryId !== expected.libraryId
+    || context.photoId !== expected.photoId || context.originalAssetId !== expected.originalAssetId
+    || context.originalSha256 !== expected.originalSha256 || context.baseVersion !== expected.baseVersion
+    || context.rendererManifestSha256 !== expected.rendererManifestSha256) return null;
+  return context.workingCopy;
+}
+
+function createValidator(runtime: RuntimePort, sdkVersion: string, resolver?: PhotoCanonicalContextResolver): PhotoRecipeValidator {
   return {
     async validate(settings, snapshot) {
       try {
@@ -173,15 +205,24 @@ function createValidator(runtime: RuntimePort, sdkVersion: string): PhotoRecipeV
         if (!Array.isArray(wasmErrors) || wasmErrors.length !== 0) return null;
         if (recipe.base !== snapshot.photo.recipe.baseVersion) return null;
         const parsed = recipe as unknown as DevelopSettings;
-        const compatible = recipe.base === null
-          ? validNullBase(snapshot, parsed)
-          : typeof recipe.base === "string" && recipe.base.length > 0 && validWorkingCopy(snapshot, parsed, recipe.base);
+        let compatible: boolean;
+        if (recipe.base === null) {
+          compatible = validNullBase(snapshot, parsed);
+        } else if (typeof recipe.base === "string" && recipe.base.length > 0) {
+          const working = resolver
+            ? await canonicalWorkingCopy(resolver, snapshot, recipe.base)
+            : currentWorkingCopy(snapshot);
+          compatible = working !== null && validWorkingCopy(working, parsed, recipe.base);
+        } else {
+          compatible = false;
+        }
         if (!compatible) return null;
 
         const surfaces = maskSurfaceIds(recipe, snapshot);
         if (!surfaces) return null;
         return { settingsSha256: photoJsonSha256(original), maskSurfaceIds: surfaces };
-      } catch {
+      } catch (error) {
+        if (error instanceof CanonicalContextUnavailableError) throw unavailable();
         return null;
       }
     },
@@ -214,17 +255,32 @@ async function verifyRuntime(ports: PinnedPhotoRecipeValidatorTestPorts = {}): P
   }
 }
 
-async function initialize(): Promise<PhotoRecipeValidator> {
-  const verified = await verifyRuntime();
-  return createValidator(verified.runtime, verified.sdkVersion);
-}
-
+type VerifiedRuntime = Awaited<ReturnType<typeof verifyRuntime>>;
+let cachedRuntime: Promise<VerifiedRuntime> | undefined;
 let cachedValidator: Promise<PhotoRecipeValidator> | undefined;
 
+async function verifiedRuntime(): Promise<VerifiedRuntime> {
+  if (cachedRuntime) return cachedRuntime;
+  const pending = verifyRuntime();
+  cachedRuntime = pending;
+  try { return await pending; } catch (error) {
+    if (cachedRuntime === pending) cachedRuntime = undefined;
+    throw error;
+  }
+}
+
+export type PinnedPhotoRecipeValidatorOptions = {
+  readonly canonicalContextResolver?: PhotoCanonicalContextResolver;
+};
+
 /** Verify and initialize the immutable pinned SDK once. This factory is intentionally not wired to routes yet. */
-export async function createPinnedPhotoRecipeValidator(): Promise<PhotoRecipeValidator> {
+export async function createPinnedPhotoRecipeValidator(options: PinnedPhotoRecipeValidatorOptions = {}): Promise<PhotoRecipeValidator> {
+  if (options.canonicalContextResolver) {
+    const verified = await verifiedRuntime();
+    return createValidator(verified.runtime, verified.sdkVersion, options.canonicalContextResolver);
+  }
   if (cachedValidator) return cachedValidator;
-  const pending = initialize();
+  const pending = verifiedRuntime().then((verified) => createValidator(verified.runtime, verified.sdkVersion));
   cachedValidator = pending;
   try { return await pending; } catch (error) {
     if (cachedValidator === pending) cachedValidator = undefined;

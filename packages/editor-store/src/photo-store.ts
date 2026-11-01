@@ -1769,6 +1769,36 @@ export type PhotoMediaReadyWrite = {
   thumbnailId: string; previewId: string;
   workingCopy: { assetId: string; baseVersion: string; encoding: "png16" | "jpeg8"; meta: PhotoJsonObject } | null;
 };
+export type PhotoCanonicalWorkingCopyIdentity = {
+  readonly libraryId: string;
+  readonly originalAssetId: string;
+  readonly originalSha256: string;
+  readonly baseVersion: string;
+  readonly rendererManifestSha256: string;
+};
+export type PhotoCanonicalWorkingCopy = {
+  readonly ownerId: string;
+  readonly libraryId: string;
+  readonly photoId: string;
+  readonly originalAssetId: string;
+  readonly originalSha256: string;
+  readonly baseVersion: string;
+  readonly rendererManifestSha256: string;
+  readonly workingCopy: {
+    readonly asset: {
+      readonly id: string;
+      readonly kind: "working-copy";
+      readonly sha256: string;
+      readonly sizeBytes: number;
+      readonly contentType: string;
+      readonly width: number;
+      readonly height: number;
+    };
+    readonly baseVersion: string;
+    readonly encoding: "png16" | "jpeg8";
+    readonly meta: PhotoJsonObject;
+  };
+};
 export type EnsurePhotoMediaInput = { recipeRevision: number; key: string; requestHash: string };
 type MediaJobRow = {
   owner: string; id: string; photo_id: string; state: PhotoMediaProjection["state"]; lifecycle_epoch: string; library_lifecycle_epoch: string;
@@ -1830,6 +1860,100 @@ async function currentClaimRow(client: Queryable, owner: OwnerId, claim: PhotoMe
 }
 export async function getPhotoMediaSource(db: Database, owner: OwnerId, photoId: string): Promise<PhotoMediaSource | null> {
   const snapshot = await getPhotoSnapshot(db, owner, photoId); return snapshot ? mediaSource(snapshot) : null;
+}
+/**
+ * Read a previously published canonical working copy for the current source identity.
+ * Historical ready jobs are intentionally independent of the selected preview job and recipe revision.
+ */
+export async function getPhotoCanonicalWorkingCopy(
+  db: Queryable,
+  owner: OwnerId,
+  photoId: string,
+  expected: PhotoCanonicalWorkingCopyIdentity,
+): Promise<PhotoCanonicalWorkingCopy | null> {
+  assertOwner(owner);
+  if (!validUuid(photoId) || !validUuid(expected.libraryId) || !validUuid(expected.originalAssetId)
+    || !SHA256.test(expected.originalSha256) || !SHA256.test(expected.rendererManifestSha256)
+    || typeof expected.baseVersion !== "string" || expected.baseVersion.length < 1
+    || Buffer.byteLength(expected.baseVersion, "utf8") > 512) return null;
+  photoId = photoId.toLowerCase();
+  const rows = (await db.query<{
+    owner: string; library_id: string; photo_id: string; original_asset_id: string; original_sha256: string;
+    base_version: string; renderer_manifest_sha256: string; encoding: string; canonical_metadata: unknown;
+    asset_id: string; asset_sha256: string; asset_size_bytes: string; asset_content_type: string;
+    asset_width: number; asset_height: number;
+  }>(
+    `SELECT l.owner,l.id AS library_id,p.id AS photo_id,oa.id AS original_asset_id,oa.sha256 AS original_sha256,
+            j.base_version,j.renderer_manifest_sha256,j.ready_media #>> '{workingCopy,encoding}' AS encoding,
+            j.canonical_metadata,wa.id AS asset_id,wa.sha256 AS asset_sha256,
+            wa.size_bytes::text AS asset_size_bytes,wa.content_type AS asset_content_type,
+            wa.width AS asset_width,wa.height AS asset_height
+       FROM photo_libraries AS l
+       JOIN photos AS p ON p.owner=l.owner AND p.library_id=l.id
+       JOIN photo_assets AS oa ON oa.owner=p.owner AND oa.photo_id=p.id AND oa.id=p.original_asset_id
+       JOIN photo_recipes AS r ON r.owner=p.owner AND r.photo_id=p.id AND r.revision=p.recipe_revision
+       JOIN photo_media_jobs AS j ON j.owner=p.owner AND j.photo_id=p.id
+       JOIN photo_assets AS wa ON wa.owner=p.owner AND wa.library_id=p.library_id AND wa.photo_id=p.id
+        AND wa.id::text=(j.ready_media #>> '{workingCopy,assetId}')
+      WHERE l.owner=$1 AND l.id=$2 AND l.state='active'
+        AND p.id=$3 AND p.lifecycle='active' AND p.original_asset_id=$4
+        AND oa.kind='original' AND oa.deletion_state='retained' AND oa.sha256=$5
+        AND r.base_version=$6
+        AND j.state='ready' AND j.terminal_reason IS NULL
+        AND j.lifecycle_epoch=p.lifecycle_epoch AND j.library_lifecycle_epoch=l.lifecycle_epoch
+        AND j.original_asset_id=oa.id AND j.original_generation=oa.object_generation
+        AND j.original_sha256=oa.sha256 AND j.original_size_bytes=oa.size_bytes
+        AND j.source_format=p.format AND j.source_width=p.width AND j.source_height=p.height
+        AND j.base_version=$6 AND j.renderer_manifest_sha256=$7
+        AND jsonb_typeof(j.ready_media)='object' AND jsonb_typeof(j.ready_media->'workingCopy')='object'
+        AND j.ready_media #>> '{workingCopy,baseVersion}'=$6
+        AND j.ready_media #>> '{workingCopy,encoding}' IN ('png16','jpeg8')
+        AND jsonb_typeof(j.ready_media #> '{workingCopy,meta}')='object'
+        AND jsonb_typeof(j.canonical_metadata)='object'
+        AND j.canonical_metadata=j.ready_media #> '{workingCopy,meta}'
+        AND octet_length(j.canonical_metadata::text)<=65536
+        AND wa.kind='working-copy' AND wa.deletion_state='retained'
+      ORDER BY j.updated_at DESC,j.created_at DESC,j.id DESC
+      LIMIT 8`,
+    [owner, expected.libraryId.toLowerCase(), photoId, expected.originalAssetId.toLowerCase(),
+      expected.originalSha256, expected.baseVersion, expected.rendererManifestSha256],
+  )).rows;
+  for (const row of rows) {
+    try {
+      assertPhotoJson(row.canonical_metadata);
+      if (row.canonical_metadata === null || Array.isArray(row.canonical_metadata)
+        || typeof row.canonical_metadata !== "object"
+        || Buffer.byteLength(photoCanonicalJson(row.canonical_metadata), "utf8") > 64 * 1024
+        || (row.encoding !== "png16" && row.encoding !== "jpeg8")) continue;
+      const meta = row.canonical_metadata as PhotoJsonObject;
+      return {
+        ownerId: row.owner,
+        libraryId: row.library_id,
+        photoId: row.photo_id,
+        originalAssetId: row.original_asset_id,
+        originalSha256: row.original_sha256,
+        baseVersion: row.base_version,
+        rendererManifestSha256: row.renderer_manifest_sha256,
+        workingCopy: {
+          asset: {
+            id: row.asset_id,
+            kind: "working-copy",
+            sha256: row.asset_sha256,
+            sizeBytes: number(row.asset_size_bytes),
+            contentType: row.asset_content_type,
+            width: row.asset_width,
+            height: row.asset_height,
+          },
+          baseVersion: row.base_version,
+          encoding: row.encoding,
+          meta,
+        },
+      };
+    } catch {
+      // Legacy rows that exceed today's bounded JSON domain are not canonical contexts.
+    }
+  }
+  return null;
 }
 export async function listPhotoMediaOutbox(db: Queryable, owner: OwnerId, limit = 100): Promise<{ photoId: string; lifecycleGeneration: number; recipeRevision: number; settingsSha256: string }[]> {
   assertOwner(owner); if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new TypeError("editor-store: invalid media outbox limit");

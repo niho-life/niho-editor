@@ -3,6 +3,7 @@ import { HASH, IDS, library, readyPhoto } from "../../../../../packages/photo-li
 import type { Photo, VersionSet } from "../../../../../packages/photo-library-contract/src/v1";
 import { PhotoAuthError } from "../photo-auth";
 import { PhotoRecipeError } from "./api";
+import { createPinnedPhotoRecipeValidator } from "./pinned-validator";
 import { createPhotoRecipesRoutes } from "./routes";
 import type { PhotoRecipeDeps, PhotoRecipeSnapshot, PhotoRecipeStore } from "./types";
 
@@ -11,7 +12,10 @@ const ACTOR = { userId: IDS.userA, sessionId: "synthetic-session", transport: "b
 const MAC_ACTOR = { userId: IDS.userA, sessionId: "synthetic-mac", transport: "mac-bearer" as const, expiresAt: "2026-11-02T00:00:00.000Z" };
 const ORIGIN = "https://editor.niho.life";
 
-function arrange(actor: typeof ACTOR | typeof MAC_ACTOR = ACTOR) {
+function arrange(
+  actor: typeof ACTOR | typeof MAC_ACTOR = ACTOR,
+  validator: PhotoRecipeDeps["validator"] = { validate: vi.fn(async () => ({ settingsSha256: HASH.settings, maskSurfaceIds: [] })) },
+) {
   let photo: Photo = readyPhoto;
   let versions: VersionSet = { revision: 7, versions: [] };
   const snapshot = (): PhotoRecipeSnapshot => ({ photo, library: {
@@ -35,7 +39,7 @@ function arrange(actor: typeof ACTOR | typeof MAC_ACTOR = ACTOR) {
   };
   const deps: PhotoRecipeDeps = {
     store,
-    validator: { validate: vi.fn(async () => ({ settingsSha256: HASH.settings, maskSurfaceIds: [] })) },
+    validator,
   };
   const verify = vi.fn(async () => actor);
   const routes = createPhotoRecipesRoutes({ recipes: () => deps, verify, origins: [ORIGIN], now: () => Date.parse("2026-11-01T12:00:00.000Z") });
@@ -106,6 +110,34 @@ describe("photo recipe HTTP routes", () => {
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: { code: "revision_conflict", currentRevision: 4 } });
     expect(response.headers.get("cache-control")).toBe("private, no-store");
+  });
+
+  it("maps canonical resolver infrastructure rejection to retryable 503 without writing", async () => {
+    const baseVersion = "raster.ci2.p2.e2.icc-srgb";
+    const resolver = vi.fn(async () => { throw new Error("private-provider-detail"); });
+    const validator = await createPinnedPhotoRecipeValidator({ canonicalContextResolver: resolver });
+    const f = arrange(ACTOR, validator);
+    f.setPhoto({
+      ...readyPhoto,
+      recipe: {
+        ...readyPhoto.recipe,
+        settings: { ...readyPhoto.recipe.settings, base: baseVersion },
+        baseVersion,
+      },
+      media: { state: "queued", jobId: IDS.job },
+    });
+    const response = await f.routes.putRecipe(request("PUT", "https://editor.niho.life/api/photo/v1/photos/photo/recipe", {
+      expectedRevision: 0,
+      settings: { ...readyPhoto.recipe.settings, base: baseVersion, exposure: 0.25 },
+      baseVersion,
+    }), IDS.photo);
+
+    expect(response.status).toBe(503);
+    const payload = await response.json();
+    expect(payload).toMatchObject({ error: { code: "temporarily_unavailable", retryable: true } });
+    expect(JSON.stringify(payload)).not.toContain("private-provider-detail");
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(f.store.putRecipe).not.toHaveBeenCalled();
   });
 
   it("fails closed when production recipe wiring is absent, after authenticating", async () => {

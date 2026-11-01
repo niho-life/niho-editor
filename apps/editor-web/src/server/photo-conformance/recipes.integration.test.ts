@@ -1,6 +1,16 @@
 // @vitest-environment node
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import {
+  allocatePhotoMediaCandidate,
+  bindPhotoCanonicalBase,
+  claimPhotoMediaJob,
+  enqueuePhotoMediaJob,
+  getPhotoSnapshot,
+  publishPhotoMediaJob,
+  stagePhotoMediaCandidate,
+  type PhotoMediaClaim,
+} from "@niho/editor-store";
 import { developSettingsEngineIdentifiers, supportedDevelopSettingsVersions } from "niho-photo-contract";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -9,7 +19,7 @@ import type { Json, JsonObject, Photo, RecipeDocument } from "../../../../../pac
 import { createPhotoCatalogRoutes } from "../photo-catalog/routes";
 import { createPhotoCatalogStore } from "../photo-catalog/store-adapter";
 import { createPhotoRecipesRoutes } from "../photo-recipes/routes";
-import { createPhotoRecipeStore } from "../photo-recipes/store-adapter";
+import { createPhotoCanonicalContextResolver, createPhotoRecipeStore } from "../photo-recipes/store-adapter";
 import { createPinnedPhotoRecipeValidator } from "../photo-recipes/pinned-validator";
 import type { PhotoRecipeValidator } from "../photo-recipes/types";
 import {
@@ -32,6 +42,13 @@ const databaseDescribe = databaseUrl ? describe : describe.skip;
 const owner = (label: string) => `synthetic-recipes-${label}-${randomUUID()}`;
 const key = () => `synthetic_recipe_${randomUUID().replaceAll("-", "")}`;
 const securityCasesUrl = new URL("../../../../../packages/photo-library-contract/fixtures/security-cases.json", import.meta.url);
+const RAW_BASE = "raw-apple.d8.p2.e1.synthetic";
+const mediaSpec = {
+  rendererManifestSha256: fixtureLibrary.capabilities.renderer.manifestSha256,
+  thumbnailMaxEdge: 512,
+  previewMaxEdge: 1280,
+  workingCopyMaxEdge: 2560,
+};
 
 function canonicalJson(value: Json): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -82,6 +99,40 @@ async function seed(pool: Pool, user: string): Promise<Photo> {
   const response = await harness.api.complete(post(), actor(user), staged.uploadId);
   expect(response.status).toBe(200);
   return (await response.json() as { value: { result: { photo: Photo } } }).value.result.photo;
+}
+
+async function seedRaw(pool: Pool, user: string): Promise<Photo> {
+  const harness = createConformanceHarness(pool);
+  harness.setProbe({
+    format: "raw", contentType: "image/x-adobe-dng", width: 2, height: 1,
+    encodedWidth: 2, encodedHeight: 1, bitDepth: 16, channels: "rgb",
+  });
+  const input = {
+    target: { kind: "original" as const, fileName: "synthetic.dng", format: "raw" as const },
+    sizeBytes: SYNTHETIC_JPEG.byteLength,
+    sha256: digest(SYNTHETIC_JPEG),
+    contentType: "image/x-adobe-dng",
+  };
+  const staged = await startAndStage(harness, user, input, SYNTHETIC_JPEG);
+  const response = await harness.api.complete(post(), actor(user), staged.uploadId);
+  expect(response.status).toBe(200);
+  return (await response.json() as { value: { result: { photo: Photo } } }).value.result.photo;
+}
+
+async function stageCanonicalCandidate(pool: Pool, user: string, claim: PhotoMediaClaim, kind: "thumbnail" | "preview" | "working-copy") {
+  const candidate = await allocatePhotoMediaCandidate(pool, user, claim, {
+    kind,
+    sha256: digest(Buffer.from(`synthetic-${kind}-${randomUUID()}`)),
+    sizeBytes: 12,
+    contentType: kind === "working-copy" ? "image/png" : "image/jpeg",
+    width: 2,
+    height: 1,
+    objectKey: `photo/synthetic/canonical/${randomUUID()}`,
+  });
+  expect(candidate).not.toBeNull();
+  const staged = await stagePhotoMediaCandidate(pool, user, claim, candidate!.id, "1");
+  expect(staged).toMatchObject({ state: "staged", objectGeneration: "1" });
+  return staged!;
 }
 
 async function recipeDatabaseState(pool: Pool, user: string, photoId: string) {
@@ -217,6 +268,77 @@ databaseDescribe("P12 recipe routes + production PostgreSQL adapter", () => {
     expect(await response.json()).toMatchObject({ error: { code: "missing_mask_surface" } });
     expect(validator.validate).toHaveBeenCalledOnce();
     expect(await recipeDatabaseState(pool, user, photo.id)).toEqual(before);
+  });
+
+  it("canonical履歴でpreview pending中も2回のnon-null-base編集をAPI→固定SDK→P02で保存する", async () => {
+    const user = owner("canonical-history");
+    const photo = await seedRaw(pool, user);
+    const initial = await getPhotoSnapshot(pool, user, photo.id);
+    expect(initial).not.toBeNull();
+    const baseSettings = { ...initial!.recipe.settings, base: RAW_BASE };
+    const bound = await bindPhotoCanonicalBase(pool, user, photo.id, {
+      expectedRevision: 0,
+      key: key(),
+      requestHash: settingsSha256(baseSettings),
+      recipe: {
+        settings: baseSettings,
+        settingsSha256: settingsSha256(baseSettings),
+        baseVersion: RAW_BASE,
+        maskSurfaceIds: [],
+        hasEdits: false,
+      },
+      original: {
+        assetId: initial!.photo.original.id,
+        generation: initial!.photo.original.objectGeneration,
+        sha256: initial!.photo.original.sha256,
+      },
+    });
+    expect(bound).not.toBeNull();
+    const canonicalJob = await enqueuePhotoMediaJob(pool, user, photo.id, mediaSpec);
+    expect(canonicalJob).not.toBeNull();
+    const claim = await claimPhotoMediaJob(pool, user, canonicalJob!.id);
+    expect(claim).not.toBeNull();
+    const thumbnail = await stageCanonicalCandidate(pool, user, claim!, "thumbnail");
+    const preview = await stageCanonicalCandidate(pool, user, claim!, "preview");
+    const workingCopy = await stageCanonicalCandidate(pool, user, claim!, "working-copy");
+    expect(await publishPhotoMediaJob(pool, user, claim!, {
+      thumbnailId: thumbnail.id,
+      previewId: preview.id,
+      workingCopy: {
+        assetId: workingCopy.id,
+        baseVersion: RAW_BASE,
+        encoding: "png16",
+        meta: { kind: "raw", source: "synthetic-only" },
+      },
+    }, [thumbnail, preview, workingCopy].map((item) => ({ id: item.id, generation: item.objectGeneration! })),
+    Math.min(claim!.expiresAt - 1, Date.now() + 10_000))).toBe(true);
+
+    const pendingJob = await enqueuePhotoMediaJob(pool, user, photo.id, {
+      ...mediaSpec,
+      rendererManifestSha256: "f".repeat(64),
+    });
+    expect(pendingJob?.id).not.toBe(canonicalJob!.id);
+    const resolver = vi.fn(createPhotoCanonicalContextResolver(pool));
+    const validator = await createPinnedPhotoRecipeValidator({ canonicalContextResolver: resolver });
+    const recipeRoutes = routes(pool, user, validator);
+    const firstSettings = { ...baseSettings, exposure: 0.25 };
+    const first = await recipeRoutes.putRecipe(request(photo.id, {
+      expectedRevision: 1, settings: firstSettings, baseVersion: RAW_BASE,
+    }, key()), photo.id);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({ value: { recipe: { revision: 2, baseVersion: RAW_BASE } } });
+
+    const secondSettings = { ...baseSettings, exposure: 0.75 };
+    const second = await recipeRoutes.putRecipe(request(photo.id, {
+      expectedRevision: 2, settings: secondSettings, baseVersion: RAW_BASE,
+    }, key()), photo.id);
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ value: { recipe: { revision: 3, baseVersion: RAW_BASE } } });
+    expect(resolver).toHaveBeenCalledTimes(2);
+    expect((await pool.query("SELECT state FROM photo_media_jobs WHERE owner=$1 AND id=$2", [user, pendingJob!.id])).rows[0])
+      .toEqual({ state: "queued" });
+    expect((await pool.query("SELECT state FROM photo_media_jobs WHERE owner=$1 AND id=$2", [user, canonicalJob!.id])).rows[0])
+      .toEqual({ state: "ready" });
   });
 
   it.each([

@@ -1,4 +1,4 @@
-import type { NamedVersion, PersonalPhotoLibrary, Photo, RecipeDocument, VersionSet } from "../../../../../packages/photo-library-contract/src/v1";
+import type { NamedVersion, PersonalPhotoLibrary, Photo, RecipeDocument, VersionSet, WorkingCopy } from "../../../../../packages/photo-library-contract/src/v1";
 
 export type PhotoRecipeLibrarySnapshot = Pick<PersonalPhotoLibrary, "id" | "owner" | "state" | "revision" | "capabilities">;
 export type PhotoRecipeSnapshot = { readonly photo: Photo; readonly library: PhotoRecipeLibrarySnapshot };
@@ -10,6 +10,25 @@ export interface PhotoRecipeValidator {
     readonly library: PhotoRecipeLibrarySnapshot;
   }): Promise<{ readonly settingsSha256: string; readonly maskSurfaceIds: readonly string[] } | null>;
 }
+
+export type PhotoCanonicalContextIdentity = {
+  readonly ownerId: string;
+  readonly libraryId: string;
+  readonly photoId: string;
+  readonly originalAssetId: string;
+  readonly originalSha256: string;
+  readonly baseVersion: string;
+  readonly rendererManifestSha256: string;
+};
+
+export type PhotoCanonicalContext = PhotoCanonicalContextIdentity & {
+  readonly workingCopy: WorkingCopy;
+};
+
+/** Server-only lookup. The verified actor/snapshot supplies every ownership and source field. */
+export type PhotoCanonicalContextResolver = (
+  expected: PhotoCanonicalContextIdentity,
+) => Promise<PhotoCanonicalContext | null>;
 
 export type ValidatedRecipeWrite = {
   readonly settings: RecipeDocument["settings"];

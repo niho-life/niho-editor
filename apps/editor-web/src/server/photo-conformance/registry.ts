@@ -37,7 +37,7 @@ export const PHOTO_CONFORMANCE_CASES = [
   { id: "changed-idempotency-payload", evidence: "db-handler", test: "completion replay and dedup", remaining: null },
   { id: "generation-race", evidence: "partial", test: "owner-scoped content", remaining: "実 GCS の generation precondition race" },
   { id: "recipe-stale", evidence: "db-handler", test: "recipe-stale", remaining: null },
-  { id: "missing-mask", evidence: "partial", test: "missing-mask", remaining: "production factoryのstrict SDK/WASM + 実P02 writerは検証済み。本番runtime配線とpending metadata resolverの受入" },
+  { id: "missing-mask", evidence: "partial", test: "missing-mask", remaining: "production factoryのstrict SDK/WASM + 実P02 writerは検証済み。本番runtime配線の実環境受入（pending metadata resolverの実P02連続保存は検証済み）" },
   { id: "unknown-recipe", evidence: "db-handler", test: "unknown-recipe", remaining: null },
   { id: "stale-preview", evidence: "db-handler", test: "stale-preview", remaining: null },
   { id: "stored-media-failed", evidence: "db-handler", test: "stored-media-failed", remaining: null },
