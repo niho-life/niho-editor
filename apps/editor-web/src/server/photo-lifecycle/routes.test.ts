@@ -63,6 +63,15 @@ describe("photo lifecycle HTTP routes", () => {
     expect(f.store.trash).not.toHaveBeenCalled();
   });
 
+  it("allows a non-null empty request stream", async () => {
+    const f = arrange();
+    const emptyStream = request("POST", "/api/photo/v1/photos/photo/trash", { key: KEY, body: "" });
+    expect(emptyStream.body).not.toBeNull();
+    const response = await f.routes.trash(emptyStream, IDS.photo);
+    expect(response.status).toBe(200);
+    expect(f.store.trash).toHaveBeenCalledOnce();
+  });
+
   it("checks a Mac bearer Origin against the canonical allowlist when present", async () => {
     const f = arrange(MAC_ACTOR);
     const allowed = await f.routes.trash(request("POST", "/api/photo/v1/photos/photo/trash", { key: KEY }), IDS.photo);

@@ -38,10 +38,42 @@ function errorResponse(error: unknown): Response {
   return response;
 }
 
-function noBody(request: Request): void {
+async function noBody(request: Request): Promise<void> {
   const length = request.headers.get("content-length");
-  if (request.body !== null || (length !== null && length !== "0") || request.headers.has("transfer-encoding")) {
+  if (length !== null && (!/^\d+$/.test(length) || Number(length) !== 0)) {
     throw new PhotoLifecycleError("invalid_request");
+  }
+  // Next's Node adapter can expose an empty IncomingMessage as a non-null stream.
+  // Stop on the first byte; cap empty chunks and total wait time for unusual streams.
+  const reader = request.body?.getReader();
+  if (!reader) return;
+  const deadline = Date.now() + 1_000;
+  try {
+    for (let chunks = 0; chunks < 16; chunks += 1) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new PhotoLifecycleError("invalid_request");
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let result: ReadableStreamReadResult<Uint8Array>;
+      try {
+        result = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => reject(new PhotoLifecycleError("invalid_request")), remaining);
+          }),
+        ]);
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
+      }
+      if (result.done) return;
+      if (result.value.byteLength > 0) throw new PhotoLifecycleError("invalid_request");
+    }
+    throw new PhotoLifecycleError("invalid_request");
+  } catch (error) {
+    if (error instanceof PhotoLifecycleError) throw error;
+    throw new PhotoLifecycleError("invalid_request");
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
 }
 
@@ -56,9 +88,9 @@ export function createPhotoLifecycleRoutes(deps: PhotoLifecycleRouteDeps) {
       if (request.method !== method) throw new PhotoLifecycleError("invalid_request");
       const actor = await deps.verify(request);
       authorize(request, actor, deps.origins, deps.now?.() ?? Date.now(), options.mutation);
+      await noBody(request);
       const lifecycle = deps.lifecycle();
       if (!lifecycle) throw new PhotoLifecycleError("temporarily_unavailable");
-      if (options.mutation) noBody(request);
       const api = createPhotoLifecycleApi(lifecycle);
       const result = await action(actor.userId, api);
       return json(result, options.successStatus ?? 200);
