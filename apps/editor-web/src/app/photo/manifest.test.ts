@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import rootManifest from "../manifest";
+import rootManifest from "../../pwa/editor-manifest";
 import { metadata } from "./layout";
 import photoManifest from "../../pwa/photo-manifest";
 import { GET as getManifest } from "./manifest.webmanifest/route";

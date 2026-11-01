@@ -266,6 +266,11 @@ describe("production start with the server entry (Dockerfile / npm start)", () =
       assert.deepEqual(await photoManifest.json().then(({ id, name, start_url, scope }) => ({ id, name, start_url, scope })), {
         id: "/photo", name: "NIHO photo", start_url: "/photo", scope: "/photo",
       });
+      const docsManifest = await fetch(`http://127.0.0.1:${port}/manifest.webmanifest`);
+      assert.equal(docsManifest.status, 200);
+      assert.deepEqual(await docsManifest.json().then(({ id, name, scope }) => ({ id, name, scope })), {
+        id: "/", name: "NIHO editor", scope: "/",
+      });
       const photoWorker = await fetch(`http://127.0.0.1:${port}/photo-sw.js`);
       assert.equal(photoWorker.status, 200);
       assert.match(photoWorker.headers.get("cache-control") ?? "", /no-cache/);
