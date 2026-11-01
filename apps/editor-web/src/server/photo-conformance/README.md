@@ -11,7 +11,7 @@ P00 の `security-cases.json` 34件を、P03 transfer handler core と P02 Postg
 
 DBはlocalでは専用の loopback `56542` だけを許可する。`CI=true` では使い捨てfixtureの loopback `5432`、user `editor_ci`、database `editor_ci` の組み合わせだけを許可し、外部hostや別DBを拒否する。suiteごとに random schemaを作り、migration適用後、終了時にそのschemaだけを `CASCADE` で削除してpoolを閉じる。setup途中の失敗でも作成済みschemaを削除する。動的値はschema名以外すべてSQL parameterで渡す。CIで `TEST_DATABASE_URL` が無ければ失敗し、localで無ければDB integration suiteだけをskipする。
 
-P02に公開projectionがまだ無いため、stored resultに必要な `Photo` は owner-scoped `getPhoto` と owner/photoで絞ったrecipe行から組み立てるtest-only shimを使う。mediaの `queued` 値はwire shapeを満たすための合成値であり、media workerの証拠ではない。
+P02の本番用snapshot、mask/start-key lookup、永続request journalを接続する。stored resultに必要な `Photo` のwire変換はsnapshotから組み立てるtest-only shimで、mediaの `queued` 値はwire shapeを満たすための合成値。media workerの証拠には数えない。
 
 ## 証明しない範囲
 

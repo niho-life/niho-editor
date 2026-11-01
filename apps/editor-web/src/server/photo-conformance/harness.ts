@@ -1,15 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  PhotoStoreError,
-  getPhoto,
-  getPhotoAsset,
-  getPhotoUpload,
+  bindPhotoRequest,
+  getPhotoMaskBySurfaceId,
+  getPhotoSnapshot,
+  getPhotoUploadByStartKey,
   type Database,
   type PhotoAssetRecord,
 } from "@niho/editor-store";
 import { applyMigrations } from "@niho/editor-store/migrate";
 import { Pool } from "pg";
-import type { Photo, RecipeDocument, StartUploadRequest, VerifiedPhotoActor } from "../../../../../packages/photo-library-contract/src/v1";
+import type { Photo, StartUploadRequest, VerifiedPhotoActor } from "../../../../../packages/photo-library-contract/src/v1";
 import { createFakePhotoStorage } from "../../storage/photo-fake";
 import { createPhotoTransferApi } from "../photo-transfer/api";
 import { createP02PhotoTransferStore } from "../photo-transfer/p02";
@@ -71,14 +71,6 @@ export async function openConformanceDatabase(connectionString: string): Promise
     const client = await pool.connect();
     try {
       await applyMigrations(client);
-      await client.query(`CREATE TABLE conformance_transfer_journal (
-        owner text NOT NULL,
-        operation text NOT NULL,
-        resource_id text NOT NULL,
-        idempotency_key text NOT NULL,
-        request_hash text NOT NULL,
-        PRIMARY KEY (owner, operation, resource_id, idempotency_key)
-      )`);
     } finally {
       client.release();
     }
@@ -112,21 +104,9 @@ function publicAsset(asset: PhotoAssetRecord): Photo["original"] {
 }
 
 async function projectPhoto(db: Database, owner: string, id: string): Promise<Photo | null> {
-  const record = await getPhoto(db, owner, id);
-  if (!record) return null;
-  const recipe = (await db.query<{
-    revision: string;
-    settings: RecipeDocument["settings"];
-    settings_sha256: string;
-    base_version: string | null;
-    mask_surface_ids: string[];
-    updated_at: Date;
-  }>(
-    `SELECT revision::text AS revision, settings, settings_sha256, base_version, mask_surface_ids, updated_at
-       FROM photo_recipes WHERE owner = $1 AND photo_id = $2`,
-    [owner, id],
-  )).rows[0];
-  if (!recipe) return null;
+  const snapshot = await getPhotoSnapshot(db, owner, id);
+  if (!snapshot) return null;
+  const { photo: record, recipe } = snapshot;
   return {
     id: record.id,
     libraryId: record.libraryId,
@@ -134,21 +114,21 @@ async function projectPhoto(db: Database, owner: string, id: string): Promise<Ph
     lifecycle: record.lifecycle,
     fileName: record.fileName,
     format: record.format,
-    hasEdits: Number(recipe.revision) > 0,
+    hasEdits: snapshot.hasEdits,
     addedAt: record.addedAt,
     capturedAt: record.capturedAt,
     width: record.width,
     height: record.height,
     original: publicAsset(record.original),
     recipe: {
-      revision: Number(recipe.revision),
+      revision: recipe.revision,
       settings: recipe.settings,
-      settingsSha256: recipe.settings_sha256,
-      baseVersion: recipe.base_version,
-      maskSurfaceIds: recipe.mask_surface_ids,
-      updatedAt: recipe.updated_at.toISOString(),
+      settingsSha256: recipe.settingsSha256,
+      baseVersion: recipe.baseVersion,
+      maskSurfaceIds: recipe.maskSurfaceIds,
+      updatedAt: recipe.updatedAt,
     },
-    // P02 does not yet expose the media projection. This opaque queued value is test-only.
+    // Media serialization/worker acceptance is outside these transfer tests.
     media: { state: "queued", jobId: record.id },
     trashedAt: record.trashedAt,
     purgeAfter: record.purgeAfter,
@@ -157,43 +137,15 @@ async function projectPhoto(db: Database, owner: string, id: string): Promise<Ph
 
 function journal(db: Database): PhotoMutationJournal {
   return {
-    async bind(input) {
-      const inserted = await db.query(
-        `INSERT INTO conformance_transfer_journal (owner, operation, resource_id, idempotency_key, request_hash)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT DO NOTHING RETURNING request_hash`,
-        [input.owner, input.operation, input.resourceId, input.key, input.requestHash],
-      );
-      if (inserted.rowCount === 1) return false;
-      const old = (await db.query<{ request_hash: string }>(
-        `SELECT request_hash FROM conformance_transfer_journal
-          WHERE owner = $1 AND operation = $2 AND resource_id = $3 AND idempotency_key = $4`,
-        [input.owner, input.operation, input.resourceId, input.key],
-      )).rows[0];
-      if (!old || old.request_hash !== input.requestHash) throw new PhotoStoreError("idempotency_conflict");
-      return true;
-    },
+    bind: ({ owner, ...input }) => bindPhotoRequest(db, owner, input),
   };
 }
 
 function projection(db: Database): Pick<PhotoTransferStore, "photo" | "mask" | "uploadByStartKey"> {
   return {
     photo: (owner, id) => projectPhoto(db, owner, id),
-    async mask(owner, photoId, surfaceId) {
-      const row = (await db.query<{ id: string }>(
-        `SELECT id FROM photo_assets
-          WHERE owner = $1 AND photo_id = $2 AND kind = 'mask' AND sha256 = $3 AND deletion_state = 'retained'`,
-        [owner, photoId, surfaceId],
-      )).rows[0];
-      return row ? getPhotoAsset(db, owner, photoId, row.id) : null;
-    },
-    async uploadByStartKey(owner, operation, key) {
-      const row = (await db.query<{ id: string }>(
-        `SELECT id FROM photo_uploads WHERE owner = $1 AND operation = $2 AND idempotency_key = $3`,
-        [owner, operation, key],
-      )).rows[0];
-      return row ? getPhotoUpload(db, owner, row.id) : null;
-    },
+    mask: (owner, photoId, surfaceId) => getPhotoMaskBySurfaceId(db, owner, photoId, surfaceId),
+    uploadByStartKey: (owner, operation, key) => getPhotoUploadByStartKey(db, owner, operation, key),
   };
 }
 
