@@ -1,0 +1,51 @@
+name: Photo cloud SDK CI
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  pack-verify-smoke:
+    name: photo-cloud-sdk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24.15.0"
+          cache: npm
+          cache-dependency-path: packages/photo-cloud-library/package-lock.json
+      - name: Prepare exact P08 peer cache
+        run: npm -C packages/photo-cloud-library ci --ignore-scripts --no-audit --no-fund
+      - name: Packaging negative and reproducibility tests
+        run: node --test scripts/photo-cloud-sdk/release-set.test.mjs
+      - name: Pack twice, independently verify, and smoke
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./sdk/photo-cloud-release-set.json").version')"
+          manifest="niho-photo-cloud-sdk-$version-$SOURCE_SHA.json"
+          node scripts/photo-cloud-sdk/pack-release-set.mjs --source-sha "$SOURCE_SHA" --output "$RUNNER_TEMP/photo-cloud-sdk"
+          node scripts/photo-cloud-sdk/pack-release-set.mjs --source-sha "$SOURCE_SHA" --output "$RUNNER_TEMP/photo-cloud-sdk-reproduced"
+          node scripts/photo-cloud-sdk/verify-release-set.mjs \
+            --manifest "$RUNNER_TEMP/photo-cloud-sdk/$manifest" \
+            --reproduced-manifest "$RUNNER_TEMP/photo-cloud-sdk-reproduced/$manifest" \
+            --expected-source "$SOURCE_SHA" \
+            --expected-version "$version" \
+            --source-repository "$GITHUB_WORKSPACE"
+          node scripts/photo-cloud-sdk/smoke-consumer.mjs --manifest "$RUNNER_TEMP/photo-cloud-sdk/$manifest"

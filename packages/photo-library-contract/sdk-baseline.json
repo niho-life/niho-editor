@@ -1,64 +1,64 @@
 {
   "schemaVersion": 1,
   "repository": "niho-life/niho-photo",
-  "releaseTag": "photo-sdk-v0.1.4",
-  "sourceCommit": "77508e53b20e4750190a9916bb5adc8f1ab0e04e",
+  "releaseTag": "photo-sdk-v0.1.5",
+  "sourceCommit": "f78926d805b5f2c115349d8f15ac184fde453ad1",
   "manifest": {
-    "file": "niho-photo-sdk-0.1.4-77508e53b20e4750190a9916bb5adc8f1ab0e04e.json",
-    "sha256": "883d60d5d09967ba4ca1c57df9cb81e6bed26379a22f8ddc87ad82624547316f"
+    "file": "niho-photo-sdk-0.1.5-f78926d805b5f2c115349d8f15ac184fde453ad1.json",
+    "sha256": "99b1893eb4344aa524279c46a06b63132fd167d3c370be8d7ba30b9ea8caf7be"
   },
   "receipt": {
     "file": "photo-sdk-artifact-receipt.json",
-    "sha256": "03ff4b8e845927c26543e9af0ef24650749bd11277f105348c3bd3ce86d49bd9"
+    "sha256": "aa75a9e6dcf0ba126bad1e12039fe7bf87417eb62990f85e8a62b4df155b0737"
   },
   "packages": [
     {
       "id": "ui",
       "name": "niho-photo-ui",
-      "file": "niho-photo-ui-0.1.4.tgz",
-      "sha256": "e89731c973d4e715978d542fb199239d6727b8b4e7020b1090f0421471c4053f",
-      "integrity": "sha256-6JcxyXPU5xWXjVQvsZkjnWcnuLTnAgsQkPBCFHHEBT8=",
+      "file": "niho-photo-ui-0.1.5.tgz",
+      "sha256": "ea3739e2aa75385fcc3fbb3f16c298b75b1f992086a4816244bb158f876f6908",
+      "integrity": "sha256-6jc54qp1OF/MP7s/FsKYt1sfmSCGpIFiRLsVj4dvaQg=",
       "size": 64007
     },
     {
       "id": "photo-editing",
       "name": "niho-photo-editing",
-      "file": "niho-photo-editing-0.1.4.tgz",
-      "sha256": "ebaa25dc794fd638a2a3a926897cdc0abe4995548de2d75f3f252a6a9b9dfe3c",
-      "integrity": "sha256-66ol3HlP1jiio6kmiXzcCr5JlVSN4tdfPyUqapud/jw=",
-      "size": 759759
+      "file": "niho-photo-editing-0.1.5.tgz",
+      "sha256": "30fd18912fb47c5fd74b199a8dbc459516e09a78d6df3538095b57cf48c6269c",
+      "integrity": "sha256-MP0YkS+0fF/XSxmajbxFlRbgmnjW3zU4CVtXz0jGJpw=",
+      "size": 760305
     },
     {
       "id": "cloud-contract",
       "name": "niho-photo-cloud-contract",
-      "file": "niho-photo-cloud-contract-0.1.4.tgz",
-      "sha256": "a62be2206eb846182a3a0dddd49795fa143e40b26c64e5896eb4cae81292042a",
-      "integrity": "sha256-piviIG64RhgqOg3d1JeV+hQ+QLJsZOWJbrTK6BKSBCo=",
+      "file": "niho-photo-cloud-contract-0.1.5.tgz",
+      "sha256": "60e36e3ade57eea9279828d1cbb6e7eb317b4c7a18b90c4d23aa6cac1f9e2677",
+      "integrity": "sha256-YONuOt5X7qknmCjRy7bn6zF7THoYuQxNI6psrB+eJnc=",
       "size": 5231
     },
     {
       "id": "photo-contract",
       "name": "niho-photo-contract",
-      "file": "niho-photo-contract-0.1.4.tgz",
-      "sha256": "f15fa54542b6fefc727e86ec74531846c902e6bab26ae35f4be5635446478142",
-      "integrity": "sha256-8V+lRUK2/vxyfobsdFMYRskC5rqyauNfS+VjVEZHgUI=",
+      "file": "niho-photo-contract-0.1.5.tgz",
+      "sha256": "883aa25d51b6dfa748f089c1358fe77675749753d93bb847cb9f6207506e269d",
+      "integrity": "sha256-iDqiXVG236dI8InBNY/ndnV0l1PZO7hHy59iB1BuJp0=",
       "size": 102349
     },
     {
       "id": "develop-engine-source",
       "name": "niho-photo-develop-engine-source",
-      "file": "niho-photo-develop-engine-source-0.1.4.tgz",
-      "sha256": "fe81427ee1c6ddaa951dabcab7c34ae4052ead7bc07c9e01635ffff9f96ba71f",
-      "integrity": "sha256-/oFCfuHG3aqVHavKt8NK5AUurXvAfJ4BY1//+flrpx8=",
-      "size": 2892472
+      "file": "niho-photo-develop-engine-source-0.1.5.tgz",
+      "sha256": "3b35adea550b7c57a71ded6e2d2a63e88cd853ac128baafeb0007c8a45ee4dcb",
+      "integrity": "sha256-OzWt6lULfFenHe1uLSpj6IzYU6wSi6r+sAB8ikXuTcs=",
+      "size": 2892470
     },
     {
       "id": "develop-engine-runtime",
       "name": "niho-photo-develop-engine-runtime",
-      "file": "niho-photo-develop-engine-runtime-0.1.4.tgz",
-      "sha256": "b8fbe03c3c90e8ea78b71e19543d87c361480fbbdb34f193f3c6c8c7cd417260",
-      "integrity": "sha256-uPvgPDyQ6Op4tx4ZVD2Hw2FID7vbNPGT88bIx81BcmA=",
-      "size": 8865197
+      "file": "niho-photo-develop-engine-runtime-0.1.5.tgz",
+      "sha256": "8a0967c7766abd710d85776e201eeecd63592102fb4f13be20580a19481e9d84",
+      "integrity": "sha256-iglnx3ZqvXENhXduIB7uzWNZIQL7TxO+IFgKGUgenYQ=",
+      "size": 8865186
     }
   ],
   "engine": {
@@ -66,8 +66,8 @@
     "crateVersion": "0.27.0",
     "manifest": {
       "file": "manifest-0.27.0.json",
-      "sha256": "1a69b66cc1667b58126c396d212d6808b14f5cd6d6ed4cd5b3c6c160e3531bd9",
-      "integrity": "sha256-Gmm2bMFme1gSbDltIS1oCLFPXNbW7UzVs8bBYONTG9k=",
+      "sha256": "8b60027641b22555f5c5dd1347b8906236c56dbf4638f094f5d494dd13852dae",
+      "integrity": "sha256-i2ACdkGyJVX1xd0TR7iQYjbFbb9GOPCU9dSU3ROFLa4=",
       "size": 2548
     }
   },
