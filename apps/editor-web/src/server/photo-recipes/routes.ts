@@ -16,6 +16,8 @@ type PhotoRecipeRouteDeps = {
   /** Resolved only after P01 verifies the current request. Null keeps incomplete production wiring closed. */
   recipes: () => PhotoRecipeDeps | null;
   verify: (request: Request) => Promise<VerifiedPhotoActor>;
+  /** Canonical configured origins, never inferred from Host / forwarded headers. */
+  origins: readonly string[];
   now?: () => number;
 };
 
@@ -112,7 +114,7 @@ export function createPhotoRecipesRoutes(deps: PhotoRecipeRouteDeps) {
     try {
       if (request.method !== method) throw new PhotoRecipeError("invalid_request");
       const actor = await deps.verify(request);
-      authorize(request, actor, [], deps.now?.() ?? Date.now(), false);
+      authorize(request, actor, deps.origins, deps.now?.() ?? Date.now(), method === "PUT");
       const recipeDeps = deps.recipes();
       if (!recipeDeps) throw new PhotoRecipeError("temporarily_unavailable");
       return await action(actor.userId, createPhotoRecipesApi(recipeDeps));
