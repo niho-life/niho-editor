@@ -15,6 +15,8 @@ COPY packages/editor-store packages/editor-store
 COPY packages/photo-library-contract packages/photo-library-contract
 COPY packages/editor-publish-contract packages/editor-publish-contract
 COPY packages/editor-publish packages/editor-publish
+# The lifecycle adapter imports this worker executor into the server build graph.
+COPY workers/photo-purge workers/photo-purge
 COPY apps/editor-web/package.json apps/editor-web/package-lock.json apps/editor-web/.npmrc apps/editor-web/
 RUN npm -C apps/editor-web ci --no-audit --no-fund
 COPY apps/editor-web apps/editor-web
