@@ -15,13 +15,14 @@ import {
   type PinnedPhotoRecipeValidatorTestPorts,
   verifyPinnedPhotoRecipeRuntimeForTest,
 } from "./pinned-validator";
-import type { PhotoRecipeSnapshot, PhotoRecipeValidator } from "./types";
+import type { PhotoCanonicalContext, PhotoCanonicalContextIdentity, PhotoRecipeSnapshot, PhotoRecipeValidator } from "./types";
 
 const GLUE = "niho-photo-develop-engine-runtime/niho_develop_wasm-0.27.0.js";
 const WASM = "niho-photo-develop-engine-runtime/niho_develop_wasm_bg-0.27.0.wasm";
 const MANIFEST = "niho-photo-develop-engine-runtime/manifest";
 const ENGINE_VERSION = "niho-develop 0.27.0 (engine niho-14)";
 const RASTER_BASE = "raster.ci2.p2.e2.icc-srgb";
+const RAW_BASE = "raw-apple.d8.p2.e1.synthetic";
 
 function canonicalJson(value: Json): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -67,6 +68,21 @@ function canonicalRaster(settings: RecipeDocument["settings"] = { ...readyPhoto.
       },
     },
   });
+}
+
+function canonicalContext(value: PhotoRecipeSnapshot): PhotoCanonicalContext {
+  const media = value.photo.media;
+  if (media.state !== "ready" || !media.workingCopy) throw new Error("synthetic canonical context must be ready");
+  return {
+    ownerId: value.library.owner.userId,
+    libraryId: value.library.id,
+    photoId: value.photo.id,
+    originalAssetId: value.photo.original.id,
+    originalSha256: value.photo.original.sha256,
+    baseVersion: value.photo.recipe.baseVersion!,
+    rendererManifestSha256: value.library.capabilities.renderer.manifestSha256,
+    workingCopy: media.workingCopy,
+  };
 }
 
 async function actualAsset(_asset: string, specifier: string): Promise<Uint8Array> {
@@ -134,6 +150,111 @@ describe("pinned PhotoRecipeValidator with real SDK 0.1.7 runtime", () => {
     const settings = { ...readyPhoto.recipe.settings, base: RASTER_BASE, exposure: -0.5 };
     const result = await validator.validate(settings, canonicalRaster(settings));
     expect(result).toEqual({ settingsSha256: settingsSha256(settings), maskSurfaceIds: [] });
+  });
+
+  it("accepts a synthetic unsigned RAW canonical context without claiming decoder acceptance", async () => {
+    const settings = { ...readyPhoto.recipe.settings, engine: "niho-2", base: RAW_BASE, exposure: 0.25 };
+    const photo: Photo = {
+      ...readyPhoto,
+      format: "raw",
+      fileName: "synthetic.dng",
+      original: { ...readyPhoto.original, contentType: "image/x-adobe-dng" },
+      recipe: { ...readyPhoto.recipe, settings, baseVersion: RAW_BASE },
+      media: { state: "queued", jobId: IDS.job },
+    };
+    const resolver = vi.fn(async (expected: PhotoCanonicalContextIdentity): Promise<PhotoCanonicalContext> => ({
+      ...expected,
+      workingCopy: {
+        asset: {
+          ...readyPhoto.original,
+          id: IDS.mask,
+          kind: "working-copy",
+          contentType: "image/png",
+          width: 2560,
+          height: 1707,
+        },
+        baseVersion: RAW_BASE,
+        encoding: "png16",
+        meta: { kind: "raw", source: "synthetic-only" },
+      },
+    }));
+    const withResolver = await createPinnedPhotoRecipeValidator({ canonicalContextResolver: resolver });
+    await expect(withResolver.validate(settings, snapshot(photo))).resolves.toEqual({
+      settingsSha256: settingsSha256(settings), maskSurfaceIds: [],
+    });
+    expect(resolver).toHaveBeenCalledOnce();
+  });
+
+  it.each(["queued", "processing", "failed"] as const)("uses canonical history for repeated edits while current media is %s", async (state) => {
+    const first = { ...readyPhoto.recipe.settings, base: RASTER_BASE, exposure: -0.5 };
+    const canonical = canonicalRaster(first);
+    const context = canonicalContext(canonical);
+    const resolver = vi.fn(async () => context);
+    const withResolver = await createPinnedPhotoRecipeValidator({ canonicalContextResolver: resolver });
+    const media = state === "failed"
+      ? { state: "failed" as const, code: "renderer_unavailable" as const }
+      : { state, jobId: IDS.job };
+    const pending = snapshot({ ...canonical.photo, media });
+    const second = { ...first, exposure: 0.75 };
+
+    await expect(withResolver.validate(first, pending)).resolves.toEqual({
+      settingsSha256: settingsSha256(first), maskSurfaceIds: [],
+    });
+    await expect(withResolver.validate(second, pending)).resolves.toEqual({
+      settingsSha256: settingsSha256(second), maskSurfaceIds: [],
+    });
+    expect(resolver).toHaveBeenCalledTimes(2);
+    await expect(validator.validate(first, pending)).resolves.toBeNull();
+  });
+
+  it("verifies every canonical source field and rejects context substitution", async () => {
+    const settings = { ...readyPhoto.recipe.settings, base: RASTER_BASE, exposure: 0.25 };
+    const canonical = canonicalRaster(settings);
+    const expectedContext = canonicalContext(canonical);
+    const pending = snapshot({ ...canonical.photo, media: { state: "queued", jobId: IDS.job } });
+    const mismatches: Array<(expected: PhotoCanonicalContextIdentity) => PhotoCanonicalContext> = [
+      (expected) => ({ ...expectedContext, ownerId: `${expected.ownerId}-foreign` }),
+      () => ({ ...expectedContext, libraryId: IDS.photo }),
+      () => ({ ...expectedContext, photoId: IDS.mask }),
+      () => ({ ...expectedContext, originalAssetId: IDS.mask }),
+      () => ({ ...expectedContext, originalSha256: "0".repeat(64) }),
+      (expected) => ({ ...expectedContext, baseVersion: `${expected.baseVersion}.stale` }),
+      () => ({ ...expectedContext, rendererManifestSha256: "0".repeat(64) }),
+    ];
+    for (const mismatch of mismatches) {
+      const resolver = vi.fn(async (expected: PhotoCanonicalContextIdentity) => mismatch(expected));
+      const withResolver = await createPinnedPhotoRecipeValidator({ canonicalContextResolver: resolver });
+      await expect(withResolver.validate(settings, pending)).resolves.toBeNull();
+      expect(resolver).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("does not resolve context for early-invalid or null-base settings and keeps RAW null-base closed", async () => {
+    const resolver = vi.fn(async () => null);
+    const withResolver = await createPinnedPhotoRecipeValidator({ canonicalContextResolver: resolver });
+    await expect(withResolver.validate({ ...readyPhoto.recipe.settings, exposure: 1_000_000 }, snapshot())).resolves.toBeNull();
+    await expect(withResolver.validate(readyPhoto.recipe.settings, snapshot())).resolves.toEqual({
+      settingsSha256: HASH.settings, maskSurfaceIds: [],
+    });
+    const raw = {
+      ...readyPhoto,
+      format: "raw" as const,
+      fileName: "synthetic.dng",
+      original: { ...readyPhoto.original, contentType: "image/x-adobe-dng" },
+    };
+    await expect(withResolver.validate(readyPhoto.recipe.settings, snapshot(raw))).resolves.toBeNull();
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it("turns resolver infrastructure rejection into only the generic unavailable error", async () => {
+    const settings = { ...readyPhoto.recipe.settings, base: RASTER_BASE };
+    const canonical = canonicalRaster(settings);
+    const pending = snapshot({ ...canonical.photo, media: { state: "processing", jobId: IDS.job } });
+    const resolver = vi.fn(async () => { throw new Error("provider-secret-detail"); });
+    const withResolver = await createPinnedPhotoRecipeValidator({ canonicalContextResolver: resolver });
+    await expect(withResolver.validate(settings, pending)).rejects.toThrow("photo recipe validator unavailable");
+    await expect(withResolver.validate(settings, pending)).rejects.not.toThrow("provider-secret-detail");
+    expect(resolver).toHaveBeenCalledTimes(2);
   });
 
   it("extracts unique sorted lowercase external mask surface IDs without changing the settings hash", async () => {

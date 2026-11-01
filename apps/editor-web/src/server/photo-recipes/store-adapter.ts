@@ -2,6 +2,7 @@ import "server-only";
 import {
   PhotoRevisionConflictError,
   PhotoStoreError,
+  getPhotoCanonicalWorkingCopy,
   getPhotoSnapshot,
   getPhotoVersions,
   putPhotoRecipe,
@@ -20,7 +21,7 @@ import {
 } from "../../../../../packages/photo-library-contract/src/v1";
 import { photoFromSnapshot } from "../photo-catalog/store-adapter";
 import { PhotoRecipeError } from "./api";
-import type { PhotoRecipeLibrarySnapshot, PhotoRecipeSnapshot, PhotoRecipeStore } from "./types";
+import type { PhotoCanonicalContextResolver, PhotoRecipeLibrarySnapshot, PhotoRecipeSnapshot, PhotoRecipeStore } from "./types";
 
 function recipe(value: PhotoRecipeRecord): Photo["recipe"] {
   return {
@@ -98,5 +99,42 @@ export function createPhotoRecipeStore(db: Database, capabilities: PhotoCapabili
       const result = await fromStore(() => putPhotoVersions(db, owner, photoId, input));
       return result ? { versions: versions(result.versions), replayed: result.replayed } : null;
     },
+  };
+}
+
+/** Owner-scoped, read-only P02 adapter. No provider locator crosses this boundary. */
+export function createPhotoCanonicalContextResolver(db: Database): PhotoCanonicalContextResolver {
+  return async (expected) => {
+    const found = await getPhotoCanonicalWorkingCopy(db, expected.ownerId, expected.photoId, {
+      libraryId: expected.libraryId,
+      originalAssetId: expected.originalAssetId,
+      originalSha256: expected.originalSha256,
+      baseVersion: expected.baseVersion,
+      rendererManifestSha256: expected.rendererManifestSha256,
+    });
+    if (!found) return null;
+    return {
+      ownerId: found.ownerId,
+      libraryId: found.libraryId,
+      photoId: found.photoId,
+      originalAssetId: found.originalAssetId,
+      originalSha256: found.originalSha256,
+      baseVersion: found.baseVersion,
+      rendererManifestSha256: found.rendererManifestSha256,
+      workingCopy: {
+        asset: {
+          id: found.workingCopy.asset.id,
+          kind: found.workingCopy.asset.kind,
+          sha256: found.workingCopy.asset.sha256,
+          sizeBytes: found.workingCopy.asset.sizeBytes,
+          contentType: found.workingCopy.asset.contentType,
+          width: found.workingCopy.asset.width,
+          height: found.workingCopy.asset.height,
+        },
+        baseVersion: found.workingCopy.baseVersion,
+        encoding: found.workingCopy.encoding,
+        meta: found.workingCopy.meta,
+      },
+    };
   };
 }

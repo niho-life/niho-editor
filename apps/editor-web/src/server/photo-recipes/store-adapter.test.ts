@@ -3,6 +3,7 @@ import { HASH, IDS, readyPhoto } from "../../../../../packages/photo-library-con
 import type { PhotoCapabilities } from "../../../../../packages/photo-library-contract/src/v1";
 
 const storeMocks = vi.hoisted(() => ({
+  getPhotoCanonicalWorkingCopy: vi.fn(),
   getPhotoSnapshot: vi.fn(),
   getPhotoVersions: vi.fn(),
   putPhotoRecipe: vi.fn(),
@@ -16,7 +17,7 @@ vi.mock("@niho/editor-store", async () => {
 });
 
 import { PhotoRevisionConflictError, type Database, type PhotoSnapshot } from "@niho/editor-store";
-import { createPhotoRecipeStore } from "./store-adapter";
+import { createPhotoCanonicalContextResolver, createPhotoRecipeStore } from "./store-adapter";
 
 const capabilities: PhotoCapabilities = {
   formats: [],
@@ -114,5 +115,50 @@ describe("photo recipe P02 store adapter", () => {
       requestHash: HASH.settings,
       recipe: { settings: readyPhoto.recipe.settings, settingsSha256: HASH.settings, baseVersion: null, maskSurfaceIds: [] },
     })).rejects.toMatchObject({ code: "revision_conflict", currentRevision: 5 });
+  });
+
+  it("maps only credential-free canonical context from the owner-scoped P02 lookup", async () => {
+    storeMocks.getPhotoCanonicalWorkingCopy.mockResolvedValue({
+      ownerId: IDS.userA,
+      libraryId: readyPhoto.libraryId,
+      photoId: readyPhoto.id,
+      originalAssetId: readyPhoto.original.id,
+      originalSha256: readyPhoto.original.sha256,
+      baseVersion: "raster.ci2.p2.e2.icc-srgb",
+      rendererManifestSha256: capabilities.renderer.manifestSha256,
+      workingCopy: {
+        asset: {
+          id: IDS.mask, kind: "working-copy", sha256: HASH.mask, sizeBytes: 12,
+          contentType: "image/jpeg", width: 2, height: 1,
+          objectKey: "must-not-cross-adapter", objectGeneration: "9",
+        },
+        baseVersion: "raster.ci2.p2.e2.icc-srgb",
+        encoding: "jpeg8",
+        meta: { kind: "raster", encoding: "jpeg8" },
+      },
+    });
+    const db = {} as Database;
+    const resolver = createPhotoCanonicalContextResolver(db);
+    const expected = {
+      ownerId: IDS.userA,
+      libraryId: readyPhoto.libraryId,
+      photoId: readyPhoto.id,
+      originalAssetId: readyPhoto.original.id,
+      originalSha256: readyPhoto.original.sha256,
+      baseVersion: "raster.ci2.p2.e2.icc-srgb",
+      rendererManifestSha256: capabilities.renderer.manifestSha256,
+    };
+    const result = await resolver(expected);
+
+    expect(storeMocks.getPhotoCanonicalWorkingCopy).toHaveBeenCalledWith(db, IDS.userA, readyPhoto.id, {
+      libraryId: readyPhoto.libraryId,
+      originalAssetId: readyPhoto.original.id,
+      originalSha256: readyPhoto.original.sha256,
+      baseVersion: expected.baseVersion,
+      rendererManifestSha256: expected.rendererManifestSha256,
+    });
+    expect(result).toMatchObject({ ...expected, workingCopy: { asset: { id: IDS.mask, kind: "working-copy" } } });
+    expect(result?.workingCopy.asset).not.toHaveProperty("objectKey");
+    expect(result?.workingCopy.asset).not.toHaveProperty("objectGeneration");
   });
 });
