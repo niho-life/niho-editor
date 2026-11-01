@@ -121,6 +121,15 @@ describe("photo transfer authorization and schema", () => {
     expect((await f.api.start(post(deep), actor)).status).toBe(400);
     expect(f.store.reserve).not.toHaveBeenCalled();
   });
+  it("rejects GET bodies before reading a private upload", async () => {
+    const f = arrange();
+    const progress = vi.spyOn(f.deps.storage, "progress");
+    const response = await f.api.get(new Request(`${ORIGIN}/api/photo/v1/uploads`, { headers: { "content-length": "1" } }), actor, IDS.upload);
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("invalid_request");
+    expect(f.store.upload).not.toHaveBeenCalled();
+    expect(progress).not.toHaveBeenCalled();
+  });
   it("makes malformed and foreign resources indistinguishable before Range or storage", async () => {
     const f = arrange(); await f.reserve();
     for (const id of [IDS.upload, "malformed"]) {
