@@ -5,12 +5,12 @@ import {
   getPhotoSnapshot,
   getPhotoUploadByStartKey,
   type Database,
-  type PhotoAssetRecord,
 } from "@niho/editor-store";
 import { applyMigrations } from "@niho/editor-store/migrate";
 import { Pool } from "pg";
 import type { Photo, StartUploadRequest, VerifiedPhotoActor } from "../../../../../packages/photo-library-contract/src/v1";
 import { createFakePhotoStorage } from "../../storage/photo-fake";
+import { photoFromSnapshot } from "../photo-catalog/store-adapter";
 import { createPhotoTransferApi } from "../photo-transfer/api";
 import { createP02PhotoTransferStore } from "../photo-transfer/p02";
 import type { PhotoMutationJournal, PhotoProbe, PhotoTransferStore, ProbeResult } from "../photo-transfer/types";
@@ -36,7 +36,10 @@ export type ConformanceDatabaseEnv = {
   readonly TEST_DATABASE_URL?: string;
 };
 
-export function conformanceDatabaseUrl(env: ConformanceDatabaseEnv = process.env): string | undefined {
+export function conformanceDatabaseUrl(env: ConformanceDatabaseEnv = {
+  CI: process.env.CI,
+  TEST_DATABASE_URL: process.env.TEST_DATABASE_URL,
+}): string | undefined {
   const value = env.TEST_DATABASE_URL;
   if (!value) {
     if (env.CI === "true") throw new Error("CI requires TEST_DATABASE_URL for photo conformance");
@@ -91,48 +94,9 @@ export async function openConformanceDatabase(connectionString: string): Promise
   };
 }
 
-function publicAsset(asset: PhotoAssetRecord): Photo["original"] {
-  return {
-    id: asset.id,
-    kind: asset.kind,
-    sha256: asset.sha256,
-    sizeBytes: asset.sizeBytes,
-    contentType: asset.contentType,
-    width: asset.width,
-    height: asset.height,
-  };
-}
-
 async function projectPhoto(db: Database, owner: string, id: string): Promise<Photo | null> {
   const snapshot = await getPhotoSnapshot(db, owner, id);
-  if (!snapshot) return null;
-  const { photo: record, recipe } = snapshot;
-  return {
-    id: record.id,
-    libraryId: record.libraryId,
-    storageState: "stored",
-    lifecycle: record.lifecycle,
-    fileName: record.fileName,
-    format: record.format,
-    hasEdits: snapshot.hasEdits,
-    addedAt: record.addedAt,
-    capturedAt: record.capturedAt,
-    width: record.width,
-    height: record.height,
-    original: publicAsset(record.original),
-    recipe: {
-      revision: recipe.revision,
-      settings: recipe.settings,
-      settingsSha256: recipe.settingsSha256,
-      baseVersion: recipe.baseVersion,
-      maskSurfaceIds: recipe.maskSurfaceIds,
-      updatedAt: recipe.updatedAt,
-    },
-    // Media serialization/worker acceptance is outside these transfer tests.
-    media: { state: "queued", jobId: record.id },
-    trashedAt: record.trashedAt,
-    purgeAfter: record.purgeAfter,
-  };
+  return snapshot ? photoFromSnapshot(snapshot) : null;
 }
 
 function journal(db: Database): PhotoMutationJournal {

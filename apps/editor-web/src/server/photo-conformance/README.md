@@ -8,17 +8,18 @@ P00 の `security-cases.json` 34件を、P03 transfer handler core と P02 Postg
 - 専用 random schema 上の PostgreSQL writer を handler 経由で動かした owner scope、quota直列化、idempotency、complete/cancel/expiry/lifecycle fence
 - generation を持つ合成 storage port に対し、DBに保存した immutable generation で content read すること
 - 合成バイト列を全量hashし、test-only probe の結果とmagic、サイズ、format、pixel上限を照合すること
+- P04の本番route factoryとDB adapterで、写真詳細・hash lookup・cursorのowner境界とcreation watermarkを保つこと（能力と認証portは合成fixture）
 
 DBはlocalでは専用の loopback `56542` だけを許可する。`CI=true` では使い捨てfixtureの loopback `5432`、user `editor_ci`、database `editor_ci` の組み合わせだけを許可し、外部hostや別DBを拒否する。suiteごとに random schemaを作り、migration適用後、終了時にそのschemaだけを `CASCADE` で削除してpoolを閉じる。setup途中の失敗でも作成済みschemaを削除する。動的値はschema名以外すべてSQL parameterで渡す。CIで `TEST_DATABASE_URL` が無ければ失敗し、localで無ければDB integration suiteだけをskipする。
 
-P02の本番用snapshot、mask/start-key lookup、永続request journalを接続する。stored resultに必要な `Photo` のwire変換はsnapshotから組み立てるtest-only shimで、mediaの `queued` 値はwire shapeを満たすための合成値。media workerの証拠には数えない。
+P02の本番用snapshot、mask/start-key lookup、永続request journalと、P04の本番用wire変換を接続する。job作成前は実装どおり `media.pending` を返し、job IDを補わない。media workerの受入は別途必要。
 
 ## 証明しない範囲
 
 - 実Cookie／bearerの検証・失効、実 route wiring、実認証provider
 - 実decoderが画像全体を安全にdecodeできること。probe fixtureはdecoderの代用品ではない
 - 実GCSの署名URL、resumable upload、generation precondition、IAM、provider error
-- catalog/recipe/media/lifecycle/jobの未接続portとroute、実purge worker
+- catalogの実NIHO認証runtime、recipe/media/lifecycle/jobの未接続portとroute、実purge worker
 - ブラウザ／Mac実機、実画像、性能、ネットワーク障害時の受入
 
 合成fixtureだけを使い、実URL、cookie、token、provider error本文は出力しない。

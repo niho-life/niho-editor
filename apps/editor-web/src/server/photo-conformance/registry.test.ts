@@ -23,10 +23,10 @@ describe("P00 photo conformance registry", () => {
   });
 
   it("keeps partial coverage out of the complete evidence aggregate", () => {
-    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "db-handler")).toHaveLength(13);
+    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "db-handler")).toHaveLength(16);
     expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "handler-precondition")).toHaveLength(3);
     expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "partial")).toHaveLength(6);
-    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "blocked")).toHaveLength(12);
+    expect(PHOTO_CONFORMANCE_CASES.filter((item) => item.evidence === "blocked")).toHaveLength(9);
 
     for (const id of ["revoked-content", "format-spoof", "pixel-limit"]) {
       expect(PHOTO_CONFORMANCE_CASES.find((item) => item.id === id)).toMatchObject({

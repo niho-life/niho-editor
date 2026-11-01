@@ -16,14 +16,14 @@ export type ConformanceCase = {
  * `partial` と `blocked` は合格ではない。特に実 provider・実 route の代替にしない。
  */
 export const PHOTO_CONFORMANCE_CASES = [
-  { id: "unauthenticated-library", evidence: "partial", test: "auth/schema guard", remaining: "library.get の実 route と実認証 resolver" },
+  { id: "unauthenticated-library", evidence: "partial", test: "unauthenticated-library", remaining: "実NIHO認証 resolver" },
   { id: "owner-in-request", evidence: "handler-precondition", test: "auth/schema guard", remaining: null },
-  { id: "foreign-photo", evidence: "blocked", test: null, remaining: "catalog handler/route と実DBの独立接続" },
+  { id: "foreign-photo", evidence: "db-handler", test: "foreign-photo", remaining: null },
   { id: "foreign-original", evidence: "db-handler", test: "owner-scoped content", remaining: null },
   { id: "foreign-upload", evidence: "db-handler", test: "owner-scoped upload mutations", remaining: null },
   { id: "foreign-purge-job", evidence: "blocked", test: null, remaining: "jobs.get route" },
-  { id: "foreign-hash", evidence: "blocked", test: null, remaining: "catalog handler とowner-scoped lookupの独立接続" },
-  { id: "foreign-cursor", evidence: "blocked", test: null, remaining: "catalog route integration" },
+  { id: "foreign-hash", evidence: "db-handler", test: "foreign-hash", remaining: null },
+  { id: "foreign-cursor", evidence: "db-handler", test: "foreign-cursor", remaining: null },
   { id: "cookie-origin", evidence: "partial", test: "auth/schema guard", remaining: "photos.trash route での Origin 検証" },
   { id: "revoked-content", evidence: "partial", test: "owner-scoped content", remaining: "実 session revocation resolver" },
   { id: "quota-boundary", evidence: "db-handler", test: "quota serialization", remaining: null },
