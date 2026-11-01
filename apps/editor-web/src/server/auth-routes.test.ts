@@ -211,6 +211,26 @@ describe("/photo/auth/*", () => {
     expect((await finishLogin(post("/auth/callback", ORIGIN), scoped)).headers.get("location")).toBe("https://login.example.invalid/authorize");
   });
 
+  it("preserves NIHO Docs callback failures and their return paths when a photo seam also exists", async () => {
+    const provider = recordingProvider("niho").provider;
+    const locations = [
+      "/auth/login?next=%2Fsettings&error=unavailable",
+      "/auth/login?error=unavailable",
+      "/auth/login?next=%2Fp%2F" + ID + "&error=forbidden",
+    ];
+    for (const location of locations) {
+      provider.completeLogin = async () => new Response(null, {
+        status: 303,
+        headers: { Location: location, "Set-Cookie": "__Host-editor-niho-pending=; Max-Age=0; Secure; HttpOnly; Path=/" },
+      });
+      const response = await finishLogin(post("/auth/callback", ORIGIN), {
+        auth: () => provider, photoAuth: () => provider, env: {},
+      });
+      expect(response.headers.get("location")).toBe(location);
+      expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+    }
+  });
+
   it("rewrites a scoped start provider failure to the photo login without exposing the Docs login", async () => {
     const niho = recordingProvider("niho").provider;
     niho.beginLogin = async ({ returnTo }) => new Response(null, {

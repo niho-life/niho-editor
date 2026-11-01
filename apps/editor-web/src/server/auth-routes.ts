@@ -39,7 +39,7 @@ function photoProvider(deps: AuthRoutesDeps): AuthProvider | null {
 }
 
 /** NIHO provider が返す既存の `/auth/login` だけを写真ログインへ移す。外部Locationや成功先は触らない。 */
-function rewritePhotoLogin(response: Response): Response {
+function rewritePhotoLogin(response: Response, requirePhotoReturnTo = false): Response {
   const location = response.headers.get("Location");
   if (!location || (location !== "/auth/login" && !location.startsWith("/auth/login?"))) return response;
   let parsed: URL;
@@ -49,7 +49,10 @@ function rewritePhotoLogin(response: Response): Response {
     return response;
   }
   if (parsed.origin !== "https://editor.invalid" || parsed.pathname !== "/auth/login") return response;
-  const next = safePhotoReturnTo(parsed.searchParams.get("next"));
+  const returnTo = safeReturnTo(parsed.searchParams.get("next"));
+  // callbackはDocsと共用。providerが保持した戻り先で写真フローだけを選び、Docsの失敗先を変えない。
+  if (requirePhotoReturnTo && safePhotoReturnTo(returnTo) !== returnTo) return response;
+  const next = safePhotoReturnTo(returnTo);
   const error = loginErrorOf(parsed.searchParams.get("error") ?? undefined) ?? undefined;
   const copy = new Response(response.body, response);
   copy.headers.set("Location", photoLoginPath(next, error));
@@ -62,7 +65,7 @@ export function finishLogin(request: Request, deps: AuthRoutesDeps): Promise<Res
     if (request.method === "POST" && deps.photoAuth) {
       const provider = photoProvider(deps);
       if (!provider) return unavailable();
-      return noStore(rewritePhotoLogin(await provider.completeLogin(request)));
+      return noStore(rewritePhotoLogin(await provider.completeLogin(request), true));
     }
     const provider = deps.auth();
     if (request.method === "GET" && provider.mode === "niho") return methodNotAllowed("POST");
