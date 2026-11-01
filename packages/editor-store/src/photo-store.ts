@@ -607,6 +607,30 @@ export async function lookupPhotoByOriginal(db: Queryable, owner: OwnerId, sha25
   return getPhoto(db, owner, found.photoId);
 }
 
+/** A deduplicated start is still an idempotent success; generation zero denotes no incoming copy. */
+async function recordExistingUploadStart(
+  client: Queryable, owner: OwnerId, library: LibraryRow, input: ReservePhotoUploadInput,
+  existing: { photoId: string; assetId: string }, targetLifecycleEpoch: number | null,
+): Promise<ReservePhotoUploadResult> {
+  await client.query(
+    `INSERT INTO photo_uploads
+       (owner, library_id, operation, target_photo_id, declared_size_bytes, sha256, content_type,
+        file_name, format, idempotency_key, request_hash, reserved_bytes, library_lifecycle_epoch,
+        target_lifecycle_epoch, state, result_photo_id, result_asset_id, completed_lease_generation,
+        completed_object_key, completed_object_generation, completed_content_type, completed_format,
+        completed_width, completed_height, completed_captured_at, deduplicated)
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, $12, $13, 'stored',
+        p.id, a.id, 0, a.object_key, a.object_generation, a.content_type,
+        CASE WHEN $3 = 'original' THEN p.format ELSE NULL END, a.width, a.height, p.captured_at, true
+       FROM photos AS p JOIN photo_assets AS a ON a.owner = p.owner AND a.photo_id = p.id
+      WHERE p.owner = $1 AND p.id = $14 AND a.id = $15`,
+    [owner, library.id, input.operation, input.targetPhotoId ?? null, input.sizeBytes, input.sha256,
+      input.contentType, input.fileName ?? null, input.format ?? null, input.idempotencyKey, input.requestHash,
+      library.lifecycle_epoch, targetLifecycleEpoch, existing.photoId, existing.assetId],
+  );
+  return { status: "existing", photoId: existing.photoId, assetId: existing.assetId };
+}
+
 export async function reservePhotoUpload(db: Database, owner: OwnerId, input: ReservePhotoUploadInput): Promise<ReservePhotoUploadResult | null> {
   assertOwner(owner);
   assertReserveInput(input);
@@ -621,7 +645,12 @@ export async function reservePhotoUpload(db: Database, owner: OwnerId, input: Re
     )).rows[0];
     if (replay) {
       if (replay.request_hash !== input.requestHash) throw new PhotoStoreError("idempotency_conflict");
-      if (replay.state === "stored" && !(await storedUploadResultIsCurrent(client, owner, replay))) return null;
+      if (replay.state === "stored") {
+        if (!(await storedUploadResultIsCurrent(client, owner, replay))) return null;
+        if (number(replay.lease_generation) === 0 && replay.deduplicated) {
+          return { status: "existing", photoId: replay.result_photo_id!, assetId: replay.result_asset_id! };
+        }
+      }
       return { status: "replayed", upload: toUpload(replay) };
     }
 
@@ -629,7 +658,7 @@ export async function reservePhotoUpload(db: Database, owner: OwnerId, input: Re
     if (input.operation === "original") {
       const existing = await existingOriginal(client, owner, input.sha256, input.sizeBytes);
       if (existing?.lifecycle === "trashed") throw new PhotoStoreError("photo_trashed");
-      if (existing) return { status: "existing", photoId: existing.photoId, assetId: existing.assetId };
+      if (existing) return recordExistingUploadStart(client, owner, library, input, existing, targetLifecycleEpoch);
     } else {
       const target = (await client.query<{ lifecycle: string; lifecycle_epoch: string }>(
         "SELECT lifecycle, lifecycle_epoch::text AS lifecycle_epoch FROM photos WHERE owner = $1 AND id = $2 FOR UPDATE",
@@ -640,7 +669,7 @@ export async function reservePhotoUpload(db: Database, owner: OwnerId, input: Re
       if (target.lifecycle !== "active") return null;
       targetLifecycleEpoch = number(target.lifecycle_epoch);
       const existing = await existingMask(client, owner, input.targetPhotoId!, input.sha256);
-      if (existing) return { status: "existing", photoId: existing.photoId, assetId: existing.assetId };
+      if (existing) return recordExistingUploadStart(client, owner, library, input, existing, targetLifecycleEpoch);
     }
 
     if (number(library.used_bytes) + number(library.reserved_bytes) + input.sizeBytes > number(library.quota_bytes)) {

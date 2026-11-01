@@ -215,6 +215,47 @@ describe("personal photo store on PostgreSQL", { skip: databaseUrl === undefined
     );
   });
 
+  it("persists deduplicated starts and fences their keys after original or mask deletion", async () => {
+    const owner = `synthetic-dedup-start-${randomUUID()}`;
+    const made = await createOriginal(pool, owner, SHA_A, 100);
+    const input = originalInput(SHA_A, 100);
+    const first = await reservePhotoUpload(pool, owner, input);
+    assert.deepEqual(first, { status: "existing", photoId: made.completed.photoId, assetId: made.completed.assetId });
+    assert.deepEqual(await reservePhotoUpload(pool, owner, input), first);
+    await rejectsCode(() => reservePhotoUpload(pool, owner, { ...input, sha256: SHA_B, requestHash: SHA_B }), "idempotency_conflict");
+    const maskInput = { operation: "mask" as const, targetPhotoId: made.completed.photoId,
+      sizeBytes: 20, sha256: SHA_B, contentType: "image/png", idempotencyKey: randomUUID(), requestHash: SHA_A };
+    const reservation = await reservePhotoUpload(pool, owner, maskInput);
+    assert.equal(reservation?.status, "created");
+    const claimed = await claimPhotoUploadVerification(pool, owner, reservation.upload.id);
+    assert.ok(claimed);
+    const maskObject = verified(claimed, "dedup-start-mask");
+    const mask = await completePhotoUpload(pool, owner, claimed.id, maskObject);
+    assert.ok(mask);
+    const duplicateMask = { ...maskInput, idempotencyKey: randomUUID() };
+    const existingMask = { status: "existing", photoId: mask.photoId, assetId: mask.assetId };
+    assert.deepEqual(await reservePhotoUpload(pool, owner, duplicateMask), existingMask);
+    assert.deepEqual(await reservePhotoUpload(pool, owner, duplicateMask), existingMask);
+    await rejectsCode(() => reservePhotoUpload(pool, owner, { ...duplicateMask, sizeBytes: 21, requestHash: SHA_B }), "idempotency_conflict");
+    const usage = await getPhotoUsage(pool, owner);
+    assert.equal(usage.usedBytes, 120);
+    assert.equal(usage.reservedBytes, 0);
+    const records = await pool.query("SELECT state, reserved_bytes, completed_lease_generation FROM photo_uploads WHERE owner = $1 AND idempotency_key = ANY($2)",
+      [owner, [input.idempotencyKey, duplicateMask.idempotencyKey]]);
+    assert.equal(records.rowCount, 2);
+    assert.ok(records.rows.every(row => row.state === "stored" && Number(row.reserved_bytes) === 0 && Number(row.completed_lease_generation) === 0));
+    await trashPhoto(pool, owner, made.completed.photoId, { idempotencyKey: randomUUID(), requestHash: SHA_A });
+    await rejectsCode(() => reservePhotoUpload(pool, owner, input), "photo_trashed");
+    await rejectsCode(() => reservePhotoUpload(pool, owner, duplicateMask), "photo_trashed");
+    const purge = await beginPhotoPurge(pool, owner, made.completed.photoId, { idempotencyKey: randomUUID(), requestHash: SHA_B });
+    assert.ok(purge);
+    await confirmPhotoAssetDeleted(pool, owner, purge.job.id, made.completed.assetId, made.object.objectGeneration);
+    await confirmPhotoAssetDeleted(pool, owner, purge.job.id, mask.assetId, maskObject.objectGeneration);
+    assert.equal(await reservePhotoUpload(pool, owner, input), null);
+    assert.equal(await reservePhotoUpload(pool, owner, duplicateMask), null);
+    assert.equal((await getPhotoUsage(pool, owner)).reservedBytes, 0);
+  });
+
   it("never queues a live generation and converges an exact duplicate without GC", async () => {
     const owner = `synthetic-live-locator-${randomUUID()}`;
     // 二つの予約を確定前に作り、同時uploadの後着completeを再現する。

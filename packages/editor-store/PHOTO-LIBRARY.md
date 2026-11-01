@@ -23,3 +23,5 @@
 `markPhotoLibraryDeleting` は新規予約を拒み、未完了の予約を解放し、accountと各photoの世代を進める。deleting中はP07が全原本を同じ台帳で消せるよう、active photoも `beginPhotoPurge` へ渡せる。active accountでこの省略は使えない。
 
 migrationには、現在のrecipeとrevision、named/auto versions、media job、purge job、canonical media metadataのowner付き保存先を用意した。初期recipeはSDKのneutralと揃え、RAWは `neutralDevelopSettings(null, { raw: true })` 相当の `niho-2`、ラスタは既存の `niho-14` を保存する。canonical base確定後の初期recipe整合はP05/P06で接続する。すでに保存された補正は自動昇格・自動置換しない。P05/P06はこの基盤に完全なCAS/worker操作を接続する。適用済みのmigrationを編集しない。
+
+重複を検出して容量予約なしで成功するstartも、同じ`photo_uploads`台帳にpayload hashと対象photo/assetを保存する。この行は`stored`・予約0・完了lease generation 0（新しい転送なし）で、再送のpayload照合と現在のphoto状態の再検証を通す。実転送の検証leaseは1以上なので区別でき、trash/purge後に同じキーからuploadを新設しない。
