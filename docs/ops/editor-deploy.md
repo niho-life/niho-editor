@@ -305,13 +305,13 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 3. `scripts/editor-deploy/set-transcribe-key.sh` — 端末で実行すると、入力を画面に出さずに鍵を求める。パスワード管理の CLI から渡すときは `<鍵を出すコマンド> | scripts/editor-deploy/set-transcribe-key.sh`。
 4. `deploy.env` に `TRANSCRIBE_MODE=cloud-tasks`（任意で `TRANSCRIBE_TIMEOUT_SEC`）。
 5. `scripts/editor-deploy/deploy.sh --no-build` — `DEEPGRAM_API_KEY`（Secret の `latest`）・`EDITOR_TRANSCRIBE_ENGINE=deepgram` と、呼び出し口の 4 つの環境変数が付く。要求の上限も時間切れに合わせて上がる。smoke で worker の route が OIDC トークンなしで 401 を返すことを確かめる。
-6. 短い音声を 1 つ起こして、段落と話者が出ることを確かめる。**これは今できない**（下の「実地の確認」）。
+6. 短い合成音声と 1 時間の合成音声を本番 Deepgram で起こし、再生時間・話者・タイムスタンプ・保存状態まで確認済み（下の「実地の確認」）。段落編集の保存と話者名変更の反映は引き続き受入する。
 
-### 実地の確認（NIHO editor接続の実環境設定後）
+### 実地の確認（2026-11-02、一時的な Google 許可リスト）
 
-**本番で音声を1本通した確認は、まだ取れていません。** 画面から音声を上げるには本人のsessionが要るため、NIHO側feature flag、候補環境専用の固定callback・公開側originとPOST transportを対向配備し、code/stateを生成URLやログへ残さない合成受入を済ませたうえで、trafficを受けない候補環境で実アカウントの接続受入を先に行う。未設定の間は`/auth/login/start`が`/auth/login?error=unavailable`へ戻る。`stub`へ落とす経路は本番にはない。
+**短尺・1時間の合成音声による本番アップロードと Deepgram 文字起こしは完了しました。** ログインには許可リストを絞った一時的な Google 認証を使いました。これは音声処理の機能受入であり、NIHO 認証の接続受入ではありません。NIHO 専用接続は、feature flag、候補環境専用の固定 callback・公開側 originとPOST transportを対向配備し、code/stateを生成URLやログへ残さない合成受入を済ませたうえで、trafficを受けない候補環境で別途受け入れます。未設定の間は `/auth/login/start` が `/auth/login?error=unavailable` へ戻ります。`stub` へ落とす経路は本番にはありません。
 
-**代わりに取れている確認**（2026-11-01 の配備、revision `niho-editor-00004-ntd`）:
+**実環境の基盤確認**（2026-11-01 の配備、revision `niho-editor-00004-ntd`）:
 
 | 確かめたこと | どう確かめたか |
 | --- | --- |
@@ -321,15 +321,24 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 | OIDC が実際に効いている | Cloud Scheduler の掃除が **200**（配備前は 404）。403 や 401 ではないので、audience と `niho-editor-tasks` の一致、route、DB、掃除の処理まで通っている |
 | 設定が噛み合っている | Cloud Run の要求の上限が 1320 秒（＝時間切れ 1200 ＋ 2 分）、キューは 3 回・60〜300 秒・同時 3 本、Scheduler の audience は run.app の URL |
 
-**接続が出たら、これだけ確かめれば完了と言えます**:
+**確認済み**:
 
-1. 本人でログインし、録音ページに**短い音声（30 秒ほど）**を上げて「文字起こし」を押す。状態が `queued` → `running` → `succeeded` と進む。
-2. **段落と話者**が本文に入る（話者を分けた場合は 1 始まりの番号、名前は空）。長さが入る。
-3. わざと失敗させて、**音声が残り「もう一度」ができる**こと。エンジンを入れたまま、形は合うが Deepgram が受け付けない鍵の版（でたらめな 1 行。`set-transcribe-key.sh` で足す）で配備する。起動時検査は鍵の形しか見ないので配備は通る。音声を上げて「文字起こし」を押すと、run が `failed` になり、`errorCode`（Deepgram の 401 は `engine_unavailable` に写される）が画面に出て、音声は消えない。確かめたら**正しい鍵をもう一度入れて版を足し、配備し直してから**「もう一度」を押し、`succeeded` まで進むこと。なお、鍵の版を無効にして配備しても失敗の経路は通らない（エンジンが `off` になり、開始が 503 `transcription_unavailable` で断られるだけで、run が作られない）。
-4. 時間切れの扱いと、Cloud Run の要求の上限との順序。**時間切れは音声の長さではなく、エンジンが返すまでにかかった時間**（`TRANSCRIBE_TIMEOUT_SEC`、既定 1200 秒）で決まる。20 分を超える音声でも、その間に返れば成功するので、長い音声を上げても `engine_timeout` になるとは限らない。確かめるのは次の 2 つ。
-   - **順序**: Cloud Run の要求の上限が時間切れより先に切れないこと。`gcloud run services describe niho-editor --region <region> --format='value(spec.template.spec.timeoutSeconds)'` が 1320（＝時間切れ 1200 ＋ 2 分）になっている。
-   - **`engine_timeout` になること**: 時間切れの扱い自体は `run.test.ts`（エンジンの応答を遅らせるテスト）で固定してある。本番で実際に見るなら、`deploy.env` の `TRANSCRIBE_TIMEOUT_SEC=60`（下限）で配備し、処理に 60 秒より長くかかる音声を上げる。60 秒以内に返れば成功するので、起きなくても失敗ではない。確かめたら `TRANSCRIBE_TIMEOUT_SEC` を戻して配備し直す。
-5. 掃除が効くこと: 実行中の run を DB で `running` のまま古くして、5 分以内に `engine_timeout` で失敗にされる（または queued の run が積み直される）。
+1. 6.65 秒・約 58 KB の合成音声をアップロードして Deepgram に送り、文字起こしの保存と再生を確認した。初回は話者分離パラメーターの併用不整合で拒否されたが、PR #190 の配備後、同じ録音の再試行が成功した。
+2. 1 時間・約 2.1 MB の合成音声をアップロードし、Deepgram の文字起こしが成功した。画面は `1:00:00` の再生時間、0 分から 59 分までの話者・タイムスタンプ付き段落、保存済み状態を表示した。これはアップロード・保存・Cloud Tasks worker・Deepgram の長尺経路の確認であり、実録音の認識品質確認ではない（同じ短い合成発話を繰り返した試験音声）。
+3. 試験用の録音ページは製品の削除操作でゴミ箱へ移した。確認画面には 30 日保持と表示され、再読み込み後に最近の一覧から消えた。物理削除は行っていない。
+
+**残る受入**:
+
+- 文字起こし段落を編集して保存し、再読み込み後も変更が残ること。
+- 話者名を変え、すべての段落へ反映されること。
+- 実マイクで録音し、Safari/iOS を含むブラウザー受入を記録する。
+- Mac 配布版で録音・端末内文字起こしを受け入れる（#45）。
+- NIHO 専用認証を、設定済みの候補環境で別途受け入れる。
+
+**時間切れ・掃除の追加受入**:
+
+- **`engine_timeout` になること**: 時間切れは音声の長さではなく、エンジンが返すまでにかかった時間（`TRANSCRIBE_TIMEOUT_SEC`、既定 1200 秒）で決まる。Cloud Run の要求上限は 1320 秒（時間切れ 1200 秒＋2 分）に設定済み。時間切れ自体は `run.test.ts`（エンジンの応答を遅らせるテスト）で固定してある。本番で確かめるなら `TRANSCRIBE_TIMEOUT_SEC=60` で配備し、60 秒より長くかかる音声で試す。60 秒以内に返れば成功するので、起きなくても失敗ではない。確かめたら設定を戻して配備し直す。
+- 掃除が効くこと: 実行中の run を隔離した候補環境で `running` のまま古くし、5 分以内に `engine_timeout` で失敗にされる（または queued の run が積み直される）。
 
 ### 無効にする・回す
 

@@ -6,9 +6,9 @@ import { EngineError, type EngineErrorCode, type EngineInput, type EngineResult,
  * Deepgram の文字起こし（`EDITOR_TRANSCRIBE_ENGINE=deepgram`）。依存を足さず fetch だけで、同期の呼び出し（callback は使わない）。
  *
  * 呼び出しの形は Mac 版（apps/docs/crates/api-ai/src/deepgram.rs。NIHO 本体の写し）に合わせる:
- * - `POST https://api.deepgram.com/v1/listen?model=nova-3&language={ja|en}&smart_format=false&punctuate=true&diarize={true|false}`
+ * - `POST https://api.deepgram.com/v1/listen?model=nova-3&language={ja|en}&smart_format=false&punctuate=true`
  *   `[&diarize_model=latest（話者を分けるときだけ）]&utterances=true&paragraphs=false[&keyterm=…（繰り返し）]`。
- *   Mac 版との違いは `diarize=true|false` を明示すること（話者を分けるかを要求の値で決めるため）。
+ *   Deepgram は `diarize_model` と `diarize=true` の併用を拒否するため、話者を分ける指定は `diarize_model` だけにする。
  * - keyterm は docs-core の deepgramKeyterms（表記だけ・重なりを除き・500 バイトの予算まで）。
  * - 本文は音声のバイト列そのまま（保存先から読み出した stream をそのまま流す。Node の fetch は `duplex: "half"` が要る）。
  *   header は `Authorization: Token <鍵>`・`Content-Type: <音声の種類>`・`Content-Length: <大きさ>`。
@@ -17,7 +17,7 @@ import { EngineError, type EngineErrorCode, type EngineInput, type EngineResult,
  * 失敗の写し方: 届かない・401・402・403・429・5xx は unavailable、400・413・415・422 は rejected、408・時間切れ・中断は timeout、
  * JSON でない・utterances が無い／空は bad_response、応答が 64 MiB を超えたら too_large。
  * 鍵・音声・応答の本文・URL は、ログにもエラーにも出さない（このファイルはログを書かず、エラーは固定の文の EngineError だけ）。
- * リダイレクトは辿らない（鍵を別の場所へ送らない）。**実際の Deepgram では未検証**（fetch を差し替えたテストだけ）。
+ * リダイレクトは辿らない（鍵を別の場所へ送らない）。実 Deepgram は 2026-11-02 に短尺・1 時間の合成音声で確認済み（実録音の品質と NIHO 認証は別途受入）。
  */
 
 export const DEEPGRAM_LISTEN_URL = "https://api.deepgram.com/v1/listen";
@@ -47,7 +47,6 @@ export function deepgramListenUrl(input: Pick<EngineInput, "language" | "diarize
   query.append("language", input.language === "en" ? "en" : "ja");
   query.append("smart_format", "false");
   query.append("punctuate", "true");
-  query.append("diarize", input.diarize ? "true" : "false");
   if (input.diarize) query.append("diarize_model", "latest");
   query.append("utterances", "true");
   query.append("paragraphs", "false");
