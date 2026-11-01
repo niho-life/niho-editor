@@ -9,6 +9,9 @@
 !packages/photo-library-contract
 !packages/editor-publish-contract
 !packages/editor-publish
+!workers/
+!workers/photo-purge/
+!workers/photo-purge/**
 **/node_modules
 **/.next
 **/dist
