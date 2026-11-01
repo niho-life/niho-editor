@@ -17,7 +17,7 @@ import { EngineError, type EngineErrorCode, type EngineInput, type EngineResult,
  * 失敗の写し方: 届かない・401・402・403・429・5xx は unavailable、400・413・415・422 は rejected、408・時間切れ・中断は timeout、
  * JSON でない・utterances が無い／空は bad_response、応答が 64 MiB を超えたら too_large。
  * 鍵・音声・応答の本文・URL は、ログにもエラーにも出さない（このファイルはログを書かず、エラーは固定の文の EngineError だけ）。
- * リダイレクトは辿らない（鍵を別の場所へ送らない）。**実際の Deepgram では未検証**（fetch を差し替えたテストだけ）。
+ * リダイレクトは辿らない（鍵を別の場所へ送らない）。実 Deepgram は 2026-11-02 に短尺・1 時間の合成音声で確認済み（実録音の品質と NIHO 認証は別途受入）。
  */
 
 export const DEEPGRAM_LISTEN_URL = "https://api.deepgram.com/v1/listen";
