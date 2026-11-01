@@ -258,6 +258,22 @@ describe("production start with the server entry (Dockerfile / npm start)", () =
       const login = await fetch(`http://127.0.0.1:${port}/photo/auth/login`, { redirect: "manual" });
       assert.equal(login.headers.get("referrer-policy"), "same-origin");
       assert.match(login.headers.get("content-security-policy") ?? "", /'nonce-[^']+'/);
+      const loginHtml = await login.text();
+      assert.match(loginHtml, /<title>ログイン · NIHO photo<\/title>/);
+      assert.match(loginHtml, /rel="manifest"[^>]*href="\/photo\/manifest.webmanifest"/);
+      const photoManifest = await fetch(`http://127.0.0.1:${port}/photo/manifest.webmanifest`);
+      assert.equal(photoManifest.status, 200);
+      assert.deepEqual(await photoManifest.json().then(({ id, name, start_url, scope }) => ({ id, name, start_url, scope })), {
+        id: "/photo", name: "NIHO photo", start_url: "/photo", scope: "/photo",
+      });
+      const photoWorker = await fetch(`http://127.0.0.1:${port}/photo-sw.js`);
+      assert.equal(photoWorker.status, 200);
+      assert.match(photoWorker.headers.get("cache-control") ?? "", /no-cache/);
+      assert.match(await photoWorker.text(), /niho-photo-static-v1/);
+      const photoSession = await fetch(`http://127.0.0.1:${port}/api/photo/v1/auth/session`);
+      assert.equal(photoSession.status, 503);
+      assert.equal(photoSession.headers.get("referrer-policy"), "no-referrer");
+      assert.match(photoSession.headers.get("cache-control") ?? "", /no-store/);
     } finally {
       const exited = new Promise(resolve => child.once("exit", resolve));
       child.kill("SIGTERM");

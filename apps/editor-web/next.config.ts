@@ -60,6 +60,9 @@ const nextConfig: NextConfig = {
       { source: "/v1/:path*", headers: [...securityHeaders, { key: "Content-Security-Policy", value: API_CSP }] },
       // service worker は更新がすぐ届くよう、ブラウザの HTTP cache に残さない（#49）
       { source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }] },
+      { source: "/photo-sw.js", headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }] },
+      // 写真APIのprivate応答をcatch-allのsame-originへ戻さず、handlerのno-referrer契約を保つ。
+      { source: "/api/photo/:path*", headers: [{ key: "Referrer-Policy", value: "no-referrer" }] },
       // catch-all の same-origin より後で standalone form の exact handler 3 箇所だけを上書きする
       { source: "/auth/login/start", headers: AUTH_FORM_HEADERS },
       { source: "/auth/callback", headers: AUTH_FORM_HEADERS },
