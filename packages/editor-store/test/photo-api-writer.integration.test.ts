@@ -220,6 +220,37 @@ describe("P02 API writer operations on PostgreSQL", { skip: databaseUrl === unde
     assert.equal((await getPhotoLibrary(pool, owner)).revision, afterReselect);
   });
 
+  it("requeues a superseded renderer after rollback without reviving the old claim", async () => {
+    const owner = `synthetic-renderer-rollback-${randomUUID()}`, made = await original(owner), id = made.snapshot.photo.id;
+    const first = await enqueuePhotoMediaJob(pool, owner, id, spec); assert.ok(first);
+    const oldClaim = await claimPhotoMediaJob(pool, owner, first.id); assert.ok(oldClaim);
+    const oldOutputs = await candidates(owner, oldClaim);
+    const next = await enqueuePhotoMediaJob(pool, owner, id, { ...spec, rendererManifestSha256: "f".repeat(64) }); assert.ok(next);
+    assert.equal(await supersedePhotoMediaJob(pool, owner, oldClaim), true);
+    const selected = await enqueuePhotoMediaJob(pool, owner, id, spec); assert.ok(selected);
+    assert.equal(selected.id, first.id);
+    assert.deepEqual(await listPendingPhotoMediaJobs(pool, owner), [first.id]);
+    const newClaim = await claimPhotoMediaJob(pool, owner, first.id); assert.ok(newClaim);
+    assert.ok(newClaim.generation > oldClaim.generation);
+    assert.equal(await publishPhotoMediaJob(pool, owner, oldClaim, oldOutputs.media, oldOutputs.objects, Math.min(oldClaim.expiresAt, Date.now() + 10_000)), false);
+    const newOutputs = await candidates(owner, newClaim);
+    assert.equal(await publishPhotoMediaJob(pool, owner, newClaim, newOutputs.media, newOutputs.objects, Math.min(newClaim.expiresAt, Date.now() + 10_000)), true);
+  });
+
+  it("updates the catalog revision when its selected media projection is superseded", async () => {
+    const owner = `synthetic-current-supersede-${randomUUID()}`, made = await original(owner), id = made.snapshot.photo.id;
+    const job = await enqueuePhotoMediaJob(pool, owner, id, spec); assert.ok(job);
+    const claim = await claimPhotoMediaJob(pool, owner, job.id); assert.ok(claim);
+    const before = await getPhotoLibrary(pool, owner);
+    assert.equal(await supersedePhotoMediaJob(pool, owner, claim), true);
+    assert.equal((await getPhotoSnapshot(pool, owner, id))?.media, null);
+    const after = await getPhotoLibrary(pool, owner);
+    assert.ok(after.revision > before.revision);
+    assert.equal((await enqueuePhotoMediaJob(pool, owner, id, spec))?.id, job.id);
+    assert.ok((await getPhotoLibrary(pool, owner)).revision > after.revision);
+    assert.deepEqual(await listPendingPhotoMediaJobs(pool, owner), [job.id]);
+  });
+
   it("fences late media after recipe changes and reconciles interrupted candidates", async () => {
     const owner = `synthetic-stale-${randomUUID()}`, made = await original(owner), id = made.snapshot.photo.id;
     const job = await enqueuePhotoMediaJob(pool, owner, id, spec); assert.ok(job); const claim = await claimPhotoMediaJob(pool, owner, job.id); assert.ok(claim);

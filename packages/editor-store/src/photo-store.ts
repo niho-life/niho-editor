@@ -1875,12 +1875,20 @@ export async function enqueuePhotoMediaJob(db: Database, owner: OwnerId, photoId
         [owner, photoId, identity.lifecycleGeneration, identity.original.generation, identity.baseVersion, identity.recipeRevision, identity.settingsSha256, identity.rendererManifestSha256, key, photoJsonHash(outputSpec)])).rows[0]?.id;
     }
     if (!id) throw new Error("editor-store: media convergence key mismatch");
+    // A renderer rollback may select an identity that was superseded while another
+    // renderer was current. Start a new attempt budget and fence every old claim.
+    const requeued = await client.query<{ id: string }>(
+      `UPDATE photo_media_jobs SET state='queued',terminal_reason=NULL,error_code=NULL,attempt_error=NULL,
+         ready_media=NULL,attempt_count=0,claim_generation=claim_generation+1,lease_until=NULL,retry_at=NULL,updated_at=clock_timestamp()
+       WHERE owner=$1 AND id=$2 AND terminal_reason='superseded' RETURNING id`,
+      [owner, id],
+    );
     const selected = await client.query<{ id: string }>(
       "UPDATE photos SET current_media_job_id=$3 WHERE owner=$1 AND id=$2 AND current_media_job_id IS DISTINCT FROM $3 RETURNING id",
       [owner, photoId, id],
     );
     await client.query("UPDATE photo_media_outbox SET consumed_at=COALESCE(consumed_at,clock_timestamp()) WHERE owner=$1 AND photo_id=$2 AND lifecycle_epoch=$3 AND recipe_revision=$4 AND settings_sha256=$5", [owner, photoId, identity.lifecycleGeneration, identity.recipeRevision, identity.settingsSha256]);
-    if (selected.rows.length > 0) await client.query("UPDATE photo_libraries SET revision=revision+1,updated_at=GREATEST(updated_at,clock_timestamp()) WHERE owner=$1", [owner]);
+    if (selected.rows.length > 0 || requeued.rows.length > 0) await client.query("UPDATE photo_libraries SET revision=revision+1,updated_at=GREATEST(updated_at,clock_timestamp()) WHERE owner=$1", [owner]);
     return { id, key, created: Boolean(inserted) };
   });
 }
@@ -1967,7 +1975,10 @@ export async function supersedePhotoMediaJob(db: Database, owner: OwnerId, claim
   assertOwner(owner); assertMediaClaim(claim);
   return transaction(db, async (client) => { const locked = await currentClaimRow(client, owner, claim, true); if (!locked) return false;
     await client.query("UPDATE photo_media_jobs SET state='failed',terminal_reason='superseded',lease_until=NULL,updated_at=clock_timestamp() WHERE owner=$1 AND id=$2", [owner, claim.jobId]);
-    await client.query("UPDATE photo_media_candidates SET state='abandoned',updated_at=clock_timestamp() WHERE owner=$1 AND job_id=$2 AND claim_generation=$3 AND state IN ('allocated','staged')", [owner, claim.jobId, claim.generation]); return true; });
+    await client.query("UPDATE photo_media_candidates SET state='abandoned',updated_at=clock_timestamp() WHERE owner=$1 AND job_id=$2 AND claim_generation=$3 AND state IN ('allocated','staged')", [owner, claim.jobId, claim.generation]);
+    await client.query(`UPDATE photo_libraries SET revision=revision+1,updated_at=GREATEST(updated_at,clock_timestamp()) WHERE owner=$1
+      AND EXISTS (SELECT 1 FROM photos WHERE owner=$1 AND current_media_job_id=$2)`, [owner, claim.jobId]);
+    return true; });
 }
 export async function failPhotoMediaJob(db: Database, owner: OwnerId, claim: PhotoMediaClaim, code: PhotoMediaAttemptFailure, retryAt: number | null): Promise<boolean> {
   assertOwner(owner); assertMediaClaim(claim);
