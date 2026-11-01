@@ -54,3 +54,17 @@ SDKの既存release assetを上書きしない。公式release workflowをmain�
 処理中のleaseはgenerationとsource identityでfenceする。rendererをA→B→Aと戻した場合も、supersededな旧jobを新しいclaimとして再queueし、旧claimのpublishを拒否できることを確認する。削除/GCはgeneration付きの永続台帳とlive asset照合を経て再開する。
 
 未解決の認可・原本保全・容量・削除の欠陥がある間は有効化しない。#161と#162は、必要な実設定・実端末・正式更新の証跡が揃うまでopenを維持する。
+
+## Web hostの固定SDK runtime
+
+`apps/editor-web` は `packages/photo-library-contract/sdk-baseline.json` に固定したPhoto SDKをexact release URLで取得する。`npm install` は `--ignore-scripts --no-audit --no-fund` を付け、baselineに記録したSHA-256 SRIとlockのintegrityが一致することを維持する。`@niho/photo-cloud-library` と `@niho/photo-library-contract` はmonorepo内の `file:` 依存を使う。
+
+`npm run build` のprebuildは `scripts/stage-photo-sdk-runtime.mjs` を実行する。scriptはインストール済み `niho-photo-develop-engine-runtime` のmanifest、全single-thread/thread runtime file、source commit、engine/crate版をbaselineと照合し、次のimmutable namespaceへ配置する。
+
+```text
+/photo-runtime/<releaseTag>/<release-manifest-sha256>/develop-engine/<engineVersion>/manifest-<crateVersion>.json
+```
+
+配置先が同一bytesなら再実行できるが、異なるbytesは上書きしない。別releaseのnamespaceも削除しない。WASM/Rustを再buildせず、networkからruntimeを追加取得しない。生成される `apps/editor-web/public/photo-runtime/` はGit管理外であり、Docker/standaloneへの同梱は各配備レーンでこのprebuild成果物をコピーする。
+
+P09画面は `src/photo-sdk/host-sdk.ts` の公式SDK re-exportと `src/photo-sdk/runtime-assets.ts` のdescriptorを使う。この追加だけでは認証、API、provider、写真UI、PWA、token、実配備を有効化しない。
