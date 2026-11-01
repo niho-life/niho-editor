@@ -47,7 +47,7 @@ jobs:
           git merge-base --is-ancestor "$REQUESTED_SOURCE" "$GITHUB_SHA"
           test "$(git show "$REQUESTED_SOURCE:sdk/photo-cloud-release-set.json" | node -p 'JSON.parse(require("node:fs").readFileSync(0,"utf8")).repository')" = "$GITHUB_REPOSITORY"
           version="$(git show "$REQUESTED_SOURCE:sdk/photo-cloud-release-set.json" | node -p 'JSON.parse(require("node:fs").readFileSync(0,"utf8")).version')"
-          test "$version" = "0.1.0"
+          test "$version" = "0.1.1"
           printf 'source-sha=%s\nversion=%s\n' "$REQUESTED_SOURCE" "$version" >> "$GITHUB_OUTPUT"
       - name: Checkout immutable selected source
         env:
@@ -222,7 +222,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="photo-cloud-sdk-v$VERSION"
-          test "$tag" = "photo-cloud-sdk-v0.1.0"
+          test "$tag" = "photo-cloud-sdk-v0.1.1"
           test -z "$(git ls-remote --tags origin "refs/tags/$tag")"
           if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" >/dev/null 2>&1; then exit 1; fi
           gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$SOURCE_SHA" >/dev/null

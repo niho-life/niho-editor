@@ -244,11 +244,29 @@ test("new lease generation is not modified by old worker failure or terminal CAS
 });
 
 test("delayed store publication cannot commit after the execution deadline", async (t) => {
+  // Freeze the deadline while real file I/O stages both outputs, then expire it
+  // only once publication is actually waiting. CI load must not choose the race.
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
   const delayed = await fixture(t, { timeoutMs: 10 });
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const completed = Promise.withResolvers();
+  t.after(() => release.resolve());
   const publish = delayed.jobs.publish;
-  delayed.jobs.publish = async (...args) => { await delay(35); return publish(...args); };
-  assert.equal(await delayed.execute(IDS.job), "timeout");
-  await delay(45);
+  delayed.jobs.publish = async (...args) => {
+    entered.resolve();
+    await release.promise;
+    const committed = await publish(...args);
+    completed.resolve(committed);
+    return committed;
+  };
+  const running = delayed.execute(IDS.job);
+  await entered.promise;
+  assert.equal(delayed.state.staged.length, 2);
+  t.mock.timers.tick(11);
+  assert.equal(await running, "timeout");
+  release.resolve();
+  assert.equal(await completed.promise, false);
   assert.equal(delayed.state.published, null);
   assert.equal(delayed.state.abandoned.length, 2);
 });

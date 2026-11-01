@@ -81,7 +81,7 @@ test("recipe fixtures carry distinct hashes of canonical settings", () => {
 
 test("SDK baseline pins a complete release set and all declared recipe engines", () => {
   assert.match(baseline.sourceCommit, /^[a-f0-9]{40}$/);
-  assert.equal(baseline.releaseTag, "photo-sdk-v0.1.5");
+  assert.equal(baseline.releaseTag, "photo-sdk-v0.1.6");
   assert.equal(baseline.engine.crateVersion, "0.27.0");
   assert.equal(baseline.packages.length, 6);
   const names = new Set();

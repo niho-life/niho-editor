@@ -2,6 +2,7 @@ node_modules/
 dist/
 .DS_Store
 *.log
+apps/editor-web/public/photo-runtime/
 
 # editor.niho.life の配備設定（本番プロジェクトを特定する値を含む）
 scripts/editor-deploy/deploy.env

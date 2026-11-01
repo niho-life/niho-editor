@@ -13,12 +13,12 @@
   "engines": { "node": "24.x" },
   "dependencies": {
     "@niho/photo-library-contract": "file:../photo-library-contract",
-    "niho-photo-contract": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.5/niho-photo-contract-0.1.5.tgz"
+    "niho-photo-contract": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.6/niho-photo-contract-0.1.6.tgz"
   },
   "devDependencies": {
-    "niho-photo-editing": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.5/niho-photo-editing-0.1.5.tgz",
-    "niho-photo-ui": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.5/niho-photo-ui-0.1.5.tgz",
-    "niho-photo-cloud-contract": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.5/niho-photo-cloud-contract-0.1.5.tgz",
+    "niho-photo-editing": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.6/niho-photo-editing-0.1.6.tgz",
+    "niho-photo-ui": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.6/niho-photo-ui-0.1.6.tgz",
+    "niho-photo-cloud-contract": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.6/niho-photo-cloud-contract-0.1.6.tgz",
     "@types/node": "24.19.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",

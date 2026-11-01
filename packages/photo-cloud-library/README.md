@@ -1,6 +1,6 @@
 # 本人写真API → PhotoLibrary adapter（段階1）
 
-Issue #157 P08のfixture先行実装。`@niho/photo-library-contract`のP00合成fixtureをcloneし、SDK 0.1.5の`PhotoLibrary`へ本人用APIを写す。実APIや本番認証へ接続した完成物ではないため、#157はこの段階ではcloseしない。
+Issue #157 P08のfixture先行実装。`@niho/photo-library-contract`のP00合成fixtureをcloneし、SDK 0.1.6の`PhotoLibrary`へ本人用APIを写す。実APIや本番認証へ接続した完成物ではないため、#157はこの段階ではcloseしない。
 
 ```sh
 npm -C packages/photo-cloud-library ci --ignore-scripts
@@ -21,11 +21,11 @@ npm -C packages/photo-cloud-library run check
 ## 残る接続
 
 - P01〜P07の実API・NIHO本人認証・storage/media/lifecycleとの接続と、P12の独立conformance。
-- SDK 0.1.5は個人用`scopeKey`を含む固定releaseとして採用済み。実hostからのscope注入とQueryClient破棄の受入は残る。
+- SDK 0.1.6は個人用`scopeKey`を含む固定releaseとして採用済み。実hostからのscope注入とQueryClient破棄の受入は残る。
 - React 19 / Next client boundary、QueryClient破棄、WASM/Worker/manifest/CSP、Web `/photo` mount、Mac native fetchとblob URL lifecycleの実host接続。
 - P03の`addFile`/`saveMaskSurface`転送、実decoder/runtime/HEIC・RAW・mask・mobile/cropの受入。
 - manifest＋full source SHA＋tarball SHA-256を伴う公開配布、niho-photo側の固定採用、署名済みMac/iPhone往復、本番配備。
 
-SDK packageはrelease URL/version/SHA-256 SRIをP00 baselineと照合する。`PhotoLibrary`型の手書きshimは持たず、通常の`tsconfig.json`と`tsconfig.sdk.json`の両方がpin済み0.1.5の実TS sourceを直接解決し、adapterの`… satisfies PhotoLibrary`を`strict:true`・`exactOptionalPropertyTypes:true`で検査する。testでも実sourceの必須methodを照合する。型importなのでSDK sourceをruntime importしない。
+SDK packageはrelease URL/version/SHA-256 SRIをP00 baselineと照合する。`PhotoLibrary`型の手書きshimは持たず、SDK 0.1.6の条件付き`types` exportから配布済み型宣言を解決し、adapterの`… satisfies PhotoLibrary`を検査する。通常の`tsconfig.json`と`tsconfig.sdk.json`の両方で`strict:true`、`exactOptionalPropertyTypes:true`、`noUncheckedIndexedAccess:true`、`verbatimModuleSyntax:true`、`skipLibCheck:false`を使用する。testでは同じtarballに含まれる実sourceの必須methodとURL/version/SRIも照合する。
 
-0.1.5の実SDK sourceは`noUncheckedIndexedAccess:true`ではSDK内部（`browser-photo-adjustments.ts`、`develop-geometry.ts`、`develop-perspective.ts`）にstrict errorが出る。またpackageに`type:module`が無いTS sourceなので、`verbatimModuleSyntax:true`ではSDK内部をCommonJSと判定したmodule errorになる。このrepoでは上流SDKを改造せず、両tsconfigの`noUncheckedIndexedAccess`と`verbatimModuleSyntax`を`false`にしている。したがって`tsconfig.sdk.json`が保証するのは「実SDK sourceを含む通常のstrict型検査と、実`PhotoLibrary`境界への適合」であり、SDK全体の`noUncheckedIndexedAccess`適合や`verbatimModuleSyntax`適合までは保証しない。
+0.1.5ではSDK内部のTS sourceがhostの厳しい型設定やReact 19と一致せず、consumer設定を緩める必要があった。0.1.6ではReact 19互換の型宣言をSDK側で配布し、consumerの設定を上記へ戻した。実行時のSDK source・Worker・WASMは従来のexportから読み、型検査の成功だけでrendererや実端末の受入を証明したことにはしない。

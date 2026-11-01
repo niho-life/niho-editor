@@ -54,6 +54,7 @@ export type PhotoStoreErrorCode =
   | "account_deleting"
   | "revision_conflict"
   | "unsupported_settings"
+  | "missing_mask_surface"
   | "content_rejected";
 
 export class PhotoStoreError extends Error {
@@ -1671,7 +1672,7 @@ export async function replayPhotoWrite(db: Database, owner: OwnerId, photoId: st
 async function assertPhotoMasks(client: Queryable, owner: OwnerId, photoId: string, ids: readonly string[]): Promise<void> {
   if (!ids.length) return;
   const count = (await client.query<{ count: number }>("SELECT count(DISTINCT sha256)::int AS count FROM photo_assets WHERE owner=$1 AND photo_id=$2 AND kind='mask' AND deletion_state='retained' AND sha256=ANY($3::text[])", [owner, photoId, ids])).rows[0]!.count;
-  if (count !== ids.length) throw new PhotoStoreError("unsupported_settings");
+  if (count !== ids.length) throw new PhotoStoreError("missing_mask_surface");
 }
 export type PhotoRecipeMutationInput = { expectedRevision: number; key: string; requestHash: string; recipe: PhotoRecipeWrite };
 export async function putPhotoRecipe(db: Database, owner: OwnerId, photoId: string, input: PhotoRecipeMutationInput): Promise<{ snapshot: PhotoSnapshot; replayed: boolean } | null> {

@@ -24,5 +24,5 @@ export default defineConfig([
       }],
     },
   },
-  globalIgnores([".next/**", "next-env.d.ts", "test/**/*.mjs"]),
+  globalIgnores([".next/**", "next-env.d.ts", "test/**/*.mjs", "public/photo-runtime/**"]),
 ]);

@@ -26,7 +26,7 @@ export const HASH = {
   settings: "198b7c25b44f10770c7301d31d8144dfedbb0393288d3555b7ce1d17a35ca62c",
   maskedSettings: "9b830e0cee503e719a24750927cad444d306a77524be110dc1a6b9367077beef",
   futureSettings: "795636badeeefeb888808d3b3b57267a87670352528c7c88159f9de4ea94624b",
-  manifest: "8b60027641b22555f5c5dd1347b8906236c56dbf4638f094f5d494dd13852dae",
+  manifest: "39bed5b6cdc433b7c7a88726e8544d9b454dd0d00b51059c42144c81757859ca",
 } as const;
 export const recipe: RecipeDocument = {
   revision: 0,
@@ -107,7 +107,7 @@ export const library: PersonalPhotoLibrary = {
       { format: "raw", extensions: ["rw2", "dng", "arw", "nef", "cr2", "cr3", "raf", "orf", "pef"], ingest: true, workingCopy: true },
     ],
     renderer: {
-      sdkVersion: "0.1.5", crateVersion: "0.27.0", manifestSha256: HASH.manifest,
+      sdkVersion: "0.1.6", crateVersion: "0.27.0", manifestSha256: HASH.manifest,
       settingsVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9],
       engines: ["niho-1", "niho-2", "niho-3", "niho-4", "niho-6", "niho-7", "niho-10", "niho-11", "niho-12", "niho-13", "niho-14"],
       features: ["geometry", "masks"], maskKinds: ["linear", "radial", "brush", "subject", "sky"], maskSurfaces: true,
