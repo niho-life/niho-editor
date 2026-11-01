@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { PHOTO_API_PREFIX, PHOTO_ERROR_STATUS, PHOTO_LIMITS, PHOTO_ROUTES } from "../src/v1.ts";
 import {
   emptyLibrary, emptyPage, failedMediaPhoto, fullLibrary, futureRecipePhoto, library,
-  maskedPhoto, mask, page, readyPhoto, recipe, responses, storedPhoto, trashedPhoto,
+  maskedPhoto, mask, page, pendingMediaPhoto, readyPhoto, recipe, responses, storedPhoto, trashedPhoto,
   verifyingUpload,
 } from "../fixtures/v1.ts";
 
@@ -49,6 +49,8 @@ test("metadata distinguishes verification, durable original, failed media and cu
   assert(!Object.hasOwn(verifyingUpload, "result"));
   assert.equal(storedPhoto.storageState, "stored");
   assert.equal(storedPhoto.media.state, "processing");
+  assert.equal(pendingMediaPhoto.storageState, "stored");
+  assert.deepEqual(pendingMediaPhoto.media, { state: "pending" });
   assert.equal(failedMediaPhoto.storageState, "stored");
   assert.deepEqual(failedMediaPhoto.original, storedPhoto.original);
   assert.equal(readyPhoto.media.recipeRevision, readyPhoto.recipe.revision);

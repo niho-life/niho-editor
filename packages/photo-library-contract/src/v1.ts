@@ -124,6 +124,8 @@ export interface PhotoAsset {
 }
 
 export type MediaState =
+  /** Persisted original whose durable outbox item has not produced a worker job yet. */
+  | { readonly state: "pending" }
   | { readonly state: "queued" | "processing"; readonly jobId: JobId }
   | {
       readonly state: "ready";

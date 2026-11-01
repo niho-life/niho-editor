@@ -130,7 +130,7 @@ P03は既存の音声用ObjectStorageを変更せず、photo専用portを作る�
 
 cancel/expireはworker leaseをfenceし、古い検証完了をcommitさせない。copy済みだがDB未確定のobject、遅着PUT、一時object、重複原本の余剰copyをgeneration付き清掃台帳へ残す。process停止後のreconcilerが回収できることをP02/P03/P07で検証する。
 
-**`storageState:stored` は原本の恒久保存完了。** 検証中にはPhotoを通常一覧へ出さない。恒久保存後のmediaは別にqueued/processing/ready/failed/unsupportedとなり、preview生成失敗だけで原本や編集値を失わせない。画面の「アップロード中」「確認中」「保存済み・プレビュー準備中」を区別する。
+**`storageState:stored` は原本の恒久保存完了。** 検証中にはPhotoを通常一覧へ出さない。恒久保存後、outboxからworker jobが作成されるまではmediaを`pending`とし、job作成後はqueued/processing/ready/failed/unsupportedへ進む。preview生成失敗だけで原本や編集値を失わせない。画面の「アップロード中」「確認中」「保存済み・プレビュー準備中」を区別する。
 
 ## 5. 形式・寸法・media
 
