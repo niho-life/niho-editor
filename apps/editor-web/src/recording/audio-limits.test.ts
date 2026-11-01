@@ -22,7 +22,7 @@ function reason(extra: Partial<AudioStartInput>) {
 }
 
 describe("audio limits", () => {
-  it("keeps the provisional limits in one place: 2 GiB, 6 hours, 30 days", () => {
+  it("keeps the confirmed product limits in one place: 2 GiB, 6 hours, 30 days", () => {
     expect(AUDIO_MAX_BYTES).toBe(2 * 1024 ** 3);
     expect(AUDIO_MAX_DURATION_SEC).toBe(21_600);
     expect(AUDIO_RETENTION_DAYS).toBe(30);

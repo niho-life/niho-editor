@@ -1,11 +1,11 @@
-/** ブラウザから `/api/settings` と `/api/ai/usage` を呼ぶ（同じ origin。鍵・token は扱わない）。 */
+/** ブラウザから設定と使用量のAPIを呼ぶ（同じ origin。鍵・token は扱わない）。 */
 
-import type { EditorSettingsPatch } from "@niho/editor-store";
+import type { EditorSettingsPatch, MediaStorageUsage } from "@niho/editor-store";
 import { SETTINGS_MESSAGES } from "@/settings/messages";
 import type { UsageSummary } from "@/server/ai-api";
 import type { SettingsDto } from "@/server/settings-api";
 
-export type { SettingsDto, UsageSummary };
+export type { MediaStorageUsage, SettingsDto, UsageSummary };
 
 /** 失敗。message は画面に出す一言。 */
 export type SettingsFailure = { ok: false; status: number; error: string | null; message: string };
@@ -73,4 +73,29 @@ export async function loadAiUsage(): Promise<{ ok: true; usage: UsageSummary } |
   const usage = body?.usage;
   if (typeof usage !== "object" || usage === null) return { ...NETWORK, message: SETTINGS_MESSAGES.usageFailed };
   return { ok: true, usage: usage as UsageSummary };
+}
+
+function isByteCount(value: unknown): value is string {
+  return typeof value === "string" && /^\d{1,80}$/.test(value);
+}
+
+function isMediaStorageUsage(value: unknown): value is MediaStorageUsage {
+  if (typeof value !== "object" || value === null) return false;
+  const usage = value as Partial<MediaStorageUsage>;
+  return isByteCount(usage.totalBytes) && isByteCount(usage.imageBytes) && isByteCount(usage.audioBytes)
+    && BigInt(usage.totalBytes) === BigInt(usage.imageBytes) + BigInt(usage.audioBytes);
+}
+
+/** アカウントのクラウドメディア使用量。容量の上限はまだ設けない。 */
+export async function loadStorageUsage(): Promise<{ ok: true; usage: MediaStorageUsage } | SettingsFailure> {
+  let response: Response;
+  try {
+    response = await fetch("/api/storage/usage", { credentials: "same-origin", cache: "no-store" });
+  } catch {
+    return { ...NETWORK, message: SETTINGS_MESSAGES.storageUsageFailed };
+  }
+  if (!response.ok) return { ...(await failureOf(response)), message: SETTINGS_MESSAGES.storageUsageFailed };
+  const body = (await response.json().catch(() => null)) as { usage?: unknown } | null;
+  if (!isMediaStorageUsage(body?.usage)) return { ...NETWORK, message: SETTINGS_MESSAGES.storageUsageFailed };
+  return { ok: true, usage: body.usage };
 }

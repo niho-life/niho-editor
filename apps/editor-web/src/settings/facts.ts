@@ -1,7 +1,4 @@
 import "server-only";
-import type { StorageMode } from "@niho/editor-publish";
-import type { Session } from "../auth/types";
-import { storageModeReaderOf } from "../publish/ports";
 import { audioLimits } from "../recording/audio-limits";
 import { resolveTranscriptionConfig, type TranscriptionEnv } from "../transcription/config";
 
@@ -11,8 +8,7 @@ import { resolveTranscriptionConfig, type TranscriptionEnv } from "../transcript
  * - 文字起こしのエンジン: `EDITOR_TRANSCRIBE_ENGINE`（src/transcription/config.ts）。Web からは選べない。
  *   Gemini は長い音声の区切りがサーバー側に無いので、まだ出さない（config.ts の方式に無い）。
  * - 音声の上限と、クラウドの音声が消えるまでの日数: src/recording/audio-limits.ts。
- * - 保存先: 公開と同じ読み手（src/publish/ports.ts の storageModeReaderOf）。NIHO から毎回読み、editor に保存しない（設計 §2.1）。
- *   Web では選べない（ブラウザの保存領域は消えることがあるため）。
+ * - 保存先は NIHO クラウド固定（Web と Mac アプリが同じサーバーを使う）。
  *
  * 鍵は読まない（`resolveTranscriptionConfig` の戻り値の `apiKey` には触れず、方式の名前だけを取る）。
  * 設定の誤りは起動時の検査が止めるので、ここは後ろの守りとして `off` にする（値も理由も画面に出さない）。
@@ -28,8 +24,6 @@ export type SettingsFacts = {
     timeoutSec: number | null;
     audio: ReturnType<typeof audioLimits>;
   };
-  /** 保存先（`UNSET` は未選択。クラウドと同じ扱い）。 */
-  storage: StorageMode;
 };
 
 export function transcriptionFact(env: TranscriptionEnv = process.env): SettingsFacts["transcription"] {
@@ -44,9 +38,6 @@ export function transcriptionFact(env: TranscriptionEnv = process.env): Settings
   return { engine: config.engine, timeoutSec: Math.round(config.timeoutMs / 1000), audio };
 }
 
-export async function settingsFacts(session: Session, env: TranscriptionEnv = process.env): Promise<SettingsFacts> {
-  return {
-    transcription: transcriptionFact(env),
-    storage: await storageModeReaderOf(session).read(session.userId),
-  };
+export function settingsFacts(env: TranscriptionEnv = process.env): SettingsFacts {
+  return { transcription: transcriptionFact(env) };
 }

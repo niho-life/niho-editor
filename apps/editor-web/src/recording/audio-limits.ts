@@ -7,7 +7,7 @@ import type { PageLang } from "@niho/editor-store";
  */
 
 /**
- * 1 ファイルの容量の上限（2 GiB）と長さの上限（6 時間）。NIHO docs の既存の remote-runner の上限に合わせた**仮置き。オーナーの決定待ち**。
+ * 1 ファイルの容量の上限（2 GiB）と長さの上限（6 時間）。2026-11-01 にオーナーが製品値として確定。
  * 長さはクライアントの申告（分かるときだけ）で確かめる。サーバーは音声を読まない。
  */
 export const AUDIO_MAX_BYTES = 2 * 1024 * 1024 * 1024;

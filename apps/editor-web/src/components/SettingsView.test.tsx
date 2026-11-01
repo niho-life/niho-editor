@@ -3,15 +3,20 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { EditorSettingsPatch } from "@niho/editor-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SettingsFailure, SettingsDto, UsageSummary } from "@/lib/settings-client";
+import type { MediaStorageUsage, SettingsFailure, SettingsDto, UsageSummary } from "@/lib/settings-client";
 import type { SettingsFacts } from "@/settings/facts";
 import { EDITOR_SETTINGS_TEXT } from "niho-docs-ui/shell";
 import { SETTINGS_MESSAGES } from "@/settings/messages";
 
 const save = vi.fn<(patch: EditorSettingsPatch) => Promise<{ ok: true; settings: SettingsDto } | SettingsFailure>>();
 const usage = vi.fn<() => Promise<{ ok: true; usage: UsageSummary } | SettingsFailure>>();
+const storageUsage = vi.fn<() => Promise<{ ok: true; usage: MediaStorageUsage } | SettingsFailure>>();
 
-vi.mock("@/lib/settings-client", () => ({ saveSettings: (patch: EditorSettingsPatch) => save(patch), loadAiUsage: () => usage() }));
+vi.mock("@/lib/settings-client", () => ({
+  saveSettings: (patch: EditorSettingsPatch) => save(patch),
+  loadAiUsage: () => usage(),
+  loadStorageUsage: () => storageUsage(),
+}));
 
 import { SettingsView } from "./SettingsView";
 
@@ -22,7 +27,6 @@ const FACTS: SettingsFacts = {
     timeoutSec: 1200,
     audio: { maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30, extensions: ["m4a", "mp3"], contentTypes: ["audio/mp4"] },
   },
-  storage: "UNSET",
 };
 
 const STEP = { id: "k7m2q9xa", name: "文字起こし修正", instruction: "整える。" };
@@ -69,6 +73,7 @@ function dto(patch: Partial<SettingsDto> = {}): SettingsDto {
 }
 
 const USAGE: UsageSummary = { month: "2026-10", inputTokens: 1234, outputTokens: 56, costUsd: 0.42, limitUsd: 5, nearLimit: false };
+const STORAGE_USAGE: MediaStorageUsage = { imageBytes: "1073741824", audioBytes: "4096", totalBytes: "1073745920" };
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -78,6 +83,8 @@ beforeEach(() => {
   save.mockReset();
   usage.mockReset();
   usage.mockResolvedValue({ ok: true, usage: USAGE });
+  storageUsage.mockReset();
+  storageUsage.mockResolvedValue({ ok: true, usage: STORAGE_USAGE });
 });
 
 afterEach(async () => {
@@ -124,18 +131,21 @@ const type = async (label: string, value: string) => {
 const status = () => container?.querySelector('[role="status"]')?.textContent;
 
 describe("SettingsView", () => {
-  it("shows the five items of #108: 文字起こしのエンジン・手順・固有名詞・使用量・保存先", async () => {
+  it("shows the five items of #108 and cloud media usage", async () => {
     const text = (await mount()).textContent ?? "";
     expect(text).toContain("Deepgram");
     expect(text).toContain(EDITOR_SETTINGS_TEXT.engineFixed);
-    expect(text).toContain("2 GB");
+    expect(text).toContain("2 GiB");
     expect(text).toContain("6 時間");
     expect(text).toContain("30 日で消えます");
     expect(text).toContain("文字起こしの結果とページは残ります");
     expect(text).toContain("記事制作");
     expect(text).toContain("文字起こし › 文字起こし修正");
-    expect(text).toContain("NIHO クラウド（未選択）");
-    expect(text).toContain(EDITOR_SETTINGS_TEXT.storageFixed);
+    expect(text).toContain("NIHO クラウド");
+    expect(text).toContain("Web と Mac アプリで共通");
+    expect(text).toContain("1 GiB");
+    expect(text).toContain("画像 1 GiB・音声 4 KiB");
+    expect(text).toContain(EDITOR_SETTINGS_TEXT.cloudStorageFixed);
     expect(text).toContain("$0.42 / $5.00");
     expect(text).toContain("2026-10");
   });
@@ -162,6 +172,13 @@ describe("SettingsView", () => {
     const text = (await mount()).textContent ?? "";
     expect(text).toContain(SETTINGS_MESSAGES.usageFailed);
     expect(text).toContain("Deepgram");
+  });
+
+  it("shows a storage-specific error without a previous capacity value", async () => {
+    storageUsage.mockResolvedValue({ ok: false, status: 503, error: "unavailable", message: SETTINGS_MESSAGES.storageUsageFailed });
+    const text = (await mount()).textContent ?? "";
+    expect(text).toContain(SETTINGS_MESSAGES.storageUsageFailed);
+    expect(text).not.toContain("画像 1 GiB");
   });
 
   it("saves the 提案の言語 and takes the answer as the new state", async () => {
