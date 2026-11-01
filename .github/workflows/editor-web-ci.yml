@@ -107,7 +107,6 @@ jobs:
         run: npm -C packages/editor-store run migrate
       - run: npm -C apps/editor-web run typecheck
       - run: npm -C apps/editor-web run lint
-      - run: npm -C apps/editor-web run test:photo-runtime
       - run: npm -C apps/editor-web test
       - name: Verify immutable Photo SDK runtime staging
         run: npm -C apps/editor-web run test:photo-runtime
