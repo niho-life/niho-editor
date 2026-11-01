@@ -22,9 +22,9 @@
 - P00契約版、NIHO本人接続契約、SDK公式manifest・tarballのhash、engine/renderer manifestのhash
 - migration集合と適用記録、worker/API/Web/PWA/Macの互換なimage・artifact
 - 本人認証、原本保存先のIAM/lifecycle/backup、容量回復・退会purgeの実設定のreadback
-- 実端末の対象OS/アプリ版、署名・公証・updater配布結果
+- 実端末の対象OS/アプリ版、現行Mac署名方式・updater署名・配布結果
 
-SDKの既存release assetを上書きしない。公式release workflowをmain由来のexact source SHAで実行し、公式manifest・attestation・hashを検証してからhostの依存を更新する。公開candidateは検証用であり、署名済みの利用者配布物には数えない。
+SDKの既存release assetを上書きしない。公式release workflowをmain由来のexact source SHAで実行し、公式manifest・attestation・hashを検証してからhostの依存を更新する。公開candidateは検証用であり、updater署名付きの利用者配布物には数えない。Macは現行の正式配布手順に従い、ad-hoc署名の検証とupdater署名・実更新を確認する。
 
 ## 段階配備
 
@@ -33,7 +33,7 @@ SDKの既存release assetを上書きしない。公式release workflowをmain�
 3. P02 writer、P03/P04/P05の実route、実storage/decoder、media/purge/reconciler workerを互換な組で候補へ配備する。必須providerが欠けた組で写真の利用可能表示を出さない。
 4. 固定SDKを取り込んだWeb/PWAとMacを候補APIへ接続する。既存DocsのGoogle認証・所有者IDの移行を写真配備へ混ぜない。無料のMacローカル編集を維持する。
 5. P12の未完項目と下記の実機シナリオを実行する。CI成功・workflow dispatch・image作成だけを配備済みとは記録せず、稼働source/imageと認証済みsmokeを読み戻す。
-6. 署名・公証済みMacの公式更新経路とPWA更新を受入した後、本人クラウドの入口を有効にする。鍵の投入は[AGENTS.md](../../AGENTS.md)のオーナー専用手順に従い、値を取り出して証跡へ貼らない。
+6. 現行の正式配布手順でad-hoc署名を検証したMacと、updater署名付きの公式更新経路とPWA更新を受入した後、本人クラウドの入口を有効にする。鍵の投入は[AGENTS.md](../../AGENTS.md)のオーナー専用手順に従い、値を取り出して証跡へ貼らない。
 
 実プロジェクト、origin、保存先、実行ID、資格情報、接続URLは公開repoへ置かない。配備は既存の[公式手順](editor-deploy.md)と非公開側の対応runbookを使い、対象serviceとexact sourceを照合する。
 

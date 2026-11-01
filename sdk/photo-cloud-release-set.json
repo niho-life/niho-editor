@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.0",
+  "releaseTag": "photo-cloud-sdk-v0.1.0",
+  "repository": "niho-life/niho-editor",
+  "upstreamSdk": {
+    "baselinePath": "packages/photo-library-contract/sdk-baseline.json",
+    "baselineSha256": "342ad046400466c633cbe0fc04af8788dbcd3b65b68faf964cb88b4bf02a51cf",
+    "repository": "niho-life/niho-photo",
+    "releaseTag": "photo-sdk-v0.1.5",
+    "version": "0.1.5",
+    "sourceCommit": "f78926d805b5f2c115349d8f15ac184fde453ad1",
+    "manifestSha256": "99b1893eb4344aa524279c46a06b63132fd167d3c370be8d7ba30b9ea8caf7be"
+  },
+  "packages": [
+    {
+      "id": "cloud-library",
+      "name": "@niho/photo-cloud-library",
+      "sourceRoot": "packages/photo-cloud-library",
+      "include": ["package.json", "README.md", "src/**"]
+    },
+    {
+      "id": "library-contract",
+      "name": "@niho/photo-library-contract",
+      "sourceRoot": "packages/photo-library-contract",
+      "include": ["package.json", "README.md", "src/**", "sdk-baseline.json"]
+    }
+  ]
+}

@@ -1,0 +1,237 @@
+name: Photo cloud SDK release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "main workflow SHAの祖先である40桁commit SHA"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: photo-cloud-sdk-release-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build immutable release set
+    if: github.repository == 'niho-life/niho-editor' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact-name: ${{ steps.names.outputs.artifact-name }}
+      manifest-file: ${{ steps.pack.outputs.manifest-file }}
+      source-sha: ${{ steps.source.outputs.source-sha }}
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: source
+        name: Bind requested source to trusted main workflow
+        env:
+          REQUESTED_SOURCE: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$REQUESTED_SOURCE" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse --verify "$REQUESTED_SOURCE^{commit}")" = "$REQUESTED_SOURCE"
+          git merge-base --is-ancestor "$REQUESTED_SOURCE" "$GITHUB_SHA"
+          test "$(git show "$REQUESTED_SOURCE:sdk/photo-cloud-release-set.json" | node -p 'JSON.parse(require("node:fs").readFileSync(0,"utf8")).repository')" = "$GITHUB_REPOSITORY"
+          version="$(git show "$REQUESTED_SOURCE:sdk/photo-cloud-release-set.json" | node -p 'JSON.parse(require("node:fs").readFileSync(0,"utf8")).version')"
+          test "$version" = "0.1.0"
+          printf 'source-sha=%s\nversion=%s\n' "$REQUESTED_SOURCE" "$version" >> "$GITHUB_OUTPUT"
+      - name: Checkout immutable selected source
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source-sha }}
+        run: git checkout --detach "$SOURCE_SHA"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24.15.0"
+          cache: npm
+          cache-dependency-path: packages/photo-cloud-library/package-lock.json
+      - run: npm -C packages/photo-cloud-library ci --ignore-scripts --no-audit --no-fund
+      - run: node --test scripts/photo-cloud-sdk/release-set.test.mjs
+      - id: pack
+        name: Pack and verify selected Git objects
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source-sha }}
+          VERSION: ${{ steps.source.outputs.version }}
+        run: |
+          set -euo pipefail
+          manifest="niho-photo-cloud-sdk-$VERSION-$SOURCE_SHA.json"
+          node scripts/photo-cloud-sdk/pack-release-set.mjs --source-sha "$SOURCE_SHA" --output "$RUNNER_TEMP/photo-cloud-sdk"
+          node scripts/photo-cloud-sdk/verify-release-set.mjs --manifest "$RUNNER_TEMP/photo-cloud-sdk/$manifest" --expected-source "$SOURCE_SHA" --expected-version "$VERSION" --source-repository "$GITHUB_WORKSPACE"
+          node scripts/photo-cloud-sdk/smoke-consumer.mjs --manifest "$RUNNER_TEMP/photo-cloud-sdk/$manifest"
+          printf 'manifest-file=%s\n' "$manifest" >> "$GITHUB_OUTPUT"
+      - id: names
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source-sha }}
+        run: printf 'artifact-name=niho-photo-cloud-sdk-%s-run-%s-attempt-%s\n' "$SOURCE_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ steps.names.outputs.artifact-name }}
+          path: ${{ runner.temp }}/photo-cloud-sdk/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+          include-hidden-files: false
+
+  reproduce:
+    name: Independently reproduce and verify
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      manifest-sha256: ${{ steps.verify.outputs.manifest-sha256 }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Recheck selected source ancestry
+        env:
+          SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$SOURCE_SHA" "$GITHUB_SHA"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24.15.0"
+          cache: npm
+          cache-dependency-path: packages/photo-cloud-library/package-lock.json
+      - run: npm -C packages/photo-cloud-library ci --ignore-scripts --no-audit --no-fund
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: ${{ runner.temp }}/photo-cloud-sdk-candidate
+          merge-multiple: true
+      - id: verify
+        env:
+          MANIFEST_FILE: ${{ needs.build.outputs.manifest-file }}
+          SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/photo-cloud-sdk/pack-release-set.mjs --source-sha "$SOURCE_SHA" --output "$RUNNER_TEMP/photo-cloud-sdk-reproduced"
+          node scripts/photo-cloud-sdk/verify-release-set.mjs \
+            --manifest "$RUNNER_TEMP/photo-cloud-sdk-candidate/$MANIFEST_FILE" \
+            --reproduced-manifest "$RUNNER_TEMP/photo-cloud-sdk-reproduced/$MANIFEST_FILE" \
+            --expected-source "$SOURCE_SHA" \
+            --expected-version "$VERSION" \
+            --source-repository "$GITHUB_WORKSPACE"
+          manifest_sha256="$(sha256sum "$RUNNER_TEMP/photo-cloud-sdk-candidate/$MANIFEST_FILE" | cut -d' ' -f1)"
+          printf 'manifest-sha256=%s\n' "$manifest_sha256" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish immutable GitHub release
+    needs: [build, reproduce]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24.15.0"
+          cache: npm
+          cache-dependency-path: packages/photo-cloud-library/package-lock.json
+      - run: npm -C packages/photo-cloud-library ci --ignore-scripts --no-audit --no-fund
+      - name: Verify Actions artifact identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact-id }}
+          ARTIFACT_NAME: ${{ needs.build.outputs.artifact-name }}
+          ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          expected_digest="$ARTIFACT_DIGEST"
+          [[ "$expected_digest" == sha256:* ]] || expected_digest="sha256:$expected_digest"
+          [[ "$expected_digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          IFS=$'\t' read -r id name expired digest run_id < <(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" --jq '[.id,.name,.expired,.digest,.workflow_run.id] | @tsv')
+          test "$id" = "$ARTIFACT_ID"
+          test "$name" = "$ARTIFACT_NAME"
+          test "$expired" = "false"
+          test "$digest" = "$expected_digest"
+          test "$run_id" = "$GITHUB_RUN_ID"
+          IFS=$'\t' read -r verified_run_id verified_attempt verified_event verified_head_sha < <(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" --jq '[.id,.run_attempt,.event,.head_sha] | @tsv')
+          test "$verified_run_id" = "$GITHUB_RUN_ID"
+          test "$verified_attempt" = "$GITHUB_RUN_ATTEMPT"
+          test "$verified_event" = "workflow_dispatch"
+          test "$verified_head_sha" = "$GITHUB_SHA"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: ${{ runner.temp }}/photo-cloud-sdk
+          merge-multiple: true
+      - name: Verify fixed manifest and create artifact receipt
+        env:
+          ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact-id }}
+          ARTIFACT_NAME: ${{ needs.build.outputs.artifact-name }}
+          MANIFEST_FILE: ${{ needs.build.outputs.manifest-file }}
+          MANIFEST_SHA256: ${{ needs.reproduce.outputs.manifest-sha256 }}
+          SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/photo-cloud-sdk/verify-release-set.mjs \
+            --manifest "$RUNNER_TEMP/photo-cloud-sdk/$MANIFEST_FILE" \
+            --expected-manifest-sha256 "$MANIFEST_SHA256" \
+            --expected-source "$SOURCE_SHA" \
+            --expected-version "$VERSION" \
+            --source-repository "$GITHUB_WORKSPACE" \
+            --receipt "$RUNNER_TEMP/photo-cloud-sdk-artifact-receipt.json" \
+            --artifact-id "$ARTIFACT_ID" \
+            --artifact-digest "$ARTIFACT_DIGEST" \
+            --artifact-name "$ARTIFACT_NAME" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Attest release manifest with official workflow identity
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: ${{ runner.temp }}/photo-cloud-sdk/${{ needs.build.outputs.manifest-file }}
+          create-storage-record: false
+      - name: Create new tag and release without overwriting assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="photo-cloud-sdk-v$VERSION"
+          test "$tag" = "photo-cloud-sdk-v0.1.0"
+          test -z "$(git ls-remote --tags origin "refs/tags/$tag")"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" >/dev/null 2>&1; then exit 1; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$SOURCE_SHA" >/dev/null
+          gh release create "$tag" \
+            "$RUNNER_TEMP/photo-cloud-sdk/"*.tgz \
+            "$RUNNER_TEMP/photo-cloud-sdk/"*.json \
+            "$RUNNER_TEMP/photo-cloud-sdk-artifact-receipt.json" \
+            --verify-tag \
+            --target "$SOURCE_SHA" \
+            --latest=false \
+            --title "NIHO photo cloud SDK v$VERSION" \
+            --notes "source $SOURCE_SHA から再現・検証した本人用写真 contract / cloud adapter の immutable release です。"
