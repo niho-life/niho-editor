@@ -151,10 +151,4 @@ END;
 $$;
 CREATE TRIGGER photos_lifecycle_media_outbox AFTER UPDATE OF lifecycle, lifecycle_epoch ON photos
   FOR EACH ROW EXECUTE FUNCTION enqueue_photo_lifecycle_outbox();
-INSERT INTO photo_media_outbox(owner, photo_id, lifecycle_epoch, recipe_revision, settings_sha256)
-  SELECT p.owner, p.id, p.lifecycle_epoch, r.revision, r.settings_sha256
-    FROM photos AS p JOIN photo_libraries AS l ON l.owner = p.owner
-    JOIN photo_recipes AS r ON r.owner = p.owner AND r.photo_id = p.id
-   WHERE p.lifecycle = 'active' AND l.state = 'active';
-
 COMMIT;

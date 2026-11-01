@@ -1832,12 +1832,22 @@ export async function getPhotoMediaSource(db: Database, owner: OwnerId, photoId:
 export async function listPhotoMediaOutbox(db: Queryable, owner: OwnerId, limit = 100): Promise<{ photoId: string; lifecycleGeneration: number; recipeRevision: number; settingsSha256: string }[]> {
   assertOwner(owner); if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new TypeError("editor-store: invalid media outbox limit");
   return (await db.query<{ photo_id: string; lifecycle_epoch: string; recipe_revision: string; settings_sha256: string }>(
-    `SELECT o.photo_id,o.lifecycle_epoch::text AS lifecycle_epoch,o.recipe_revision::text AS recipe_revision,o.settings_sha256
-       FROM photo_media_outbox AS o JOIN photos AS p ON p.owner=o.owner AND p.id=o.photo_id
-       JOIN photo_libraries AS l ON l.owner=p.owner AND l.id=p.library_id JOIN photo_recipes AS r ON r.owner=p.owner AND r.photo_id=p.id
-      WHERE o.owner=$1 AND o.consumed_at IS NULL AND l.state='active' AND p.lifecycle='active'
-        AND o.lifecycle_epoch=p.lifecycle_epoch AND o.recipe_revision=r.revision AND o.settings_sha256=r.settings_sha256
-      ORDER BY o.created_at,o.photo_id LIMIT $2`, [owner, limit],
+    `SELECT pending.photo_id,pending.lifecycle_epoch::text AS lifecycle_epoch,pending.recipe_revision::text AS recipe_revision,pending.settings_sha256
+       FROM (
+         SELECT o.photo_id,o.lifecycle_epoch,o.recipe_revision,o.settings_sha256,o.created_at AS queued_at
+           FROM photo_media_outbox AS o JOIN photos AS p ON p.owner=o.owner AND p.id=o.photo_id
+           JOIN photo_libraries AS l ON l.owner=p.owner AND l.id=p.library_id JOIN photo_recipes AS r ON r.owner=p.owner AND r.photo_id=p.id
+          WHERE o.owner=$1 AND o.consumed_at IS NULL AND l.state='active' AND p.lifecycle='active'
+            AND o.lifecycle_epoch=p.lifecycle_epoch AND o.recipe_revision=r.revision AND o.settings_sha256=r.settings_sha256
+         UNION ALL
+         SELECT p.id,p.lifecycle_epoch,r.revision,r.settings_sha256,p.added_at AS queued_at
+           FROM photos AS p JOIN photo_libraries AS l ON l.owner=p.owner AND l.id=p.library_id
+           JOIN photo_recipes AS r ON r.owner=p.owner AND r.photo_id=p.id
+          WHERE p.owner=$1 AND l.state='active' AND p.lifecycle='active' AND p.current_media_job_id IS NULL
+            AND NOT EXISTS (SELECT 1 FROM photo_media_outbox AS o WHERE o.owner=p.owner AND o.photo_id=p.id AND o.consumed_at IS NULL
+              AND o.lifecycle_epoch=p.lifecycle_epoch AND o.recipe_revision=r.revision AND o.settings_sha256=r.settings_sha256)
+       ) AS pending
+      ORDER BY pending.queued_at,pending.photo_id LIMIT $2`, [owner, limit],
   )).rows.map((row) => ({ photoId: row.photo_id, lifecycleGeneration: number(row.lifecycle_epoch), recipeRevision: number(row.recipe_revision), settingsSha256: row.settings_sha256 }));
 }
 export async function enqueuePhotoMediaJob(db: Database, owner: OwnerId, photoId: string, spec: PhotoMediaOutputSpec): Promise<{ id: string; key: string; created: boolean } | null> {

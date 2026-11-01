@@ -81,6 +81,17 @@ describe("P02 API writer operations on PostgreSQL", { skip: databaseUrl === unde
     assert.equal(await getPhotoMaskBySurfaceId(pool, owner, randomUUID(), SHA), null);
   });
 
+  it("surfaces legacy active photos without migration-seeding media outbox rows", async () => {
+    const owner = `synthetic-legacy-media-${randomUUID()}`, made = await original(owner), id = made.snapshot.photo.id;
+    await pool.query("DELETE FROM photo_media_outbox WHERE owner=$1", [owner]);
+    assert.deepEqual(await listPhotoMediaOutbox(pool, owner), [{
+      photoId: id, lifecycleGeneration: made.snapshot.photo.lifecycleEpoch, recipeRevision: 0,
+      settingsSha256: made.snapshot.recipe.settingsSha256,
+    }]);
+    assert.ok(await enqueuePhotoMediaJob(pool, owner, id, spec));
+    assert.deepEqual(await listPhotoMediaOutbox(pool, owner), []);
+  });
+
   it("uses stable keysets and a creation watermark while filtering one owner snapshot", async () => {
     const owner = `synthetic-page-${randomUUID()}`, other = `synthetic-page-other-${randomUUID()}`;
     await getPhotoLibrary(pool, owner);
