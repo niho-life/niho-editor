@@ -9,8 +9,8 @@
 Google の側（OAuth クライアント・同意画面・本人ごとの接続と refresh token の保管・Markdown から Google ドキュメントへの変換）は **niho-app に既にあり、本番で動いています**。
 editor はそれの 2 番目の客になるだけです。**Google Cloud のコンソールでの作業も、client secret も、refresh token を預かる表も要りません。**
 
-> **依存：この機能は niho-app #19459（app-connect の契約）が出るまで実際には使えません。** #19459 は**いま本番のログインを塞いでいるものと同じ**で
-> （`/auth/login/start` が `error=unavailable`。[editor-deploy.md](../ops/editor-deploy.md) §5）、それまで editor は誰も入れません。
+> **依存：この機能はDocs API専用の最小権限credential契約が出るまで使えません。** NIHO editorのopaque browser sessionは写真本人確認に限定し、
+> native AppConnect・Experience token・一般NIHO API tokenを流用せず、`apiToken`はnullのままにします。
 > それでもこの方式を採ります（書き出しは今すぐ要る機能ではなく、ここで token の預かりとコンソール作業を増やす見返りが小さい）。
 > **先に使いたくなったときは §7 の予備案から作れます。**
 
@@ -88,7 +88,7 @@ src/lib/google-docs-paths.ts             画面とサーバーが共有する pa
 ```
 
 **migration は足しません**（受付の表は API 側が持つ）。本人の token の口だけ `AuthProvider` に足します
-（`apiToken`。`niho` も `stub` も今は null を返す＝閉じたまま。#19459 がここを埋める）。
+（`apiToken`。`niho`も`stub`もnullを返す＝閉じたまま。写真本人確認とは別のcredential契約だけがここを埋める）。
 
 `gateway.ts` を**口（interface）**にしておくので、将来 editor が自分で Google を呼ぶ必要が出たときは実装を 1 本足すだけです（§7 の予備案）。
 `packages/docs-ui` には足しません（共有画面は `fetch` を書けない＝`isolation.test.ts`。旧版の hook を使うには Mac の bridge とアカウント状態を作り直すことになり、割に合いません）。
@@ -134,16 +134,16 @@ exportMarkdown(blocks, { boxes: "quote" }) // Google ドキュメントへ渡す
 やめられる形も要ります。画面の「接続をやめる」は `DELETE me/docs-drive/connection` を呼び、**預かっているもの（refresh token）を持っているのは
 niho-app なので、消すのと Google 側で失効させるのも API 側で行います**（旧 Mac アプリの解除とまったく同じ経路）。
 editor は何も持たないので、editor 側に消すものはありません。**API が実際に Google の revoke を呼んでいるかは niho-app 側の実装**なので、
-#19459 の確認項目に入れます（§6）。利用者は本人の Google アカウントの「サードパーティ製アプリとサービス」からも取り消せます。
+専用credentialの受入項目に入れます（§6）。利用者は本人のGoogleアカウントの「サードパーティ製アプリとサービス」からも取り消せます。
 
 ## 6. niho-app 側に要るもの（editor だけでは開かない）
 
-1. **app-connect の契約（niho-app #19459）。** editor が本人として API を呼ぶための token。**ログインが待っているものと同じ**で、これが無いあいだ editor は誰も入れません（[editor-deploy.md](../ops/editor-deploy.md) §5）。
+1. **Docs API専用credentialの契約。** editorの写真本人確認sessionや既存AppConnectを広げず、`me/docs-drive/*`だけを呼べるserver-side tokenを発行・失効できること。
 2. **editor を許すこと。** 今の API は `403 niho_docs_app_required` で **NIHO docs からの呼び出しだけ**を通します。editor からの呼び出しを許してもらう必要があります。
 3. **`returnTo` の値。** 旧版は `"niho-docs"` を送っていました。editor 用の値（`EDITOR_NIHO_RETURN_TO`、既定 `niho-editor`）を受け入れてもらいます。
 4. **解除で Google 側の失効まで行うこと。** `DELETE me/docs-drive/connection` が refresh token を消すだけでなく、Google の revoke も呼んでいることを確かめます（§5.1）。
 
-この 3 つが揃うまで、書き出しは**閉じたまま**です（API は 503 `google_docs_unavailable`）。AI（§10）・文字起こし（§12）と同じ posture です。
+この4つが揃うまで、書き出しは**閉じたまま**です（APIは503 `google_docs_unavailable`）。AI（§10）・文字起こし（§12）と同じpostureです。
 
 ## 7. 予備案：editor が自分で Google を呼ぶ（採らない）
 

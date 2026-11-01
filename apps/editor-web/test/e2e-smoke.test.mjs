@@ -33,7 +33,13 @@ async function freePort() {
 async function startDev(mode, readyStatus, extraEnv = {}) {
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
-  const env = { ...process.env, ...extraEnv, EDITOR_AUTH_MODE: mode, NEXT_TELEMETRY_DISABLED: "1" };
+  const env = {
+    ...process.env,
+    ...(mode === "niho" ? { EDITOR_NIHO_ORIGIN: "https://niho-auth.example.invalid" } : {}),
+    ...extraEnv,
+    EDITOR_AUTH_MODE: mode,
+    NEXT_TELEMETRY_DISABLED: "1",
+  };
   delete env.NODE_ENV;
   const server = spawn(process.execPath, [nextBin, "dev", "--webpack", "-p", String(port), "-H", "127.0.0.1"], {
     cwd: appDir,
@@ -1169,7 +1175,7 @@ describe("editor-web e2e (stub, next dev, the fake transcription engine fails) (
   });
 });
 
-describe("editor-web e2e (niho until #19459, next dev)", () => {
+describe("editor-web e2e (niho session boundary, next dev)", () => {
   let base;
   let dev;
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 2 });
@@ -1245,7 +1251,7 @@ describe("editor-web e2e (niho until #19459, next dev)", () => {
   });
 });
 
-describe("editor-web e2e (niho until #19459, next dev)", () => {
+describe("editor-web e2e (niho session boundary, next dev)", () => {
   let base;
   let dev;
 
@@ -1324,6 +1330,7 @@ describe("public API v1 (production build, PostgreSQL)", () => {
       ...process.env,
       NODE_ENV: "production",
       EDITOR_AUTH_MODE: "niho",
+      EDITOR_NIHO_ORIGIN: "https://niho-auth.example.invalid",
       DATABASE_URL: schemaUrl,
       EDITOR_FACE_CREDENTIALS: JSON.stringify([{ audience: "exp", sha256: sha256(expToken), expiresAt: at(60) }]),
       // 公開のシート（#39）と同じ写真の置き場（プレビューの写真の URL）

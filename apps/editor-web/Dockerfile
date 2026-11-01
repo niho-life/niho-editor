@@ -11,6 +11,8 @@ COPY packages/docs-core packages/docs-core
 COPY packages/docs-ui packages/docs-ui
 COPY packages/ui packages/ui
 COPY packages/editor-store packages/editor-store
+# 写真の本人型を直接参照する。runtime importは無いがbuildの型検査には必要。
+COPY packages/photo-library-contract packages/photo-library-contract
 COPY packages/editor-publish-contract packages/editor-publish-contract
 COPY packages/editor-publish packages/editor-publish
 COPY apps/editor-web/package.json apps/editor-web/package-lock.json apps/editor-web/.npmrc apps/editor-web/

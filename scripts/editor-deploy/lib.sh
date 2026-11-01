@@ -21,20 +21,29 @@ load_deploy_env() {
     [[ -n "${!name:-}" ]] || die "$name is not set in $DEPLOY_ENV"
   done
   APP_DOMAIN="${APP_DOMAIN:-}"
-  # Login (#47, docs/ops/editor-deploy.md §13). The default is niho (fail-closed until niho-app #19459 ships the contract).
-  # google is the temporary way in: Google's sign-in plus an allowlist of addresses. stub never reaches production
+  # Login (#47, docs/ops/editor-deploy.md §13). niho uses the dedicated NIHO editor browser-session contract.
+  # google remains the temporary way in: Google's sign-in plus an allowlist of addresses. stub never reaches production
   # (the app exits before it opens the port), so the only values accepted here are niho and google.
   EDITOR_AUTH_MODE="${EDITOR_AUTH_MODE:-niho}"
   [[ "$EDITOR_AUTH_MODE" == niho || "$EDITOR_AUTH_MODE" == google ]] \
     || die "EDITOR_AUTH_MODE must be niho or google in $DEPLOY_ENV (stub is for development and CI only)"
   GOOGLE_OAUTH_CLIENT_ID="${GOOGLE_OAUTH_CLIENT_ID:-}"
   GOOGLE_ALLOWED_EMAILS="${GOOGLE_ALLOWED_EMAILS:-}"
+  EDITOR_NIHO_ORIGIN="${EDITOR_NIHO_ORIGIN:-}"
   # The allowlist is one variable holding a comma-separated list, and gcloud splits --set-env-vars on commas, so with
   # google the whole flag uses gcloud's own escaped-list form (^|^A=1|B=2). '|' appears in none of the values, and the
   # checks below refuse anything that could carry one in.
   ENV_SEP=","
   ENV_PREFIX=""
-  if [[ "$EDITOR_AUTH_MODE" == google ]]; then
+  if [[ "$EDITOR_AUTH_MODE" == niho ]]; then
+    [[ "$EDITOR_NIHO_ORIGIN" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] \
+      || die "EDITOR_NIHO_ORIGIN in $DEPLOY_ENV must be an exact HTTPS origin without credentials, path, query, or fragment"
+    if [[ -n "${BASH_REMATCH[1]:-}" ]]; then
+      local niho_origin_port="${BASH_REMATCH[1]#:}"
+      (( niho_origin_port > 0 && niho_origin_port <= 65535 )) \
+        || die "EDITOR_NIHO_ORIGIN in $DEPLOY_ENV has an invalid port"
+    fi
+  elif [[ "$EDITOR_AUTH_MODE" == google ]]; then
     ENV_SEP="|"
     ENV_PREFIX="^|^"
     [[ -n "$GOOGLE_OAUTH_CLIENT_ID" ]] || die "GOOGLE_OAUTH_CLIENT_ID is not set in $DEPLOY_ENV (required by EDITOR_AUTH_MODE=google)"
@@ -169,7 +178,7 @@ service_secrets() {
 }
 
 # Environment of the web service (`--set-env-vars` also replaces the whole list). The login is EDITOR_AUTH_MODE from
-# deploy.env (niho by default; google adds the client id and the allowlist). stub never gets here: the app refuses to
+# deploy.env (niho by default; niho adds only its trusted origin, while google adds the client id and allowlist). stub never gets here: the app refuses to
 # start with it in production. With google the list is joined with '|' behind gcloud's ^|^ marker, because the allowlist
 # itself holds commas (see load_deploy_env).
 service_env_vars() {
@@ -177,7 +186,9 @@ service_env_vars() {
   # every image and audio request. The bucket goes with it, and the runner may only create and read objects in it.
   printf '%sEDITOR_AUTH_MODE=%s%sEDITOR_ORIGIN=%s%sEDITOR_STORAGE=gcs%sEDITOR_ASSETS_BUCKET=%s' \
     "$ENV_PREFIX" "$EDITOR_AUTH_MODE" "$ENV_SEP" "$(app_origin)" "$ENV_SEP" "$ENV_SEP" "$ASSETS_BUCKET"
-  if [[ "$EDITOR_AUTH_MODE" == google ]]; then
+  if [[ "$EDITOR_AUTH_MODE" == niho ]]; then
+    printf '%sEDITOR_NIHO_ORIGIN=%s' "$ENV_SEP" "$EDITOR_NIHO_ORIGIN"
+  elif [[ "$EDITOR_AUTH_MODE" == google ]]; then
     printf '%sEDITOR_GOOGLE_CLIENT_ID=%s%sEDITOR_GOOGLE_ALLOWED_EMAILS=%s' \
       "$ENV_SEP" "$GOOGLE_OAUTH_CLIENT_ID" "$ENV_SEP" "$GOOGLE_ALLOWED_EMAILS"
   fi

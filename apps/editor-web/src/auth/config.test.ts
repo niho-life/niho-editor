@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AuthConfigError, isAllowedEmail, parseAllowedEmails, resolveAuthMode } from "./config";
+import { AuthConfigError, isAllowedEmail, isTrustedNihoOrigin, parseAllowedEmails, resolveAuthMode } from "./config";
 import { getAuthProvider } from "./index";
 import { STUB_USER_ID } from "./stub";
 
@@ -19,11 +19,11 @@ describe("resolveAuthMode", () => {
 
   it("accepts stub and niho explicitly outside production", () => {
     expect(resolveAuthMode({ NODE_ENV: "development", EDITOR_AUTH_MODE: "stub" })).toBe("stub");
-    expect(resolveAuthMode({ NODE_ENV: "development", EDITOR_AUTH_MODE: "niho" })).toBe("niho");
+    expect(resolveAuthMode({ NODE_ENV: "development", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" })).toBe("niho");
   });
 
   it("requires niho in production and never falls back to stub", () => {
-    expect(resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "niho" })).toBe("niho");
+    expect(resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" })).toBe("niho");
     expect(() => resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "stub" })).toThrow(AuthConfigError);
     expect(() => resolveAuthMode({ NODE_ENV: "production" })).toThrow(AuthConfigError);
     expect(() => resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "" })).toThrow(AuthConfigError);
@@ -46,9 +46,19 @@ describe("resolveAuthMode", () => {
       expect(() => resolveAuthMode({ ...production, EDITOR_GOOGLE_ALLOWED_EMAILS })).toThrow(AuthConfigError);
     }
     // 許可リストは google のときだけ要る（niho の守りは変わらない）
-    expect(resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "niho" })).toBe("niho");
+    expect(resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" })).toBe("niho");
     // 本番以外では許可リストが無くても選べる（誰も許可リストに居ないので入れない）
     expect(resolveAuthMode({ NODE_ENV: "development", EDITOR_AUTH_MODE: "google" })).toBe("google");
+  });
+});
+
+describe("EDITOR_NIHO_ORIGIN", () => {
+  it("accepts only an exact HTTPS origin", () => {
+    expect(isTrustedNihoOrigin("https://niho.example.invalid")).toBe(true);
+    for (const value of [undefined, "", "http://localhost:3000", "https://user@niho.example.invalid", "https://niho.example.invalid/next", "https://niho.example.invalid?x=1"]) {
+      expect(isTrustedNihoOrigin(value), String(value)).toBe(false);
+    }
+    expect(() => resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "niho" })).toThrow(/EDITOR_NIHO_ORIGIN/);
   });
 });
 
@@ -115,18 +125,9 @@ describe("auth providers", () => {
     expect(login.headers.get("set-cookie")).toBeNull();
   });
 
-  it("niho is fail-closed until the niho-app contract exists", async () => {
-    const provider = getAuthProvider({ NODE_ENV: "production", EDITOR_AUTH_MODE: "niho" });
+  it("selects the NIHO provider only with its trusted origin configured", () => {
+    const provider = getAuthProvider({ NODE_ENV: "production", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" });
     expect(provider.mode).toBe("niho");
-    const withCookie = { headers: new Headers({ cookie: "session=synthetic" }) };
-    expect(await provider.getSession(withCookie)).toBeNull();
-    const start = new Request("http://editor.test/auth/login/start");
-    const login = await provider.beginLogin({ request: start, returnTo: "/settings" });
-    expect(login.status).toBe(303);
-    expect(login.headers.get("location")).toBe("/auth/login?next=%2Fsettings&error=unavailable");
-    const callback = await provider.completeLogin(new Request("http://editor.test/auth/callback?code=synthetic&state=synthetic"));
-    expect(callback.headers.get("location")).toBe("/auth/login?error=unavailable");
-    expect(callback.headers.get("set-cookie")).toBeNull();
   });
 
   it("refuses to pick a provider in production unless the mode is niho or google", () => {

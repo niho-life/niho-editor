@@ -5,14 +5,14 @@
 **Google Cloud のコンソールでの作業はありません。鍵も Secret も増えません。** editor は Google を直接呼ばず、
 NIHO が既に動かしている `https://niho.life/api/me/docs-drive/*` を本人として呼びます（OAuth クライアント・同意画面・本人ごとの接続と refresh token・Markdown からの変換は、すべて niho-app 側にあります）。
 
-> **いつ使えるようになるか：niho-app #19459 が出てからです。** #19459 は**本番のログインを塞いでいるものと同じ**なので、
-> それが出るまで editor には誰も入れず、この機能も画面から試せません（[editor-deploy.md](editor-deploy.md) §5）。
+> **現在は閉じたままです。** NIHO editorの専用sessionは写真本人確認だけに限定し、Docs Drive用の`apiToken`を発行しません。
+> 書き出しを開くには、ログインとは別の最小権限credential契約とNIHO側の許可・失効受入が必要です。
 
 ## 1. 開く前に要るもの（niho-app 側）
 
 editor 側の配備だけでは開きません。**次の 3 つは niho-app に頼むことです。**
 
-1. **app-connect の契約（niho-app #19459）。** editor が本人として API を呼ぶための token。**ログインが待っているものと同じ**で、これが無いあいだ editor は誰も入れません（[editor-deploy.md](editor-deploy.md) §5）。
+1. **Docs API専用credentialの契約。** editorの写真本人確認sessionやnative AppConnectを流用せず、`me/docs-drive/*`だけを本人として呼べる最小権限tokenをserver側に渡すこと。
 2. **editor からの呼び出しを許すこと。** 今の API は `403 niho_docs_app_required` で、**NIHO docs からの呼び出しだけ**を通します。許されるまで、書き出しは画面で `app_not_allowed`（「NIHO 側の許可待ちです」）になります。
 3. **`returnTo` の値を受け入れること。** 旧 Mac アプリは `"niho-docs"` を送っていました。editor は既定で `"niho-editor"` を送ります（`deploy.env` の `NIHO_RETURN_TO` で変えられます）。Google の同意のあとに本人を戻す先を、この値で決めてもらいます。
 
@@ -34,7 +34,7 @@ editor 側の配備だけでは開きません。**次の 3 つは niho-app に�
 2. `scripts/editor-deploy/deploy.sh --no-build` — `EDITOR_GOOGLE_DOCS_MODE` ほかが付きます（ログに `Google Docs: on` / `off`）。
 3. 画面で確かめます。ページの「…」›「Google ドキュメントへ」→ 未接続なら案内の画面 →「接続する」→ Google の同意 → 戻ってもう一度「Google ドキュメントへ」→ 自分のドライブに文書ができ、開けること。
 
-> ログイン（`EDITOR_AUTH_MODE=niho`）が入るまで、本番の editor は誰も入れません。この機能も、そこが開くまでは画面から試せません。
+> NIHOログインが使えても、Docs用credentialが無い間はこの機能だけ503 `google_docs_unavailable`のままです。
 
 ## 3. やめる・閉じる
 
