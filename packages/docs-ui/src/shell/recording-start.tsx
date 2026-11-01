@@ -46,7 +46,7 @@ export type RecordingStartProps = {
 /**
  * 「録音から」の開始画面。録音する／音声ファイルを置く → 上限の案内 → 背景情報・登場人物・固有名詞 → このあと。
  * 上限（limitsNote）は呼び出し側がサーバーの値から組む（画面に数を埋め込まない）。
- * 文字起こしをどこで行うかは `engineNote` で渡す（Mac は「この Mac」も選べる。既定は NIHO クラウド）。
+ * 文字起こしをどこで行うかは `engineNote` で呼び出し側から渡す。送信先は既定値から推測しない。
  */
 export function RecordingStart(props: RecordingStartProps) {
   const backgroundId = useId();
@@ -129,7 +129,7 @@ export function RecordingStart(props: RecordingStartProps) {
         ))}
       </div>
       <div className="es-foot2">
-        <span>{props.engineNote ?? "文字起こしは NIHO クラウドで行います"}</span>
+        <span>{props.engineNote ?? "文字起こしの送信先は未設定です"}</span>
         {props.onEditEngine && (
           <button type="button" className="es-btn es-btn--quiet es-btn--sm" onClick={props.onEditEngine}>
             変える

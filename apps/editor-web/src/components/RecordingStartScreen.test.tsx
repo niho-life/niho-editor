@@ -195,7 +195,7 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-async function mount(props: { keep?: RecordingKeep | null; limits?: typeof LIMITS } = {}) {
+async function mount(props: { keep?: RecordingKeep | null; limits?: typeof LIMITS; transcriptionEngine?: string | null } = {}) {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -645,6 +645,11 @@ describe("RecordingStartScreen（前回の録音・上限の案内）", () => {
     await mount({ limits: LIMITS });
     expect(container!.textContent).toContain("音声は 1 つ 6 時間・2 GiB まで。クラウドの音声は 30 日で消えます（文字起こしは残ります）");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("録音の開始画面に文字起こしの送信先を正確に表示する", async () => {
+    await mount({ limits: LIMITS, transcriptionEngine: "gemini" });
+    expect(container!.textContent).toContain("文字起こしを始めると、音声は Google Gemini に送られます");
   });
 });
 

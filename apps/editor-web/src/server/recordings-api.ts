@@ -15,6 +15,7 @@ import type { AuthProvider } from "../auth/types";
 import { appendTranscript, type AppendRejection } from "../recording/append-transcript";
 import { audioPartBody } from "./audio-api";
 import { candidateBody } from "./recording-candidates-api";
+import type { TranscriptionEngineName } from "../transcription/engine";
 import { SEGMENT_EDITS_MAX, editSegments, type SegmentEdit, type SegmentEditRejection } from "../recording/edit-segments";
 import { listSpeakers, mergeSpeakers, renameSpeaker, type SpeakerRejection, type SpeakerSummary } from "../recording/speakers";
 import { VTT_IMPORT_ENGINE, VTT_IMPORT_MAX_BYTES, importVtt, readVtt, type VttImportFailure } from "../recording/vtt-import";
@@ -51,6 +52,7 @@ export type RecordingsStore = {
 
 /** いま使えるエンジンの名前（画面が案のエンジンを選べるか決める）。 */
 export type RecordingEnginesReader = () => readonly string[];
+export type DefaultRecordingEngineReader = () => TranscriptionEngineName | null;
 
 export type RecordingsApiDeps = {
   auth: () => AuthProvider;
@@ -58,6 +60,8 @@ export type RecordingsApiDeps = {
   store: () => RecordingsStore | null;
   /** いま使えるエンジン（#36 段 3b-4。無ければ空＝画面はエンジンを選ばない）。 */
   engines?: RecordingEnginesReader;
+  /** 通常の文字起こしで音声を送る先。 */
+  defaultEngine?: DefaultRecordingEngineReader;
   env?: Readonly<Record<string, string | undefined>>;
 };
 
@@ -199,13 +203,14 @@ export function getRecordingRoute(request: Request, id: string, deps: Recordings
       store.listAudioParts?.(owner, id) ?? [],
       store.listCandidates?.(owner, id) ?? [],
     ]);
-    if (!store.latestTranscription && !store.listAudioParts && !store.listCandidates) return jsonResponse(200, withSpeakers(recording));
+    if (!store.latestTranscription && !store.listAudioParts && !store.listCandidates && !deps.engines && !deps.defaultEngine) return jsonResponse(200, withSpeakers(recording));
     return jsonResponse(200, {
       ...withSpeakers(recording),
       transcription: run ? transcriptionRunBody(run) : null,
       audios: audios.map(audioPartBody),
       candidates: candidates.map(candidateBody),
       engines: [...(deps.engines?.() ?? [])],
+      defaultEngine: deps.defaultEngine?.() ?? null,
     });
   });
 }

@@ -136,9 +136,3 @@ export function isAudioExpired(audio: Pick<RecordingAudio, "expiresAt"> | null, 
   const at = Date.parse(audio.expiresAt);
   return Number.isFinite(at) && at <= now;
 }
-
-/**
- * 外部のエンジンに音声が渡ることの一言。**オーナー確認待ちの仮置きの文言**（画面に説明文を置かない方針とぶつかるので、
- * 「文字起こしをはじめる」「もう一度」の近くに最小の 1 行だけ）。
- */
-export const EXTERNAL_ENGINE_NOTE = "音声は文字起こしのため外部のサービスに送られます";

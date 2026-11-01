@@ -243,6 +243,20 @@ describe("GET /api/pages/{id}/recording", () => {
     expect(body.speakers).toEqual(created.speakers);
   });
 
+  it("returns available transcription engines and only the default provider name", async () => {
+    const { store } = memoryStore();
+    const created = await imported(store);
+    const d: RecordingsApiDeps = {
+      ...deps("user-a", store),
+      engines: () => ["deepgram", "gemini"],
+      defaultEngine: () => "gemini",
+    };
+    const body = await (await get(created.page.id, d)).json();
+    expect(body.engines).toEqual(["deepgram", "gemini"]);
+    expect(body.defaultEngine).toBe("gemini");
+    expect(JSON.stringify(body)).not.toMatch(/apiKey|secret|gemini-3\./i);
+  });
+
   it("answers 401 and 503 before touching the store", async () => {
     const { store, calls } = memoryStore();
     expect((await get(randomUUID(), deps(null, store))).status).toBe(401);

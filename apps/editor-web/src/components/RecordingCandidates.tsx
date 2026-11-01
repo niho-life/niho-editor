@@ -13,7 +13,7 @@ import {
   type RecordingCandidateSummary,
   type RecordingSnapshot,
 } from "@/lib/recording-client";
-import { candidateEngineLabel } from "@/recording/candidate-names";
+import { canDiscloseTranscriptionEngine, candidateEngineLabel, transcriptionServiceNote } from "@/recording/candidate-names";
 import { formatClock, speakerLabel } from "@/lib/recording-view";
 
 const ROW_STYLE: CSSProperties = { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 8 };
@@ -53,6 +53,7 @@ export function RecordingCandidates({
   pageId,
   candidates,
   engines,
+  defaultEngine,
   onSnapshot,
   onChanged,
   disabled,
@@ -61,6 +62,8 @@ export function RecordingCandidates({
   candidates: readonly RecordingCandidateSummary[];
   /** いま使えるエンジン（2 つ以上あれば、どのエンジンで作るか選べる）。 */
   engines?: readonly string[];
+  /** エンジン未指定で作る案が使う既定の送信先。 */
+  defaultEngine?: string | null;
   /** 採用のあとの最新の録音（正本が入れ替わる）。 */
   onSnapshot: (snapshot: RecordingSnapshot) => void;
   /** 案が増えた・実行を積んだ（録音を読み直す）。 */
@@ -73,6 +76,7 @@ export function RecordingCandidates({
   // 「消す」を押した案（1 回確かめる）
   const [confirming, setConfirming] = useState<string | null>(null);
   const locked = busy || disabled === true;
+  const defaultCandidateEngine = (engines ?? []).length === 1 ? engines?.[0] ?? null : defaultEngine ?? null;
 
   // 案を作る・もう一度作る実行は、上の文字起こしの見張り（useTranscription）の対象ではない。作っている途中の案がある
   // あいだは、録音を読み直して状態を追う（できた・できなかったが画面に出る。読み直さないと「作っています」のまま残る）
@@ -99,14 +103,20 @@ export function RecordingCandidates({
     }
   };
 
-  const create = (engine?: string) =>
-    guard("candidate", async () => {
+  const create = (engine?: string) => {
+    const recipient = engine ?? defaultCandidateEngine;
+    if (!canDiscloseTranscriptionEngine(recipient)) {
+      setMessage({ kind: "error", text: transcriptionServiceNote(recipient) });
+      return;
+    }
+    return guard("candidate", async () => {
       const added = await addCandidate(pageId, engine);
       onChanged();
       if (added.started) return { kind: "info", text: `${added.candidate.name} の案を作っています` };
       // 案はできたが、実行を積めなかった（音声が途中・期限切れ・ほかの実行が走っている）
       return { kind: "error", text: recordingErrorMessage(new RecordingRequestError(409, added.cannotStart), "candidate") };
     });
+  };
 
   const show = (candidate: RecordingCandidateSummary) =>
     guard("candidate", async () => {
@@ -144,20 +154,25 @@ export function RecordingCandidates({
         {/* エンジンが 2 つ以上使えるときは、どのエンジンで作るかを選ばせる（旧 NIHO docs の「別のエンジンの案」） */}
         {(engines ?? []).length > 1 ? (
           (engines ?? []).map((engine) => (
-            <button
-              key={engine}
-              type="button"
-              className="es-btn es-btn--outline es-btn--sm"
-              aria-disabled={locked || undefined}
-              onClick={() => void create(engine)}
-            >
-              {candidateEngineLabel(engine)} で案を作る
-            </button>
+            <span key={engine} style={{ display: "inline-flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <button
+                type="button"
+                className="es-btn es-btn--outline es-btn--sm"
+                aria-disabled={locked || !canDiscloseTranscriptionEngine(engine) || undefined}
+                onClick={() => void create(engine)}
+              >
+                {candidateEngineLabel(engine)} で案を作る
+              </button>
+              <span className="es-note">{transcriptionServiceNote(engine)}</span>
+            </span>
           ))
         ) : (
-          <button type="button" className="es-btn es-btn--outline es-btn--sm" aria-disabled={locked || undefined} onClick={() => void create()}>
-            別の案を作る
-          </button>
+          <>
+            <button type="button" className="es-btn es-btn--outline es-btn--sm" aria-disabled={locked || !canDiscloseTranscriptionEngine(defaultCandidateEngine) || undefined} onClick={() => void create()}>
+              別の案を作る
+            </button>
+            <span className="es-note">{transcriptionServiceNote(defaultCandidateEngine)}</span>
+          </>
         )}
         <span className="es-note">同じ音声をもう一度文字起こしして、見比べて選べます</span>
       </div>

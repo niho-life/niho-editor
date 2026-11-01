@@ -3,6 +3,7 @@ import { StoreUnavailable } from "@/components/Notice";
 import { audioLimits } from "@/recording/audio-limits";
 import { getStore } from "@/server/db";
 import { requireSession } from "@/server/session";
+import { resolveTranscriptionEngines } from "@/transcription/config";
 
 export const dynamic = "force-dynamic";
 
@@ -13,5 +14,5 @@ export default async function NewPageView(props: { searchParams: Promise<{ from?
   await requireSession(recording ? "/p/new?from=recording" : "/p/new");
   if (!getStore()) return <StoreUnavailable />;
   // 上限（長さ・容量・クラウドの音声を残す日数）は、画面の案内のためにそのまま渡す（要求を増やさない）
-  return recording ? <RecordingStartScreen limits={audioLimits()} /> : <NewPage />;
+  return recording ? <RecordingStartScreen limits={audioLimits()} transcriptionEngine={resolveTranscriptionEngines(process.env)?.default ?? null} /> : <NewPage />;
 }

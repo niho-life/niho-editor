@@ -59,7 +59,7 @@ function json(status: number, body: unknown) {
 
 async function mount(
   candidates: RecordingCandidateSummary[],
-  handlers: { onSnapshot?: (snapshot: RecordingSnapshot) => void; onChanged?: () => void; engines?: string[] } = {},
+  handlers: { onSnapshot?: (snapshot: RecordingSnapshot) => void; onChanged?: () => void; engines?: string[]; defaultEngine?: string | null } = {},
 ) {
   container = document.createElement("div");
   document.body.append(container);
@@ -70,6 +70,7 @@ async function mount(
         pageId={PAGE_ID}
         candidates={candidates}
         engines={handlers.engines ?? []}
+        defaultEngine={handlers.defaultEngine === undefined ? handlers.engines?.[0] ?? "fake" : handlers.defaultEngine}
         onSnapshot={handlers.onSnapshot ?? (() => undefined)}
         onChanged={handlers.onChanged ?? (() => undefined)}
       />,
@@ -107,6 +108,8 @@ describe("RecordingCandidates（文字起こしの案）", () => {
     vi.stubGlobal("fetch", fetchMock);
     await mount([], { engines: ["deepgram", "gemini"] });
     expect([...container!.querySelectorAll("button")].map((button) => button.textContent?.trim())).toEqual(["Deepgram で案を作る", "Gemini で案を作る"]);
+    expect(container!.textContent).toContain("音声は Deepgram に送られます");
+    expect(container!.textContent).toContain("音声は Google Gemini に送られます");
     await click("Gemini で案を作る");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(statusText()).toContain("Gemini の案を作っています");
@@ -122,6 +125,16 @@ describe("RecordingCandidates（文字起こしの案）", () => {
     expect(buttonByText("別の案を作る")).toBeTruthy();
     await click("別の案を作る");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("送信先が分からなければ案を開始しない", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await mount([], { defaultEngine: null });
+    expect(buttonByText("別の案を作る")?.getAttribute("aria-disabled")).toBe("true");
+    await click("別の案を作る");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(alertText()).toContain("送信先を確認できません");
   });
 
   it("始められなかったときは理由を出す（案は残る）", async () => {

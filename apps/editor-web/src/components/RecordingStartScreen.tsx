@@ -12,6 +12,7 @@ import { recordingKeep, type KeptTake, type RecordingKeep } from "@/lib/recordin
 import { formatClock } from "@/lib/recording-view";
 import { AUDIO_STAGE_LABELS, useAudioImport } from "@/lib/use-audio-import";
 import { micErrorMessage, useMicCapture } from "@/lib/use-mic-capture";
+import { transcriptionServiceNote } from "@/recording/candidate-names";
 import { useEditorFrame } from "./EditorFrame";
 
 type Message = { kind: "info" | "error"; text: string };
@@ -57,10 +58,13 @@ const UNKNOWN_FILE: Message = { kind: "error", text: "このファイルは取�
  */
 export function RecordingStartScreen({
   limits: given,
+  transcriptionEngine = null,
   keep: injected,
 }: {
   /** 上限（server が持っている値。案内に出す。選んだファイルの検査は API の値で行う）。 */
   limits?: AudioLimits;
+  /** 既定の送信先（provider 名だけ。秘密やモデル設定は含めない）。 */
+  transcriptionEngine?: string | null;
   /** テスト用の控え（既定はこの画面の IndexedDB）。 */
   keep?: RecordingKeep | null;
 } = {}) {
@@ -345,6 +349,7 @@ export function RecordingStartScreen({
           file={file ? { name: file.name, detail: fileDetail } : undefined}
           fileHint={FILE_HINT}
           limitsNote={audioLimitsNote(limits)}
+          engineNote={transcriptionServiceNote(transcriptionEngine)}
           startLabel={startLabel}
           background={background}
           onBackground={setBackground}

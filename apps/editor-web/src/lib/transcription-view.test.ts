@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TranscriptionRequestError, type TranscriptionRun } from "./transcription-client";
 import {
-  EXTERNAL_ENGINE_NOTE,
   INITIAL_TRANSCRIPTION_STATE,
   POLL_HIDDEN_INTERVAL_MS,
   POLL_INTERVAL_MS,
@@ -125,7 +124,4 @@ describe("transcription view words", () => {
     expect(audioExpiryLabel({ expiresAt: "not a date" }, before)).toBeNull();
   });
 
-  it("keeps the external-service note to one short line", () => {
-    expect(EXTERNAL_ENGINE_NOTE).toBe("音声は文字起こしのため外部のサービスに送られます");
-  });
 });

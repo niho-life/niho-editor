@@ -612,7 +612,7 @@ describe("ページの部品", () => {
     const html = renderToStaticMarkup(
       <RecordingStart how="mic" onHow={noop} background="" onBackground={noop} people={[{ name: "Takuya", tone: "a" }]} terms="北鎌倉 · 円覚寺" next="article" onNext={noop} onStart={noop} />,
     );
-    for (const text of ["録音する", "音声ファイルをここにドロップ", ".m4a .mp3 .wav、文字起こし済みの .vtt も", "背景情報", "任意", "登場人物", "話者の名前になります", "固有名詞", "設定から引き継いでいます", "このあと", "記事にする", "議事録にする", "文字起こしだけ", "録音をはじめる", "文字起こしは NIHO クラウドで行います"]) {
+    for (const text of ["録音する", "音声ファイルをここにドロップ", ".m4a .mp3 .wav、文字起こし済みの .vtt も", "背景情報", "任意", "登場人物", "話者の名前になります", "固有名詞", "設定から引き継いでいます", "このあと", "記事にする", "議事録にする", "文字起こしだけ", "録音をはじめる", "文字起こしの送信先は未設定です"]) {
       expect(html).toContain(text);
     }
     expect(html).toContain('role="radiogroup"');

@@ -20,7 +20,7 @@ type Run = { id: string; status: "queued" | "running" | "succeeded" | "failed"; 
 const runOf = (status: Run["status"], errorCode: string | null = null): Run => ({ id: RUN_ID, status, engine: "fake", language: "ja", errorCode, createdAt: "2030-01-10T00:00:00.000Z", startedAt: null, finishedAt: null });
 
 /** 音声のある録音の API の偽物。runs は GET transcription が順に返す run（最後は繰り返す）。 */
-function createServer(options: { segments?: typeof SEGMENTS; audioStatus?: "uploading" | "uploaded"; expiresAt?: string; runs?: (Run | null)[]; start?: () => Response; recordingAfter?: typeof SEGMENTS } = {}) {
+function createServer(options: { segments?: typeof SEGMENTS; audioStatus?: "uploading" | "uploaded"; expiresAt?: string; runs?: (Run | null)[]; start?: () => Response; recordingAfter?: typeof SEGMENTS; defaultEngine?: string | null } = {}) {
   const state = {
     revision: 1,
     segments: options.segments ?? [],
@@ -44,6 +44,8 @@ function createServer(options: { segments?: typeof SEGMENTS; audioStatus?: "uplo
       updatedAt: "2030-01-01T00:00:00.000Z",
     },
     speakers: [...new Set(state.segments.map((segment) => segment.speaker))].map((speaker) => ({ speaker, name: null, count: state.segments.filter((segment) => segment.speaker === speaker).length })),
+    engines: ["deepgram"],
+    defaultEngine: options.defaultEngine === undefined ? "deepgram" : options.defaultEngine,
   });
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
   const fetchMock = vi.fn(async (resource: RequestInfo | URL, init?: RequestInit) => {
@@ -121,12 +123,20 @@ describe("録音ページの文字起こしの開始と状態（#36 段 3b-1）"
     const server = createServer();
     await mount(server);
     expect(buttonByText("文字起こしをはじめる")).not.toBeNull();
-    expect(text()).toContain("音声は文字起こしのため外部のサービスに送られます");
+    expect(text()).toContain("文字起こしを始めると、音声は Deepgram に送られます");
     expect(text()).toContain("音声は 1月31日に削除されます");
     // 段落がまだ無いので、段落の欄（直す・話者・時刻）は出さない
     expect(text()).not.toContain("文字起こしを直す");
     expect(container!.querySelector('[data-transcription] [role="status"]')!.getAttribute("aria-live")).toBe("polite");
     expect(server.state.gets.transcription).toBe(1);
+  });
+
+  it("does not start when the server cannot identify a transcription recipient", async () => {
+    const server = createServer({ defaultEngine: null });
+    await mount(server);
+    expect(buttonByText("文字起こしをはじめる")).toBeNull();
+    expect(text()).toContain("送信先を確認できません");
+    expect(server.state.posts).toEqual([]);
   });
 
   it("starts, says 待機中 then 文字起こし中 every 3 seconds, and shows the paragraphs when it succeeds; then stops reading", async () => {
@@ -181,10 +191,10 @@ describe("録音ページの文字起こしの開始と状態（#36 段 3b-1）"
     await mount(server);
     expect(text()).toContain("[fake] 一つ目の段落です。");
     // 段落があるときは、外部のサービスの一言は確かめる欄に出す
-    expect(text()).not.toContain("音声は文字起こしのため外部のサービスに送られます");
+    expect(container!.querySelector("[data-transcription]")!.textContent).not.toContain("音声は Deepgram に送られます");
     await click("もう一度文字起こしする");
     expect(text()).toContain("いまの文字起こしは、足した分も含めて置き換えられます");
-    expect(text()).toContain("音声は文字起こしのため外部のサービスに送られます");
+    expect(text()).toContain("文字起こしを始めると、音声は Deepgram に送られます");
     expect(document.activeElement?.textContent).toBe("やめる");
     await click("やめる");
     expect(server.state.posts).toEqual([]);

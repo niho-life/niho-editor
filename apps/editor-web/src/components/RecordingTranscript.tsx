@@ -89,6 +89,8 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
         ...next,
         ...(next.audios === undefined && previous?.audios !== undefined ? { audios: previous.audios } : {}),
         ...(next.candidates === undefined && previous?.candidates !== undefined ? { candidates: previous.candidates } : {}),
+        ...(next.engines === undefined && previous?.engines !== undefined ? { engines: previous.engines } : {}),
+        ...(next.defaultEngine === undefined && previous?.defaultEngine !== undefined ? { defaultEngine: previous.defaultEngine } : {}),
       });
     },
     [replaceSnapshot],
@@ -296,7 +298,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
       }}
     >
       {audio && (
-        <RecordingTranscription pageId={pageId} audio={audio} hasTranscript={hasSegments} onSucceeded={reloadAfterTranscription} onHasTranscript={reloadAfterTranscription} />
+        <RecordingTranscription pageId={pageId} audio={audio} engine={snapshot.defaultEngine ?? null} hasTranscript={hasSegments} onSucceeded={reloadAfterTranscription} onHasTranscript={reloadAfterTranscription} />
       )}
       {/* src は playback.ref が付け外しする（外して付け直されても src が戻るように） */}
       {player && <audio key={pageId} ref={playback.ref} preload="metadata" data-recording-audio="" />}
@@ -353,6 +355,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
           pageId={pageId}
           candidates={snapshot.candidates ?? []}
           engines={snapshot.engines ?? []}
+          defaultEngine={snapshot.defaultEngine ?? null}
           onSnapshot={(next) => {
             applyDrafts({});
             applySnapshot(next);
