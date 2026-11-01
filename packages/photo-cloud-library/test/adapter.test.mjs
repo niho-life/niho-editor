@@ -428,3 +428,16 @@ test("SDK 0.1.4 release URL/version/SRIと実sourceのPhotoLibrary必須method�
   }
   assert.equal(PHOTO_LIMITS.lookupMaxCount, 100);
 });
+
+
+test("現在recipeから外した過去版のmaskをowner-filtered APIへ照会する", async () => {
+  assert.equal(readyPhoto.recipe.maskSurfaceIds.includes(HASH.mask), false);
+  const saved = setup({ handler: async (input) => String(input).includes("/content/")
+    ? new Response(new Uint8Array(mask.sizeBytes), { headers: { "content-type": "image/png" } }) : null });
+  const bytes = await saved.cloud.library.loadMaskSurface(IDS.photo, HASH.mask);
+  assert.equal(bytes.byteLength, mask.sizeBytes);
+  assert.equal(saved.transport.calls.some(call => String(call.input).includes(`/masks/${HASH.mask}`)), true);
+  const missing = setup({ handler: async input => String(input).includes("/masks/") ? error("not_found", 404) : null });
+  assert.equal(await missing.cloud.library.loadMaskSurface(IDS.photo, HASH.mask), null);
+  await assert.rejects(() => saved.cloud.library.loadMaskSurface(IDS.photo, "bad-surface"), reason => reason.code === "invalid_request");
+});

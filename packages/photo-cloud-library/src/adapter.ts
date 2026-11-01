@@ -407,8 +407,9 @@ export function createCloudPhotoLibrary(options: CloudPhotoLibraryOptions): Clou
       }
     },
     async loadMaskSurface(photoId, surfaceId) {
-      const photo = await requireRaw(photoId);
-      if (!photo.recipe.maskSurfaceIds.includes(surfaceId)) return null;
+      if (!/^[a-f0-9]{64}$/.test(surfaceId)) throw new CloudPhotoError("invalid_request", 400, null, false);
+      await requireRaw(photoId);
+      // 過去の版だけが参照するsurfaceも、本人とphotoを検証するAPIで照合する。
       try {
         const asset = parseAsset(await client.request("masks.get", { photoId, surfaceId }), { kind: "mask", sha256: surfaceId });
         return (await readAsset({ photoId, asset }, PHOTO_LIMITS.maxMaskBytes)).bytes;
