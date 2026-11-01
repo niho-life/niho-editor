@@ -8,8 +8,8 @@ import ts from "../../packages/photo-cloud-library/node_modules/typescript/lib/t
 export const CONFIG_PATH = "sdk/photo-cloud-release-set.json";
 export const NOTICE_PATH = "sdk/PHOTO_CLOUD_THIRD_PARTY_NOTICES.md";
 export const REPOSITORY = "niho-life/niho-editor";
-export const RELEASE_VERSION = "0.1.1";
-export const RELEASE_TAG = "photo-cloud-sdk-v0.1.1";
+export const RELEASE_VERSION = "0.1.2";
+export const RELEASE_TAG = "photo-cloud-sdk-v0.1.2";
 export const FULL_SHA = /^[a-f0-9]{40}$/u;
 export const SHA256 = /^[a-f0-9]{64}$/u;
 export const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
@@ -19,9 +19,9 @@ export const PACKAGE_DEFINITIONS = [
 ];
 export const EXPECTED_PEERS = new Map([
   ["@niho/photo-cloud-library", {
-    "@niho/photo-library-contract": "0.1.1",
-    "niho-photo-contract": "0.1.6",
-    "niho-photo-editing": "0.1.6",
+    "@niho/photo-library-contract": "0.1.2",
+    "niho-photo-contract": "0.1.7",
+    "niho-photo-editing": "0.1.7",
   }],
   ["@niho/photo-library-contract", {}],
 ]);
@@ -141,12 +141,12 @@ export function validateConfig(config) {
   if (JSON.stringify(config.packages) !== JSON.stringify(PACKAGE_DEFINITIONS)) fail("package source allowlistが不正です");
   const expectedUpstream = {
     baselinePath: "packages/photo-library-contract/sdk-baseline.json",
-    baselineSha256: "aa5defc1f64a28e80aeaa1ab1e146d3151ae6255f838ea17d0fc70f4318aeb2d",
+    baselineSha256: "35f1f68ad0b57cdc7e40f98f9a6958387743d5c3403071531e5620a48112f78d",
     repository: "niho-life/niho-photo",
-    releaseTag: "photo-sdk-v0.1.6",
-    version: "0.1.6",
-    sourceCommit: "bc95b2764b089dfd4bc7beaf3626c12c636f809a",
-    manifestSha256: "043f234ed28c765e0dd10d6c37e1a5a2d18dcc09f37d6060844c1716d40b3dc5",
+    releaseTag: "photo-sdk-v0.1.7",
+    version: "0.1.7",
+    sourceCommit: "5ff21a28ae5f7a0e3a64a98b1ef31a7ca523b2a6",
+    manifestSha256: "8b02658cbbab7976b56b921c30fc953cc434f933a1e91a4511948bfee3882349",
   };
   exactObject(config.upstreamSdk, expectedUpstream, "upstream SDK pin");
   return config;
