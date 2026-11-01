@@ -1,0 +1,16 @@
+{
+  "name": "@niho/photo-media-worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.mjs",
+    "check": "npm run typecheck && npm test"
+  },
+  "engines": { "node": "24.x" },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "6.0.3"
+  }
+}
