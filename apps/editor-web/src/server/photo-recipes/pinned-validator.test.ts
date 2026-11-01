@@ -42,6 +42,8 @@ function snapshot(photo: Photo = readyPhoto, source = library): PhotoRecipeSnaps
 }
 
 function canonicalRaster(settings: RecipeDocument["settings"] = { ...readyPhoto.recipe.settings, base: RASTER_BASE }): PhotoRecipeSnapshot {
+  const media = readyPhoto.media;
+  if (media.state !== "ready") throw new Error("synthetic fixture media must be ready");
   const workingAsset = {
     ...readyPhoto.original,
     id: IDS.mask,
@@ -55,7 +57,7 @@ function canonicalRaster(settings: RecipeDocument["settings"] = { ...readyPhoto.
     ...readyPhoto,
     recipe: { ...readyPhoto.recipe, settings, baseVersion: RASTER_BASE },
     media: {
-      ...readyPhoto.media,
+      ...media,
       state: "ready",
       workingCopy: {
         asset: workingAsset,
@@ -136,7 +138,7 @@ describe("pinned PhotoRecipeValidator with real SDK 0.1.7 runtime", () => {
 
   it("extracts unique sorted lowercase external mask surface IDs without changing the settings hash", async () => {
     const second = "0".repeat(64);
-    const settings = {
+    const settings: RecipeDocument["settings"] = {
       ...maskedPhoto.recipe.settings,
       masks: [
         ...(maskedPhoto.recipe.settings.masks as Json[]),
