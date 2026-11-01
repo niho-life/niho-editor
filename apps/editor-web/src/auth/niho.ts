@@ -480,7 +480,12 @@ export function createNihoAuthProvider(deps: NihoAuthDeps = {}): AuthProvider {
       const nihoOrigin = origin();
       const callbackOrigin = editorOrigin();
       if (!nihoOrigin || !callbackOrigin || nihoOrigin === callbackOrigin || request.method !== "POST") return badCallbackResponse();
-      if (request.url !== `${callbackOrigin}${CALLBACK_PATH}`) return badCallbackResponse();
+      const callbackUrl = new URL(request.url);
+      if (callbackUrl.pathname !== CALLBACK_PATH || request.url.includes("?") || request.url.includes("#")) return badCallbackResponse();
+      // standalone は待受host/portから内部URLを作る。公開originは固定設定と元のHostで照合し、
+      // x-forwarded-hostは信用しない。Hostを持たない直接RequestだけはURL originを使う。
+      const host = request.headers.get("host");
+      if (host === null ? callbackUrl.origin !== callbackOrigin : host.toLowerCase() !== new URL(callbackOrigin).host) return badCallbackResponse();
       const requestOrigin = request.headers.get("origin");
       if (requestOrigin !== nihoOrigin && requestOrigin !== callbackOrigin) return badCallbackResponse();
       const fields = await readCallbackFields(request);

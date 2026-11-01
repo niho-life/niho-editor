@@ -18,6 +18,22 @@ function provider() {
     logout: async () => new Response(null, { status: 303, headers: { Location: "/auth/login" } }),
   };
 }
+function postWithHost(url, headers, body) {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(url, { method: "POST", headers }, response => {
+      const chunks = [];
+      response.on("data", chunk => chunks.push(chunk));
+      response.on("error", reject);
+      response.on("end", () => {
+        const pairs = [];
+        for (let i = 0; i < response.rawHeaders.length; i += 2) pairs.push([response.rawHeaders[i], response.rawHeaders[i + 1]]);
+        resolve(new Response(Buffer.concat(chunks), { status: response.statusCode, headers: pairs }));
+      });
+    });
+    request.on("error", reject);
+    request.end(body);
+  });
+}
 async function serve(t, auth = provider()) {
   const server = createAcceptanceServer(createHandler(env, manifest, auth), env.EDITOR_ORIGIN);
   server.listen(0, "127.0.0.1");
@@ -141,21 +157,16 @@ test("productionのNIHO providerを同じsourceから実行し、PKCE/cookie/sna
   assert.doesNotMatch(startHtml, /codeVerifier|verifier|credential/);
   const state = /name="state" value="([A-Za-z0-9._~-]+)"/.exec(startHtml)[1];
   const form = `code=${"c".repeat(43)}&state=${state}`;
-  const relay = await fetch(`${base}/auth/callback`, {
-    method: "POST",
-    headers: { origin: env.EDITOR_NIHO_ORIGIN, "content-type": "application/x-www-form-urlencoded" },
-    body: form,
-  });
+  const relay = await postWithHost(`${base}/auth/callback`, {
+    origin: env.EDITOR_NIHO_ORIGIN, host: new URL(env.EDITOR_ORIGIN).host, "content-type": "application/x-www-form-urlencoded",
+  }, form);
   assert.equal(relay.status, 200);
   assert.equal(relay.headers.get("set-cookie"), null);
   assert.equal(relay.headers.get("referrer-policy"), "origin");
   assert.match(await relay.text(), new RegExp(`action="${env.EDITOR_ORIGIN}/auth/callback"`));
-  const callback = await fetch(`${base}/auth/callback`, {
-    method: "POST",
-    headers: { cookie: pending, origin: env.EDITOR_ORIGIN, "content-type": "application/x-www-form-urlencoded" },
-    body: form,
-    redirect: "manual",
-  });
+  const callback = await postWithHost(`${base}/auth/callback`, {
+    cookie: pending, origin: env.EDITOR_ORIGIN, host: new URL(env.EDITOR_ORIGIN).host, "content-type": "application/x-www-form-urlencoded",
+  }, form);
   assert.equal(callback.status, 303);
   const cookie = callback.headers.getSetCookie().find(value => value.startsWith(`${cookieName}=`)).split(";")[0];
   assert.equal((await (await fetch(`${base}/api/photo/v1/auth/session`, { headers: { cookie } })).json()).userId, "synthetic-canonical");

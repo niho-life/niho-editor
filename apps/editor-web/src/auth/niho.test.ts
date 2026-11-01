@@ -74,6 +74,7 @@ function provider(fake = fakeNiho(), now: () => number = () => NOW) {
 
 function callbackRequest(options: {
   origin?: string;
+  host?: string;
   cookie?: string;
   body?: string | ReadableStream<Uint8Array>;
   contentType?: string | null;
@@ -82,6 +83,7 @@ function callbackRequest(options: {
 } = {}): Request {
   const headers = new Headers();
   if (options.origin !== undefined) headers.set("origin", options.origin);
+  if (options.host !== undefined) headers.set("host", options.host);
   if (options.cookie) headers.set("cookie", options.cookie);
   if (options.contentType !== null) headers.set("content-type", options.contentType ?? "application/x-www-form-urlencoded");
   return new Request(options.url ?? `${ORIGIN}/auth/callback`, {
@@ -203,6 +205,26 @@ describe("NIHO auth provider", () => {
     expect(completed.headers.getSetCookie().find((value) => value.startsWith(`${NIHO_PENDING_COOKIE}=`))).toContain("Max-Age=0");
     const exchange = fake.calls.find((call) => call.url.endsWith("/exchange"));
     expect(exchange?.body).toMatchObject({ attemptId: ATTEMPT, code: CODE, codeVerifier: VERIFIER });
+  });
+
+  it("accepts standalone internal URLs only with the configured public Host and keeps relay actions public", async () => {
+    const { auth, fake } = provider();
+    const pending = cookieValue(await begin(auth), NIHO_PENDING_COOKIE);
+    const internalUrl = "http://0.0.0.0:8080/auth/callback";
+    const publicHost = new URL(ORIGIN).host;
+    const relay = await auth.completeLogin(callbackRequest({ url: internalUrl, host: publicHost, origin: NIHO }));
+    expect(relay.status).toBe(200);
+    expect(await relay.text()).toContain(`action="${ORIGIN}/auth/callback"`);
+    expect(relay.headers.get("set-cookie")).toBeNull();
+    expect(fake.calls.some((call) => call.url.endsWith("/exchange"))).toBe(false);
+    const completed = await auth.completeLogin(callbackRequest({ url: internalUrl, host: publicHost, origin: ORIGIN, cookie: `${NIHO_PENDING_COOKIE}=${pending}` }));
+    expect(completed.status).toBe(303);
+    expect(cookieValue(completed, NIHO_SESSION_COOKIE)).toBe(CREDENTIAL);
+    const before = fake.calls.length;
+    for (const host of ["other.example.invalid", `${publicHost}, other.example.invalid`]) {
+      expect((await auth.completeLogin(callbackRequest({ url: internalUrl, host, origin: NIHO }))).status).toBe(400);
+    }
+    expect(fake.calls).toHaveLength(before);
   });
 
   it("introspects every request and returns canonical safe metadata without an apiToken", async () => {

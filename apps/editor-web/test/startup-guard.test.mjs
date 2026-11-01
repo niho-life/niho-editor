@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import net from "node:net";
+import { request as httpRequest } from "node:http";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -118,6 +119,61 @@ describe("production start with the server entry (Dockerfile / npm start)", () =
       assert.doesNotMatch(html, /data-auth-mode="stub"/);
     } finally {
       child.kill("SIGTERM");
+    }
+  });
+
+  it("accepts NIHO form POST through standalone internal URLs with the public Host and preserves the handler CSP", async () => {
+    const port = await freePort();
+    const editorOrigin = "https://editor.example.invalid";
+    const nihoOrigin = "https://niho-auth.example.invalid";
+    const env = { ...childEnv(port, "niho"), HOSTNAME: "0.0.0.0", EDITOR_ORIGIN: editorOrigin };
+    const child = spawn(process.execPath, ["scripts/server-entry.mjs", standaloneServer], { cwd: appDir, env, stdio: "ignore" });
+    try {
+      await waitForHttp(port);
+      const post = (overrides = {}, suffix = "") => new Promise((resolve, reject) => {
+        // Node fetchはHostを上書きしない。実HTTPクライアントで公開Hostと内部URLの差を再現する。
+        const request = httpRequest(`http://127.0.0.1:${port}/auth/callback${suffix}`, {
+          method: "POST",
+          headers: { host: new URL(editorOrigin).host, origin: nihoOrigin, "x-forwarded-proto": "https", "content-type": "application/x-www-form-urlencoded", ...overrides },
+        }, response => {
+          const chunks = [];
+          response.on("data", chunk => chunks.push(chunk));
+          response.on("error", reject);
+          response.on("end", () => {
+            const pairs = [];
+            for (let i = 0; i < response.rawHeaders.length; i += 2) pairs.push([response.rawHeaders[i], response.rawHeaders[i + 1]]);
+            resolve(new Response(Buffer.concat(chunks), { status: response.statusCode, headers: pairs }));
+          });
+        });
+        request.on("error", reject);
+        request.end(`code=${"c".repeat(43)}&state=${"s".repeat(43)}`);
+      });
+      const relay = await post();
+      assert.equal(relay.status, 200);
+      assert.equal(relay.headers.get("set-cookie"), null);
+      assert.equal(relay.headers.get("referrer-policy"), "origin");
+      assert.match(relay.headers.get("cache-control") ?? "", /no-store/);
+      const csp = relay.headers.get("content-security-policy") ?? "";
+      const nonce = /script-src 'nonce-([^']+)'/.exec(csp)?.[1];
+      assert.ok(nonce);
+      assert.match(csp, /default-src 'none'/);
+      assert.match(csp, /form-action 'self'/);
+      assert.doesNotMatch(csp, /strict-dynamic/);
+      const html = await relay.text();
+      assert.ok(html.includes(`<script nonce="${nonce}">`));
+      assert.ok(html.includes(`action="${editorOrigin}/auth/callback"`));
+      assert.doesNotMatch(html, /0\.0\.0\.0|verifier|credential/);
+      assert.equal((await post({ host: "other.example.invalid", "x-forwarded-host": new URL(editorOrigin).host })).status, 400);
+      assert.equal((await post({ origin: "null" })).status, 400);
+      assert.equal((await post({}, "?code=legacy")).status, 400);
+      const sameOrigin = await post({ origin: editorOrigin });
+      assert.equal(sameOrigin.status, 303, "same-origin callback reaches pending/state validation instead of rejecting the internal URL");
+      assert.equal(sameOrigin.headers.get("set-cookie"), null);
+      assert.equal((await fetch(`http://127.0.0.1:${port}/auth/callback`, { redirect: "manual" })).status, 405);
+    } finally {
+      const exited = new Promise(resolve => child.once("exit", resolve));
+      child.kill("SIGTERM");
+      await exited;
     }
   });
 
