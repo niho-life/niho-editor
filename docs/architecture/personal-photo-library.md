@@ -28,12 +28,15 @@ Epic #148 / P00 #149。2026-11-01の契約。本文と [`photo-library-contract`
 
 - clientは`niho-editor`、写真APIのaudienceは`niho-photo`に固定する。native AppConnect、Experience editor、一般NIHO APIのcredentialを相互利用しない。
 - WebのBFFがstateとPKCE verifierを生成し、NIHO側の相対endpointで10分のattemptを開始する。BFF cookieは`__Host-` prefix、Secure、HttpOnly、SameSite=Lax、Path=/で、attempt ID、state、verifier、安全なeditor内の戻り先、期限だけを保持する。cookie自体はrequest timeout margin（10秒）だけattempt期限より長く残し、callbackは10分の期限を厳守する一方、logoutと次のbeginはmargin中の期限切れproofもcancelへ送る。重複cookie、余分なfield、外部戻り先を拒否する。
-- NIHOの確認画面は固定の「NIHO editor」「本人用の写真同期」だけを表示する。ログイン中のactiveなLOGINアカウントが明示承認したときだけ、5分・一回限りのcodeを固定callbackへ`code`と`state`だけで返す。private DBはstate/code/credential secretのhashだけを保存する。
-- callbackはpending stateと期限を照合してからcode＋verifierを交換する。成功時だけopaque credentialを`__Host-editor-niho-session` cookieへ置き、pendingを消す。無効・古いcallbackは現在のpending cookieを消さない。
+- browser接続はprotocol v2（`responseMode=form_post`）に固定する。beginは固定の`/api/auth/editor-connect/request`だけを返す。BFFのstandalone formからNIHOへattemptId/stateをPOSTし、NIHOは登録済みconsumer origin・form・DB stateを確認して短期HttpOnly request Cookieへ束縛し、queryなしの確認画面へ303する。確認画面とログインreturn URLにもcode/stateを載せず、v1 query transportへfallbackしない。
+- NIHOの確認画面は固定の「NIHO editor」「本人用の写真同期」だけを表示する。ログイン中のactiveなLOGINアカウントが明示承認したときだけ、5分・一回限りのcodeを、query/fragmentのない固定callbackへcode/stateのform POSTで返す。private DBはstate/code/credential secretのhashだけを保存する。
+- callbackはNIHO originからの厳密なPOSTを受け、Cookieを書き替えず・exchangeせず、同じoriginへ再POSTするstandalone relayを返す。同じoriginのPOSTだけがpending stateと期限を照合してからcode＋verifierを交換する。これによりcross-site POSTでもSameSite=Laxを維持する。成功時だけopaque credentialを`__Host-editor-niho-session` cookieへ置き、pendingを消す。無効・古いcallbackは現在のpending cookieを消さない。
 - browser sessionは毎要求NIHO introspectionを通し、canonical `User.id`、LOGIN/deleted、Firebase失効、auth time、親session、子credential世代、期限を再確認する。30日目安の親sessionと複数の10分grace世代でrefreshを線形化し、3並列refreshの応答が逆順に届いても有効にする。期限外世代の再利用は親sessionを失効する。
 - logoutはsession revokeとpending cancelの両方が成功するまでcookieを保持し、NIHOが確認不能なら再試行可能な503にする。新規接続では、そのブラウザが`replaceCredential`として提示した旧cookieだけを失効し、同じcanonical IDのiPhone Safari・PWA・別ブラウザsessionを一括失効しない。取消、交換、refresh、logoutはDB row lockで競合を閉じる。
 - Mac bearerは公開サーバーから固定のMac検証endpointへだけ渡す。NIHO側が`niho-camera`のnative ID tokenを署名・issuer・audience・期限・失効込みで検証し、active AppConnectionと同じcanonical `User.id`を返す。公開側はJWTをdecodeしただけでは本人にせず、browser cookieとbearerが同時なら曖昧な認証として拒否する。
 - `GET /api/photo/v1/auth/session`は`sessionId`、`userId`、`expiresAt`、`refreshRequired`だけをno-storeで返す。token、cookie値、email、roleは返さない。`POST /auth/refresh`だけがcookieを書き替え、同一origin以外を拒否する。
+
+認証formのHTMLは要求と独立したnonce・送信先を限定したCSP・no-store・`Referrer-Policy: origin`を持つ。Originの欠落/null/不一致、重複/余分なfield、4KiB超、2秒の時間切れ、不正UTF-8を拒否する。長期credentialとPKCE verifierをHTML/JavaScriptへ出さない。Nextのdocument CSPとreferrer例外は`/auth/login/start`と`/auth/callback`だけで、通常画面とGoogle GET callbackの方式は維持する。
 
 公開側の接続先は`EDITOR_NIHO_ORIGIN`にpath/query/fragment/credentialsのないexact HTTPS originを設定する。`EDITOR_AUTH_MODE=niho`で未設定・不正ならportを開く前に停止する。全server fetchはredirect拒否、no-store、時間切れ、応答byte上限、closed response shapeを持つ。公開リポジトリの例は`.invalid`だけとし、実origin、callback、project、identity、secretは置かない。NIHO editor sessionは写真本人確認専用で、Google Docs用の`apiToken`はnullのままにする。
 

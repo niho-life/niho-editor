@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { autoFormResponse } from "./auto-form";
 import { isTrustedNihoOrigin } from "./config";
 import { loginPath, safeReturnTo } from "./return-to";
 import { AuthTemporarilyUnavailable, type AuthProvider, type Session, type SessionRequest } from "./types";
@@ -11,7 +12,8 @@ const INTROSPECT_PATH = "/api/auth/editor-connect/introspect";
 const REFRESH_PATH = "/api/auth/editor-connect/refresh";
 const REVOKE_PATH = "/api/auth/editor-connect/revoke";
 const CANCEL_PATH = "/api/auth/editor-connect/cancel";
-const CONFIRMATION_PATH = "/connect/niho-editor";
+const CONFIRMATION_PATH = "/api/auth/editor-connect/request";
+const CALLBACK_PATH = "/auth/callback";
 
 export const NIHO_PENDING_COOKIE = "__Host-editor-niho-pending";
 export const NIHO_SESSION_COOKIE = "__Host-editor-niho-session";
@@ -20,6 +22,8 @@ const PENDING_TTL_SECONDS = 10 * 60;
 const MAX_COOKIE_VALUE = 4096;
 const MAX_RESPONSE_BYTES = 16 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
+const CALLBACK_BODY_TIMEOUT_MS = 2_000;
+const MAX_CALLBACK_BODY_BYTES = 4 * 1024;
 const PENDING_COOKIE_TTL_SECONDS = PENDING_TTL_SECONDS + Math.ceil(REQUEST_TIMEOUT_MS / 1000);
 const MAX_SESSION_LIFETIME_MS = 31 * 24 * 60 * 60 * 1000;
 const STATE_RE = /^[A-Za-z0-9._~-]{22,128}$/;
@@ -27,6 +31,7 @@ const VERIFIER_RE = /^[A-Za-z0-9._~-]{43,128}$/;
 const CODE_RE = /^[A-Za-z0-9_-]{43}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CREDENTIAL_RE = /^v1\.[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}$/i;
+const ISO_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 type Env = Readonly<Record<string, string | undefined>>;
 type Pending = { attemptId: string; state: string; verifier: string; returnTo: string; expiresAt: number };
@@ -258,6 +263,107 @@ function logFailure(step: string): void {
   console.error("editor-web: NIHO authentication failed", { step });
 }
 
+type CallbackFields = { code: string; state: string };
+
+function badCallbackResponse(status = 400): Response {
+  return Response.json({ error: status === 413 ? "payload_too_large" : "bad_request" }, {
+    status,
+    headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
+  });
+}
+
+function isFormContentType(value: string | null): boolean {
+  return value !== null
+    && /^application\/x-www-form-urlencoded(?:\s*;\s*charset=utf-8)?$/i.test(value.trim());
+}
+
+async function readCallbackFields(request: Request): Promise<CallbackFields | Response> {
+  if (!isFormContentType(request.headers.get("content-type"))) return badCallbackResponse();
+  const declared = request.headers.get("content-length");
+  if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > MAX_CALLBACK_BODY_BYTES)) {
+    return badCallbackResponse(Number(declared) > MAX_CALLBACK_BODY_BYTES ? 413 : 400);
+  }
+  if (request.signal.aborted) return badCallbackResponse();
+  const requestBody = request.body;
+  if (!requestBody) return badCallbackResponse();
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try {
+    reader = requestBody.getReader();
+  } catch {
+    return badCallbackResponse();
+  }
+  let rejectAbort!: () => void;
+  const abortGate = new Promise<never>((_resolve, reject) => {
+    rejectAbort = () => reject(new Error("callback_body_aborted"));
+  });
+  const onAbort = () => rejectAbort();
+  request.signal.addEventListener("abort", onAbort, { once: true });
+  if (request.signal.aborted) onAbort();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadlineGate = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error("callback_body_timeout")), CALLBACK_BODY_TIMEOUT_MS);
+  });
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let readCompleted = false;
+  try {
+    for (;;) {
+      const { done, value } = await Promise.race([reader.read(), deadlineGate, abortGate]);
+      if (done) {
+        readCompleted = true;
+        break;
+      }
+      total += value.byteLength;
+      if (total > MAX_CALLBACK_BODY_BYTES) return badCallbackResponse(413);
+      chunks.push(value);
+    }
+  } catch {
+    return badCallbackResponse();
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    request.signal.removeEventListener("abort", onAbort);
+    if (!readCompleted) {
+      try {
+        void reader.cancel().catch(() => undefined);
+      } catch {
+        // stream cleanup is best effort; callback rejection must not wait for an untrusted source
+      }
+    }
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  let body: string;
+  try {
+    body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return badCallbackResponse();
+  }
+  const values = new Map<string, string>();
+  const parts = body.split("&");
+  if (parts.length !== 2) return badCallbackResponse();
+  for (const part of parts) {
+    const separator = part.indexOf("=");
+    if (separator <= 0) return badCallbackResponse();
+    const name = part.slice(0, separator);
+    if ((name !== "code" && name !== "state") || values.has(name)) return badCallbackResponse();
+    try {
+      values.set(name, decodeURIComponent(part.slice(separator + 1).replace(/\+/g, " ")));
+    } catch {
+      return badCallbackResponse();
+    }
+  }
+  const code = values.get("code");
+  const state = values.get("state");
+  return code && state && CODE_RE.test(code) && STATE_RE.test(state)
+    ? { code, state }
+    : badCallbackResponse();
+}
+
 export function createNihoAuthProvider(deps: NihoAuthDeps = {}): AuthProvider {
   const readEnv = deps.env ?? (() => process.env as Env);
   const fetchFn = deps.fetch ?? ((...args: Parameters<typeof fetch>) => globalThis.fetch(...args));
@@ -266,6 +372,11 @@ export function createNihoAuthProvider(deps: NihoAuthDeps = {}): AuthProvider {
 
   function origin(): string | null {
     const value = readEnv().EDITOR_NIHO_ORIGIN;
+    return isTrustedNihoOrigin(value) ? value! : null;
+  }
+
+  function editorOrigin(): string | null {
+    const value = readEnv().EDITOR_ORIGIN;
     return isTrustedNihoOrigin(value) ? value! : null;
   }
 
@@ -307,7 +418,8 @@ export function createNihoAuthProvider(deps: NihoAuthDeps = {}): AuthProvider {
 
     async beginLogin({ request, returnTo }): Promise<Response> {
       const nihoOrigin = origin();
-      if (!nihoOrigin) return unavailableResponse(returnTo);
+      const callbackOrigin = editorOrigin();
+      if (!nihoOrigin || !callbackOrigin || nihoOrigin === callbackOrigin) return unavailableResponse(returnTo);
       const cookieHeader = request.headers.get("cookie");
       if (hasDuplicateCookie(cookieHeader, NIHO_PENDING_COOKIE)
         || hasDuplicateCookie(cookieHeader, NIHO_SESSION_COOKIE)) return unavailableResponse(returnTo);
@@ -329,19 +441,16 @@ export function createNihoAuthProvider(deps: NihoAuthDeps = {}): AuthProvider {
           state,
           codeChallenge,
           codeChallengeMethod: "S256",
+          protocolVersion: 2,
+          responseMode: "form_post",
         });
         if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("shape");
         const value = raw as Record<string, unknown>;
         if (!exactKeys(value, ["attemptId", "expiresAt", "confirmationPath"])
           || typeof value.attemptId !== "string" || !UUID_RE.test(value.attemptId)
-          || typeof value.expiresAt !== "string" || !Number.isFinite(Date.parse(value.expiresAt))
-          || typeof value.confirmationPath !== "string" || value.confirmationPath.length > 1024
-          || !value.confirmationPath.startsWith("/") || value.confirmationPath.startsWith("//")) throw new Error("shape");
-        const confirmation = new URL(value.confirmationPath, nihoOrigin);
-        if (confirmation.origin !== nihoOrigin || confirmation.pathname !== CONFIRMATION_PATH
-          || confirmation.searchParams.size !== 2
-          || confirmation.searchParams.get("attempt_id") !== value.attemptId
-          || confirmation.searchParams.get("state") !== state) throw new Error("shape");
+          || typeof value.expiresAt !== "string" || !ISO_INSTANT_RE.test(value.expiresAt)
+          || !Number.isFinite(Date.parse(value.expiresAt)) || new Date(Date.parse(value.expiresAt)).toISOString() !== value.expiresAt
+          || value.confirmationPath !== CONFIRMATION_PATH) throw new Error("shape");
         const expiresAt = Math.min(Date.parse(value.expiresAt), now() + PENDING_TTL_SECONDS * 1000);
         if (expiresAt <= now()) throw new Error("shape");
         const pending = encodePending({
@@ -351,7 +460,16 @@ export function createNihoAuthProvider(deps: NihoAuthDeps = {}): AuthProvider {
           returnTo: safeReturnTo(returnTo),
           expiresAt,
         });
-        return redirectTo(confirmation.toString(), [setCookie(NIHO_PENDING_COOKIE, pending, PENDING_COOKIE_TTL_SECONDS)]);
+        const response = autoFormResponse({
+          target: `${nihoOrigin}${CONFIRMATION_PATH}`,
+          formAction: nihoOrigin,
+          fields: { attemptId: value.attemptId, state },
+          title: "NIHO 認証へ移動",
+          message: "NIHO 認証へ移動しています。",
+          submitLabel: "続ける",
+        });
+        response.headers.append("Set-Cookie", setCookie(NIHO_PENDING_COOKIE, pending, PENDING_COOKIE_TTL_SECONDS));
+        return response;
       } catch {
         logFailure("begin");
         return unavailableResponse(returnTo);
@@ -360,18 +478,30 @@ export function createNihoAuthProvider(deps: NihoAuthDeps = {}): AuthProvider {
 
     async completeLogin(request: Request): Promise<Response> {
       const nihoOrigin = origin();
-      if (!nihoOrigin) return unavailableResponse("/");
+      const callbackOrigin = editorOrigin();
+      if (!nihoOrigin || !callbackOrigin || nihoOrigin === callbackOrigin || request.method !== "POST") return badCallbackResponse();
+      if (request.url !== `${callbackOrigin}${CALLBACK_PATH}`) return badCallbackResponse();
+      const requestOrigin = request.headers.get("origin");
+      if (requestOrigin !== nihoOrigin && requestOrigin !== callbackOrigin) return badCallbackResponse();
+      const fields = await readCallbackFields(request);
+      if (fields instanceof Response) return fields;
+      if (requestOrigin === nihoOrigin) {
+        return autoFormResponse({
+          target: `${callbackOrigin}${CALLBACK_PATH}`,
+          formAction: "'self'",
+          fields,
+          title: "NIHO editor に戻る",
+          message: "NIHO editor に戻っています。",
+          submitLabel: "戻る",
+        });
+      }
       const cookieHeader = request.headers.get("cookie");
       if (hasDuplicateCookie(cookieHeader, NIHO_PENDING_COOKIE)
         || hasDuplicateCookie(cookieHeader, NIHO_SESSION_COOKIE)) return unavailableResponse("/");
       const pending = readPending(singletonCookie(cookieHeader, NIHO_PENDING_COOKIE), now());
       const returnTo = pending?.returnTo ?? "/";
-      const params = new URL(request.url).searchParams;
-      const keys = [...params.keys()].sort();
-      const state = params.get("state");
-      const code = params.get("code");
-      if (!pending || keys.length !== 2 || keys[0] !== "code" || keys[1] !== "state"
-        || !state || !code || !CODE_RE.test(code) || !sameValue(state, pending.state)) {
+      const { code, state } = fields;
+      if (!pending || !sameValue(state, pending.state)) {
         logFailure("callback_validation");
         return unavailableResponse(returnTo);
       }

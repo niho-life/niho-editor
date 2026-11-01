@@ -36,6 +36,27 @@ describe("proxy", () => {
     expect(response.headers.get("Content-Security-Policy")).not.toContain("attacker");
   });
 
+  it("leaves only the two standalone auth handlers free of proxy CSP/path headers", () => {
+    for (const path of ["/auth/login/start", "/auth/login/start?next=%2Fsettings", "/auth/callback", "/auth/callback?rejected=1"]) {
+      const response = proxy(new NextRequest(`https://editor.example.test${path}`, {
+        headers: {
+          "Content-Security-Policy": "script-src 'nonce-attacker'",
+          [EDITOR_PATH_HEADER]: "//evil.invalid",
+        },
+      }));
+      expect(response.headers.get("Content-Security-Policy"), path).toBeNull();
+      expect(response.headers.get("x-middleware-request-content-security-policy"), path).toBeNull();
+      expect(response.headers.get(`x-middleware-request-${EDITOR_PATH_HEADER}`), path).toBeNull();
+      expect(response.headers.get("x-middleware-override-headers"), path).not.toContain("content-security-policy");
+    }
+
+    for (const path of ["/auth/login", "/auth/login/start/extra", "/auth/callback/extra", "/settings"]) {
+      const response = proxy(new NextRequest(`https://editor.example.test${path}`));
+      expect(response.headers.get("Content-Security-Policy"), path).toContain("script-src 'self' 'nonce-");
+      expect(response.headers.get(`x-middleware-request-${EDITOR_PATH_HEADER}`), path).toBe(path);
+    }
+  });
+
   it("skips the API, static assets and prefetches", () => {
     const [rule] = config.matcher;
     expect(rule?.source).toBe("/((?!api|v1/|_next/static|_next/image|favicon.ico).*)");

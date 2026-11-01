@@ -93,7 +93,7 @@ migration は expand → contract（列の削除は配備の 1 つ後）。適�
 
 実origin、NIHO側の固定callback、feature flagは非公開の配備設定へ運用手順に従って投入する。鍵・secret値の投入はAGENTSのオーナー専用手順に従う。設定と実アカウント受入が済むまでは`EDITOR_AUTH_MODE=google`（Googleのサインイン＋許可リスト）を一時的に使える（§13）。`stub`を本番で開ける案は却下した（認証なしの固定ユーザーで、URLを知った誰でも全ページを書ける。noindexはアクセス制御ではない）。
 
-既存のproduction trafficが`google`を使っている間は、そのserviceの環境変数を直接`niho`へ切り替えない。まずtrafficを受けない候補service/revisionを作り、その候補だけのexact callbackをNIHO側へ登録し、同じcanonical IDになるiPhone/Mac往復と失効を受入する。さらに、Cloud Runのrequest access logが`/auth/callback?code=...&state=...`を保存しないよう、候補を起動する前に対象serviceのcallback request logを`_Default` bucketのexclusionへ入れ、合成callbackでqueryが保存されないことを確認する。app log・error logにもrequest URL/queryを出さない。この2つを満たした証跡とオーナーの切替判断が揃うまで、既存production service/revisionのtraffic・`EDITOR_AUTH_MODE=google`・Google所有者IDを変更しない。
+既存のproduction trafficが`google`を使っている間は、そのserviceの環境変数を直接`niho`へ切り替えない。まずtrafficを受けない候補service/revisionを作り、その候補だけのexact callbackをNIHO側へ登録し、同じcanonical IDになるiPhone/Mac往復と失効を受入する。認証transportはv2のform POSTだけを使い、開始・確認・login return・callbackの生成URLへcode/stateを載せない。候補で合成値をPOSTし、応答HTMLのactionと実際のrequest URLに合成値/query/fragmentがないことを確認する。request logのpositive controlと保存結果を照合し、POST本文・Cookie・Authorizationがapp/error/access logへ記録されないことも確認する。旧GET callbackはNIHOモードで拒否する。ログexclusionの有無だけを非保存の根拠とせず、既存production loggingへ広い除外を加えない。実際の応答のCSP・nonce・Referrer-Policy originと、SameSite=Lax Cookie付き同一origin再POSTまで確認する。この証跡とオーナーの切替判断が揃うまで、既存production service/revisionのtraffic・`EDITOR_AUTH_MODE=google`・Google所有者IDを変更しない。
 
 ## 6. 独自ドメインと TLS
 
@@ -309,7 +309,7 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 
 ### 実地の確認（NIHO editor接続の実環境設定後）
 
-**本番で音声を1本通した確認は、まだ取れていません。** 画面から音声を上げるには本人のsessionが要るため、NIHO側feature flag、候補環境専用の固定callback、公開側origin、callback access log exclusionを設定したうえで、trafficを受けない候補環境で実アカウントの接続受入を先に行う。未設定の間は`/auth/login/start`が`/auth/login?error=unavailable`へ戻る。`stub`へ落とす経路は本番にはない。
+**本番で音声を1本通した確認は、まだ取れていません。** 画面から音声を上げるには本人のsessionが要るため、NIHO側feature flag、候補環境専用の固定callback・公開側originとPOST transportを対向配備し、code/stateを生成URLやログへ残さない合成受入を済ませたうえで、trafficを受けない候補環境で実アカウントの接続受入を先に行う。未設定の間は`/auth/login/start`が`/auth/login?error=unavailable`へ戻る。`stub`へ落とす経路は本番にはない。
 
 **代わりに取れている確認**（2026-11-01 の配備、revision `niho-editor-00004-ntd`）:
 

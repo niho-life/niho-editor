@@ -22,7 +22,7 @@ export function createHandler(env, manifest, provider) {
       response = new Response(page, { headers: { "content-type": "text/html; charset=utf-8" } });
     } else if (request.method === "GET" && url.pathname === "/health") response = Response.json({ ok: true, ...manifest });
     else if (request.method === "GET" && url.pathname === "/auth/login/start") response = await routes.startLogin(request, deps);
-    else if (request.method === "GET" && url.pathname === "/auth/callback") response = await routes.finishLogin(request, deps);
+    else if (request.method === "POST" && url.pathname === "/auth/callback") response = await routes.finishLogin(request, deps);
     else if (request.method === "POST" && url.pathname === "/auth/logout") response = await routes.logout(request, deps);
     else if (request.method === "POST" && url.pathname === "/auth/refresh") response = await routes.refresh(request, deps);
     else if (request.method === "GET" && url.pathname === "/api/photo/v1/auth/session") {
@@ -35,7 +35,7 @@ export function createHandler(env, manifest, provider) {
     } else response = new Response(null, { status: 404 });
     response.headers.set("Cache-Control", "private, no-store");
     response.headers.set("X-Robots-Tag", "noindex, nofollow");
-    response.headers.set("Referrer-Policy", "no-referrer");
+    if (!response.headers.has("Referrer-Policy")) response.headers.set("Referrer-Policy", "no-referrer");
     return response;
   };
 }

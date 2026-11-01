@@ -34,6 +34,9 @@ export const SHARED_PAGE_HEADERS = [
   { key: "Referrer-Policy", value: "no-referrer" },
 ];
 
+/** standalone auto-form handlers own CSP and need a non-null Origin on their POST. */
+export const AUTH_FORM_HEADERS = [{ key: "Referrer-Policy", value: "origin" }];
+
 const nextConfig: NextConfig = {
   // Cloud Run の container 用の自己完結の server（Dockerfile）
   output: "standalone",
@@ -57,6 +60,9 @@ const nextConfig: NextConfig = {
       { source: "/v1/:path*", headers: [...securityHeaders, { key: "Content-Security-Policy", value: API_CSP }] },
       // service worker は更新がすぐ届くよう、ブラウザの HTTP cache に残さない（#49）
       { source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }] },
+      // catch-all の same-origin より後で exact handler 2 箇所だけを上書きする
+      { source: "/auth/login/start", headers: AUTH_FORM_HEADERS },
+      { source: "/auth/callback", headers: AUTH_FORM_HEADERS },
       // 共有リンクのページ（#34）。private・no-store・no-referrer。全体の規則のあとに置いて、同じ key（Referrer-Policy）を上書きする
       { source: "/s/:token*", headers: SHARED_PAGE_HEADERS },
     ];
