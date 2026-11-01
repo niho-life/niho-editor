@@ -25,6 +25,8 @@ import { createP02MediaJobs, createP02MediaObjects, type MediaObjectStorage } fr
 import { MediaProviderError, type MediaClaim, type MediaProvider, type StoredDerivative } from "../../../../../workers/photo-media/src/types.ts";
 import { createPhotoCatalogRoutes } from "../photo-catalog/routes";
 import { createPhotoCatalogStore } from "../photo-catalog/store-adapter";
+import { createPhotoMediaRoutes } from "../photo-media/routes";
+import { createPhotoMediaStore } from "../photo-media/store-adapter";
 import { createPhotoRecipesRoutes } from "../photo-recipes/routes";
 import { createPhotoRecipeStore } from "../photo-recipes/store-adapter";
 import type { PhotoRecipeValidator } from "../photo-recipes/types";
@@ -73,6 +75,18 @@ function recipeRequest(photoId: string, body: unknown): Request {
   });
 }
 
+function mediaRequest(photoId: string, recipeRevision: number, key = recipeKey()): Request {
+  return new Request(`${CONFORMANCE_ORIGIN}/api/photo/v1/photos/${photoId}/media`, {
+    method: "POST",
+    headers: {
+      origin: CONFORMANCE_ORIGIN,
+      "content-type": "application/json; charset=utf-8",
+      "idempotency-key": key,
+    },
+    body: JSON.stringify({ recipeRevision }),
+  });
+}
+
 function catalogRoutes(pool: Pool, user: string) {
   return createPhotoCatalogRoutes({
     enabled: true,
@@ -85,6 +99,14 @@ function catalogRoutes(pool: Pool, user: string) {
 function recipeRoutes(pool: Pool, user: string, validator: PhotoRecipeValidator) {
   return createPhotoRecipesRoutes({
     recipes: () => ({ store: createPhotoRecipeStore(pool, fixtureLibrary.capabilities), validator }),
+    verify: async () => actor(user),
+    origins: [CONFORMANCE_ORIGIN],
+  });
+}
+
+function mediaRoutes(pool: Pool, user: string) {
+  return createPhotoMediaRoutes({
+    media: () => ({ store: createPhotoMediaStore(pool, mediaSpec) }),
     verify: async () => actor(user),
     origins: [CONFORMANCE_ORIGIN],
   });
@@ -184,7 +206,7 @@ databaseDescribe("P12 production media adapter + worker + catalog conformance", 
   beforeAll(async () => { ({ pool, close } = await openConformanceDatabase(databaseUrl!)); });
   afterAll(async () => { await close?.(); });
 
-  it("stored-media-failed: decoder-confirmed synthetic failure keeps the durable original and owner boundary", async () => {
+  it("stored-media-failed / retry_media_only: a new ensure key retries derivatives without touching the original", async () => {
     const user = owner("failed-a");
     const foreign = owner("failed-b");
     const bytes = Buffer.concat([SYNTHETIC_JPEG, Buffer.from([41, 42])]);
@@ -246,6 +268,15 @@ databaseDescribe("P12 production media adapter + worker + catalog conformance", 
     expect(projected.media).not.toHaveProperty("jobId");
     expect(JSON.stringify(projected)).not.toMatch(/objectKey|objectGeneration|photo\/final\//);
 
+    const retry = await mediaRoutes(pool, user).ensure(mediaRequest(photo.id, 0), photo.id);
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ value: { state: "queued", jobId: job!.id }, replayed: false });
+    const retriedRow = (await pool.query<{
+      state: string; attempt_count: number; claim_generation: string; error_code: string | null; attempt_error: string | null;
+    }>("SELECT state,attempt_count,claim_generation::text AS claim_generation,error_code,attempt_error FROM photo_media_jobs WHERE owner=$1 AND id=$2",
+      [user, job!.id])).rows[0];
+    expect(retriedRow).toEqual({ state: "queued", attempt_count: 0, claim_generation: "2", error_code: null, attempt_error: null });
+
     const content = await harness.api.content(get(), actor(user), photo.id, photo.original.id);
     expect(content.status).toBe(200);
     expect(Buffer.from(await content.arrayBuffer())).toEqual(bytes);
@@ -261,7 +292,7 @@ databaseDescribe("P12 production media adapter + worker + catalog conformance", 
     expect(libraryAfter.usage.originalBytes).toBe(bytes.byteLength);
   });
 
-  it("stale-preview: recipe CAS fences an old claimed generation and P04 never projects its staged preview", async () => {
+  it("stale-preview 409: recipe CAS rejects stale ensure and fences the old claimed generation", async () => {
     const user = owner("stale-preview");
     const { harness, photo } = await seed(pool, user);
     const job = await enqueuePhotoMediaJob(pool, user, photo.id, mediaSpec);
@@ -300,6 +331,13 @@ databaseDescribe("P12 production media adapter + worker + catalog conformance", 
     );
     expect(update.status).toBe(200);
     expect(await update.json()).toMatchObject({ value: { recipe: { revision: 1, settings } } });
+
+    const staleEnsure = await mediaRoutes(pool, user).ensure(mediaRequest(photo.id, 0), photo.id);
+    expect(staleEnsure.status).toBe(409);
+    expect(await staleEnsure.json()).toMatchObject({
+      error: { code: "revision_conflict", retryable: false, currentRevision: 1, requestId: expect.any(String) },
+    });
+    expect((await pool.query("SELECT 1 FROM photo_media_ensure_receipts WHERE owner=$1 AND photo_id=$2", [user, photo.id])).rowCount).toBe(0);
 
     const published = await jobs.publish(claim!, {
       state: "ready",

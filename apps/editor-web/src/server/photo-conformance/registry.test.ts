@@ -24,9 +24,9 @@ describe("P00 photo conformance registry", () => {
   });
 
   it("keeps partial coverage out of the complete evidence aggregate", () => {
-    expect(cases.filter((item) => item.evidence === "db-handler")).toHaveLength(22);
+    expect(cases.filter((item) => item.evidence === "db-handler")).toHaveLength(24);
     expect(cases.filter((item) => item.evidence === "handler-precondition")).toHaveLength(3);
-    expect(cases.filter((item) => item.evidence === "partial")).toHaveLength(9);
+    expect(cases.filter((item) => item.evidence === "partial")).toHaveLength(7);
     expect(cases.filter((item) => item.evidence === "blocked")).toHaveLength(0);
 
     for (const id of [
@@ -35,13 +35,14 @@ describe("P00 photo conformance registry", () => {
       "pixel-limit",
       "missing-mask",
       "pending-purge-retains-quota",
-      "stale-preview",
-      "stored-media-failed",
     ]) {
       expect(cases.find((item) => item.id === id)).toMatchObject({
         evidence: "partial",
         remaining: expect.any(String),
       });
+    }
+    for (const id of ["stale-preview", "stored-media-failed"]) {
+      expect(cases.find((item) => item.id === id)).toMatchObject({ evidence: "db-handler", remaining: null });
     }
     expect(cases.find((item) => item.id === "unknown-recipe")).toMatchObject({
       evidence: "db-handler",
