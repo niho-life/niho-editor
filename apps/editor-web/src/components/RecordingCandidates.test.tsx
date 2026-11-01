@@ -243,12 +243,27 @@ describe("RecordingCandidates（文字起こしの案）", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     const onChanged = vi.fn();
-    await mount([candidate(), failed], { onChanged });
-    expect(container!.querySelector(`[data-candidate="${SECOND}"]`)?.textContent).toContain("できませんでした");
+    await mount([candidate(), failed], { onChanged, defaultEngine: "fake" });
+    const failedRow = container!.querySelector(`[data-candidate="${SECOND}"]`)!;
+    expect(failedRow.textContent).toContain("できませんでした");
+    expect(failedRow.textContent).toContain("外部サービスへ送られません");
     await click("もう一度");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(onChanged).toHaveBeenCalledTimes(1);
     expect(statusText()).toContain("開発の偽物 をもう一度作っています");
+  });
+
+  it("再試行の送信先が分からなければ開始しない", async () => {
+    const failed = candidate({ id: SECOND, adopted: false, state: "failed", segmentCount: 0, preview: [] });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await mount([failed], { defaultEngine: null });
+    const retryButton = container!.querySelector(`[data-candidate="${SECOND}"] button`)!;
+    expect(retryButton.getAttribute("aria-disabled")).toBe("true");
+    expect(container!.querySelector(`[data-candidate="${SECOND}"]`)?.textContent).toContain("送信先を確認できません");
+    await click("もう一度");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(container!.querySelector('[role="alert"]')?.textContent).toContain("送信先を確認できません");
   });
 
   it("作っている途中の案があるあいだは録音を読み直し続け、できたら止める（「作っています」のまま残さない）", async () => {

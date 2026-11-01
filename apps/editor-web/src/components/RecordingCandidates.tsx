@@ -39,6 +39,11 @@ function detailOf(candidate: RecordingCandidateSummary): string {
   return parts.join(" · ");
 }
 
+/** retryCandidateRoute は、元の engine が現在も使えるときはそれを、そうでなければ既定の engine を使う。 */
+function retryEngineOf(candidate: RecordingCandidateSummary, engines: readonly string[] | undefined, defaultEngine: string | null | undefined): string | null {
+  return candidate.engine !== null && (engines ?? []).includes(candidate.engine) ? candidate.engine : defaultEngine ?? null;
+}
+
 /**
  * 文字起こしの案（#36 段 3b-4）。同じ音声を別のエンジンで起こして**見比べ、採用する案を選ぶ**
  * （旧 NIHO docs の candidateSets の工程 1）。
@@ -141,12 +146,18 @@ export function RecordingCandidates({
       return { kind: "info", text: `${candidate.name} を消しました` };
     });
 
-  const retry = (candidate: RecordingCandidateSummary) =>
-    guard("candidate", async () => {
+  const retry = (candidate: RecordingCandidateSummary) => {
+    const engine = retryEngineOf(candidate, engines, defaultEngine);
+    if (!canDiscloseTranscriptionEngine(engine)) {
+      setMessage({ kind: "error", text: transcriptionServiceNote(engine) });
+      return;
+    }
+    return guard("candidate", async () => {
       await retryCandidate(pageId, candidate.id);
       onChanged();
       return { kind: "info", text: `${candidate.name} をもう一度作っています` };
     });
+  };
 
   return (
     <section aria-label="文字起こしの案" data-recording-candidates={candidates.length}>
@@ -196,9 +207,17 @@ export function RecordingCandidates({
                 </button>
               )}
               {candidate.state === "failed" && (
-                <button type="button" className="es-btn es-btn--outline es-btn--sm" aria-disabled={locked || undefined} onClick={() => void retry(candidate)}>
-                  もう一度
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="es-btn es-btn--outline es-btn--sm"
+                    aria-disabled={locked || !canDiscloseTranscriptionEngine(retryEngineOf(candidate, engines, defaultEngine)) || undefined}
+                    onClick={() => void retry(candidate)}
+                  >
+                    もう一度
+                  </button>
+                  <span className="es-note">{transcriptionServiceNote(retryEngineOf(candidate, engines, defaultEngine))}</span>
+                </>
               )}
               {/* 採用中・作っている途中は消せない（server も断る） */}
               {!candidate.adopted && candidate.state !== "pending" && confirming !== candidate.id && (
