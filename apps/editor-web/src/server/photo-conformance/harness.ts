@@ -1,19 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   bindPhotoRequest,
-  getPhotoMaskBySurfaceId,
-  getPhotoSnapshot,
-  getPhotoUploadByStartKey,
   type Database,
 } from "@niho/editor-store";
 import { applyMigrations } from "@niho/editor-store/migrate";
 import { Pool } from "pg";
-import type { Photo, StartUploadRequest, VerifiedPhotoActor } from "../../../../../packages/photo-library-contract/src/v1";
+import type { StartUploadRequest, VerifiedPhotoActor } from "../../../../../packages/photo-library-contract/src/v1";
 import { createFakePhotoStorage } from "../../storage/photo-fake";
-import { photoFromSnapshot } from "../photo-catalog/store-adapter";
 import { createPhotoTransferApi } from "../photo-transfer/api";
 import { createP02PhotoTransferStore } from "../photo-transfer/p02";
-import type { PhotoMutationJournal, PhotoProbe, PhotoTransferStore, ProbeResult } from "../photo-transfer/types";
+import type { PhotoMutationJournal, PhotoProbe, ProbeResult } from "../photo-transfer/types";
 
 export const CONFORMANCE_ORIGIN = "https://editor.synthetic.invalid";
 export const SYNTHETIC_JPEG = Buffer.from([255, 216, 255, 224, 0, 4, 0, 0, 255, 217]);
@@ -94,22 +90,9 @@ export async function openConformanceDatabase(connectionString: string): Promise
   };
 }
 
-async function projectPhoto(db: Database, owner: string, id: string): Promise<Photo | null> {
-  const snapshot = await getPhotoSnapshot(db, owner, id);
-  return snapshot ? photoFromSnapshot(snapshot) : null;
-}
-
 function journal(db: Database): PhotoMutationJournal {
   return {
     bind: ({ owner, ...input }) => bindPhotoRequest(db, owner, input),
-  };
-}
-
-function projection(db: Database): Pick<PhotoTransferStore, "photo" | "mask" | "uploadByStartKey"> {
-  return {
-    photo: (owner, id) => projectPhoto(db, owner, id),
-    mask: (owner, photoId, surfaceId) => getPhotoMaskBySurfaceId(db, owner, photoId, surfaceId),
-    uploadByStartKey: (owner, operation, key) => getPhotoUploadByStartKey(db, owner, operation, key),
   };
 }
 
@@ -155,7 +138,7 @@ export function maskRequest(photoId: string, bytes: Uint8Array = SYNTHETIC_PNG):
 export function createConformanceHarness(db: Database) {
   const clock = () => Date.now();
   const fake = createFakePhotoStorage(clock);
-  const store = createP02PhotoTransferStore(db, projection(db));
+  const store = createP02PhotoTransferStore(db);
   let probeResult: ProbeResult = {
     format: "jpeg",
     contentType: "image/jpeg",
