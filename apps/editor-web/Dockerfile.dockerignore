@@ -7,6 +7,7 @@
 !packages/ui
 !packages/editor-store
 !packages/photo-library-contract
+!packages/photo-cloud-library
 !packages/editor-publish-contract
 !packages/editor-publish
 !workers/

@@ -16,6 +16,7 @@ const LICENSE_FILES = [
   "licenses/Adobe-DNG-SDK-LICENSE.txt",
 ];
 const ADOBE_DNG_LICENSE = "Synthetic Adobe DNG SDK license text for staging tests.\n";
+const HOST_SDK_PACKAGES = ["niho-photo-ui", "niho-photo-editing", "niho-photo-cloud-contract", "niho-photo-contract", "niho-photo-develop-engine-runtime"];
 
 function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -35,6 +36,8 @@ async function createFixture(root, options = {}) {
   const engineRoot = path.join(runtimePackageRoot, "develop-engine", engineVersion);
   const publicRoot = path.join(root, "public");
   const baselinePath = path.join(root, `baseline-${sdkVersion}-${options.fixtureName ?? "default"}.json`);
+  const appPackagePath = path.join(root, `host-${sdkVersion}-${options.fixtureName ?? "default"}.json`);
+  const appLockPath = path.join(root, `lock-${sdkVersion}-${options.fixtureName ?? "default"}.json`);
   await mkdir(engineRoot, { recursive: true });
   await writeJson(path.join(runtimePackageRoot, "package.json"), {
     name: "niho-photo-develop-engine-runtime",
@@ -82,14 +85,18 @@ async function createFixture(root, options = {}) {
   const manifestBytes = await readFile(path.join(engineRoot, manifestFile));
   const baseline = {
     schemaVersion: 1,
-    repository: "example/photo",
+    repository: "niho-life/niho-photo",
     releaseTag,
     sourceCommit,
     manifest: {
       file: `release-${sdkVersion}.json`,
       sha256: digest(Buffer.from(`release-set-${sdkVersion}-${options.fixtureName ?? "default"}`)),
     },
-    packages: [],
+    packages: HOST_SDK_PACKAGES.map((name) => {
+      const bytes = Buffer.from(`${name}-${sdkVersion}`);
+      const sha256 = digest(bytes);
+      return { name, file: `${name}-${sdkVersion}.tgz`, size: bytes.length, sha256, integrity: `sha256-${Buffer.from(sha256, "hex").toString("base64")}` };
+    }),
     engine: {
       version: engineVersion,
       crateVersion,
@@ -101,6 +108,15 @@ async function createFixture(root, options = {}) {
     },
   };
   await writeJson(baselinePath, baseline);
+  const dependencies = Object.fromEntries(baseline.packages.map((entry) => [entry.name,
+    `https://github.com/${baseline.repository}/releases/download/${releaseTag}/${entry.file}`]));
+  await writeJson(appPackagePath, { dependencies });
+  await writeJson(appLockPath, { lockfileVersion: 3, packages: {
+    "": { dependencies },
+    ...Object.fromEntries(baseline.packages.map((entry) => [`node_modules/${entry.name}`, {
+      version: sdkVersion, resolved: dependencies[entry.name], integrity: entry.integrity,
+    }])),
+  } });
   const namespace = path.join(
     publicRoot,
     "photo-runtime",
@@ -109,7 +125,7 @@ async function createFixture(root, options = {}) {
     "develop-engine",
     engineVersion,
   );
-  return { baseline, baselinePath, engineRoot, manifestFile, namespace, publicRoot, runtimePackageRoot };
+  return { baseline, baselinePath, appPackagePath, appLockPath, engineRoot, manifestFile, namespace, publicRoot, runtimePackageRoot };
 }
 
 async function withTemp(t, run) {
@@ -150,6 +166,29 @@ test("is idempotent when the immutable namespace has identical bytes", (t) => wi
   const fixture = await createFixture(root);
   assert.equal((await stagePhotoSdkRuntime(fixture)).status, "staged");
   assert.equal((await stagePhotoSdkRuntime(fixture)).status, "unchanged");
+}));
+
+test("rejects host dependency, lock and baseline pin drift before publishing", (t) => withTemp(t, async (root) => {
+  for (const mode of ["package-url", "lock-url", "version", "integrity", "nested", "baseline-sri"]) {
+    const fixture = await createFixture(root, { fixtureName: mode });
+    const appPackage = JSON.parse(await readFile(fixture.appPackagePath, "utf8"));
+    const lock = JSON.parse(await readFile(fixture.appLockPath, "utf8"));
+    const name = "niho-photo-editing";
+    const locked = lock.packages[`node_modules/${name}`];
+    if (mode === "package-url") appPackage.dependencies[name] = "https://example.invalid/mutable.tgz";
+    if (mode === "lock-url") locked.resolved = "https://example.invalid/mirror.tgz";
+    if (mode === "version") locked.version = "0.1.4";
+    if (mode === "integrity") locked.integrity = `sha256-${Buffer.alloc(32).toString("base64")}`;
+    if (mode === "nested") lock.packages[`node_modules/other/node_modules/${name}`] = locked;
+    if (mode === "baseline-sri") {
+      fixture.baseline.packages.find((entry) => entry.name === name).integrity = `sha256-${Buffer.alloc(32).toString("base64")}`;
+      await writeJson(fixture.baselinePath, fixture.baseline);
+    }
+    await writeJson(fixture.appPackagePath, appPackage);
+    await writeJson(fixture.appLockPath, lock);
+    await assert.rejects(stagePhotoSdkRuntime(fixture), /host URL|host lock|second host installation|baseline SRI/);
+    await assert.rejects(readdir(fixture.publicRoot), { code: "ENOENT" });
+  }
 }));
 
 test("preserves a different release namespace", (t) => withTemp(t, async (root) => {
@@ -224,4 +263,22 @@ test("refuses to overwrite an abnormal existing namespace", (t) => withTemp(t, a
   await writeFile(target, "existing-anomaly");
   await assert.rejects(stagePhotoSdkRuntime(fixture), /existing runtime namespace differs/);
   assert.equal(await readFile(target, "utf8"), "existing-anomaly");
+}));
+
+test("refuses unknown files in an existing immutable namespace", (t) => withTemp(t, async (root) => {
+  const fixture = await createFixture(root);
+  await stagePhotoSdkRuntime(fixture);
+  const extra = path.join(fixture.namespace, "unexpected.js");
+  await writeFile(extra, "unreviewed");
+  await assert.rejects(stagePhotoSdkRuntime(fixture), /unexpected file unexpected\.js/);
+  assert.equal(await readFile(extra, "utf8"), "unreviewed");
+}));
+
+test("refuses a symlinked public root", (t) => withTemp(t, async (root) => {
+  const fixture = await createFixture(root);
+  const other = path.join(root, "other-public");
+  await mkdir(other);
+  await symlink(other, fixture.publicRoot);
+  await assert.rejects(stagePhotoSdkRuntime(fixture), /public root must be a regular directory/);
+  assert.deepEqual(await readdir(other), []);
 }));

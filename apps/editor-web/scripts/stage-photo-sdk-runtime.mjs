@@ -16,6 +16,13 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const APP_DIR = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_BASELINE_PATH = path.resolve(APP_DIR, "../../packages/photo-library-contract/sdk-baseline.json");
 const DEFAULT_PUBLIC_ROOT = path.join(APP_DIR, "public");
+const HOST_SDK_PACKAGES = Object.freeze([
+  "niho-photo-ui",
+  "niho-photo-editing",
+  "niho-photo-cloud-contract",
+  "niho-photo-contract",
+  "niho-photo-develop-engine-runtime",
+]);
 const LICENSE_FILES = Object.freeze([
   "LICENSE.md",
   "ASSET_LICENSE.md",
@@ -118,6 +125,32 @@ function sdkVersionFromReleaseTag(releaseTag) {
   return match[1];
 }
 
+function verifyHostSdkPins(baseline, sdkVersion, appPackage, appLock) {
+  if (baseline.repository !== "niho-life/niho-photo") fail("baseline.repository is not the official Photo SDK repository");
+  if (!Array.isArray(baseline.packages)) fail("baseline.packages must be an array");
+  const dependencies = assertPlainObject(appPackage.dependencies, "host package dependencies");
+  const lockedPackages = assertPlainObject(appLock.packages, "host lock packages");
+  const lockedDependencies = assertPlainObject(lockedPackages[""]?.dependencies, "host lock root dependencies");
+  for (const name of HOST_SDK_PACKAGES) {
+    const matches = baseline.packages.filter((entry) => entry?.name === name);
+    if (matches.length !== 1) fail(`baseline must declare exactly one ${name}`);
+    const metadata = matches[0];
+    if (metadata.file !== `${name}-${sdkVersion}.tgz`) fail(`${name} baseline filename does not match SDK version`);
+    assertFileMetadata({ sha256: metadata.sha256, bytes: metadata.size }, `${name} baseline`);
+    const integrity = `sha256-${Buffer.from(metadata.sha256, "hex").toString("base64")}`;
+    if (metadata.integrity !== integrity) fail(`${name} baseline SRI does not match sha256`);
+    const url = `https://github.com/${baseline.repository}/releases/download/${baseline.releaseTag}/${metadata.file}`;
+    if (dependencies[name] !== url || lockedDependencies[name] !== url) fail(`${name} host URL does not match SDK baseline`);
+    const locked = assertPlainObject(lockedPackages[`node_modules/${name}`], `${name} host lock`);
+    if (locked.version !== sdkVersion || locked.resolved !== url || locked.integrity !== integrity) {
+      fail(`${name} host lock version, URL or SRI does not match SDK baseline`);
+    }
+    if (Object.keys(lockedPackages).some((key) => key.endsWith(`/node_modules/${name}`) && key !== `node_modules/${name}`)) {
+      fail(`${name} has a second host installation`);
+    }
+  }
+}
+
 function runtimePackageRootFromInstall() {
   const require = createRequire(import.meta.url);
   let manifestPath;
@@ -205,6 +238,8 @@ export async function stagePhotoSdkRuntime(options = {}) {
   const baselinePath = options.baselinePath ?? DEFAULT_BASELINE_PATH;
   const publicRoot = options.publicRoot ?? DEFAULT_PUBLIC_ROOT;
   const runtimePackageRoot = options.runtimePackageRoot ?? runtimePackageRootFromInstall();
+  const appPackagePath = options.appPackagePath ?? path.join(APP_DIR, "package.json");
+  const appLockPath = options.appLockPath ?? path.join(APP_DIR, "package-lock.json");
 
   const { value: baselineValue } = await readJsonFile(baselinePath, "SDK baseline");
   const baseline = assertPlainObject(baselineValue, "SDK baseline");
@@ -214,6 +249,9 @@ export async function stagePhotoSdkRuntime(options = {}) {
     ? baseline.sourceCommit
     : fail("baseline.sourceCommit is invalid");
   const sdkVersion = sdkVersionFromReleaseTag(releaseTag);
+  const appPackage = (await readJsonFile(appPackagePath, "host package.json")).value;
+  const appLock = (await readJsonFile(appLockPath, "host package-lock.json")).value;
+  verifyHostSdkPins(baseline, sdkVersion, appPackage, appLock);
   const baselineManifest = assertPlainObject(baseline.manifest, "baseline.manifest");
   const manifestSetHash = assertNamespacePart(baselineManifest.sha256, "baseline.manifest.sha256");
   if (!/^[a-f0-9]{64}$/.test(manifestSetHash)) fail("baseline.manifest.sha256 is invalid");
@@ -248,7 +286,7 @@ export async function stagePhotoSdkRuntime(options = {}) {
     if (error instanceof SyntaxError) fail("engine manifest is not valid JSON");
     throw error;
   }
-  if (manifest.engine !== engineVersion || manifest.version !== crateVersion || manifest.source?.commit !== sourceCommit) {
+  if (manifest.schemaVersion !== 1 || manifest.engine !== engineVersion || manifest.version !== crateVersion || manifest.source?.commit !== sourceCommit) {
     fail("engine manifest identity does not match SDK baseline");
   }
 

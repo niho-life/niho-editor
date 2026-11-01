@@ -1,6 +1,6 @@
 # Photo conformance P12
 
-P00 の `security-cases.json` 34件を、P03 transfer handler core と P02 PostgreSQL writer の現在の接続範囲で独立検証する。`registry.ts` は34件を必ず一度だけ分類し、`partial` と `blocked` を合格として扱わない。現在の集計は `db-handler` 16件、`handler-precondition` 3件、`partial` 6件、`blocked` 9件である。
+P00 の `security-cases.json` 34件を、P03 transfer handler core と P02 PostgreSQL writer の現在の接続範囲で独立検証する。`registry.ts` は34件を必ず一度だけ分類し、`partial` と `blocked` を合格として扱わない。現在の集計は `db-handler` 13件、`handler-precondition` 3件、`partial` 6件、`blocked` 12件である。
 
 ## この試験が証明する範囲
 
