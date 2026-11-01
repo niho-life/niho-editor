@@ -65,5 +65,19 @@ while IFS= read -r path; do
   fi
 done <<< "$needed"
 
+# Photo server code imports the shared v1 contract directly by relative path. It is not a `file:` dependency,
+# but the Next build still needs its source in the Docker context.
+path="packages/photo-library-contract"
+if printf '%s' "$before" | grep -qE "^COPY ${path}(/| )"; then
+  printf 'ok    %s is copied before npm ci (relative source import)\n' "$path"
+else
+  fail "$path is imported by editor-web source but is not COPYed before npm ci"
+fi
+if [[ -f "$ignore" ]] && grep -qxF "!$path" "$ignore"; then
+  printf 'ok    %s is allowed into the build context\n' "$path"
+else
+  fail "$path is COPYed but not allowed in $(basename "$ignore")"
+fi
+
 [[ $failed -eq 0 ]] || { printf 'dockerfile-test: failed\n' >&2; exit 1; }
 printf 'dockerfile-test: all passed\n'

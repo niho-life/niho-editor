@@ -1,0 +1,18 @@
+name: Editor auth acceptance CI
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  editor-auth-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --build-arg SOURCE_COMMIT=${{ github.sha }} -f apps/editor-web/test/niho-auth-candidate/Dockerfile -t editor-auth-acceptance .
