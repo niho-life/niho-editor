@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { IDS, library, readyPhoto, storedPhoto } from "../../../../../packages/photo-library-contract/fixtures/v1";
+import { IDS, library, pendingMediaPhoto, readyPhoto, storedPhoto } from "../../../../../packages/photo-library-contract/fixtures/v1";
 import type { Photo, PhotoInfo, PhotoPage } from "../../../../../packages/photo-library-contract/src/v1";
 import { catalogResponse, createPhotoCatalogApi } from "./api";
 import type { PhotoCatalogAfter, PhotoCatalogFilter, PhotoCatalogStore } from "./types";
@@ -192,6 +192,13 @@ describe("photo catalog serialization and lookup", () => {
     vi.mocked(f.store.info).mockResolvedValue({ width: 3000, gps: null, privateColumn: "photo/final/private" } as PhotoInfo);
     const info = await f.api.info(IDS.userA, IDS.photo);
     expect(info.value).toEqual({ width: 3000, gps: null });
+  });
+
+  it("preserves pending media in photo detail", async () => {
+    const f = setup();
+    vi.mocked(f.store.photo).mockResolvedValue({ photo: pendingMediaPhoto, library: { id: library.id,
+      owner: library.owner, state: library.state, revision: library.revision } });
+    expect((await f.api.photo(IDS.userA, IDS.photo)).value?.media).toEqual({ state: "pending" });
   });
 
   it("applies the working-copy metadata contract cap to photo detail as well as lists", async () => {

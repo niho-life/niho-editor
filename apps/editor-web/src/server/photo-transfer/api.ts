@@ -22,7 +22,8 @@ function publicPhoto(photo: Photo): Photo {
     media: media.state === "ready" ? { state: "ready", thumbnail: publicPhotoAsset(media.thumbnail), preview: publicPhotoAsset(media.preview),
       workingCopy: media.workingCopy ? { asset: publicPhotoAsset(media.workingCopy.asset), baseVersion: media.workingCopy.baseVersion, encoding: media.workingCopy.encoding, meta: media.workingCopy.meta } : null,
       recipeRevision: media.recipeRevision, rendererManifestSha256: media.rendererManifestSha256 }
-      : "jobId" in media ? { state: media.state, jobId: media.jobId } : { state: media.state, code: media.code },
+      : media.state === "pending" ? { state: "pending" }
+        : "jobId" in media ? { state: media.state, jobId: media.jobId } : { state: media.state, code: media.code },
   };
 }
 function stageKey(id: string) { return `photo/stage/${id}`; }

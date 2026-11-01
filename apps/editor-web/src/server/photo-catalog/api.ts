@@ -101,7 +101,8 @@ function publicPhoto(photo: Photo): Photo {
         workingCopy: media.workingCopy ? { asset: publicAsset(media.workingCopy.asset), baseVersion: media.workingCopy.baseVersion,
           encoding: media.workingCopy.encoding, meta: media.workingCopy.meta } : null,
         recipeRevision: media.recipeRevision, rendererManifestSha256: media.rendererManifestSha256 }
-      : "jobId" in media ? { state: media.state, jobId: media.jobId } : { state: media.state, code: media.code },
+      : media.state === "pending" ? { state: "pending" }
+        : "jobId" in media ? { state: media.state, jobId: media.jobId } : { state: media.state, code: media.code },
   };
 }
 
