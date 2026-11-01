@@ -42,7 +42,11 @@ function childEnv(port, mode) {
   delete env.DATABASE_URL;
   // google の許可リストは渡さない（#47 google: 空なら起動しない）
   delete env.EDITOR_GOOGLE_ALLOWED_EMAILS;
+  // 親processの実設定を合成testへ持ち込まず、Googleへ接続しない。
+  delete env.EDITOR_GOOGLE_CLIENT_ID;
+  delete env.GOOGLE_OAUTH_CLIENT_SECRET;
   delete env.EDITOR_NIHO_ORIGIN;
+  delete env.EDITOR_ORIGIN;
   if (mode !== undefined) env.EDITOR_AUTH_MODE = mode;
   if (mode === "niho") env.EDITOR_NIHO_ORIGIN = "https://niho-auth.example.invalid";
   return env;
@@ -170,6 +174,90 @@ describe("production start with the server entry (Dockerfile / npm start)", () =
       assert.equal(sameOrigin.status, 303, "same-origin callback reaches pending/state validation instead of rejecting the internal URL");
       assert.equal(sameOrigin.headers.get("set-cookie"), null);
       assert.equal((await fetch(`http://127.0.0.1:${port}/auth/callback`, { redirect: "manual" })).status, 405);
+    } finally {
+      const exited = new Promise(resolve => child.once("exit", resolve));
+      child.kill("SIGTERM");
+      await exited;
+    }
+  });
+
+  it("keeps Google as the Docs provider while routing only photo callback POST to NIHO", async () => {
+    const port = await freePort();
+    const editorOrigin = "https://editor.example.invalid";
+    const nihoOrigin = "https://niho-auth.example.invalid";
+    const env = {
+      ...childEnv(port, "google"),
+      HOSTNAME: "0.0.0.0",
+      EDITOR_GOOGLE_ALLOWED_EMAILS: "synthetic-owner@example.invalid",
+      EDITOR_NIHO_ORIGIN: nihoOrigin,
+      EDITOR_ORIGIN: editorOrigin,
+    };
+    const child = spawn(process.execPath, ["scripts/server-entry.mjs", standaloneServer], { cwd: appDir, env, stdio: "ignore" });
+    const requestWithPublicHost = (path, { method = "GET", origin, body } = {}) => new Promise((resolve, reject) => {
+      const request = httpRequest(`http://127.0.0.1:${port}${path}`, {
+        method,
+        headers: {
+          host: new URL(editorOrigin).host,
+          "x-forwarded-proto": "https",
+          ...(origin ? { origin } : {}),
+          ...(body ? { "content-type": "application/x-www-form-urlencoded" } : {}),
+        },
+      }, response => {
+        const chunks = [];
+        response.on("data", chunk => chunks.push(chunk));
+        response.on("error", reject);
+        response.on("end", () => {
+          const pairs = [];
+          for (let i = 0; i < response.rawHeaders.length; i += 2) pairs.push([response.rawHeaders[i], response.rawHeaders[i + 1]]);
+          resolve(new Response(Buffer.concat(chunks), { status: response.statusCode, headers: pairs }));
+        });
+      });
+      request.on("error", reject);
+      request.end(body);
+    });
+    try {
+      await waitForHttp(port);
+      const relay = await requestWithPublicHost("/auth/callback", {
+        method: "POST",
+        origin: nihoOrigin,
+        body: `code=${"c".repeat(43)}&state=${"s".repeat(43)}`,
+      });
+      assert.equal(relay.status, 200);
+      assert.equal(relay.headers.get("set-cookie"), null);
+      assert.equal(relay.headers.get("referrer-policy"), "origin");
+      assert.match(relay.headers.get("content-security-policy") ?? "", /form-action 'self'/);
+      assert.match(await relay.text(), new RegExp(`action="${editorOrigin}/auth/callback"`));
+
+      const googleGet = await requestWithPublicHost("/auth/callback?code=synthetic&state=synthetic");
+      assert.equal(googleGet.status, 303);
+      assert.equal(googleGet.headers.get("location"), "/auth/login?error=unavailable");
+      assert.equal(googleGet.headers.get("set-cookie")?.includes("__Host-editor-niho"), false);
+    } finally {
+      const exited = new Promise(resolve => child.once("exit", resolve));
+      child.kill("SIGTERM");
+      await exited;
+    }
+  });
+
+  it("keeps an unconfigured scoped start closed without contacting a provider and preserves exact auth headers", async () => {
+    const port = await freePort();
+    const env = {
+      ...childEnv(port, "google"),
+      EDITOR_GOOGLE_ALLOWED_EMAILS: "synthetic-owner@example.invalid",
+      EDITOR_ORIGIN: "https://editor.example.invalid",
+    };
+    const child = spawn(process.execPath, ["scripts/server-entry.mjs", standaloneServer], { cwd: appDir, env, stdio: "ignore" });
+    try {
+      await waitForHttp(port);
+      const start = await fetch(`http://127.0.0.1:${port}/photo/auth/start?next=%2Fphoto%2Ftrash`, { redirect: "manual" });
+      assert.equal(start.status, 303);
+      assert.equal(start.headers.get("location"), "/photo/auth/login?next=%2Fphoto%2Ftrash&error=unavailable");
+      assert.equal(start.headers.get("set-cookie"), null);
+      assert.equal(start.headers.get("referrer-policy"), "origin");
+      assert.equal(start.headers.get("content-security-policy"), null);
+      const login = await fetch(`http://127.0.0.1:${port}/photo/auth/login`, { redirect: "manual" });
+      assert.equal(login.headers.get("referrer-policy"), "same-origin");
+      assert.match(login.headers.get("content-security-policy") ?? "", /'nonce-[^']+'/);
     } finally {
       const exited = new Promise(resolve => child.once("exit", resolve));
       child.kill("SIGTERM");

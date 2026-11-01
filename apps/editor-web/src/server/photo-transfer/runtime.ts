@@ -1,5 +1,5 @@
 import "server-only";
-import { getAuthProvider } from "../../auth";
+import { photoAuthRuntimeDeps } from "../photo-auth/runtime";
 import { createPhotoTransferRoutes, type PhotoTransferRouteDeps } from "./routes";
 
 /** P13 must wire accepted decoder, expiring ticket broker, durable reconciliation and storage.
@@ -7,7 +7,7 @@ import { createPhotoTransferRoutes, type PhotoTransferRouteDeps } from "./routes
  * Keep DB/storage resolution absent until that complete production wiring is accepted.
  */
 export const photoTransferRuntimeDeps: PhotoTransferRouteDeps = {
-  auth: () => getAuthProvider(),
+  ...photoAuthRuntimeDeps,
   transfer: () => null,
 };
 

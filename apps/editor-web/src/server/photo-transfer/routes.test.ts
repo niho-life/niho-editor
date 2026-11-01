@@ -105,7 +105,7 @@ describe("photo transfer HTTP authentication", () => {
 describe("contract Next routes with default production runtime", () => {
   it("leaves all seven endpoints fail-closed after real actor verification", async () => {
     const getSession = vi.fn(async () => session);
-    vi.spyOn(photoTransferRuntimeDeps, "auth").mockReturnValue({ ...stubAuthProvider, mode: "niho", getSession });
+    vi.spyOn(photoTransferRuntimeDeps, "photoAuth").mockReturnValue({ ...stubAuthProvider, mode: "niho", getSession });
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     const upload = { params: Promise.resolve({ uploadId: IDS.upload }) };
     const responses = await Promise.all([

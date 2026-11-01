@@ -57,6 +57,30 @@ describe("photo auth", () => {
     expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: "POST", redirect: "error", cache: "no-store" });
   });
 
+  it("keeps native bearer verification independent from a missing browser photo provider", async () => {
+    const fetch = vi.fn(async () => Response.json({
+      actor: { id: "canonical-native" },
+      sessionId: "native-connection",
+      expiresAt: MAC_EXPIRES_AT,
+      clientId: "niho-editor",
+      audience: "niho-photo",
+      refreshRequired: false,
+      sourceClientId: "niho-camera",
+    }));
+    const docsSession = vi.fn();
+    const result = await verifyPhotoActor(new Request(`${EDITOR_ORIGIN}/api/photo/v1/auth/session`, {
+      headers: { authorization: "Bearer synthetic-native" },
+    }), {
+      auth: () => ({ ...stubAuthProvider, mode: "google", getSession: docsSession }),
+      photoAuth: () => null,
+      env: { EDITOR_NIHO_ORIGIN: ORIGIN },
+      fetch: fetch as typeof globalThis.fetch,
+      now: () => NOW,
+    });
+    expect(result.actor).toMatchObject({ userId: "canonical-native", transport: "mac-bearer" });
+    expect(docsSession).not.toHaveBeenCalled();
+  });
+
   it.each<{ headers: Record<string, string>; code: string }>([
     { headers: { authorization: "Bearer token", cookie: `${NIHO_SESSION_COOKIE}=v1.33333333-3333-4333-8333-333333333333.${"D".repeat(43)}` }, code: "ambiguous_authentication" },
     { headers: { "x-owner-id": "another-user" }, code: "identity_header_forbidden" },
@@ -114,6 +138,36 @@ describe("photo auth", () => {
     await expect(verifyPhotoActor(new Request(`${EDITOR_ORIGIN}/api/photo/v1/auth/session`), {
       auth: () => stubAuthProvider,
     })).rejects.toEqual(new PhotoAuthError(401, "unauthorized"));
+  });
+
+  it("uses an explicit photo provider for browser cookies and never calls the Google provider", async () => {
+    const googleSession = vi.fn(async () => ({ userId: "google-sub", mode: "google" as const }));
+    const photoSession = vi.fn(async ({ headers }: { headers: Pick<Headers, "get"> }) => {
+      expect(headers.get("cookie")).toContain("editor_session=synthetic-google");
+      expect(headers.get("cookie")).toContain(`${NIHO_SESSION_COOKIE}=synthetic-niho`);
+      return { userId: "canonical-niho", mode: "niho" as const, sessionId: "photo-session", expiresAt: MAC_EXPIRES_AT };
+    });
+    const result = await verifyPhotoActor(new Request(`${EDITOR_ORIGIN}/api/photo/v1/auth/session`, {
+      headers: { cookie: `editor_session=synthetic-google; ${NIHO_SESSION_COOKIE}=synthetic-niho` },
+    }), {
+      auth: () => ({ ...stubAuthProvider, mode: "google", getSession: googleSession }),
+      photoAuth: () => ({ ...stubAuthProvider, mode: "niho", getSession: photoSession }),
+    });
+    expect(result.actor.userId).toBe("canonical-niho");
+    expect(photoSession).toHaveBeenCalledOnce();
+    expect(googleSession).not.toHaveBeenCalled();
+  });
+
+  it("fails explicit null or wrong-mode photo seams as 503 without trying Docs auth", async () => {
+    const docsSession = vi.fn(async () => ({ userId: "google-sub", mode: "google" as const }));
+    const docs = { ...stubAuthProvider, mode: "google" as const, getSession: docsSession };
+    for (const photoAuth of [() => null, () => docs]) {
+      await expect(verifyPhotoActor(new Request(`${EDITOR_ORIGIN}/api/photo/v1/auth/session`), {
+        auth: () => docs,
+        photoAuth,
+      })).rejects.toEqual(new PhotoAuthError(503, "photo_auth_unavailable", true));
+    }
+    expect(docsSession).not.toHaveBeenCalled();
   });
 
   it("maps abnormal, oversized, errored, expired, and overlong Mac responses to the same typed 503", async () => {

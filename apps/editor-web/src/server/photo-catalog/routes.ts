@@ -1,9 +1,9 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { PHOTO_ERROR_STATUS, type PhotoCapabilities, type PhotoErrorCode, type PhotoErrorEnvelope, type VerifiedPhotoActor } from "../../../../../packages/photo-library-contract/src/v1";
-import { getAuthProvider } from "../../auth";
 import { getPool } from "../db";
 import { PhotoAuthError, verifyPhotoActor } from "../photo-auth";
+import { photoAuthRuntimeDeps } from "../photo-auth/runtime";
 import { PhotoTransferError, readBody } from "../photo-transfer/http";
 import { PRIVATE_CATALOG_HEADERS, PhotoCatalogError, catalogResponse, createPhotoCatalogApi } from "./api";
 import { createPhotoCatalogStore } from "./store-adapter";
@@ -102,5 +102,5 @@ export function runtimePhotoCatalogRoutes(env: Readonly<Record<string, string | 
   const pool = enabled && cursorSecret && capabilities ? getPool(env) : null;
   return createPhotoCatalogRoutes({ enabled, cursorSecret,
     store: pool && capabilities ? createPhotoCatalogStore(pool, capabilities) : null,
-    verify: async (request) => (await verifyPhotoActor(request, { auth: () => getAuthProvider() })).actor });
+    verify: async (request) => (await verifyPhotoActor(request, photoAuthRuntimeDeps)).actor });
 }

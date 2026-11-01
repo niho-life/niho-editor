@@ -13,18 +13,28 @@ const MESSAGES: Readonly<Record<LoginError, string>> = {
 };
 
 /**
- * ログインの画面（枠の外）。「NIHOでログイン」で `/auth/login/start` へ移る。next はサーバーで safeReturnTo を通した戻り先（`/` なら null）。
+ * ログインの画面（枠の外）。既定は `/auth/login/start`、写真だけは限定した prop で `/photo/auth/start` へ移る。
+ * next はサーバーで用途ごとの safeReturnTo を通した戻り先（既定の画面なら null）。
  * 「アカウントを作る」「ヘルプ」の行き先はまだ決まっていない。
  */
-export function LoginView({ next, error }: { next: string | null; error: LoginError | null }) {
+export type LoginStartPath = "/auth/login/start" | "/photo/auth/start";
+
+export function loginStartLocation(startPath: LoginStartPath, next: string | null): string {
+  return `${startPath}${next ? `?next=${encodeURIComponent(next)}` : ""}`;
+}
+
+export function LoginView({ next, error, startPath = "/auth/login/start" }: {
+  next: string | null;
+  error: LoginError | null;
+  startPath?: LoginStartPath;
+}) {
   return (
     <div data-docs-app-root="" data-docs-shared-ui="" style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
       {error && <p role="alert">{MESSAGES[error]}</p>}
       <div style={{ flex: 1, minHeight: 0 }}>
         <LoginScreen
           onLogin={() =>
-            // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- 行き先は route handler（ページではない）
-            window.location.assign(`/auth/login/start${next ? `?next=${encodeURIComponent(next)}` : ""}`)
+            window.location.assign(loginStartLocation(startPath, next))
           }
         />
       </div>

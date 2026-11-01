@@ -34,7 +34,8 @@ import {
   updateImageMeta,
   updateRecording,
 } from "@niho/editor-store";
-import { getAuthProvider } from "../auth";
+import { getAuthProvider, getPhotoAuthProvider } from "../auth";
+import type { AuthRoutesDeps } from "./auth-routes";
 import { getGoogleDocsCredential, getGoogleDocsGateway } from "../google-docs/runtime";
 import { publishConfig } from "../publish/config";
 import { pgDraftFingerprints, pgPublishStore } from "../publish/pg-store";
@@ -61,8 +62,9 @@ import type { ShareApiDeps } from "./share-api";
 import type { TranscriptionApiDeps } from "./transcription-api";
 
 /** 実行時の依存（方式の選択・DB の接続は要求のたびに遅延して決める）。`/auth/*` の route も同じものを使う。 */
-export const runtimeDeps: PagesApiDeps = {
+export const runtimeDeps: PagesApiDeps & Pick<AuthRoutesDeps, "photoAuth"> = {
   auth: () => getAuthProvider(),
+  photoAuth: () => getPhotoAuthProvider(),
   store: () => getStore(),
 };
 

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { loginPath, safeReturnTo, seeOther } from "./return-to";
+import { loginPath, photoLoginPath, safePhotoReturnTo, safeReturnTo, seeOther } from "./return-to";
 
 const ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
 
 describe("safeReturnTo", () => {
   it("keeps the editor's own screens", () => {
-    for (const path of ["/", "/p/new", `/p/${ID}`, `/p/${ID.toUpperCase()}`, "/destinations", "/destinations/my-site-1", "/account", "/settings"]) {
+    for (const path of ["/", "/p/new", `/p/${ID}`, `/p/${ID.toUpperCase()}`, "/destinations", "/destinations/my-site-1", "/account", "/settings", "/photo", "/photo/trash", `/photo/${ID}`]) {
       expect(safeReturnTo(path), path).toBe(path);
     }
     expect(safeReturnTo("/p/new?from=recording")).toBe("/p/new?from=recording");
@@ -56,6 +56,12 @@ describe("safeReturnTo", () => {
       "/auth/login",
       "/auth/callback",
       "/auth/logout",
+      "/photo/auth/login",
+      "/photo/auth/start",
+      "/photo/auth/logout",
+      "/photo/auth/refresh",
+      "/photo/not-a-uuid",
+      `/photo/${ID}/edit`,
       "/api/pages",
       `/api/pages/${ID}`,
       "/destinations/",
@@ -80,6 +86,20 @@ describe("safeReturnTo", () => {
   });
 });
 
+describe("safePhotoReturnTo", () => {
+  it("keeps only photo UI paths and drops query/hash", () => {
+    expect(safePhotoReturnTo("/photo")).toBe("/photo");
+    expect(safePhotoReturnTo("/photo/trash?from=menu#top")).toBe("/photo/trash");
+    expect(safePhotoReturnTo(`/photo/${ID}?x=1#top`)).toBe(`/photo/${ID}`);
+  });
+
+  it("falls back to /photo for Docs, auth loops, external and malformed paths", () => {
+    for (const raw of ["/", "/settings", `/p/${ID}`, "/photo/auth/login", "/photo/auth/start", "//evil.invalid", "https://evil.invalid/photo", "/photo/\\evil"]) {
+      expect(safePhotoReturnTo(raw), raw).toBe("/photo");
+    }
+  });
+});
+
 describe("loginPath", () => {
   it("omits next for / and encodes it otherwise", () => {
     expect(loginPath("/")).toBe("/auth/login");
@@ -92,6 +112,16 @@ describe("loginPath", () => {
   it("never carries a return path that safeReturnTo would refuse", () => {
     expect(loginPath("//evil.com")).toBe("/auth/login");
     expect(loginPath("/auth/login?next=%2Fsettings")).toBe("/auth/login");
+  });
+});
+
+describe("photoLoginPath", () => {
+  it("uses only a sanitized photo return path and error", () => {
+    expect(photoLoginPath("/photo")).toBe("/photo/auth/login");
+    expect(photoLoginPath("/photo/trash", "unavailable")).toBe("/photo/auth/login?next=%2Fphoto%2Ftrash&error=unavailable");
+    expect(photoLoginPath(`/photo/${ID}`)).toBe(`/photo/auth/login?next=%2Fphoto%2F${ID}`);
+    expect(photoLoginPath("/settings", "forbidden")).toBe("/photo/auth/login?error=forbidden");
+    expect(photoLoginPath("/photo/auth/login?next=%2Fphoto%2Ftrash")).toBe("/photo/auth/login");
   });
 });
 

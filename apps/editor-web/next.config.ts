@@ -60,9 +60,10 @@ const nextConfig: NextConfig = {
       { source: "/v1/:path*", headers: [...securityHeaders, { key: "Content-Security-Policy", value: API_CSP }] },
       // service worker は更新がすぐ届くよう、ブラウザの HTTP cache に残さない（#49）
       { source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }] },
-      // catch-all の same-origin より後で exact handler 2 箇所だけを上書きする
+      // catch-all の same-origin より後で standalone form の exact handler 3 箇所だけを上書きする
       { source: "/auth/login/start", headers: AUTH_FORM_HEADERS },
       { source: "/auth/callback", headers: AUTH_FORM_HEADERS },
+      { source: "/photo/auth/start", headers: AUTH_FORM_HEADERS },
       // 共有リンクのページ（#34）。private・no-store・no-referrer。全体の規則のあとに置いて、同じ key（Referrer-Policy）を上書きする
       { source: "/s/:token*", headers: SHARED_PAGE_HEADERS },
     ];
