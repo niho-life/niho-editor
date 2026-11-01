@@ -36,7 +36,7 @@ describe("公開の設定（環境変数）", () => {
 
   it("方式ごとの既定: stub は dev の宣言と既定の役割、niho は宣言も役割も無し（fail closed）", () => {
     expect(publishConfig({ EDITOR_AUTH_MODE: "stub" })).toEqual({ mode: "stub", stubRoles: ["writer", "kamakura"], declarations: { kind: "dev" }, assetOrigin: null });
-    expect(publishConfig({ EDITOR_AUTH_MODE: "niho", EDITOR_STUB_ROLES: "writer" })).toEqual({ mode: "niho", stubRoles: [], declarations: { kind: "none" }, assetOrigin: null });
+    expect(publishConfig({ EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid", EDITOR_STUB_ROLES: "writer" })).toEqual({ mode: "niho", stubRoles: [], declarations: { kind: "none" }, assetOrigin: null });
   });
 });
 
@@ -66,7 +66,7 @@ describe("ポート", () => {
     const stub = roleReaderOf(publishConfig({ EDITOR_AUTH_MODE: "stub", EDITOR_STUB_ROLES: "writer" }), SESSION);
     expect(await stub.read("user-a")).toEqual(["writer"]);
     expect(await stub.read("user-b")).toEqual([]);
-    expect(await roleReaderOf(publishConfig({ EDITOR_AUTH_MODE: "niho" }), { ...SESSION, mode: "niho" }).read("user-a")).toEqual([]);
+    expect(await roleReaderOf(publishConfig({ EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" }), { ...SESSION, mode: "niho" }).read("user-a")).toEqual([]);
   });
 
   it("著者: session の profile の名前（handle・url は null）。名前が無ければ例外（公開は失敗）", async () => {

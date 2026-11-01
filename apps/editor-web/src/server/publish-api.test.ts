@@ -156,7 +156,7 @@ describe("公開のシート GET", () => {
   });
 
   it("niho の方式は役割が無く（fail closed）、面は role で選べない", async () => {
-    const { deps } = world({ env: { EDITOR_AUTH_MODE: "niho" } });
+    const { deps } = world({ env: { EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" } });
     const sheet = await sheetOf(await getSheet(deps, PAGE, "?handle=exp"));
     expect(sheet.destinations.map((entry) => [entry.handle, entry.reason])).toEqual([
       ["exp", "role"],
