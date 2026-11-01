@@ -2,15 +2,14 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { gzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import ts from "../../packages/photo-cloud-library/node_modules/typescript/lib/typescript.js";
 
 export const CONFIG_PATH = "sdk/photo-cloud-release-set.json";
 export const NOTICE_PATH = "sdk/PHOTO_CLOUD_THIRD_PARTY_NOTICES.md";
 export const REPOSITORY = "niho-life/niho-editor";
-export const RELEASE_VERSION = "0.1.0";
-export const RELEASE_TAG = "photo-cloud-sdk-v0.1.0";
+export const RELEASE_VERSION = "0.1.1";
+export const RELEASE_TAG = "photo-cloud-sdk-v0.1.1";
 export const FULL_SHA = /^[a-f0-9]{40}$/u;
 export const SHA256 = /^[a-f0-9]{64}$/u;
 export const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
@@ -20,7 +19,7 @@ export const PACKAGE_DEFINITIONS = [
 ];
 export const EXPECTED_PEERS = new Map([
   ["@niho/photo-cloud-library", {
-    "@niho/photo-library-contract": "0.1.0",
+    "@niho/photo-library-contract": "0.1.1",
     "niho-photo-contract": "0.1.5",
     "niho-photo-editing": "0.1.5",
   }],
@@ -242,6 +241,32 @@ function tarPath(value) {
   fail(`tar pathが長すぎます: ${value}`);
 }
 
+export function gzipStored(bytes) {
+  const data = Buffer.from(bytes);
+  if (data.length > 0xffffffff) throw new RangeError("gzip input exceeds 32-bit size");
+  const chunks = [Buffer.from([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255])];
+  let offset = 0;
+  do {
+    const size = Math.min(65535, data.length - offset);
+    const block = Buffer.alloc(5);
+    block[0] = offset + size === data.length ? 1 : 0;
+    block.writeUInt16LE(size, 1);
+    block.writeUInt16LE(size ^ 0xffff, 3);
+    chunks.push(block, data.subarray(offset, offset + size));
+    offset += size;
+  } while (offset < data.length);
+  let checksum = 0xffffffff;
+  for (const byte of data) {
+    checksum ^= byte;
+    for (let bit = 0; bit < 8; bit++) checksum = (checksum >>> 1) ^ ((checksum & 1) ? 0xedb88320 : 0);
+  }
+  const trailer = Buffer.alloc(8);
+  trailer.writeUInt32LE((checksum ^ 0xffffffff) >>> 0, 0);
+  trailer.writeUInt32LE(data.length, 4);
+  chunks.push(trailer);
+  return Buffer.concat(chunks);
+}
+
 export function createTarGzip(entries) {
   const chunks = [];
   for (const [relative, bytes] of [...entries].sort(([left], [right]) => left.localeCompare(right, "en"))) {
@@ -268,7 +293,7 @@ export function createTarGzip(entries) {
     chunks.push(header, bytes, Buffer.alloc((512 - (bytes.length % 512)) % 512));
   }
   chunks.push(Buffer.alloc(1024));
-  return gzipSync(Buffer.concat(chunks), { level: 9, mtime: 0 });
+  return gzipStored(Buffer.concat(chunks));
 }
 
 function actualToolBytes(toolingRoot, relative) {

@@ -12,6 +12,7 @@ import {
   TOOLING_PATHS,
   PhotoCloudReleaseError,
   createTarGzip,
+  gzipStored,
   packReleaseSet,
   recordDigest,
   sha256,
@@ -100,12 +101,26 @@ function tarWithType(bytes, type) {
   return gzipSync(archive, { level: 9, mtime: 0 });
 }
 
+test("gzip bytesはOS・zlibに依存せず既知CRCとblock境界を維持する", () => {
+  assert.equal(gzipStored(Buffer.from("123456789")).toString("hex"), "1f8b08000000000000ff010900f6ff3132333435363738392639f4cb09000000");
+  for (const length of [0, 1, 65535, 65536, 131070, 131071]) {
+    const bytes = Buffer.from(Array.from({ length }, (_, i) => (i * 31) % 256));
+    const packed = gzipStored(bytes);
+    assert.deepEqual(gunzipSync(packed), bytes);
+    assert.deepEqual(packed.subarray(0, 10), Buffer.from([31, 139, 8, 0, 0, 0, 0, 0, 0, 255]));
+    if (length > 65535) {
+      assert.equal(packed[10], 0);
+      assert.equal(packed[10 + 5 + 65535] & 6, 0);
+    }
+  }
+});
+
 test("Git objectだけから2 packageを再現し、source/entry/upstream pinを検証する", (t) => {
   const data = fixture();
   const one = pack(data, "one");
   const two = pack(data, "two");
   t.after(() => { rmSync(data.root, { recursive: true, force: true }); rmSync(one.output, { recursive: true, force: true }); rmSync(two.output, { recursive: true, force: true }); });
-  const verified = verifyReproducedReleaseSet(one.manifestPath, two.manifestPath, { expectedSource: data.sha, expectedVersion: "0.1.0", sourceRepositoryRoot: data.root });
+  const verified = verifyReproducedReleaseSet(one.manifestPath, two.manifestPath, { expectedSource: data.sha, expectedVersion: "0.1.1", sourceRepositoryRoot: data.root });
   assert.equal(verified.releaseReady, true);
   assert.equal(verified.upstreamSdk.version, "0.1.5");
   assert.equal(verified.upstreamSdk.baselineSha256, "342ad046400466c633cbe0fc04af8788dbcd3b65b68faf964cb88b4bf02a51cf");
@@ -114,7 +129,7 @@ test("Git objectだけから2 packageを再現し、source/entry/upstream pinを
   const cloudEntries = readTarEntries(readFileSync(path.join(one.output, cloud.file)));
   const cloudManifest = JSON.parse(cloudEntries.get("package.json"));
   assert.deepEqual(cloudManifest.peerDependencies, {
-    "@niho/photo-library-contract": "0.1.0",
+    "@niho/photo-library-contract": "0.1.1",
     "niho-photo-contract": "0.1.5",
     "niho-photo-editing": "0.1.5",
   });

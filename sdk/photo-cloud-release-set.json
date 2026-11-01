@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "version": "0.1.0",
-  "releaseTag": "photo-cloud-sdk-v0.1.0",
+  "version": "0.1.1",
+  "releaseTag": "photo-cloud-sdk-v0.1.1",
   "repository": "niho-life/niho-editor",
   "upstreamSdk": {
     "baselinePath": "packages/photo-library-contract/sdk-baseline.json",
