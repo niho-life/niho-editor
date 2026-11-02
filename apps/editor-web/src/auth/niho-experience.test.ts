@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createNihoExperienceAuthProvider,
   EXPERIENCE_EDITOR_FIREBASE_REFRESH_COOKIE,
@@ -175,6 +175,29 @@ describe("NIHO Experience editor auth", () => {
     expect((await auth.completeLogin(formPost("https://attacker.example.invalid", cookie))).status).toBe(400);
     expect((await auth.completeLogin(formPost(EDITOR, cookie, { code: CODE, state: "wrong_state-1234567890" }))).headers.get("location"))
       .toBe("/auth/login?next=%2Fsettings&error=unavailable");
+  });
+
+  it("logs only a callback rejection category and status", async () => {
+    const auth = provider(async () => { throw new Error("rejected callback must not call upstream"); });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const untrustedOrigin = "https://attacker.example.invalid";
+      expect((await auth.completeLogin(formPost(untrustedOrigin, null))).status).toBe(400);
+      expect(log).toHaveBeenLastCalledWith("editor-web: NIHO Experience authentication failed", {
+        step: "callback_origin",
+        status: 400,
+      });
+      expect(JSON.stringify(log.mock.calls)).not.toContain(untrustedOrigin);
+
+      expect((await auth.completeLogin(formPost(EDITOR, null, { code: "sensitive-code", state: "short" }))).status).toBe(400);
+      expect(log).toHaveBeenLastCalledWith("editor-web: NIHO Experience authentication failed", {
+        step: "callback_field_format",
+        status: 400,
+      });
+      expect(JSON.stringify(log.mock.calls)).not.toContain("sensitive-code");
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("rejects a callback request that was already aborted before its body is read", async () => {
