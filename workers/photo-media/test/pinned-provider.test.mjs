@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,7 +9,7 @@ import { createPinnedWasmMediaProvider } from "../src/pinned-provider.ts";
 import { inspectPng } from "../src/png.ts";
 import { MediaProviderError } from "../src/types.ts";
 import { syntheticOrientedJpeg } from "./synthetic-jpeg.mjs";
-import { syntheticPng, withSyntheticTextMetadata } from "./synthetic-png.mjs";
+import { syntheticPng, withSrgbIntent, withSyntheticTextMetadata } from "./synthetic-png.mjs";
 
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const png = syntheticPng();
@@ -74,6 +74,24 @@ test("PNG inspection rejects bad CRCs and derivative metadata chunks", () => {
   corrupted[corrupted.length - 5] ^= 1;
   assert.throws(() => inspectPng(corrupted), /invalid png/);
   assert.throws(() => inspectPng(withSyntheticTextMetadata(png), { output: true }), /unsafe png output/);
+});
+
+test("valid input sRGB intents 1-3 decode while derivative PNGs use intent 0", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "photo-media-pinned-srgb-intent-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const provider = createPinnedWasmMediaProvider();
+  for (const intent of [1, 2, 3]) {
+    const directory = join(root, `intent-${intent}`);
+    await mkdir(directory);
+    const input = withSrgbIntent(png, intent);
+    const originalPath = join(directory, "original.png");
+    await writeFile(originalPath, input, { mode: 0o600 });
+    const item = source({ original: { assetId: IDS.original, generation: "1", sha256: sha(input), sizeBytes: input.length } });
+    assert.equal(inspectPng(input).srgbIntent, intent);
+    const outputs = await provider.render({ originalPath, scratchDirectory: directory, source: item, identity: {}, signal: new AbortController().signal });
+    assert.equal(outputs.length, 2);
+    for (const output of outputs) assert.equal(inspectPng(await readFile(output.path), { output: true }).srgbIntent, 0);
+  }
 });
 
 test("pinned JPEG decoder applies EXIF orientation and strips original metadata", async (t) => {

@@ -29,6 +29,13 @@ export function withSyntheticTextMetadata(bytes) {
   return Buffer.concat([bytes.subarray(0, ihdrEnd), text, bytes.subarray(ihdrEnd)]);
 }
 
+export function withSrgbIntent(bytes, intent) {
+  if (!Number.isSafeInteger(intent) || intent < 0 || intent > 3) throw new RangeError("invalid sRGB intent");
+  const srgb = chunk("sRGB", Buffer.from([intent]));
+  const ihdrEnd = 8 + 12 + 13;
+  return Buffer.concat([bytes.subarray(0, ihdrEnd), srgb, bytes.subarray(ihdrEnd)]);
+}
+
 /** Deterministic RGBA image with valid PNG CRCs and no personal or embedded metadata. */
 export function syntheticPng(width = 2, height = 1) {
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 || width * height > 64) throw new RangeError("invalid synthetic PNG dimensions");

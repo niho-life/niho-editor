@@ -13,6 +13,7 @@ export interface PngInfo {
   readonly height: number;
   readonly bitDepth: number;
   readonly colorType: number;
+  readonly srgbIntent: number | null;
   readonly chunks: readonly string[];
 }
 
@@ -43,6 +44,7 @@ export function inspectPng(bytes: Uint8Array, options: { readonly output?: boole
   let sawIdat = false;
   let endedIdat = false;
   let sawSrgb = false;
+  let srgbIntent: number | null = null;
   let sawIend = false;
   let chunks = 0;
   const types: string[] = [];
@@ -80,8 +82,10 @@ export function inspectPng(bytes: Uint8Array, options: { readonly output?: boole
     if (type === "acTL" || type === "fcTL" || type === "fdAT" || type === "eXIf") throw new Error("unsupported png");
     if (options.output && !["IHDR", "IDAT", "IEND", "sRGB"].includes(type)) throw new Error("unsafe png output");
     if (type === "sRGB") {
-      if (sawSrgb || sawIdat || length !== 1 || input[dataStart] !== 0) throw new Error("invalid png color profile");
+      const intent = input[dataStart];
+      if (sawSrgb || sawIdat || length !== 1 || intent === undefined || intent > 3 || (options.output && intent !== 0)) throw new Error("invalid png color profile");
       sawSrgb = true;
+      srgbIntent = intent;
     }
     if (type === "IEND") {
       if (length !== 0 || !sawIdat || next !== input.byteLength) throw new Error("invalid png");
@@ -91,7 +95,7 @@ export function inspectPng(bytes: Uint8Array, options: { readonly output?: boole
     offset = next;
   }
   if (!sawIend) throw new Error("invalid png");
-  return { width, height, bitDepth, colorType, chunks: types };
+  return { width, height, bitDepth, colorType, srgbIntent, chunks: types };
 }
 
 /** The pinned engine emits sRGB pixel values; make that output profile explicit. */
