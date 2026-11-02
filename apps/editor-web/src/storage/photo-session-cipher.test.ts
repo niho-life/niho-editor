@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createPhotoSessionCipher, type PhotoSessionEnvelope } from "./photo-session-cipher";
 import type { PhotoUploadSessionIdentity } from "./photo-session-identity";
 
-const SESSION_URL = "https://storage.googleapis.com/upload/storage/v1/b/synthetic-docs-bucket/o?upload_id=synthetic-private-session";
+const SESSION_URL = "https://storage.googleapis.com/upload/storage/v1/b/synthetic-docs-bucket/o?uploadType=resumable&name=photo%2Fstage%2F44444444-4444-4444-8444-444444444444&upload_id=synthetic-private-session";
 const IDENTITY: PhotoUploadSessionIdentity = {
   ownerId: "synthetic-owner",
   uploadId: "44444444-4444-4444-8444-444444444444",

@@ -15,7 +15,7 @@ const IDENTITY: PhotoUploadSessionIdentity = {
   libraryLifecycleEpoch: 2,
   uploadLeaseGeneration: 3,
 };
-const SESSION = `https://storage.googleapis.com/upload/storage/v1/b/${BUCKET}/o?upload_id=synthetic-private-session`;
+const SESSION = `https://storage.googleapis.com/upload/storage/v1/b/${BUCKET}/o?uploadType=resumable&name=${encodeURIComponent(IDENTITY.stageKey)}&upload_id=synthetic-private-session`;
 const signal = () => new AbortController().signal;
 const metadata = (overrides: Record<string, unknown> = {}, status = 200) => new Response(JSON.stringify({
   name: IDENTITY.stageKey,
@@ -73,19 +73,21 @@ describe("GCS private resumable upload session driver", () => {
       SESSION.replace("storage.googleapis.com", "user:pass@storage.googleapis.com"),
       SESSION.replace(BUCKET, "foreign-bucket"),
       SESSION.replace("/upload/storage/v1", "/storage/v1"),
+      SESSION.replace("uploadType=resumable&", ""),
+      SESSION.replace(`&name=${encodeURIComponent(IDENTITY.stageKey)}`, ""),
+      SESSION.replace("uploadType=resumable", "uploadType=media"),
+      SESSION.replace(encodeURIComponent(IDENTITY.stageKey), encodeURIComponent("photo/stage/00000000-0000-0000-0000-000000000000")),
       `${SESSION}#fragment`,
       SESSION.replace("upload_id=", "unknown=x&upload_id="),
       `${SESSION}&upload_id=duplicate`,
       SESSION.replace("synthetic-private-session", ""),
-      `${SESSION}&uploadType=media`,
-      `${SESSION}&name=photo%2Fstage%2F00000000-0000-0000-0000-000000000000`,
       `${SESSION}&ifGenerationMatch=1`,
     ];
     for (const url of invalid) await expect(f.driver.progress(url, IDENTITY, signal())).rejects.toMatchObject({ code: "unavailable" });
     expect(f.fetcher).not.toHaveBeenCalled();
 
     const allowed = sequence([new Response(null, { status: 308 }), new Response(null, { status: 308 })]);
-    await expect(allowed.driver.progress(`${SESSION}&uploadType=resumable&name=${encodeURIComponent(IDENTITY.stageKey)}&ifGenerationMatch=0`, IDENTITY, signal())).resolves.toBe(0);
+    await expect(allowed.driver.progress(`${SESSION}&ifGenerationMatch=0`, IDENTITY, signal())).resolves.toBe(0);
     await expect(allowed.driver.progress(SESSION, IDENTITY, signal())).resolves.toBe(0);
   });
 

@@ -124,7 +124,10 @@ function validateSessionUrl(sessionUrl: string, bucket: string, identity: PhotoU
       || (name === "name" && value !== identity.stageKey)
       || (name === "ifGenerationMatch" && value !== "0")) throw unavailable();
   }
-  if (!seen.has("upload_id")) throw unavailable();
+  // JSON API session URIs bind both the resumable protocol and the target object.
+  // Requiring `name` prevents a valid but differently-bound session from being
+  // used with this upload identity.
+  if (!seen.has("upload_id") || !seen.has("uploadType") || !seen.has("name")) throw unavailable();
   return url.href;
 }
 
