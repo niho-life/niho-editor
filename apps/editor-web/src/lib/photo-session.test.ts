@@ -1,11 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { library } from "@niho/photo-library-contract/fixtures";
-import { loadPhotoSession } from "./photo-session";
+import { loadPhotoSession, schedulePhotoSessionExpiry } from "./photo-session";
 
 const session = { userId: library.owner.userId, sessionId: "session-a", expiresAt: "2099-01-01T00:00:00Z", refreshRequired: false };
 const response = (status: number, value: unknown) => new Response(JSON.stringify(value), { status });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+describe("photo session expiry timer", () => {
+  it("keeps a 31-day session active across the browser timer limit, then expires it", async () => {
+    vi.useFakeTimers();
+    const start = new Date("2026-11-02T00:00:00Z").getTime();
+    vi.setSystemTime(start);
+    const expire = vi.fn();
+    const stop = schedulePhotoSessionExpiry(new Date(start + 31 * 24 * 60 * 60 * 1000).toISOString(), expire);
+
+    await vi.advanceTimersByTimeAsync(2_147_483_647);
+    expect(expire).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(31 * 24 * 60 * 60 * 1000 - 2_147_483_647);
+    expect(expire).toHaveBeenCalledOnce();
+    stop();
+  });
+});
 
 describe("photo session gate", () => {
   it("keeps 401 closed and distinguishes retryable 503", async () => {

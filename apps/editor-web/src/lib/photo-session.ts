@@ -5,6 +5,29 @@ export type PhotoSessionResult =
   | { kind: "ready"; session: PhotoSession; library: PersonalPhotoLibrary; scopeKey: string }
   | { kind: "login" | "unavailable" | "error" };
 
+const MAX_SESSION_TIMER_DELAY_MS = 2_147_483_647;
+
+/** Long sessions need chained timers because browsers clamp setTimeout delays above 2^31-1 ms. */
+export function schedulePhotoSessionExpiry(expiresAt: string, onExpire: () => void): () => void {
+  const expiry = Date.parse(expiresAt);
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let cancelled = false;
+  const check = () => {
+    if (cancelled) return;
+    const remaining = expiry - Date.now();
+    if (!Number.isFinite(expiry) || remaining <= 0) {
+      onExpire();
+      return;
+    }
+    timer = setTimeout(check, Math.min(remaining, MAX_SESSION_TIMER_DELAY_MS));
+  };
+  check();
+  return () => {
+    cancelled = true;
+    if (timer !== null) clearTimeout(timer);
+  };
+}
+
 const photoFetch = (input: string, signal: AbortSignal) => fetch(input, {
   credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json" }, signal,
 });

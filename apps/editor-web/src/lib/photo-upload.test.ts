@@ -14,7 +14,7 @@ const scope = { actorId: "user-a", libraryId: "library-a", sessionEpoch: "sessio
 const file = () => new File(["hello"], "synthetic.jpg", { type: "image/jpeg" });
 const ticket = { url: "https://upload.example.test/synthetic", method: "PUT" as const, headers: {}, expiresAt: "2099-01-01T00:00:00Z", resumeOffsetBytes: 0 };
 const options = (signal = new AbortController().signal) => ({
-  file: file(), scope, currentScope: () => scope, authenticatedFetch: vi.fn(), signal, onProgress: vi.fn(),
+  file: file(), uploadAttemptId: "attempt-a", scope, currentScope: () => scope, authenticatedFetch: vi.fn(), signal, onProgress: vi.fn(),
 });
 
 afterEach(() => { request.mockReset(); clientKeys.length = 0; vi.unstubAllGlobals(); });
@@ -45,6 +45,13 @@ describe("photo upload confirmation", () => {
     await uploadPhotoFile({ ...options(), cancelledGeneration: 1 });
     expect(clientKeys[0]?.("uploads.start")).not.toBe(clientKeys[1]?.("uploads.start"));
     expect(clientKeys[1]?.("uploads.start")).toBe(clientKeys[2]?.("uploads.start"));
+  });
+
+  it("uses a fresh start key when the same file is selected as a new upload", async () => {
+    request.mockResolvedValue({ value: { kind: "existing", photo: storedPhoto } });
+    await uploadPhotoFile(options());
+    await uploadPhotoFile({ ...options(), uploadAttemptId: "attempt-b" });
+    expect(clientKeys[0]?.("uploads.start")).not.toBe(clientKeys[1]?.("uploads.start"));
   });
 
   it("sends only the remaining bytes with the full-file Content-Range", async () => {

@@ -20,6 +20,8 @@ export function photoFileFormat(file: File): PhotoFormat | null {
 
 export async function uploadPhotoFile(options: {
   file: File;
+  /** A fresh opaque ID for each newly selected upload; reused only while retrying that row. */
+  uploadAttemptId: string;
   scope: CloudPhotoScope;
   currentScope: () => CloudPhotoScope | null;
   authenticatedFetch: AuthenticatedFetch;
@@ -45,7 +47,8 @@ export async function uploadPhotoFile(options: {
   };
   // The request journal is owner scoped. The same bytes/name/metadata replay the same reservation
   // after an ambiguous network failure, without exposing the name or digest in the header.
-  const startKey = stableKey(["uploads.start", options.scope.actorId, options.scope.libraryId, startRequest, options.cancelledGeneration ?? 0]);
+  const startKey = stableKey(["uploads.start", options.scope.actorId, options.scope.libraryId,
+    options.uploadAttemptId, startRequest, options.cancelledGeneration ?? 0]);
   const keys = new Map<string, string>([["uploads.start", startKey]]);
   const client = createPhotoApiClient({
     scope: options.scope, currentScope: options.currentScope, authenticatedFetch: options.authenticatedFetch,

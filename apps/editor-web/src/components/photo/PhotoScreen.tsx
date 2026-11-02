@@ -9,7 +9,7 @@ import {
   QueryClient, QueryClientProvider, type PhotoEditingHost,
 } from "@/photo-sdk/host-sdk";
 import { photoSdkRuntimeAssets } from "@/photo-sdk/runtime-assets";
-import { loadPhotoSession, type PhotoSessionResult } from "@/lib/photo-session";
+import { loadPhotoSession, schedulePhotoSessionExpiry, type PhotoSessionResult } from "@/lib/photo-session";
 import { PhotoUploadError, photoFileFormat, uploadPhotoFile } from "@/lib/photo-upload";
 import { formatPhotoBytes, photoUploadLabel, photoUploadMessage, uploadAllowed, uploadFormatAllowed, type PhotoUploadRow } from "@/lib/photo-view";
 import type { PersonalPhotoLibrary, QuotaUsage } from "@niho/photo-library-contract";
@@ -117,17 +117,14 @@ export function PhotoScreen() {
 
   useEffect(() => {
     if (!ready) return;
-    const delay = Date.parse(ready.session.expiresAt) - Date.now();
-    if (delay <= 0) { scopeRef.current = null; return; }
-    const timer = setTimeout(() => {
+    return schedulePhotoSessionExpiry(ready.session.expiresAt, () => {
       scopeRef.current = null;
       controllersRef.current.forEach((controller) => controller.abort());
       controllersRef.current.clear();
       cancelledGenerationsRef.current.clear();
       setRows([]);
       setResult({ kind: "login" });
-    }, delay);
-    return () => clearTimeout(timer);
+    });
   }, [ready]);
 
   useEffect(() => () => {
@@ -204,7 +201,7 @@ export function PhotoScreen() {
     const cancelledGeneration = cancelledGenerationsRef.current.get(id) ?? 0;
     controllersRef.current.set(id, controller);
     updateRow(id, { controller, stage: "preparing", fraction: null, message: null });
-    void uploadPhotoFile({ file, scope: session.scope, currentScope: () => scopeRef.current,
+    void uploadPhotoFile({ file, uploadAttemptId: id, scope: session.scope, currentScope: () => scopeRef.current,
       authenticatedFetch, signal: controller.signal, cancelledGeneration,
       onProgress: (stage, fraction) => updateRow(id, { stage, fraction }),
     }).then(async (outcome) => {
