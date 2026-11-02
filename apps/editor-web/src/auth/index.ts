@@ -2,12 +2,13 @@ import "server-only";
 import { isTrustedNihoOrigin, resolveAuthMode, type AuthEnv, type AuthMode } from "./config";
 import { googleAuthProvider } from "./google";
 import { nihoAuthProvider } from "./niho";
+import { nihoExperienceAuthProvider } from "./niho-experience";
 import { stubAuthProvider } from "./stub";
 import type { AuthProvider } from "./types";
 
 const PROVIDERS: Readonly<Record<AuthMode, AuthProvider>> = {
   stub: stubAuthProvider,
-  niho: nihoAuthProvider,
+  niho: nihoExperienceAuthProvider,
   google: googleAuthProvider,
 };
 
@@ -20,7 +21,7 @@ export function getAuthProvider(env: AuthEnv = process.env): AuthProvider {
 }
 
 /**
- * 写真だけが使う NIHO provider。Docs の既定 provider は切り替えず、Google/stub と NIHO の cookie を同じ origin で併存させる。
+ * 写真専用の旧 NIHO provider。Docs の global provider は Experience editor contract を使い、Photo の Cookie と callback は分離する。
  * global mode の検査は getAuthProvider と同じまま通し、NIHO 接続先が明示されたときだけ写真の接続口を開く。
  */
 export function getPhotoAuthProvider(env: AuthEnv = process.env): AuthProvider | null {

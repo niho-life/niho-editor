@@ -25,7 +25,7 @@
 | `/destinations`、`/destinations/{id}` | 発信先の一覧と、本人のサイトの接続 |
 | `/account` | 役割とつながり |
 | `/settings` | プロフィール、AI、文字起こし、手順、保存先、使用量 |
-| `/auth/login`、`/auth/callback` | NIHO アカウントの接続 |
+| `/auth/login`、`/auth/callback`、`/editor/auth/callback` | Google/PhotoとNIHO Experience editorを分けたアカウント接続 |
 | `/s/{token}` | リンクで共有（読み取り専用、ログイン不要） |
 
 ### 2.1 保存先（正本はサーバーだけ）

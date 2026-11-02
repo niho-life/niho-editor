@@ -8,6 +8,7 @@ const request = { headers: new Headers() };
 // 合成のアドレスだけを使う（実際の許可リストは手元の deploy.env にあり、リポジトリには入れない）
 const ALLOWED_ONE = "owner@example.test";
 const ALLOWED_TWO = "owner.second@example.invalid";
+const FIREBASE_WEB_API_KEY = "A".repeat(39);
 
 describe("resolveAuthMode", () => {
   it("defaults to stub outside production", () => {
@@ -19,11 +20,11 @@ describe("resolveAuthMode", () => {
 
   it("accepts stub and niho explicitly outside production", () => {
     expect(resolveAuthMode({ NODE_ENV: "development", EDITOR_AUTH_MODE: "stub" })).toBe("stub");
-    expect(resolveAuthMode({ NODE_ENV: "development", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" })).toBe("niho");
+    expect(resolveAuthMode({ NODE_ENV: "development", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid", EDITOR_NIHO_FIREBASE_API_KEY: FIREBASE_WEB_API_KEY })).toBe("niho");
   });
 
   it("requires niho in production and never falls back to stub", () => {
-    expect(resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" })).toBe("niho");
+    expect(resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid", EDITOR_NIHO_FIREBASE_API_KEY: FIREBASE_WEB_API_KEY })).toBe("niho");
     expect(() => resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "stub" })).toThrow(AuthConfigError);
     expect(() => resolveAuthMode({ NODE_ENV: "production" })).toThrow(AuthConfigError);
     expect(() => resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "" })).toThrow(AuthConfigError);
@@ -46,7 +47,7 @@ describe("resolveAuthMode", () => {
       expect(() => resolveAuthMode({ ...production, EDITOR_GOOGLE_ALLOWED_EMAILS })).toThrow(AuthConfigError);
     }
     // 許可リストは google のときだけ要る（niho の守りは変わらない）
-    expect(resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" })).toBe("niho");
+    expect(resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid", EDITOR_NIHO_FIREBASE_API_KEY: FIREBASE_WEB_API_KEY })).toBe("niho");
     // 本番以外では許可リストが無くても選べる（誰も許可リストに居ないので入れない）
     expect(resolveAuthMode({ NODE_ENV: "development", EDITOR_AUTH_MODE: "google" })).toBe("google");
   });
@@ -59,6 +60,17 @@ describe("EDITOR_NIHO_ORIGIN", () => {
       expect(isTrustedNihoOrigin(value), String(value)).toBe(false);
     }
     expect(() => resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "niho" })).toThrow(/EDITOR_NIHO_ORIGIN/);
+  });
+
+  it("requires a Firebase Web API key for the server-side custom-token exchange", () => {
+    expect(() => resolveAuthMode({ NODE_ENV: "production", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" }))
+      .toThrow(/EDITOR_NIHO_FIREBASE_API_KEY/);
+    expect(resolveAuthMode({
+      NODE_ENV: "production",
+      EDITOR_AUTH_MODE: "niho",
+      EDITOR_NIHO_ORIGIN: "https://niho.example.invalid",
+      EDITOR_NIHO_FIREBASE_API_KEY: FIREBASE_WEB_API_KEY,
+    })).toBe("niho");
   });
 });
 
@@ -126,10 +138,14 @@ describe("auth providers", () => {
   });
 
   it("selects the NIHO provider only with its trusted origin configured", () => {
-    const env = { NODE_ENV: "production", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid" } as const;
+    const env = {
+      NODE_ENV: "production", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid",
+      EDITOR_NIHO_FIREBASE_API_KEY: FIREBASE_WEB_API_KEY,
+    } as const;
     const provider = getAuthProvider(env);
     expect(provider.mode).toBe("niho");
-    expect(getPhotoAuthProvider(env)).toBe(provider);
+    expect(getPhotoAuthProvider(env)).not.toBe(provider);
+    expect(getPhotoAuthProvider(env)?.mode).toBe("niho");
   });
 
   it("keeps the Docs provider while selecting NIHO only for photos with an explicit trusted origin", () => {

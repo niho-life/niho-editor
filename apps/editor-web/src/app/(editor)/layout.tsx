@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { headers } from "next/headers";
 import { EditorFrame } from "@/components/EditorFrame";
+import { AuthSessionRefresher } from "@/components/AuthSessionRefresher";
 import { StoreUnavailable } from "@/components/Notice";
 import { listRecentPages } from "@niho/editor-store";
 import { PAGE_CHUNK } from "@/lib/page-limits";
@@ -34,6 +35,7 @@ export default async function EditorLayout({ children }: { children: ReactNode }
     <EditorFrame
       initial={{ pages: chunk.pages, next: chunk.next, recent, now: renderedAt(), me: frameMe(session), initialNarrow: guessNarrow(requestHeaders) }}
     >
+      {session.mode === "niho" ? <AuthSessionRefresher /> : null}
       {children}
     </EditorFrame>
   );

@@ -28,9 +28,8 @@ export interface AuthProvider {
   /** `/auth/refresh`。cookieを書き替えられるRoute Handlerからだけ呼ぶ。未対応providerは省略する。 */
   refresh?(request: Request): Promise<Response>;
   /**
-   * NIHO の API（`me/docs-drive/*` など）を**本人として**呼ぶための ID token。サーバーの中だけで使い、
-   * ブラウザの JavaScript・storage には渡さない。NIHO editor認証は写真本人確認専用なのでnullのまま
-   * （Google ドキュメントの書き出しは 503 `google_docs_unavailable` のまま）。
+   * NIHO APIを本人として呼ぶためのtoken。browser JavaScript・storageには渡さない。
+   * editor-scoped tokenを受け付けるAPI契約が個別に確定するまでnullのままにする。
    */
   apiToken?(session: Session): Promise<string | null>;
 }

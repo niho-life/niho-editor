@@ -46,9 +46,13 @@ function childEnv(port, mode) {
   delete env.EDITOR_GOOGLE_CLIENT_ID;
   delete env.GOOGLE_OAUTH_CLIENT_SECRET;
   delete env.EDITOR_NIHO_ORIGIN;
+  delete env.EDITOR_NIHO_FIREBASE_API_KEY;
   delete env.EDITOR_ORIGIN;
   if (mode !== undefined) env.EDITOR_AUTH_MODE = mode;
-  if (mode === "niho") env.EDITOR_NIHO_ORIGIN = "https://niho-auth.example.invalid";
+  if (mode === "niho") {
+    env.EDITOR_NIHO_ORIGIN = "https://niho-auth.example.invalid";
+    env.EDITOR_NIHO_FIREBASE_API_KEY = "A".repeat(39);
+  }
   return env;
 }
 
