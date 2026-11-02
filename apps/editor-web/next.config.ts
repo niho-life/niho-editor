@@ -48,7 +48,18 @@ const nextConfig: NextConfig = {
   // Cloud Run の container 用の自己完結の server（Dockerfile）
   output: "standalone",
   // packages/* は TypeScript のまま（install-links で node_modules に複製される）
-  transpilePackages: ["@niho/docs-core", "@niho/editor-publish", "@niho/editor-publish-contract", "@niho/editor-store", "niho-docs-ui", "niho-ui"],
+  transpilePackages: [
+    "@niho/docs-core",
+    "@niho/editor-publish",
+    "@niho/editor-publish-contract",
+    "@niho/editor-store",
+    "@niho/photo-cloud-library",
+    "@niho/photo-library-contract",
+    "niho-docs-ui",
+    "niho-photo-editing",
+    "niho-photo-ui",
+    "niho-ui",
+  ],
   poweredByHeader: false,
   reactStrictMode: true,
   outputFileTracingRoot: process.cwd(),

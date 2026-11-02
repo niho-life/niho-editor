@@ -187,6 +187,17 @@ describe("ShellSidebar", () => {
     expect(shellAccountItems(0).every((item) => !item.badge)).toBe(true);
   });
 
+  it("独立したアプリrouteはページ一覧と分けて表示し、現在地を示す", () => {
+    const html = renderToStaticMarkup(sidebar({
+      appLinks: [{ id: "photo", label: "写真", icon: "img" }],
+      currentAppLinkId: "photo",
+      onAppLinkSelect: noop,
+    }));
+    expect(html).toContain('<nav class="es-sb-appnav" aria-label="アプリ"><ul>');
+    expect(html).toContain('class="es-app-link es-app-link--on" aria-current="page"');
+    expect(html).toContain("写真");
+  });
+
   it("listEnd は一覧の <ul> の直後（<nav> の中）に出る。渡さなければ何も足さない", () => {
     const withEnd = renderToStaticMarkup(sidebar({ listEnd: <div data-list-end="" /> }));
     expect(withEnd).toContain('</ul><div data-list-end=""></div></nav>');

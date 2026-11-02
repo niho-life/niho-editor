@@ -122,6 +122,13 @@ function chunkResponse(pages: PageSummary[], next: string | null): Response {
 }
 
 describe("EditorFrame", () => {
+  it("opens NIHO photo from app navigation", async () => {
+    await mount();
+    expect(container!.querySelector(".es-sb-appnav")?.textContent).toContain("写真");
+    await click(".es-app-link");
+    expect(nav.push).toHaveBeenCalledWith("/photo");
+  });
+
   it("loads the next chunk when the end of the list comes near, one request at a time, deduped, until next is null", async () => {
     let release: (response: Response) => void = () => undefined;
     const fetchMock = vi.fn<(url: string) => Promise<Response>>(
