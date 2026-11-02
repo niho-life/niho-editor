@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   createNihoExperienceAuthProvider,
@@ -77,14 +78,21 @@ function sessionResponse() {
 }
 
 describe("NIHO Experience editor auth", () => {
-  it("creates a PKCE login redirect without contacting the Photo connect API", async () => {
+  it("POSTs PKCE login fields to the fixed NIHO start endpoint without contacting the Photo connect API", async () => {
     const auth = provider(async () => { throw new Error("no upstream request is expected"); }, loginRandomValues());
     const response = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start`), returnTo: "/p/new" });
-    const location = new URL(response.headers.get("location")!);
-    expect([response.status, location.origin, location.pathname]).toEqual([303, NIHO, "/connect/niho-experience-editor"]);
-    expect(location.searchParams.get("state")).toBe(STATE);
-    expect(location.searchParams.get("code_challenge_method")).toBe("S256");
-    expect(location.searchParams.get("code_challenge")).toHaveLength(43);
+    const html = await response.text();
+    const challenge = createHash("sha256").update(VERIFIER, "ascii").digest("base64url");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("content-security-policy")).toContain(`form-action ${NIHO}`);
+    expect(response.headers.get("referrer-policy")).toBe("origin");
+    expect(html).toContain(`action="${NIHO}/connect/niho-experience-editor/start"`);
+    expect(html).toContain(`name="code_challenge" value="${challenge}"`);
+    expect(html).toContain(`name="code_challenge_method" value="S256"`);
+    expect(html).toContain(`name="state" value="${STATE}"`);
+    expect(html).not.toContain("code_challenge=");
+    expect(html).not.toContain("state=");
     expect(response.headers.get("set-cookie")).toContain("HttpOnly; Secure; SameSite=Lax; Path=/");
   });
 
