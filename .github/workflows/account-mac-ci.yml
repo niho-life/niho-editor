@@ -1,0 +1,97 @@
+name: Account Mac CI
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  scope:
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_mac: ${{ steps.scope.outputs.run_mac }}
+    steps:
+      - name: Checkout exact event SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact checkout
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+      - name: Test scope helper
+        run: node --test scripts/ci/account-mac-scope.test.mjs
+      - name: Decide Account Mac scope
+        id: scope
+        run: node scripts/ci/account-mac-scope.mjs
+
+  account-mac:
+    name: Account Rust Mac (1.99.1, macos-26)
+    needs: scope
+    if: ${{ always() && !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && (needs.scope.result != 'success' || needs.scope.outputs.run_mac != 'false') }}
+    runs-on: macos-26
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: packages/desktop-account
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.1
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - name: Checkout exact event SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify hosted ARM64 macOS identity and exact checkout
+        run: |
+          test "$RUNNER_OS" = "macOS"
+          test "$RUNNER_ARCH" = "ARM64"
+          test "$RUNNER_ENVIRONMENT" = "github-hosted"
+          test "$(uname -s)" = "Darwin"
+          test "$(uname -m)" = "arm64"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Cache Rust inputs and target
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            packages/desktop-account/target/
+          key: account-mac-${{ runner.os }}-${{ runner.arch }}-rust-1.99.1-${{ hashFiles('packages/desktop-account/Cargo.lock') }}
+      - name: Setup Rust
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.99.1
+          rustc --version
+          cargo --version
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --locked --all-features --all-targets -- -D warnings
+      - name: Test (core)
+        run: cargo test --locked
+      - name: Test (all features)
+        run: cargo test --locked --all-features
+      - name: Permissions are committed
+        run: git diff --exit-code -- permissions
