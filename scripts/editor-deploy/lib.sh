@@ -9,6 +9,16 @@ DEPLOY_ENV="${DEPLOY_ENV:-$SCRIPT_DIR/deploy.env}"
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
+is_dns_name() {
+  [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]
+}
+
+domain_mapping_names() {
+  [[ -n "$APP_DOMAIN" ]] && printf '%s\n' "$APP_DOMAIN"
+  [[ -n "$PUBLIC_API_DOMAIN" ]] && printf '%s\n' "$PUBLIC_API_DOMAIN"
+  return 0
+}
+
 load_deploy_env() {
   [[ -f "$DEPLOY_ENV" ]] || die "$DEPLOY_ENV is missing: copy scripts/editor-deploy/deploy.env.example and fill it in"
   set -a
@@ -21,6 +31,14 @@ load_deploy_env() {
     [[ -n "${!name:-}" ]] || die "$name is not set in $DEPLOY_ENV"
   done
   APP_DOMAIN="${APP_DOMAIN:-}"
+  PUBLIC_API_DOMAIN="${PUBLIC_API_DOMAIN:-}"
+  if [[ -n "$APP_DOMAIN" ]]; then
+    is_dns_name "$APP_DOMAIN" || die "APP_DOMAIN in $DEPLOY_ENV must be a DNS hostname without scheme, port, path, or trailing dot"
+  fi
+  if [[ -n "$PUBLIC_API_DOMAIN" ]]; then
+    is_dns_name "$PUBLIC_API_DOMAIN" || die "PUBLIC_API_DOMAIN in $DEPLOY_ENV must be a DNS hostname without scheme, port, path, or trailing dot"
+    [[ "$PUBLIC_API_DOMAIN" != "$APP_DOMAIN" ]] || die "PUBLIC_API_DOMAIN and APP_DOMAIN must be different hostnames"
+  fi
   # Login (#47, docs/ops/editor-deploy.md §13). niho uses the dedicated NIHO editor browser-session contract.
   # google remains the temporary way in: Google's sign-in plus an allowlist of addresses. stub never reaches production
   # (the app exits before it opens the port), so the only values accepted here are niho and google.
