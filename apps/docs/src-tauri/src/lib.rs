@@ -2649,7 +2649,7 @@ pub fn run() {
           let _ = window.set_title(DEV_WINDOW_TITLE);
         }
       }
-      // Mac の殻（設計 §13）: 配布版は editor.niho.life を既定で読む。NIHO_DOCS_SHELL=local で同梱画面へ戻せる。
+      // Mac の殻（設計 §13）: 配布版は常に editor.niho.life を読む。同梱画面は開発起動だけで使う。
       // URL は shell.rs の定数だけ。remote から呼べるコマンドは capabilities/remote-editor.json で決まる。
       let shell_mode = shell::shell_mode(std::env::var(shell::SHELL_ENV).ok().as_deref(), dev);
       if let Some(url) = shell::remote_url(shell_mode) {

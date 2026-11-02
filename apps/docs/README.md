@@ -34,7 +34,7 @@ npm -C apps/docs run dev:fake        # 偽の claude・codex・agy と偽の nih
 ### 同梱 editor の旧画面（切り戻し・開発用）
 
 `editor.niho.life` と同じ shell の枠・同じ本文のエディタ（限定 AST・「/」・書式の帯・囲み）で、保管庫のページを一覧して書く画面。
-配布版の既定画面ではなく、`NIHO_DOCS_SHELL=local` で切り戻す同梱画面の一部として残す。`VITE_NIHO_DOCS_EDITOR_SHELL=true` を指定したビルドでこの editor 画面を選べる。旧版データを editor.niho.life へ移行する機能はない。
+開発・旧版検査用に残す同梱画面。配布版からは選べない。`VITE_NIHO_DOCS_EDITOR_SHELL=true` を指定した開発ビルドで選べる。旧版データを editor.niho.life へ移行する機能はない。
 
 ```sh
 VITE_NIHO_DOCS_EDITOR_SHELL=true npm -C apps/docs run dev:fake
@@ -49,7 +49,7 @@ VITE_NIHO_DOCS_EDITOR_SHELL=true npm -C apps/docs run dev:fake
 ### Mac の殻（#45 の T7）
 
 設計（`docs/architecture/editor-niho-life-design.md` §13）のとおり、Mac アプリは **editor.niho.life を読む殻 ＋ 端末の力**になる。
-T7 の第 1〜4 段で殻・録音と端末内の文字起こし・CLI AI・型付き command を実装した。配布版は editor.niho.life を既定で開き、同梱画面への切り戻しは `NIHO_DOCS_SHELL=local` で明示する。開発起動は同梱画面が既定。
+T7 の第 1〜4 段で殻・録音と端末内の文字起こし・CLI AI・型付き command を実装した。配布版は常に editor.niho.life を開く。開発起動は同梱画面が既定で、`NIHO_DOCS_SHELL=remote` なら editor.niho.life を読む。
 
 ```sh
 NIHO_DOCS_SHELL=remote npm -C apps/docs run dev:fake    # editor.niho.life を読む（配布版の既定）

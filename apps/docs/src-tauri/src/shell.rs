@@ -31,8 +31,7 @@ use crate::{AppState, CommandError, CommandResult};
 pub const EDITOR_URL: &str = "https://editor.niho.life";
 /// 開発の画面（`npm -C apps/editor-web run dev`）。開発・試験の起動でだけ使える。
 pub const DEV_EDITOR_URL: &str = "http://localhost:3000";
-/// どの画面を読むかの環境変数。配布版は既定で editor.niho.life、`local` は同梱画面への切り戻し、
-/// `dev` は開発起動だけで使える localhost。
+/// どの画面を読むかの環境変数。配布版は常に editor.niho.life、`local` と `dev` は開発起動だけで使える。
 pub const SHELL_ENV: &str = "NIHO_DOCS_SHELL";
 
 /// 殻が読む画面。
@@ -54,12 +53,12 @@ impl ShellMode {
 }
 
 /// `NIHO_DOCS_SHELL` の値と、開発の起動かどうかから読む画面を決める。
-/// 配布版は未指定または不正な値なら editor.niho.life。開発版は未指定または不正な値なら同梱画面。
+/// 配布版は環境変数の値にかかわらず editor.niho.life。開発版は未指定または不正な値なら同梱画面。
 pub fn shell_mode(value: Option<&str>, dev: bool) -> ShellMode {
   match value.map(str::trim) {
     Some("remote") => ShellMode::Remote,
     Some("dev") if dev => ShellMode::Dev,
-    Some("local") => ShellMode::Local,
+    Some("local") if dev => ShellMode::Local,
     _ if !dev => ShellMode::Remote,
     _ => ShellMode::Local,
   }
@@ -542,7 +541,8 @@ mod tests {
       assert_eq!(shell_mode(value, true), ShellMode::Local, "dev: {value:?}");
       assert_eq!(shell_mode(value, false), ShellMode::Remote, "release: {value:?}");
     }
-    assert_eq!(shell_mode(Some("local"), false), ShellMode::Local);
+    assert_eq!(shell_mode(Some("local"), false), ShellMode::Remote);
+    assert_eq!(shell_mode(Some("local"), true), ShellMode::Local);
     assert_eq!(remote_url(ShellMode::Local), None);
   }
 

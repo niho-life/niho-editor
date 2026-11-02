@@ -46,9 +46,9 @@ Issue #45 の対応表と Mac アプリの切り替え方針です。**機能の
 
 - Mac 専用の画面は作らない。**Tauri が editor.niho.life を読み、端末の力だけを bridge で足す**（設計 §13）。工程設計・AI と作る・版と履歴・公開・発信先・検索はサーバー側にあるものを使う。
 - Mac に残すのは native 層：マイク録音（`niho-speech record`）、端末内の文字起こし（`packages/apple-speech`、`niho-speech` の sidecar）、**CLI の AI（`apps/docs/crates/local-ai`。サブスクのアカウントで起動する旧 NIHO docs の AI チャットの経路は、残すのではなく維持する機能。設計 §6.1）**、ファイル選択、鍵。結果はサーバーの同じ API に書く。一時置き場は文字起こしと AI で 1 つの仕組み（設計 §13）。
-- **旧画面は通常経路から退役**：`DocsApp` 一式、#109 の `EditorScreen`・`vault-pages`・`vault-recordings` は配布版の既定画面にしない。受入確認が済むまでは `NIHO_DOCS_SHELL=local` の切り戻し用に残す。`desktop-vault`（三方向併合）、`DocsStorageMode`、`remote-runner`（スマホから受ける実行）は使わない。
+- **旧画面は配布版から退役**：`DocsApp` 一式、#109 の `EditorScreen`・`vault-pages`・`vault-recordings` は開発・旧版検査用に残し、配布版からは選べない。既存のローカルデータは変更しない。`desktop-vault`（三方向併合）、`DocsStorageMode`、`remote-runner`（スマホから受ける実行）は使わない。
 - 殻の安全性（capability の `remote.urls` を editor.niho.life に限る、command の allowlist、CSP）は設計 §13 に書いたとおり。
-- 配布版は `NIHO_DOCS_SHELL` 未指定なら editor.niho.life を開く。`NIHO_DOCS_SHELL=local` は切り戻し用、`dev` は開発起動だけで localhost を開く。開発起動で未指定なら同梱画面を使う。
+- 配布版は `NIHO_DOCS_SHELL` の値にかかわらず editor.niho.life を開く。`local` は開発・旧版検査だけ、`dev` は開発起動だけで localhost を開く。開発起動で未指定なら同梱画面を使う。
 - T7 の第 1〜4 段は実装済み：remote shell、id だけでの録音・音声選択・端末内文字起こし、CLI AI、型付き command。remote origin と許可 command は Tauri capability で制限し続ける。
 - Mac の UI は別に作らない。editor のログイン・ページ編集・公開は Web と同じ UI/API を使う。native の録音・文字起こし・CLI AI の結果も editor の同じページへ書く。
 

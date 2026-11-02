@@ -245,7 +245,7 @@ Block は段落、見出し（2・3）、箇条書き・番号付き、引用、
   - CLI の AI（Claude Code・Codex・Antigravity CLI。本人のサブスクのアカウントで Mac で動かし、**提案はサーバーの同じ API に書く**。§6.1。「接続中か」と「AI がどこで動くか」は別の軸。これは「残す」ではなく**維持する機能**）
   - 音声ファイルの選択、鍵（Keychain）
   UI は capability を見て「この Mac で」の選択肢を出すだけで、画面は Web と同じ。
-- 配布版は `NIHO_DOCS_SHELL` が未指定なら editor.niho.life を開く。`NIHO_DOCS_SHELL=local` は切り戻し用、`dev` は開発起動だけで localhost を開く。開発起動で未指定なら同梱画面を使う。
+- 配布版は `NIHO_DOCS_SHELL` の値にかかわらず editor.niho.life を開く。`local` は開発・旧版検査だけ、`dev` は開発起動だけで localhost を開く。開発起動で未指定なら同梱画面を使う。
 - **一時置き場は 1 つの仕組み**（端末内の文字起こしも CLI の AI も同じものを使う。2 つ作らない）：
   - 置き場は app data の `staging/<操作の id>/`（0700。`niho-local-ai` の `PrivateDir`・`scratch_dir` と同じ作法）。`~/Documents/NIHO docs` は使わない。
   - 中身：文字起こしは `audio/<file>`（この Mac で録った音声はそのまま、サーバーにある音声は取ってくる）と `context/background.md`。CLI の AI は `page/body.md`（書ける唯一の場所）・`context/*.md`・`instructions.md`（0600）。
