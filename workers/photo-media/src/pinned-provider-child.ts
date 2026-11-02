@@ -161,6 +161,13 @@ async function render(): Promise<unknown> {
   catch { return { ok: false, code: "renderer_unavailable" }; }
 
   try {
+    const wasmErrors: unknown = JSON.parse(runtime.validateSettings(settings.value));
+    if (!Array.isArray(wasmErrors) || wasmErrors.length !== 0) return { ok: false, code: "unsupported_settings" };
+  } catch {
+    return { ok: false, code: "unsupported_settings" };
+  }
+
+  try {
     const scratchStat = await lstat(request.scratchDirectory);
     if (!scratchStat.isDirectory() || scratchStat.isSymbolicLink()) throw new Error("invalid scratch directory");
     const scratch = await realpath(request.scratchDirectory);
@@ -180,8 +187,6 @@ async function render(): Promise<unknown> {
     const dimensions = imageSize(runtime.imageSize(original));
     if (!dimensions || dimensions.width !== request.width || dimensions.height !== request.height
       || dimensions.width < 1 || dimensions.height < 1 || dimensions.width * dimensions.height > MAX_PIXELS) throw new Error("source dimensions mismatch");
-    const wasmErrors: unknown = JSON.parse(runtime.validateSettings(settings.value));
-    if (!Array.isArray(wasmErrors) || wasmErrors.length !== 0) return { ok: false, code: "unsupported_settings" };
     const outputs: { kind: "thumbnail" | "preview"; file: string; width: number; height: number }[] = [];
     for (const [kind, maxEdge] of [["thumbnail", PHOTO_LIMITS.thumbnailMaxEdge], ["preview", PHOTO_LIMITS.previewMaxEdge]] as const) {
       const decodedEdge = runtime.rasterDecodeSize(settings.value, dimensions.width, dimensions.height, maxEdge, MAX_PIXELS);

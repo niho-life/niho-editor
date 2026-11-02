@@ -1,3 +1,5 @@
+import { PHOTO_LIMITS } from "../../../packages/photo-library-contract/src/v1.ts";
+
 const SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const CRC_TABLE = new Uint32Array(256);
 for (let n = 0; n < CRC_TABLE.length; n += 1) {
@@ -64,7 +66,7 @@ export function inspectPng(bytes: Uint8Array, options: { readonly output?: boole
       const compression = input[dataStart + 10]!;
       const filter = input[dataStart + 11]!;
       const interlace = input[dataStart + 12]!;
-      if (!width || !height || width * height > 40_000_000 || ![0, 2, 3, 4, 6].includes(colorType)
+      if (!width || !height || width * height > PHOTO_LIMITS.browserDirectMaxPixels || ![0, 2, 3, 4, 6].includes(colorType)
         || ![1, 2, 4, 8, 16].includes(bitDepth) || compression !== 0 || filter !== 0 || ![0, 1].includes(interlace)) throw new Error("invalid png");
     } else if (type === "IHDR") {
       throw new Error("invalid png");
