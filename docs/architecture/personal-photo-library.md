@@ -16,11 +16,31 @@ Epic #148 / P00 #149。2026-11-01の契約。本文と [`photo-library-contract`
 
 | 面 | 実装先 | 契約 |
 | --- | --- | --- |
-| 個人写真API・Web/PWA・DB・media処理 | `niho-life/niho-editor` | 本文、`packages/photo-library-contract` |
+| 公開API契約・BFF・Web/PWA・独立DB検証・media core | `niho-life/niho-editor` | 本文、`packages/photo-library-contract`、P13の正本接続追補 |
 | 再利用する編集UI・engine・SDK生成器 | `niho-life/niho-photo` | immutable SDK releaseとそのmanifest |
 | Macのクラウド接続・「クラウドにコピー」 | `niho-life/niho-photo` | P08の共通adapterを固定版で採用し、既存cloudBindingへ注入 |
 | NIHOの本人確認・失効・退会イベントの最終接続 | 非公開の認証側 | P01が公開側のverified-actor接続口を満たす。公開へ実URL・鍵・運用値を書かない |
+| 本番の原本・所有権・即時削除lifecycle | NIHOappの本人写真API | NIHOapp #19582。公開側で同じ写真を二重管理しない |
 | 本番のDB/storage/worker権限・署名・配備 | 非公開の運用側 | P13で接続・受入・配布。公開CIから実行しない |
+
+### P13の正本接続（2026-11-02追補）
+
+#156の即時purge方針とNIHOapp #19582に従い、実際の原本・所有権・削除lifecycleはNIHOappの本人写真APIへ集約する。公開側はBFFと共通SDKを接続し、同じ写真や使用量を公開P02と私有台帳へ二重に書かない。P02の独立DB試験と公開handlerは契約・競合・越権の検証に使い、実API接続の完了証跡とは分ける。
+
+`server/photo-private-api/client.ts`はP01で毎回本人を検証し、写真専用のHttpOnly cookieまたはMac bearerを固定されたNIHO接続先の本人写真APIだけへ渡すserver専用口である。DocsのGoogle/Experience credentialや`AuthProvider.apiToken`を流用しない。公開URLやJavaScriptへcredentialを出さず、上流のResponse・Cookie・Location・失敗本文も返さない。一覧・写真詳細は私有DTOのまま検証し、P00のPhoto/Libraryに必要な値を仮造しない。削除は私有APIの204だけを成功とし、公開のPurgeJobや冪等receiptを仮造しない。
+
+実runtimeを接続する前に、以下の差を正本側で解消し、対応するP00 fixtureとBFFを合わせる。
+
+| 公開契約に必要な値・挙動 | 現在の私有API | 残る接続条件 |
+| --- | --- | --- |
+| stable library ID、revision、used/reserved/pending purge内訳 | User所有の写真・5GiB上限 | 正本台帳に基づく本人library projectionを追加する |
+| 原本asset ID、generation、実形式・向き適用後の寸法・撮影日時 | 写真ID、hash、size、拡張子等 | 実byteのprobe結果とimmutable generationのprojectionを用意する。寸法0や架空assetで補完しない |
+| 24時間予約、最大15分ticket、権威ある再開offset、最大256MiB | 30分予約、resumable URI、最大200MiB | 期限を強制するbroker/再開台帳と受入を接続し、採用上限を契約・UI・fixtureで一致させる |
+| SDK gate、recipe/versions、競合した両revision | develop revision・競合候補 | 未知設定の保全、書込み判定、CASと採用操作を対応付ける |
+| thumbnail/preview/working-copy、base、media job | 原本中心の写真DTO | 実providerの検証済み出力・世代・job状態を正本へ接続する |
+| 即時削除、物理削除完了まで容量保持 | 本人DELETE・purge fence・世代削除 | ゴミ箱/restoreを廃止する契約追補と、実際に永続化された削除状態の読取を接続する |
+
+NIHOappの写真flagは既定falseのままとし、migrationの適用履歴、sourceのmerge、私有clientの単体試験だけで有効化しない。退会・PII purge・account mergeのwriterはNIHOapp側の担当を維持する。iPhone/Macの受入を省略した進行では、その結果を完了証跡として記録しない。
 
 `apps/editor-web/src/auth/niho.ts` はP01でNIHO editor専用のopaque browser session consumerになった。ただしfeature flag、双方の固定origin/callback、実アカウントでの受入はP13の配備事項であり、既存のログイン画面や合成テストを本人の写真が本番で使える証拠にしない。
 

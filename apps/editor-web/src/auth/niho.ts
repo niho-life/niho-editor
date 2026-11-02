@@ -148,6 +148,13 @@ function safeCredential(raw: string | null): string | null {
   return raw && raw.length <= 96 && CREDENTIAL_RE.test(raw) ? raw : null;
 }
 
+/** @internal 写真private APIのserver-only clientだけが、検証済みcookie credentialを上流へ中継するために使う。 */
+export function readNihoPhotoApiCredential(request: SessionRequest): string | null {
+  const header = request.headers.get("cookie");
+  if (hasDuplicateCookie(header, NIHO_SESSION_COOKIE)) return null;
+  return safeCredential(singletonCookie(header, NIHO_SESSION_COOKIE));
+}
+
 function sameValue(left: string, right: string): boolean {
   const a = Buffer.from(left, "utf8");
   const b = Buffer.from(right, "utf8");
