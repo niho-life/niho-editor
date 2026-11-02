@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { stubAuthProvider } from "../auth/stub";
 import type { AuthMode } from "../auth/config";
 import type { AuthProvider } from "../auth/types";
-import { finishLogin, logout, logoutPhoto, refresh, refreshPhoto, startLogin, startPhotoLogin, type AuthRoutesDeps } from "./auth-routes";
+import { finishExperienceEditorLogin, finishLogin, logout, logoutPhoto, refresh, refreshPhoto, startLogin, startPhotoLogin, type AuthRoutesDeps } from "./auth-routes";
 
 const ORIGIN = "http://editor.test";
 const ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
@@ -130,6 +130,27 @@ describe("/auth/*", () => {
     expect(await response.text()).toBe('{"error":"internal"}');
     expect(JSON.stringify(log.mock.calls)).not.toContain("secret");
     log.mockRestore();
+  });
+});
+
+describe("/editor/auth/callback", () => {
+  it("routes only POST to the global NIHO provider, not the Photo provider", async () => {
+    const global = recordingProvider("niho").provider;
+    const photo = recordingProvider("niho").provider;
+    const globalComplete = vi.spyOn(global, "completeLogin");
+    const photoComplete = vi.spyOn(photo, "completeLogin");
+    const scoped: AuthRoutesDeps = { auth: () => global, photoAuth: () => photo };
+
+    expect((await finishExperienceEditorLogin(get("/editor/auth/callback"), scoped)).status).toBe(405);
+    expect((await finishExperienceEditorLogin(post("/editor/auth/callback", ORIGIN), scoped)).status).toBe(303);
+    expect(globalComplete).toHaveBeenCalledOnce();
+    expect(photoComplete).not.toHaveBeenCalled();
+  });
+
+  it("is unavailable outside NIHO auth mode", async () => {
+    const response = await finishExperienceEditorLogin(post("/editor/auth/callback", ORIGIN), deps(recordingProvider("google").provider));
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toContain("no-store");
   });
 });
 

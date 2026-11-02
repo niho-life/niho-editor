@@ -30,6 +30,7 @@ load_deploy_env() {
   GOOGLE_OAUTH_CLIENT_ID="${GOOGLE_OAUTH_CLIENT_ID:-}"
   GOOGLE_ALLOWED_EMAILS="${GOOGLE_ALLOWED_EMAILS:-}"
   EDITOR_NIHO_ORIGIN="${EDITOR_NIHO_ORIGIN:-}"
+  EDITOR_NIHO_FIREBASE_API_KEY="${EDITOR_NIHO_FIREBASE_API_KEY:-}"
   # The allowlist is one variable holding a comma-separated list, and gcloud splits --set-env-vars on commas, so with
   # google the whole flag uses gcloud's own escaped-list form (^|^A=1|B=2). '|' appears in none of the values, and the
   # checks below refuse anything that could carry one in.
@@ -43,6 +44,8 @@ load_deploy_env() {
       (( niho_origin_port > 0 && niho_origin_port <= 65535 )) \
         || die "EDITOR_NIHO_ORIGIN in $DEPLOY_ENV has an invalid port"
     fi
+    [[ "$EDITOR_NIHO_FIREBASE_API_KEY" =~ ^[A-Za-z0-9_-]{20,128}$ ]] \
+      || die "EDITOR_NIHO_FIREBASE_API_KEY in $DEPLOY_ENV must be the Firebase Web API key used for NIHO custom-token exchange"
   elif [[ "$EDITOR_AUTH_MODE" == google ]]; then
     ENV_SEP="|"
     ENV_PREFIX="^|^"
@@ -178,7 +181,7 @@ service_secrets() {
 }
 
 # Environment of the web service (`--set-env-vars` also replaces the whole list). The login is EDITOR_AUTH_MODE from
-# deploy.env (niho by default; niho adds only its trusted origin, while google adds the client id and allowlist). stub never gets here: the app refuses to
+# deploy.env (niho by default; niho adds its trusted origin and public Firebase Web API key, while google adds the client id and allowlist). stub never gets here: the app refuses to
 # start with it in production. With google the list is joined with '|' behind gcloud's ^|^ marker, because the allowlist
 # itself holds commas (see load_deploy_env).
 service_env_vars() {
@@ -187,7 +190,8 @@ service_env_vars() {
   printf '%sEDITOR_AUTH_MODE=%s%sEDITOR_ORIGIN=%s%sEDITOR_STORAGE=gcs%sEDITOR_ASSETS_BUCKET=%s' \
     "$ENV_PREFIX" "$EDITOR_AUTH_MODE" "$ENV_SEP" "$(app_origin)" "$ENV_SEP" "$ENV_SEP" "$ASSETS_BUCKET"
   if [[ "$EDITOR_AUTH_MODE" == niho ]]; then
-    printf '%sEDITOR_NIHO_ORIGIN=%s' "$ENV_SEP" "$EDITOR_NIHO_ORIGIN"
+    printf '%sEDITOR_NIHO_ORIGIN=%s%sEDITOR_NIHO_FIREBASE_API_KEY=%s' \
+      "$ENV_SEP" "$EDITOR_NIHO_ORIGIN" "$ENV_SEP" "$EDITOR_NIHO_FIREBASE_API_KEY"
   elif [[ "$EDITOR_AUTH_MODE" == google ]]; then
     printf '%sEDITOR_GOOGLE_CLIENT_ID=%s%sEDITOR_GOOGLE_ALLOWED_EMAILS=%s' \
       "$ENV_SEP" "$GOOGLE_OAUTH_CLIENT_ID" "$ENV_SEP" "$GOOGLE_ALLOWED_EMAILS"

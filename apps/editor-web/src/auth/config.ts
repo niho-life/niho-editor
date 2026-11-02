@@ -2,7 +2,7 @@
  * 認証の方式（#47）。`EDITOR_AUTH_MODE=stub|niho|google`。
  *
  * - stub: 固定の合成ユーザー 1 人。開発と CI だけ。
- * - niho: NIHO editor専用のopaque browser session（src/auth/niho.ts）。
+ * - niho: NIHO Experience editor専用のbrowser session（src/auth/niho-experience.ts）。
  * - google: Google のサインイン ＋ 許可リスト（src/auth/google.ts）。niho の実環境接続を受入するまでの一時的な方式で、
  *   `EDITOR_GOOGLE_ALLOWED_EMAILS` に挙げたアドレスだけが入れる（docs/ops/editor-deploy.md §13）。
  *
@@ -26,6 +26,8 @@ export type AuthEnv = {
   readonly EDITOR_AUTH_MODE?: string | undefined;
   readonly EDITOR_GOOGLE_ALLOWED_EMAILS?: string | undefined;
   readonly EDITOR_NIHO_ORIGIN?: string | undefined;
+  /** Firebase Web API key。公開クライアント設定で、custom token をサーバー側でID tokenへ交換するために使う。 */
+  readonly EDITOR_NIHO_FIREBASE_API_KEY?: string | undefined;
 };
 
 export class AuthConfigError extends Error {
@@ -48,6 +50,11 @@ export function isTrustedNihoOrigin(value: string | undefined): boolean {
     && parsed.search === ""
     && parsed.hash === ""
     && parsed.origin === value;
+}
+
+/** Firebase Web API key は公開クライアント設定。制御文字・区切り文字を含む値は配備へ渡さない。 */
+export function isFirebaseWebApiKey(value: string | undefined): boolean {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{20,128}$/.test(value);
 }
 
 function isAuthMode(value: string): value is AuthMode {
@@ -95,6 +102,9 @@ export function resolveAuthMode(env: AuthEnv): AuthMode {
   }
   if (raw === "niho" && !isTrustedNihoOrigin(env.EDITOR_NIHO_ORIGIN)) {
     throw new AuthConfigError("EDITOR_NIHO_ORIGIN must be an exact HTTPS origin when EDITOR_AUTH_MODE=niho");
+  }
+  if (raw === "niho" && !isFirebaseWebApiKey(env.EDITOR_NIHO_FIREBASE_API_KEY)) {
+    throw new AuthConfigError("EDITOR_NIHO_FIREBASE_API_KEY must be a Firebase Web API key when EDITOR_AUTH_MODE=niho");
   }
   return raw === "" ? "stub" : raw;
 }

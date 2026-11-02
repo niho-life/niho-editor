@@ -11,9 +11,9 @@ import { buildCsp, newNonce } from "@/security/csp";
  */
 export function proxy(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
-  // この3つのRoute Handlerだけが、独立nonceと送信先限定CSPを持つform HTMLを返す。
+  // この4つのRoute Handlerだけが、独立nonceと送信先限定CSPを持つform HTMLを返す。
   // 通常のNext文書用CSPで上書きせず、外から来たCSP/pathも下流へ信用させない。
-  if (["/auth/login/start", "/auth/callback", "/photo/auth/start"].includes(request.nextUrl.pathname)) {
+  if (["/auth/login/start", "/auth/callback", "/photo/auth/start", "/editor/auth/callback"].includes(request.nextUrl.pathname)) {
     requestHeaders.delete("Content-Security-Policy");
     requestHeaders.delete(EDITOR_PATH_HEADER);
     return NextResponse.next({ request: { headers: requestHeaders } });

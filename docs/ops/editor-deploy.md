@@ -29,6 +29,7 @@
 | --- | --- | --- |
 | `EDITOR_AUTH_MODE` | `deploy.env` の `EDITOR_AUTH_MODE`（既定 `niho`） | ログインの方式。本番は `niho` か `google` 以外だと起動しない（[apps/editor-web/README.md](../../apps/editor-web/README.md)）。`google` は §13 の一時的な方式 |
 | `EDITOR_NIHO_ORIGIN` | `deploy.env` の同名設定 | `niho`のときだけ渡す専用接続先。exact HTTPS originだけを許し、未設定・不正なら配備前とアプリ起動時の両方で止める。実値はgit管理外 |
+| `EDITOR_NIHO_FIREBASE_API_KEY` | `deploy.env` の同名設定 | `niho`のときだけ渡すFirebase Web API key。公開クライアント設定で、custom tokenのserver-side交換に使う。実値はignored `deploy.env`だけに置く |
 | `EDITOR_GOOGLE_CLIENT_ID` | `GOOGLE_OAUTH_CLIENT_ID` | `EDITOR_AUTH_MODE=google` のときだけ渡す。OAuth クライアント ID（§13） |
 | `EDITOR_GOOGLE_ALLOWED_EMAILS` | `GOOGLE_ALLOWED_EMAILS` | 同上。入れる人のアドレス（コンマ区切り）。空では起動しない |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Secret | 同上。`niho-editor-google-oauth-secret` の最新の版が有効なときだけ渡す（§13） |
@@ -456,11 +457,18 @@ editor を動かしているのと同じ GCP プロジェクトで行う（別�
 
 ### `niho` に戻す（専用接続を受入したとき）
 
-1. `deploy.env`の`EDITOR_AUTH_MODE`を`niho`に戻し、`EDITOR_NIHO_ORIGIN`へレビュー済みのexact HTTPS originを設定する（実値はcommitしない）。`GOOGLE_OAUTH_CLIENT_ID`・`GOOGLE_ALLOWED_EMAILS`は消してよい（`niho`では渡らない）。
-2. `scripts/editor-deploy/deploy.sh --no-build` — ログに `login: niho (...)`。`--set-env-vars`・`--set-secrets` は毎回の全量なので、Google の環境変数と Secret は前の revision の分も残らない。これで出ているセッションの cookie も読めなくなる（方式が変わると誰も入れない）。
-3. Secret の有効な版をすべて無効にする: `gcloud secrets versions list niho-editor-google-oauth-secret --filter='state:ENABLED'` で版を見て、それぞれ `gcloud secrets versions disable <版> --secret niho-editor-google-oauth-secret`。
-4. Google Cloud のコンソールで OAuth クライアントを削除する（または無効にする）。テストユーザーの登録も消す。
-5. `apps/editor-web/src/auth/google.ts` と `EDITOR_GOOGLE_*` を消す PR を出す（この節も消す）。`src/auth/config.ts` の `AUTH_MODES` から `google` を外せば、設定が残っていても起動しない。
+1. niho-app側の`EXPERIENCE_EDITOR_CONNECT_ENABLED`を有効にし、`EXPERIENCE_EDITOR_CALLBACK_URL`をEditor originと`/editor/auth/callback`に固定する。公開コールバックはrouteで固定され、requestからは受け取らない。
+2. `deploy.env`の`EDITOR_AUTH_MODE`を`niho`に戻し、`EDITOR_NIHO_ORIGIN`と公開Firebase Web API key `EDITOR_NIHO_FIREBASE_API_KEY`を設定する（実値はcommitしない）。`GOOGLE_OAUTH_CLIENT_ID`・`GOOGLE_ALLOWED_EMAILS`は消してよい（`niho`では渡らない）。
+3. `scripts/editor-deploy/deploy.sh --no-build` — 起動確認後に最新revisionへtrafficを向ける。`--set-env-vars`・`--set-secrets` は毎回全量なので、Googleの環境変数とSecretは前revisionから外れる。既存Google cookieはNIHO sessionとして使えず、ログインし直す必要がある。
+4. NIHOアカウントで新規ログインし、ページの作成・保存・再読込・公開APIの公開反映まで確認する。Photo用の同意画面やclient IDへ進まず、Editor用の接続画面に戻ることを確認する。
+5. GoogleのSecret版とOAuth clientは、NIHOログイン受入後に無効化・削除する。Google fallbackのコード削除は別PRで行う。
+
+#### NIHO Experience editor のcallbackとsession
+
+- `niho`は`niho-experience-editor` browser接続を使い、Photoの`niho-editor`接続とはCookie・client ID・callbackを分ける。
+- EditorはPKCE verifierとstateをHttpOnly cookieに置く。NIHOの接続画面からEditorへのcode/stateはquery stringではなくform POSTし、Editor serverがNIHO APIとFirebase Identity Toolkitを呼ぶ。custom token、ID token、refresh tokenはbrowser JavaScriptへ渡さない。
+- EditorはHttpOnly cookieのID tokenでNIHOの専用session endpointを照合する。Firebase ID tokenはserver側で更新し、NIHO connection refresh tokenはconnection期限が近づいた時だけrotateする。
+- `EDITOR_NIHO_FIREBASE_API_KEY`は公開Web設定で、秘密鍵ではない。`deploy.env.example`には合成値だけを置き、実値はignored `deploy.env`へ設定する。ログ・PR・Issueには書かない。
 
 ### 費用と限界
 

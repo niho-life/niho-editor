@@ -36,8 +36,8 @@ describe("proxy", () => {
     expect(response.headers.get("Content-Security-Policy")).not.toContain("attacker");
   });
 
-  it("leaves only the three standalone auth handlers free of proxy CSP/path headers", () => {
-    for (const path of ["/auth/login/start", "/auth/login/start?next=%2Fsettings", "/auth/callback", "/auth/callback?rejected=1", "/photo/auth/start", "/photo/auth/start?next=%2Fphoto%2Ftrash"]) {
+  it("leaves only the standalone auth handlers free of proxy CSP/path headers", () => {
+    for (const path of ["/auth/login/start", "/auth/login/start?next=%2Fsettings", "/auth/callback", "/auth/callback?rejected=1", "/photo/auth/start", "/photo/auth/start?next=%2Fphoto%2Ftrash", "/editor/auth/callback", "/editor/auth/callback?code=secret"]) {
       const response = proxy(new NextRequest(`https://editor.example.test${path}`, {
         headers: {
           "Content-Security-Policy": "script-src 'nonce-attacker'",
@@ -50,7 +50,7 @@ describe("proxy", () => {
       expect(response.headers.get("x-middleware-override-headers"), path).not.toContain("content-security-policy");
     }
 
-    for (const path of ["/auth/login", "/auth/login/start/extra", "/auth/callback/extra", "/photo", "/photo/auth/login", "/photo/auth/start/extra", "/photo/auth/logout", "/photo/auth/refresh", "/settings"]) {
+    for (const path of ["/auth/login", "/auth/login/start/extra", "/auth/callback/extra", "/photo", "/photo/auth/login", "/photo/auth/start/extra", "/photo/auth/logout", "/photo/auth/refresh", "/editor/auth/callback/extra", "/settings"]) {
       const response = proxy(new NextRequest(`https://editor.example.test${path}`));
       expect(response.headers.get("Content-Security-Policy"), path).toContain("script-src 'self' 'nonce-");
       expect(response.headers.get(`x-middleware-request-${EDITOR_PATH_HEADER}`), path).toBe(path);

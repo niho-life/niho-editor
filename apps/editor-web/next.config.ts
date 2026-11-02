@@ -70,9 +70,10 @@ const nextConfig: NextConfig = {
       { source: "/photo-sw.js", headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }] },
       // 写真APIのprivate応答をcatch-allのsame-originへ戻さず、handlerのno-referrer契約を保つ。
       { source: "/api/photo/:path*", headers: [{ key: "Referrer-Policy", value: "no-referrer" }] },
-      // catch-all の same-origin より後で standalone form の exact handler 3 箇所だけを上書きする
+      // catch-all の same-origin より後で standalone form の exact handler 4 箇所だけを上書きする
       { source: "/auth/login/start", headers: AUTH_FORM_HEADERS },
       { source: "/auth/callback", headers: AUTH_FORM_HEADERS },
+      { source: "/editor/auth/callback", headers: AUTH_FORM_HEADERS },
       { source: "/photo/auth/start", headers: AUTH_FORM_HEADERS },
       // 共有リンクのページ（#34）。private・no-store・no-referrer。全体の規則のあとに置いて、同じ key（Referrer-Policy）を上書きする
       { source: "/s/:token*", headers: SHARED_PAGE_HEADERS },

@@ -1,0 +1,184 @@
+import { describe, expect, it } from "vitest";
+import {
+  createNihoExperienceAuthProvider,
+  EXPERIENCE_EDITOR_FIREBASE_REFRESH_COOKIE,
+  EXPERIENCE_EDITOR_ID_TOKEN_COOKIE,
+  EXPERIENCE_EDITOR_PENDING_COOKIE,
+  EXPERIENCE_EDITOR_REFRESH_COOKIE,
+} from "./niho-experience";
+
+const NIHO = "https://niho.example.invalid";
+const EDITOR = "https://editor.example.invalid";
+const API_KEY = "A".repeat(39);
+const NOW = Date.parse("2026-11-02T00:00:00.000Z");
+const STATE = "state_value-12345678901234567890";
+const VERIFIER = "v".repeat(43);
+const CODE = "C".repeat(43);
+const ID_TOKEN = "I".repeat(100);
+const FIREBASE_REFRESH = "F".repeat(43);
+const NIHO_REFRESH = "R".repeat(43);
+const CONNECTION_ID = "synthetic-connection-id";
+const USER_ID = "synthetic-niho-user";
+const CONNECTION_EXPIRY = new Date(NOW + 180 * 24 * 60 * 60 * 1000).toISOString();
+
+function loginRandomValues() {
+  const values = [STATE, VERIFIER];
+  return () => values.shift() ?? VERIFIER;
+}
+
+function json(value: unknown, status = 200) {
+  return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+}
+
+function provider(fetch: typeof globalThis.fetch, randomValue = () => VERIFIER) {
+  return createNihoExperienceAuthProvider({
+    env: () => ({ EDITOR_NIHO_ORIGIN: NIHO, EDITOR_ORIGIN: EDITOR, EDITOR_NIHO_FIREBASE_API_KEY: API_KEY }),
+    fetch,
+    now: () => NOW,
+    randomValue,
+  });
+}
+
+function formPost(origin: string, cookie: string | null, fields = { code: CODE, state: STATE }) {
+  return new Request(`${EDITOR}/editor/auth/callback`, {
+    method: "POST",
+    headers: {
+      origin,
+      host: new URL(EDITOR).host,
+      "content-type": "application/x-www-form-urlencoded",
+      ...(cookie ? { cookie } : {}),
+    },
+    body: new URLSearchParams(fields),
+  });
+}
+
+function pendingCookie(response: Response): string {
+  const cookie = response.headers.get("set-cookie");
+  expect(cookie).toMatch(new RegExp(`^${EXPERIENCE_EDITOR_PENDING_COOKIE}=`));
+  return cookie!.split(";", 1)[0]!;
+}
+
+function connectionResponse() {
+  return {
+    customToken: "synthetic-custom-token-value-1234567890",
+    refreshToken: NIHO_REFRESH,
+    connectionId: CONNECTION_ID,
+    connectionExpiresAt: CONNECTION_EXPIRY,
+    user: { id: USER_ID, displayName: null, handle: null, iconImage: null },
+  };
+}
+
+function sessionResponse() {
+  return {
+    actor: { id: USER_ID },
+    connection: { id: CONNECTION_ID, expiresAt: CONNECTION_EXPIRY },
+    account: { active: true },
+  };
+}
+
+describe("NIHO Experience editor auth", () => {
+  it("creates a PKCE login redirect without contacting the Photo connect API", async () => {
+    const auth = provider(async () => { throw new Error("no upstream request is expected"); }, loginRandomValues());
+    const response = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start`), returnTo: "/p/new" });
+    const location = new URL(response.headers.get("location")!);
+    expect([response.status, location.origin, location.pathname]).toEqual([303, NIHO, "/connect/niho-experience-editor"]);
+    expect(location.searchParams.get("state")).toBe(STATE);
+    expect(location.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(location.searchParams.get("code_challenge")).toHaveLength(43);
+    expect(response.headers.get("set-cookie")).toContain("HttpOnly; Secure; SameSite=Lax; Path=/");
+  });
+
+  it("relays NIHO's callback form to the same-origin Editor callback without URL fields", async () => {
+    const auth = provider(async () => { throw new Error("callback relay does not call the API"); });
+    const response = await auth.completeLogin(formPost(NIHO, null));
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-security-policy")).toContain("form-action 'self'");
+    expect(html).toContain(`action="${EDITOR}/editor/auth/callback"`);
+    expect(html).toContain(`name="code" value="${CODE}"`);
+    expect(html).toContain(`name="state" value="${STATE}"`);
+    expect(response.headers.get("location")).toBeNull();
+  });
+
+  it("exchanges the form code server-side and stores only HttpOnly cookies", async () => {
+    const auth = provider(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/auth/experience-editor-connect/exchange")) return json(connectionResponse());
+      if (url.includes("identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken")) {
+        return json({ idToken: ID_TOKEN, refreshToken: FIREBASE_REFRESH, expiresIn: "3600", localId: "firebase-user" });
+      }
+      if (url.endsWith("/api/auth/experience-editor-connect/session")) return json(sessionResponse());
+      throw new Error("unexpected upstream URL");
+    }, loginRandomValues());
+    const started = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start`), returnTo: "/p/new" });
+    const response = await auth.completeLogin(formPost(EDITOR, pendingCookie(started)));
+    expect([response.status, response.headers.get("location")]).toEqual([303, "/p/new"]);
+    const cookies = response.headers.getSetCookie();
+    expect(cookies.some((cookie) => cookie.startsWith(`${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN};`))).toBe(true);
+    expect(cookies.some((cookie) => cookie.startsWith(`${EXPERIENCE_EDITOR_FIREBASE_REFRESH_COOKIE}=${FIREBASE_REFRESH};`))).toBe(true);
+    expect(cookies.some((cookie) => cookie.startsWith(`${EXPERIENCE_EDITOR_REFRESH_COOKIE}=${NIHO_REFRESH};`))).toBe(true);
+    expect(cookies.every((cookie) => cookie.includes("HttpOnly; Secure; SameSite=Lax; Path=/"))).toBe(true);
+    expect(JSON.stringify(response.headers)).not.toContain(ID_TOKEN);
+  });
+
+  it("validates the NIHO session for each request and never exposes its editor token through apiToken", async () => {
+    const auth = provider(async (input) => {
+      expect(String(input)).toBe(`${NIHO}/api/auth/experience-editor-connect/session`);
+      return json(sessionResponse());
+    });
+    const session = await auth.getSession({ headers: new Headers({ cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}` }) });
+    expect(session).toEqual({ userId: USER_ID, mode: "niho", sessionId: CONNECTION_ID, expiresAt: CONNECTION_EXPIRY });
+    expect(await auth.apiToken?.(session!)).toBeNull();
+  });
+
+  it("refreshes Firebase ID tokens server-side and confirms the connection remains active", async () => {
+    const auth = provider(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith("https://securetoken.googleapis.com/v1/token?key=")) {
+        expect(init?.headers).toMatchObject({ "content-type": "application/x-www-form-urlencoded" });
+        expect(String(init?.body)).toContain(`refresh_token=${FIREBASE_REFRESH}`);
+        return json({ id_token: "J".repeat(100), refresh_token: "G".repeat(43), expires_in: "3600", user_id: "firebase-user" });
+      }
+      if (url.endsWith("/api/auth/experience-editor-connect/session")) return json(sessionResponse());
+      throw new Error("unexpected upstream URL");
+    });
+    const expiry = String(NOW + 90 * 24 * 60 * 60 * 1000);
+    const response = await auth.refresh!(new Request(`${EDITOR}/auth/refresh`, {
+      method: "POST",
+      headers: {
+        origin: EDITOR,
+        cookie: [
+          `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}`,
+          `${EXPERIENCE_EDITOR_FIREBASE_REFRESH_COOKIE}=${FIREBASE_REFRESH}`,
+          `${EXPERIENCE_EDITOR_REFRESH_COOKIE}=${NIHO_REFRESH}`,
+          `__Host-editor-experience-expiry=${expiry}`,
+        ].join("; "),
+      },
+    }));
+    expect(response.status).toBe(200);
+    expect(response.headers.getSetCookie().join("\n")).toContain("__Host-editor-experience-id=JJJJ");
+    expect(await response.text()).not.toContain("J".repeat(100));
+  });
+
+  it("rejects a callback from an untrusted origin and a state mismatch", async () => {
+    const auth = provider(async () => { throw new Error("invalid callback must not call upstream"); }, loginRandomValues());
+    const started = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start`), returnTo: "/settings" });
+    const cookie = pendingCookie(started);
+    expect((await auth.completeLogin(formPost("https://attacker.example.invalid", cookie))).status).toBe(400);
+    expect((await auth.completeLogin(formPost(EDITOR, cookie, { code: CODE, state: "wrong_state-1234567890" }))).headers.get("location"))
+      .toBe("/auth/login?next=%2Fsettings&error=unavailable");
+  });
+
+  it("rejects a callback request that was already aborted before its body is read", async () => {
+    const auth = provider(async () => { throw new Error("aborted callback must not call upstream"); });
+    const controller = new AbortController();
+    controller.abort();
+    const request = new Request(`${EDITOR}/editor/auth/callback`, {
+      method: "POST",
+      headers: { origin: NIHO, host: new URL(EDITOR).host, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ code: CODE, state: STATE }),
+      signal: controller.signal,
+    });
+    expect((await auth.completeLogin(request)).status).toBe(400);
+  });
+});

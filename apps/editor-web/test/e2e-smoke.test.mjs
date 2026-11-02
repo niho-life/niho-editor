@@ -35,7 +35,10 @@ async function startDev(mode, readyStatus, extraEnv = {}) {
   const base = `http://127.0.0.1:${port}`;
   const env = {
     ...process.env,
-    ...(mode === "niho" ? { EDITOR_NIHO_ORIGIN: "https://niho-auth.example.invalid" } : {}),
+    ...(mode === "niho" ? {
+      EDITOR_NIHO_ORIGIN: "https://niho-auth.example.invalid",
+      EDITOR_NIHO_FIREBASE_API_KEY: "A".repeat(39),
+    } : {}),
     ...extraEnv,
     EDITOR_AUTH_MODE: mode,
     NEXT_TELEMETRY_DISABLED: "1",
@@ -1331,6 +1334,7 @@ describe("public API v1 (production build, PostgreSQL)", () => {
       NODE_ENV: "production",
       EDITOR_AUTH_MODE: "niho",
       EDITOR_NIHO_ORIGIN: "https://niho-auth.example.invalid",
+      EDITOR_NIHO_FIREBASE_API_KEY: "A".repeat(39),
       DATABASE_URL: schemaUrl,
       EDITOR_FACE_CREDENTIALS: JSON.stringify([{ audience: "exp", sha256: sha256(expToken), expiresAt: at(60) }]),
       // 公開のシート（#39）と同じ写真の置き場（プレビューの写真の URL）

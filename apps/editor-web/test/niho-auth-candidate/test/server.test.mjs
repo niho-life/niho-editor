@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { createHandler } from "../dist/app.mjs";
 import { createAcceptanceServer } from "../dist/server.mjs";
 
-const env = { NODE_ENV: "production", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid", EDITOR_ORIGIN: "https://candidate.example.invalid" };
+const env = { NODE_ENV: "production", EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid", EDITOR_NIHO_FIREBASE_API_KEY: "A".repeat(39), EDITOR_ORIGIN: "https://candidate.example.invalid" };
 const manifest = { sourceCommit: "0".repeat(40), hashes: {} };
 const cookieName = "__Host-editor-niho-session";
 function provider() {
@@ -43,7 +43,7 @@ async function serve(t, auth = provider()) {
 }
 
 test("候補はNIHO固定で設定不足・Google・stubを起動前に拒否する", () => {
-  for (const config of [{ ...env, EDITOR_AUTH_MODE: "stub" }, { ...env, EDITOR_AUTH_MODE: "google" }, { ...env, EDITOR_ORIGIN: "" }, { ...env, EDITOR_NIHO_ORIGIN: "" }]) {
+  for (const config of [{ ...env, EDITOR_AUTH_MODE: "stub" }, { ...env, EDITOR_AUTH_MODE: "google" }, { ...env, EDITOR_ORIGIN: "" }, { ...env, EDITOR_NIHO_ORIGIN: "" }, { ...env, EDITOR_NIHO_FIREBASE_API_KEY: "" }]) {
     assert.throws(() => createHandler(config, manifest, provider()));
   }
 });

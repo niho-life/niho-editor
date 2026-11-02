@@ -17,6 +17,7 @@ use crate::pc_runner_api::{
   PcRunnerApi, PcRunnerTransport, ProviderId, Registration, ReqwestTransport, SessionToken, StepEffort, StepKind,
   MAX_CANDIDATE_BYTES, MAX_SYSTEM_PROMPT_BYTES, MAX_USER_PROMPT_BYTES,
 };
+use crate::shell::ShellMode;
 use crate::{AppState, CommandError, CommandResult};
 use chrono::{DateTime, Utc};
 use niho_desktop_account::AccountService;
@@ -753,7 +754,7 @@ impl PcRunner {
 
   /// 起動時（`.setup`。AppState と Cloud を入れた後）。ON なら、ログイン時の起動の登録（実行ファイルの場所が変われば書き直す）と
   /// メニューバーを出してから、窓と関係なく裏のループを始める。
-  pub(crate) fn start(app: &tauri::AppHandle, log: LogFn) -> Self {
+  pub(crate) fn start(app: &tauri::AppHandle, log: LogFn, shell_mode: ShellMode) -> Self {
     let service = app
       .try_state::<niho_desktop_account::tauri::AccountHandle>()
       .map(|handle| handle.service().clone());
@@ -772,7 +773,8 @@ impl PcRunner {
       app: app.clone(),
       log: log.clone(),
     });
-    let enabled = read_enabled(&host.app().data_dir);
+    let allowed = shell_mode.allows_pc_runner();
+    let enabled = allowed && read_enabled(&host.app().data_dir);
     let runner = Self::new(
       host,
       account,
@@ -781,15 +783,19 @@ impl PcRunner {
       log,
       enabled,
     );
-    if let Some(service) = service {
-      // ログイン・ログアウト・オフラインからの戻りで、待っているループを起こす
-      let wake = runner.inner.wake.clone();
-      service.subscribe(move |_| wake.notify_one());
+    if allowed {
+      if let Some(service) = service {
+        // ログイン・ログアウト・オフラインからの戻りで、待っているループを起こす
+        let wake = runner.inner.wake.clone();
+        service.subscribe(move |_| wake.notify_one());
+      }
     }
     if enabled && runner.inner.host.resident_on(&runner.status()).is_err() {
       runner.inner.log("pc_runner.login_item_failed", json!({}));
     }
-    runner.spawn_loop();
+    if allowed {
+      runner.spawn_loop();
+    }
     runner
   }
 

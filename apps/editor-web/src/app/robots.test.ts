@@ -68,12 +68,12 @@ describe("noindex, nofollow", () => {
     expect((await configHeaders("/photo-sw.js")).get("Cache-Control")).toBe("no-cache, must-revalidate");
   });
 
-  it("overrides Referrer-Policy only on the three exact auth form handlers", async () => {
+  it("overrides Referrer-Policy only on the exact auth form handlers", async () => {
     expect(AUTH_FORM_HEADERS).toEqual([{ key: "Referrer-Policy", value: "origin" }]);
-    for (const path of ["/auth/login/start", "/auth/login/start?next=%2Fsettings", "/auth/callback", "/photo/auth/start", "/photo/auth/start?next=%2Fphoto%2Ftrash"]) {
+    for (const path of ["/auth/login/start", "/auth/login/start?next=%2Fsettings", "/auth/callback", "/photo/auth/start", "/photo/auth/start?next=%2Fphoto%2Ftrash", "/editor/auth/callback"]) {
       expect((await configHeaders(path)).get("Referrer-Policy"), path).toBe("origin");
     }
-    for (const path of ["/auth/login", "/auth/login/start/extra", "/auth/callback/extra", "/photo", "/photo/auth/login", "/photo/auth/start/extra", "/photo/auth/logout", "/photo/auth/refresh", "/settings"]) {
+    for (const path of ["/auth/login", "/auth/login/start/extra", "/auth/callback/extra", "/photo", "/photo/auth/login", "/photo/auth/start/extra", "/photo/auth/logout", "/photo/auth/refresh", "/editor/auth/callback/extra", "/settings"]) {
       expect((await configHeaders(path)).get("Referrer-Policy"), path).toBe("same-origin");
     }
     expect((await configHeaders("/s/synthetic-token")).get("Referrer-Policy")).toBe("no-referrer");

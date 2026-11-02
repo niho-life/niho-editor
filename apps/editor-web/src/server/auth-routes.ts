@@ -75,6 +75,16 @@ export function finishLogin(request: Request, deps: AuthRoutesDeps): Promise<Res
   });
 }
 
+/** POST /editor/auth/callback — NIHO Experience editor専用のcallback。PhotoとGoogle callbackを共有しない。 */
+export function finishExperienceEditorLogin(request: Request, deps: AuthRoutesDeps): Promise<Response> {
+  return guarded(`${request.method} /editor/auth/callback`, async () => {
+    const provider = deps.auth();
+    if (provider.mode !== "niho") return unavailable();
+    if (request.method !== "POST") return methodNotAllowed("POST");
+    return noStore(await provider.completeLogin(request));
+  });
+}
+
 /** GET /photo/auth/start — 写真のNIHOログインだけを始める。 */
 export function startPhotoLogin(request: Request, deps: AuthRoutesDeps): Promise<Response> {
   return guarded("GET /photo/auth/start", async () => {
