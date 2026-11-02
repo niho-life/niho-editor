@@ -129,7 +129,6 @@ describe("Deepgram engine", () => {
       durationSec: 12.5,
       segments: [
         { start: 0.5, end: 3, speaker: 0, text: "合成の一つ目です。" },
-        { start: 3.2, end: 4, speaker: 1, text: " " },
         { start: 4.1, end: 9, speaker: 1, text: "合成の二つ目です。" },
         { start: 9.5, end: 10, speaker: null, text: "話者なし" },
       ],
@@ -197,12 +196,12 @@ describe("Deepgram engine", () => {
     expect((await failureOf(pending)).code).toBe("timeout");
   });
 
-  it("answers bad_response for JSON it cannot read, and missing or empty utterances", async () => {
+  it("answers bad_response for JSON it cannot read or responses without any transcript text", async () => {
     for (const response of [
       new Response("not json", { status: 200 }),
       new Response(new Uint8Array([0xff, 0xfe]), { status: 200 }),
-      json({ results: { channels: [{ alternatives: [{ transcript: "合成の全文" }] }] } }),
       json({ results: { utterances: [] } }),
+      json({ results: { channels: [{ alternatives: [{ transcript: " " }] }], utterances: [] } }),
       json({ results: { utterances: [{ start: 0, end: 1, speaker: 0 }] } }),
       json({ results: { utterances: "nope" } }),
       json([]),
@@ -254,6 +253,19 @@ describe("Deepgram engine", () => {
 });
 
 describe("parseDeepgramResponse", () => {
+  it("falls back to channel transcripts when utterances are missing, empty, or unusable", () => {
+    for (const results of [
+      { channels: [{ alternatives: [{ transcript: " 全文 です " }] }] },
+      { channels: [{ alternatives: [{ transcript: "全文 です" }] }], utterances: [] },
+      { channels: [{ alternatives: [{ transcript: "全文 です" }] }], utterances: [{ transcript: " " }] },
+    ]) {
+      expect(parseDeepgramResponse({ metadata: { duration: 12 }, results })).toEqual({
+        durationSec: 12,
+        segments: [{ start: null, end: null, text: "全文 です", speaker: null }],
+      });
+    }
+  });
+
   it("keeps Deepgram's speaker numbers, drops malformed utterances and reads a non-negative duration", () => {
     const parsed = parseDeepgramResponse({
       metadata: { duration: -1 },
