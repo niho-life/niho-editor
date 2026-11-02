@@ -39,6 +39,7 @@ export type PhotoId = string;
 export type AssetId = string;
 export type UploadId = string;
 export type JobId = string;
+export type RecipeConflictId = string;
 /** Lowercase 64-character hex; numbers below must be finite safe integers. */
 export type Sha256 = string;
 export type Instant = string;
@@ -265,6 +266,39 @@ export interface VersionSet {
   readonly revision: number;
   readonly versions: readonly NamedVersion[];
 }
+/** Server-retained stale recipe write; content stays recoverable until its photo is purged. */
+export interface RecipeCandidate {
+  readonly settings: RecipeDocument["settings"];
+  readonly baseVersion: string | null;
+  readonly settingsSha256: Sha256;
+  readonly maskSurfaceIds: readonly Sha256[];
+}
+export interface RecipeConflict {
+  readonly id: RecipeConflictId;
+  /** Revision the writer edited from. */
+  readonly expectedRevision: number;
+  /** Current recipe revision observed atomically when the stale write arrived. */
+  readonly currentRevision: number;
+  /** Full stale payload, preserved without normalization. */
+  readonly conflictingRecipe: RecipeCandidate;
+  /** Exact winning branch at conflict time, retained after later recipe writes. */
+  readonly currentRecipe: RecipeDocument;
+  readonly createdAt: Instant;
+  readonly resolution: "adopt" | "keep-current" | null;
+  readonly resolvedAt: Instant | null;
+  /** New active recipe revision after adoption, or the retained current revision after keep-current. */
+  readonly resultingRevision: number | null;
+}
+export interface RecipeConflictPage {
+  readonly items: readonly RecipeConflict[];
+  readonly nextCursor: string | null;
+  readonly currentRevision: number;
+}
+export interface RecipeConflictResolution {
+  readonly conflict: RecipeConflict;
+  /** The active recipe after the explicit owner choice. */
+  readonly recipe: RecipeDocument;
+}
 export interface PurgeJob {
   readonly id: JobId;
   readonly state: "queued" | "running" | "completed" | "retrying";
@@ -302,6 +336,8 @@ export interface PhotoErrorEnvelope {
     readonly requestId: string;
     readonly retryable: boolean;
     readonly currentRevision?: number;
+    /** Set when a stale recipes.put payload was durably retained for owner choice. */
+    readonly conflictId?: RecipeConflictId;
     readonly retryAfterSeconds?: number;
   };
 }
@@ -349,6 +385,12 @@ export interface PhotoOperationMap {
     readonly expectedRevision: number;
     readonly versions: readonly NamedVersion[];
   }, MutationReceipt<VersionSet>>;
+  readonly "recipe-conflicts.list": Operation<Id & { readonly cursor?: string; readonly limit?: number }, RecipeConflictPage>;
+  readonly "recipe-conflicts.resolve": Operation<Id & {
+    readonly conflictId: RecipeConflictId;
+    readonly expectedRevision: number;
+    readonly decision: "adopt" | "keep-current";
+  }, MutationReceipt<RecipeConflictResolution>>;
   readonly "media.ensure": Operation<Id & { readonly recipeRevision: number }, MutationReceipt<MediaState>>;
   readonly "photos.trash": Operation<Id, MutationReceipt<Photo>>;
   readonly "photos.restore": Operation<Id, MutationReceipt<Photo>>;
@@ -378,6 +420,8 @@ export const PHOTO_ROUTES = {
   "recipes.put": { method: "PUT", path: "/photos/{photoId}/recipe", idempotency: "required" },
   "versions.get": { method: "GET", path: "/photos/{photoId}/versions", idempotency: "none" },
   "versions.put": { method: "PUT", path: "/photos/{photoId}/versions", idempotency: "required" },
+  "recipe-conflicts.list": { method: "GET", path: "/photos/{photoId}/recipe-conflicts", idempotency: "none" },
+  "recipe-conflicts.resolve": { method: "POST", path: "/photos/{photoId}/recipe-conflicts/{conflictId}/resolve", idempotency: "required" },
   "media.ensure": { method: "POST", path: "/photos/{photoId}/media", idempotency: "required" },
   "photos.trash": { method: "POST", path: "/photos/{photoId}/trash", idempotency: "required" },
   "photos.restore": { method: "POST", path: "/photos/{photoId}/restore", idempotency: "required" },
