@@ -1195,14 +1195,14 @@ describe("editor-web e2e (niho session boundary, next dev)", () => {
     await dev?.stop();
   });
 
-  it("sends an unauthenticated visitor to /auth/login with the screen as next", async () => {
+  it("sends an unauthenticated NIHO visitor to login recovery with the screen as next", async () => {
     const id = randomUUID();
     for (const [path, expected, headers] of [
-      [`/p/${id}`, `/auth/login?next=%2Fp%2F${id}`, {}],
-      ["/p/new?from=recording", "/auth/login?next=%2Fp%2Fnew%3Ffrom%3Drecording", {}],
-      ["/settings", "/auth/login?next=%2Fsettings", { "x-editor-path": "//evil.example" }],
-      ["/", "/auth/login", {}],
-      ["/p/not-a-uuid", "/auth/login", {}],
+      [`/p/${id}`, `/auth/login?next=%2Fp%2F${id}&recover=1`, {}],
+      ["/p/new?from=recording", "/auth/login?next=%2Fp%2Fnew%3Ffrom%3Drecording&recover=1", {}],
+      ["/settings", "/auth/login?next=%2Fsettings&recover=1", { "x-editor-path": "//evil.example" }],
+      ["/", "/auth/login?recover=1", {}],
+      ["/p/not-a-uuid", "/auth/login?recover=1", {}],
     ]) {
       const response = await fetch(`${base}${path}`, { redirect: "manual", headers });
       assert.equal(response.status, 307, path);
@@ -1250,7 +1250,7 @@ describe("editor-web e2e (niho session boundary, next dev)", () => {
     // 共有したページでも、editor の画面はログインへ
     const editor = await fetch(`${base}/p/${pageId}`, { redirect: "manual" });
     assert.equal(editor.status, 307);
-    assert.equal(editor.headers.get("location"), `/auth/login?next=%2Fp%2F${pageId}`);
+    assert.equal(editor.headers.get("location"), `/auth/login?next=%2Fp%2F${pageId}&recover=1`);
   });
 });
 
@@ -1267,14 +1267,14 @@ describe("editor-web e2e (niho session boundary, next dev)", () => {
     await dev?.stop();
   });
 
-  it("sends an unauthenticated visitor to /auth/login with the screen as next", async () => {
+  it("sends an unauthenticated NIHO visitor to login recovery with the screen as next", async () => {
     const id = randomUUID();
     for (const [path, expected, headers] of [
-      [`/p/${id}`, `/auth/login?next=%2Fp%2F${id}`, {}],
-      ["/p/new?from=recording", "/auth/login?next=%2Fp%2Fnew%3Ffrom%3Drecording", {}],
-      ["/settings", "/auth/login?next=%2Fsettings", { "x-editor-path": "//evil.example" }],
-      ["/", "/auth/login", {}],
-      ["/p/not-a-uuid", "/auth/login", {}],
+      [`/p/${id}`, `/auth/login?next=%2Fp%2F${id}&recover=1`, {}],
+      ["/p/new?from=recording", "/auth/login?next=%2Fp%2Fnew%3Ffrom%3Drecording&recover=1", {}],
+      ["/settings", "/auth/login?next=%2Fsettings&recover=1", { "x-editor-path": "//evil.example" }],
+      ["/", "/auth/login?recover=1", {}],
+      ["/p/not-a-uuid", "/auth/login?recover=1", {}],
     ]) {
       const response = await fetch(`${base}${path}`, { redirect: "manual", headers });
       assert.equal(response.status, 307, path);

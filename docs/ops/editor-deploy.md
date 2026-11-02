@@ -467,7 +467,7 @@ editor を動かしているのと同じ GCP プロジェクトで行う（別�
 
 - `niho`は`niho-experience-editor` browser接続を使い、Photoの`niho-editor`接続とはCookie・client ID・callbackを分ける。
 - EditorはPKCE verifierとstateをHttpOnly cookieに置き、NIHOの固定`/start` endpointへchallenge/stateをform POSTする。NIHO Webは設定済みのEditor originを検証して短命HttpOnly cookieに移し、queryのない接続画面を返す。NIHOからEditorへのcode/stateもquery stringではなくform POSTし、Editor serverがNIHO APIとFirebase Identity Toolkitを呼ぶ。custom token、ID token、refresh tokenはbrowser JavaScriptへ渡さない。
-- EditorはHttpOnly cookieのID tokenでNIHOの専用session endpointを照合する。Firebase ID tokenはserver側で更新し、NIHO connection refresh tokenはconnection期限が近づいた時だけrotateする。
+- EditorはHttpOnly cookieのID tokenでNIHOの専用session endpointを照合する。Firebase ID tokenはserver側で更新し、NIHO connection refresh tokenはconnection期限が近づいた時だけrotateする。認証済み画面はマウント時に更新を確認し、前回成功から35分後に次を試す。ID tokenが無効で保護画面からloginへ戻る場合も、safe return pathを保ったlogin画面から同一originの`POST /auth/refresh`を一度試し、成功時はServer Componentを再読込して元の画面へ戻す。更新cookieが無効なら通常のNIHOログインへ進み、一時的な通信失敗はtokenや応答本文を出さず再試行できる。
 - `EDITOR_NIHO_FIREBASE_API_KEY`は公開Web設定で、秘密鍵ではない。`deploy.env.example`には合成値だけを置き、実値はignored `deploy.env`へ設定する。ログ・PR・Issueには書かない。
 
 ### 費用と限界

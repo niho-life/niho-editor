@@ -156,7 +156,6 @@ describe("NIHO Experience editor auth", () => {
       headers: {
         origin: EDITOR,
         cookie: [
-          `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}`,
           `${EXPERIENCE_EDITOR_FIREBASE_REFRESH_COOKIE}=${FIREBASE_REFRESH}`,
           `${EXPERIENCE_EDITOR_REFRESH_COOKIE}=${NIHO_REFRESH}`,
           `__Host-editor-experience-expiry=${expiry}`,
