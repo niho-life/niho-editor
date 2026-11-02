@@ -13,9 +13,10 @@ import { EngineError, type EngineErrorCode, type EngineInput, type EngineResult,
  * - 本文は音声のバイト列そのまま（保存先から読み出した stream をそのまま流す。Node の fetch は `duplex: "half"` が要る）。
  *   header は `Authorization: Token <鍵>`・`Content-Type: <音声の種類>`・`Content-Length: <大きさ>`。
  * - 応答は 64 MiB まで読み、`results.utterances[]`（start・end・speaker・transcript）と `metadata.duration` を読む。
+ *   使用できる utterance が無いときは channel の先頭 alternative transcript を時刻なしの 1 段落として使う（Mac 版と同じ）。
  *
  * 失敗の写し方: 届かない・401・402・403・429・5xx は unavailable、400・413・415・422 は rejected、408・時間切れ・中断は timeout、
- * JSON でない・utterances が無い／空は bad_response、応答が 64 MiB を超えたら too_large。
+ * JSON でない・utterance と channel transcript が両方無い／空は bad_response、応答が 64 MiB を超えたら too_large。
  * 鍵・音声・応答の本文・URL は、ログにもエラーにも出さない（このファイルはログを書かず、エラーは固定の文の EngineError だけ）。
  * リダイレクトは辿らない（鍵を別の場所へ送らない）。実 Deepgram は 2026-11-02 に短尺・1 時間の合成音声で確認済み（実録音の品質と NIHO 認証は別途受入）。
  */
@@ -108,23 +109,38 @@ function finiteOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-/** 応答の JSON → 生の結果（話者は Deepgram の 0 始まりの番号のまま）。utterances が無い・空・形が違えば bad_response。 */
+/** 応答の JSON → 生の結果。使用できる utterance が無い場合は channel 全文を時刻なしで使う。 */
 export function parseDeepgramResponse(value: unknown): EngineResult {
   const results = isRecord(value) ? value.results : undefined;
   const utterances = isRecord(results) ? results.utterances : undefined;
-  if (!Array.isArray(utterances) || utterances.length === 0) throw new EngineError("bad_response");
   const segments: RecordingSegment[] = [];
-  for (const utterance of utterances) {
-    if (!isRecord(utterance) || typeof utterance.transcript !== "string") continue;
-    const speaker = utterance.speaker;
-    segments.push({
-      start: finiteOrNull(utterance.start),
-      end: finiteOrNull(utterance.end),
-      text: utterance.transcript,
-      speaker: typeof speaker === "number" && Number.isSafeInteger(speaker) && speaker >= 0 ? speaker : null,
-    });
+  if (Array.isArray(utterances)) {
+    for (const utterance of utterances) {
+      if (!isRecord(utterance) || typeof utterance.transcript !== "string") continue;
+      const transcript = utterance.transcript.trim();
+      if (!transcript) continue;
+      const speaker = utterance.speaker;
+      segments.push({
+        start: finiteOrNull(utterance.start),
+        end: finiteOrNull(utterance.end),
+        text: transcript,
+        speaker: typeof speaker === "number" && Number.isSafeInteger(speaker) && speaker >= 0 ? speaker : null,
+      });
+    }
   }
-  if (segments.length === 0) throw new EngineError("bad_response");
+  if (segments.length === 0) {
+    const channels = isRecord(results) && Array.isArray(results.channels) ? results.channels : [];
+    const transcript = channels
+      .map((channel) => {
+        if (!isRecord(channel) || !Array.isArray(channel.alternatives)) return "";
+        const first = channel.alternatives[0];
+        return isRecord(first) && typeof first.transcript === "string" ? first.transcript.trim() : "";
+      })
+      .filter(Boolean)
+      .join(" ");
+    if (!transcript) throw new EngineError("bad_response");
+    segments.push({ start: null, end: null, text: transcript, speaker: null });
+  }
   const metadata = isRecord(value) ? value.metadata : undefined;
   const duration = isRecord(metadata) ? finiteOrNull(metadata.duration) : null;
   return { segments, durationSec: duration !== null && duration >= 0 ? duration : null };
