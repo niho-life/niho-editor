@@ -56,8 +56,10 @@ jobs:
           --health-timeout 5s
           --health-retries 12
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
           cache: npm
@@ -89,8 +91,10 @@ jobs:
           --health-timeout 5s
           --health-retries 12
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
           cache: npm
@@ -122,7 +126,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: shellcheck
         run: shellcheck -x scripts/editor-deploy/lib.sh scripts/editor-deploy/gcp-bootstrap.sh scripts/editor-deploy/deploy.sh scripts/editor-deploy/set-ai-key.sh scripts/editor-deploy/set-transcribe-key.sh scripts/editor-deploy/set-google-oauth-secret.sh scripts/editor-deploy/steps-infra.sh scripts/editor-deploy/transcribe-infra.sh scripts/editor-deploy/lib-test.sh scripts/editor-deploy/steps-infra.test.sh scripts/editor-deploy/transcribe-infra.test.sh scripts/editor-deploy/dockerfile-test.sh
       - name: The example env file sets every variable the scripts require

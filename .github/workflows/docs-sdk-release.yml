@@ -26,8 +26,9 @@ jobs:
       source-sha: ${{ steps.source.outputs.source-sha }}
       version: ${{ steps.names.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 0
       - id: source
@@ -49,7 +50,7 @@ jobs:
         env:
           SOURCE_SHA: ${{ steps.source.outputs.source-sha }}
         run: git checkout --detach "$SOURCE_SHA"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
           cache: npm
@@ -75,7 +76,7 @@ jobs:
             echo "version=$VERSION"
           } >> "$GITHUB_OUTPUT"
       - id: upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ steps.names.outputs.artifact-name }}
           path: ${{ runner.temp }}/docs-sdk/*
@@ -95,17 +96,18 @@ jobs:
       source-sha: ${{ steps.verify.outputs.source-sha }}
       version: ${{ steps.verify.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: apps/docs/package-lock.json
       - run: npm -C apps/docs ci --ignore-scripts --no-audit --no-fund
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           artifact-ids: ${{ needs.build.outputs.artifact-id }}
           path: ${{ runner.temp }}/docs-sdk
@@ -138,8 +140,9 @@ jobs:
       actions: read
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 0
       - name: Verify artifact identity and transport digest
@@ -161,7 +164,7 @@ jobs:
           test "$metadata_digest" = "sha256:$ARTIFACT_DIGEST"
           test "$metadata_run_id" = "$GITHUB_RUN_ID"
       - name: Download exact artifact ID
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           artifact-ids: ${{ needs.build.outputs.artifact-id }}
           path: ${{ runner.temp }}/docs-sdk
@@ -187,8 +190,8 @@ jobs:
           test -z "$existing_tag" || { echo "tag already exists: $tag" >&2; exit 1; }
           existing_release="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$tag\") | .id")"
           test -z "$existing_release" || { echo "release already exists: $tag" >&2; exit 1; }
-          git tag "$tag" "$SOURCE_SHA"
-          git push origin "refs/tags/$tag"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$tag" -f sha="$SOURCE_SHA" >/dev/null
           prerelease_args=()
           if [[ "${VERSION%%+*}" == *-* ]]; then prerelease_args+=(--prerelease); fi
           gh release create "$tag" "$RUNNER_TEMP/docs-sdk/"* \
