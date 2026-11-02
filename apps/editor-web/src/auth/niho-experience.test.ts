@@ -184,10 +184,21 @@ describe("NIHO Experience editor auth", () => {
       const untrustedOrigin = "https://attacker.example.invalid";
       expect((await auth.completeLogin(formPost(untrustedOrigin, null))).status).toBe(400);
       expect(log).toHaveBeenLastCalledWith("editor-web: NIHO Experience authentication failed", {
-        step: "callback_origin",
+        step: "callback_origin_external",
         status: 400,
       });
       expect(JSON.stringify(log.mock.calls)).not.toContain(untrustedOrigin);
+
+      const missingOriginRequest = new Request(`${EDITOR}/editor/auth/callback`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ code: CODE, state: STATE }),
+      });
+      expect((await auth.completeLogin(missingOriginRequest)).status).toBe(400);
+      expect(log).toHaveBeenLastCalledWith("editor-web: NIHO Experience authentication failed", {
+        step: "callback_origin_missing",
+        status: 400,
+      });
 
       expect((await auth.completeLogin(formPost(EDITOR, null, { code: "sensitive-code", state: "short" }))).status).toBe(400);
       expect(log).toHaveBeenLastCalledWith("editor-web: NIHO Experience authentication failed", {
