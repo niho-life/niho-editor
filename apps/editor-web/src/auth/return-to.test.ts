@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loginPath, photoLoginPath, safePhotoReturnTo, safeReturnTo, seeOther } from "./return-to";
+import { sessionRecoveryLoginPath } from "../lib/session-recovery-path";
 
 const ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
 
@@ -112,6 +113,14 @@ describe("loginPath", () => {
   it("never carries a return path that safeReturnTo would refuse", () => {
     expect(loginPath("//evil.com")).toBe("/auth/login");
     expect(loginPath("/auth/login?next=%2Fsettings")).toBe("/auth/login");
+  });
+});
+
+describe("sessionRecoveryLoginPath", () => {
+  it("preserves only a safe editor return path and marks the NIHO recovery attempt", () => {
+    expect(sessionRecoveryLoginPath("/")).toBe("/auth/login?recover=1");
+    expect(sessionRecoveryLoginPath(`/p/${ID}`)).toBe(`/auth/login?next=%2Fp%2F${ID}&recover=1`);
+    expect(sessionRecoveryLoginPath(safeReturnTo("//evil.com"))).toBe("/auth/login?recover=1");
   });
 });
 
