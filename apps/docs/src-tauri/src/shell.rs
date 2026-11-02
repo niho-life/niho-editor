@@ -54,13 +54,13 @@ impl ShellMode {
 }
 
 /// `NIHO_DOCS_SHELL` の値と、開発の起動かどうかから読む画面を決める。
-/// 配布版は未指定なら editor.niho.life。開発版は未指定なら同梱画面。未知の値と本番での `dev` は同梱画面へ閉じる。
+/// 配布版は未指定または不正な値なら editor.niho.life。開発版は未指定または不正な値なら同梱画面。
 pub fn shell_mode(value: Option<&str>, dev: bool) -> ShellMode {
   match value.map(str::trim) {
     Some("remote") => ShellMode::Remote,
     Some("dev") if dev => ShellMode::Dev,
     Some("local") => ShellMode::Local,
-    None if !dev => ShellMode::Remote,
+    _ if !dev => ShellMode::Remote,
     _ => ShellMode::Local,
   }
 }
@@ -533,15 +533,16 @@ mod tests {
     assert_eq!(shell_mode(Some("dev"), true), ShellMode::Dev);
     assert_eq!(remote_url(ShellMode::Dev).unwrap().as_str(), "http://localhost:3000/");
     // 本番の起動で dev を指定しても、開発の画面は読まない
-    assert_eq!(shell_mode(Some("dev"), false), ShellMode::Local);
+    assert_eq!(shell_mode(Some("dev"), false), ShellMode::Remote);
   }
 
   #[test]
-  fn anything_else_keeps_the_bundled_screen() {
-    for value in [Some(""), Some("local"), Some("https://example.com"), Some("REMOTE")] {
+  fn invalid_overrides_never_select_local_in_release() {
+    for value in [Some(""), Some("https://example.com"), Some("REMOTE")] {
       assert_eq!(shell_mode(value, true), ShellMode::Local, "dev: {value:?}");
-      assert_eq!(shell_mode(value, false), ShellMode::Local, "release: {value:?}");
+      assert_eq!(shell_mode(value, false), ShellMode::Remote, "release: {value:?}");
     }
+    assert_eq!(shell_mode(Some("local"), false), ShellMode::Local);
     assert_eq!(remote_url(ShellMode::Local), None);
   }
 
