@@ -108,7 +108,7 @@ describe("photo lifecycle HTTP routes", () => {
   it("fails closed after authentication when the purge runtime is absent", async () => {
     const verify = vi.fn(async () => ACTOR);
     const lifecycle = vi.fn(() => null);
-    const routes = createPhotoLifecycleRoutes({ verify, lifecycle, origins: [ORIGIN] });
+    const routes = createPhotoLifecycleRoutes({ verify, lifecycle, origins: [ORIGIN], now: () => Date.parse("2026-11-01T12:00:00.000Z") });
     const response = await routes.purge(request("POST", "/api/photo/v1/photos/photo/purge", { key: KEY }), IDS.photo);
     expect(response.status).toBe(503);
     expect(response.headers.get("Retry-After")).toBe("1");
