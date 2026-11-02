@@ -6,15 +6,16 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { IDS, recipe } from "../../../packages/photo-library-contract/fixtures/v1.ts";
+import { syntheticPng } from "./synthetic-png.mjs";
 import { MEDIA_BASELINE, verifyPinnedArtifact } from "../src/baseline.ts";
 import { matchesSource, mediaIdentity, mediaJobKey } from "../src/identity.ts";
 import { createMediaExecutor } from "../src/run.ts";
 import { MediaProviderError } from "../src/types.ts";
 
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
-// A valid synthetic 1x1 PNG. Used as opaque original/output bytes for orchestration tests;
-// the fake provider below does not establish decoder, color or SDK acceptance.
-const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH2kAAAAASUVORK5CYII=", "base64");
+// Used as opaque original/output bytes for orchestration tests; the fake provider below
+// does not establish decoder, color or SDK acceptance.
+const png = syntheticPng();
 const renderer = { ...MEDIA_BASELINE, settingsVersions: [1], engines: ["niho-14"], features: [], maskKinds: [], maskSurfaces: false };
 
 async function fixture(t, options = {}) {
@@ -24,7 +25,7 @@ async function fixture(t, options = {}) {
     source: {
       ownerId: IDS.userA, photoId: IDS.photo, lifecycle: "active", lifecycleGeneration: 1,
       original: { assetId: IDS.original, generation: "11", sha256: sha(png), sizeBytes: png.length },
-      format: "png", width: 1, height: 1, baseVersion: null, recipe: structuredClone(recipe),
+      format: "png", width: 2, height: 1, baseVersion: null, recipe: structuredClone(recipe),
     },
     generation: 1, claimed: false, published: null, failures: [], staged: [], abandoned: [], superseded: [], reads: 0,
   };

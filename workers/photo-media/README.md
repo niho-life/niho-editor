@@ -1,6 +1,6 @@
 # 写真media workerの独立コア（P06 / #155）
 
-P00の固定値と本人写真contractを使う、依存注入式の実行コア。`src/p02.ts`がP02のPostgreSQL writerへ接続する。object storageの実backend、decoder、SDK runtime loader、常設server、資格情報は含まない。このpackageだけで写真クラウドを有効にしない。
+P00の固定値と本人写真contractを使う、依存注入式の実行コア。`src/p02.ts`がP02のPostgreSQL writerへ接続する。v0.1.7固定SDKを検証するJPEG/PNG candidate providerはあるが、production factoryには登録していない。object storageの実backend、常設server、資格情報は含まない。このpackageだけで写真クラウドを有効にしない。
 
 ```sh
 npm -C packages/editor-store ci
@@ -24,7 +24,7 @@ npm -C workers/photo-media run check
 
 - **P02接続済み**: `MediaJobs`のclaim/publish/fail/supersedeはP02のDB transactionを使う。publishはlease期限・実行deadline・claim世代・owner・active lifecycle・原本generation/hash・base・recipe revision/hashを同時照合し、派生物参照とlibrary revisionを一度だけ確定する。実運用のDB query timeoutとprocess停止後のlease回収はP13のscheduler配備でも設定する。
 - **P03/P07残件**: `MediaObjectStorage`に実backendを接続し、通信結果不明・process停止・遅着書込のgeneration照合と清掃executorを受け入れる。publish応答の喪失時はDBへ確定済みの場合があるため、物理削除前に必ずpublish状態と参照を再照合し、参照済み派生物を消さない。P02台帳の接続試験だけで、実storageの中断・遅着書込の回収を合格扱いしない。
-- **P06 decoder bridge**: 実release bytesを`verifyPinnedArtifact`で検査してSDKをロードする。providerのrenderer自己申告だけをartifact検証の代用にしない。`supports`は固定SDKで設定全体・canonical hash・base・mask/featureを検証する。decode前にpixel上限をprobeし、別processのCPU/メモリ/一時領域を制限し、abortでprocessを終了する。`inspect`は実decoderで出力を調べる。JPEG/PNG、LinuxのHEIC/HEIF bridge、検証済みRW2と色/向きの実decode証跡はまだない。
+- **P06 decoder bridge**: `src/pinned-provider-child.ts`はv0.1.7のrelease baseline、engine manifest、JS glue、WASM bytes、package versionを検査してからruntimeをロードする。`supports`とchildの両方でSDK contract、canonical settings hash、base、mask、featureを検査し、WASM `validateSettings`も通す。合成PNG/JPEGの実decode、JPEG EXIF向き適用、sRGB PNG出力、出力chunk CRCとmetadata allowlistを対象テストで確認した。JPEGは64 MiB、PNGは10 MiB、40MP以下に限定し、60秒deadlineでabort時にchild processを終了する。childのV8 heap上限は256 MiBだが、WASM/native memoryのOS上限はcontainer側で設定が必要で、実配備の資源受入は未完了。HEIC/HEIF、RAW、mask、working-copy、実storage/API接続は未対応。このproviderはproductionに登録せず、capabilityを有効にしない。
 - **P03/P06のbase選択**: RAW等のworking-copyが必須な入力は、serverが選んだcanonical baseVersionをjob作成前に固定して`MediaSource.baseVersion`へ渡す。既存recipeにbaseがある場合は一致が必須。base未確定のまま任意のworking-copyを成功扱いしない。このmappingは実store/decoder接続で確定する。
 - **P01/P13**: 認証済みactor、rate/queue上限、workerの実行ID、公式配備、起動時の停止済みprocessのscratch清掃、メモリ予算を接続する。100MP入力の予算が未確定のため並行数2以上は拒否する。owner以外へ内部identity・locator・失敗本文を返さない。
 
