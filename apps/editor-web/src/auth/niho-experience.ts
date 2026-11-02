@@ -180,6 +180,23 @@ function badCallback(status = 400, step = "callback_body"): Response {
   });
 }
 
+type CallbackOriginClass = "missing" | "opaque" | "niho" | "editor" | "niho_alias" | "external" | "invalid";
+
+function callbackOriginClass(value: string | null, nihoOrigin: string, editorOrigin: string): CallbackOriginClass {
+  if (value === null) return "missing";
+  if (value === "null") return "opaque";
+  if (value === nihoOrigin) return "niho";
+  if (value === editorOrigin) return "editor";
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:" || parsed.origin !== value) return "invalid";
+    const nihoHost = new URL(nihoOrigin).hostname;
+    return parsed.hostname.endsWith(`.${nihoHost}`) ? "niho_alias" : "external";
+  } catch {
+    return "invalid";
+  }
+}
+
 async function readCallbackFields(request: Request): Promise<CallbackFields | Response> {
   if (request.signal.aborted) return badCallback(400, "callback_aborted");
   if (!isUrlEncoded(request.headers.get("content-type"))) return badCallback(400, "callback_content_type");
@@ -548,7 +565,9 @@ export function createNihoExperienceAuthProvider(deps: NihoExperienceAuthDeps = 
         return badCallback(400, "callback_host");
       }
       const requestOrigin = request.headers.get("origin");
-      if (requestOrigin !== nihoOrigin && requestOrigin !== callbackOrigin) return badCallback(400, "callback_origin");
+      if (requestOrigin !== nihoOrigin && requestOrigin !== callbackOrigin) {
+        return badCallback(400, `callback_origin_${callbackOriginClass(requestOrigin, nihoOrigin, callbackOrigin)}`);
+      }
       const fields = await readCallbackFields(request);
       if (fields instanceof Response) return fields;
       if (requestOrigin === nihoOrigin) {
