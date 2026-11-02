@@ -6,6 +6,7 @@ import { AuthTemporarilyUnavailable, type AuthProvider, type Session, type Sessi
 
 const CLIENT_ID = "niho-experience-editor";
 const CONNECT_PATH = "/connect/niho-experience-editor";
+const CONNECT_START_PATH = `${CONNECT_PATH}/start`;
 const EXCHANGE_PATH = "/api/auth/experience-editor-connect/exchange";
 const REFRESH_PATH = "/api/auth/experience-editor-connect/refresh";
 const SESSION_PATH = "/api/auth/experience-editor-connect/session";
@@ -510,16 +511,26 @@ export function createNihoExperienceAuthProvider(deps: NihoExperienceAuthDeps = 
       const verifier = randomValue();
       if (!STATE_RE.test(state) || !VERIFIER_RE.test(verifier)) return unavailableResponse(returnTo);
       const challenge = createHash("sha256").update(verifier, "ascii").digest("base64url");
-      const query = new URLSearchParams({
-        v: "1",
-        code_challenge: challenge,
-        code_challenge_method: "S256",
-        state,
-      });
       const pending = encodePending({ state, verifier, returnTo: safeReturnTo(returnTo), expiresAt: now() + LOGIN_TTL_SECONDS * 1000 });
-      return redirectTo(`${nihoOrigin}${CONNECT_PATH}?${query.toString()}`, [
-        setCookie(EXPERIENCE_EDITOR_PENDING_COOKIE, pending, LOGIN_TTL_SECONDS + COOKIE_TTL_MARGIN_SECONDS),
-      ]);
+      const response = autoFormResponse({
+        target: `${nihoOrigin}${CONNECT_START_PATH}`,
+        formAction: nihoOrigin,
+        fields: {
+          v: "1",
+          code_challenge: challenge,
+          code_challenge_method: "S256",
+          state,
+        },
+        title: "NIHOアカウントへ接続",
+        message: "NIHOの接続画面へ移動しています。",
+        submitLabel: "続ける",
+      });
+      response.headers.append("Set-Cookie", setCookie(
+        EXPERIENCE_EDITOR_PENDING_COOKIE,
+        pending,
+        LOGIN_TTL_SECONDS + COOKIE_TTL_MARGIN_SECONDS,
+      ));
+      return response;
     },
 
     async completeLogin(request: Request): Promise<Response> {
