@@ -11,7 +11,7 @@ describe("P00 photo conformance registry", () => {
     const fixtureIds = fixture.cases.map((item) => item.id).sort();
     const registryIds = cases.map((item) => item.id).sort();
 
-    expect(new Set(registryIds).size).toBe(34);
+    expect(new Set(registryIds).size).toBe(39);
     expect(registryIds).toEqual(fixtureIds);
     for (const item of cases) {
       if (item.evidence === "blocked") {
@@ -27,7 +27,7 @@ describe("P00 photo conformance registry", () => {
     expect(cases.filter((item) => item.evidence === "db-handler")).toHaveLength(24);
     expect(cases.filter((item) => item.evidence === "handler-precondition")).toHaveLength(3);
     expect(cases.filter((item) => item.evidence === "partial")).toHaveLength(7);
-    expect(cases.filter((item) => item.evidence === "blocked")).toHaveLength(0);
+    expect(cases.filter((item) => item.evidence === "blocked")).toHaveLength(5);
 
     for (const id of [
       "revoked-content",
@@ -43,6 +43,19 @@ describe("P00 photo conformance registry", () => {
     }
     for (const id of ["stale-preview", "stored-media-failed"]) {
       expect(cases.find((item) => item.id === id)).toMatchObject({ evidence: "db-handler", remaining: null });
+    }
+    for (const id of [
+      "recipe-conflict-adopt",
+      "recipe-conflict-unknown-readonly",
+      "recipe-conflict-keep-current",
+      "recipe-conflict-raced",
+      "foreign-recipe-conflict",
+    ]) {
+      expect(cases.find((item) => item.id === id)).toMatchObject({
+        evidence: "blocked",
+        test: null,
+        remaining: expect.any(String),
+      });
     }
     expect(cases.find((item) => item.id === "unknown-recipe")).toMatchObject({
       evidence: "db-handler",

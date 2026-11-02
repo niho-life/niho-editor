@@ -4,8 +4,8 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { PHOTO_API_PREFIX, PHOTO_ERROR_STATUS, PHOTO_LIMITS, PHOTO_ROUTES } from "../src/v1.ts";
 import {
-  emptyLibrary, emptyPage, failedMediaPhoto, fullLibrary, futureRecipePhoto, library,
-  maskedPhoto, mask, page, pendingMediaPhoto, readyPhoto, recipe, responses, storedPhoto, trashedPhoto,
+  adoptedConflictRecipe, adoptedRecipeConflict, emptyLibrary, emptyPage, failedMediaPhoto, fullLibrary, futureRecipePhoto, HASH, library,
+  maskedPhoto, mask, page, pendingMediaPhoto, readyPhoto, recipe, recipeConflict, recipeConflictError, recipeConflictPage, responses, storedPhoto, trashedPhoto,
   verifyingUpload,
 } from "../fixtures/v1.ts";
 
@@ -70,6 +70,32 @@ test("unknown settings round-trip without normalization; masks resolve by conten
   assert.notEqual(mask.sha256, mask.id);
 });
 
+test("recipe conflicts remain server-readable until the owner explicitly chooses a branch", () => {
+  assert.equal(recipeConflictPage.currentRevision, 1);
+  assert.equal(recipeConflict.expectedRevision, 0);
+  assert.equal(recipeConflict.currentRevision, 1);
+  assert.equal(recipeConflict.conflictingRecipe.settingsSha256, HASH.conflictSettings);
+  assert.equal(recipeConflict.conflictingRecipe.settings.exposure, 0.5);
+  assert.equal(recipeConflict.currentRecipe.revision, 1);
+  assert.equal(recipeConflict.currentRecipe.settings.exposure, 0.25);
+  assert.equal(recipeConflictError.error.code, "revision_conflict");
+  assert.equal(recipeConflictError.error.currentRevision, 1);
+  assert.equal(recipeConflictError.error.conflictId, recipeConflict.id);
+  assert.equal(PHOTO_ERROR_STATUS[recipeConflictError.error.code], 409);
+  assert.equal(responses["photos.get"].recipe.settings.exposure, 0);
+
+  const resolution = responses["recipe-conflicts.resolve"].value;
+  assert.equal(resolution.conflict.id, recipeConflict.id);
+  assert.equal(resolution.conflict.currentRecipe.revision, 1);
+  assert.equal(resolution.conflict.resolution, "adopt");
+  assert.equal(resolution.conflict.resultingRevision, 2);
+  assert.equal(resolution.recipe.revision, 2);
+  assert.equal(resolution.recipe.settings.exposure, recipeConflict.conflictingRecipe.settings.exposure);
+  assert.equal(adoptedRecipeConflict.resolution, "adopt");
+  assert.equal(adoptedConflictRecipe.settingsSha256, HASH.conflictSettings);
+  assert(PHOTO_ROUTES["recipe-conflicts.resolve"].idempotency === "required");
+});
+
 test("recipe fixtures carry distinct hashes of canonical settings", () => {
   // Fixture JSON is ASCII with finite JSON numbers; the full runtime canonicalizer is P05's duty.
   const canonical = (v) => Array.isArray(v) ? v.map(canonical) :
@@ -77,6 +103,8 @@ test("recipe fixtures carry distinct hashes of canonical settings", () => {
   for (const r of [recipe, maskedPhoto.recipe, futureRecipePhoto.recipe]) {
     assert.equal(createHash("sha256").update(JSON.stringify(canonical(r.settings))).digest("hex"), r.settingsSha256);
   }
+  assert.equal(createHash("sha256").update(JSON.stringify(canonical(recipeConflict.conflictingRecipe.settings))).digest("hex"), recipeConflict.conflictingRecipe.settingsSha256);
+  assert.equal(createHash("sha256").update(JSON.stringify(canonical(recipeConflict.currentRecipe.settings))).digest("hex"), recipeConflict.currentRecipe.settingsSha256);
 });
 
 test("SDK baseline pins a complete release set and all declared recipe engines", () => {
@@ -110,7 +138,7 @@ test("machine-readable security vectors reference valid operations and stable er
     else assert(c.expected.status >= 200 && c.expected.status < 300, c.id);
     if (c.actor === "none" || c.actor === "revoked") assert.equal(c.expected.status, 401, c.id);
   }
-  for (const required of ["owner-in-request", "foreign-original", "foreign-hash", "foreign-cursor", "cookie-origin", "revoked-content", "quota-concurrent-loser", "duplicate-complete", "cancel-verification", "complete-after-expiry", "generation-race", "recipe-stale", "missing-mask", "unknown-recipe", "pending-purge-retains-quota", "account-deleting"]) {
+  for (const required of ["owner-in-request", "foreign-original", "foreign-hash", "foreign-cursor", "cookie-origin", "revoked-content", "quota-concurrent-loser", "duplicate-complete", "cancel-verification", "complete-after-expiry", "generation-race", "recipe-stale", "recipe-conflict-adopt", "recipe-conflict-unknown-readonly", "recipe-conflict-keep-current", "recipe-conflict-raced", "foreign-recipe-conflict", "missing-mask", "unknown-recipe", "pending-purge-retains-quota", "account-deleting"]) {
     assert(ids.has(required), `missing mandatory vector: ${required}`);
   }
 });

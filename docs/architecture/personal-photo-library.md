@@ -93,6 +93,8 @@ prefixは **`/api/photo/v1`**。成功は型どおりのJSON、失敗は `PhotoE
 | recipes.put | PUT `/photos/{photoId}/recipe` | P05 |
 | versions.get | GET `/photos/{photoId}/versions` | P05 |
 | versions.put | PUT `/photos/{photoId}/versions` | P05 |
+| recipe-conflicts.list | GET `/photos/{photoId}/recipe-conflicts` | P05 contract / NIHOapp #19559 persistence |
+| recipe-conflicts.resolve | POST `/photos/{photoId}/recipe-conflicts/{conflictId}/resolve` | P05 contract / NIHOapp #19559 persistence |
 | media.ensure | POST `/photos/{photoId}/media` | P06 |
 | photos.trash | POST `/photos/{photoId}/trash` | P07 |
 | photos.restore | POST `/photos/{photoId}/restore` | P07 |
@@ -169,7 +171,13 @@ media jobはowner/photo/original generation/baseVersion/settings hash/recipe rev
 
 ## 6. 補正・マスク・複数端末の競合
 
-recipeのrevisionは0から始め、**全保存でexpectedRevision必須**。現在値が一致するときだけ+1し、409 `revision_conflict` ではcurrentRevisionを返す。adapterが最新photoを読み直してSDKの`stale`へ対応する。last-write-winsや自動のengine昇格を使わない。Macの未送信編集は本人＋写真hash＋generationに結び付け、競合時に利用者が選べる状態で残す。
+recipeのrevisionは0から始め、**全保存でexpectedRevision必須**。現在値が一致するときだけ+1し、last-write-winsや自動のengine昇格を使わない。認証済み本人が送ったサイズ上限内のJSONは、CAS不一致でも両版を残す。staleな`recipes.put`はactive recipeを変更せず、409 `revision_conflict` と `currentRevision`、永続化した`conflictId`を返す。同じIdempotency-Keyとbodyの再送は同じconflictを返し、重複rowを作らない。
+
+`RecipeConflict`はexpected/current revision、stale側のsettings JSON全体、競合時点のcurrent recipe全体、server算出のhash・base・mask参照、作成時刻、解決状態を保持する。双方のsnapshotは後続のrecipe保存後も残し、unknown field/versionを削らず、競合端末のメモリやローカルdraftだけに依存しない。GET `recipe-conflicts.list`は本人の履歴をopaque cursorで返し、別端末・再起動後にも選択できる。1ページは最大100件かつ4MiB以下で、cursorは本人・photoに束縛する。P05はconflict値を通常のnamed/auto versionと混ぜず、解決時も保存済みconflictのIDからだけ候補を読み込む。conflict台帳の永続化・同一transactionでの作成と解決はNIHOapp #19559が担当し、niho-editor #154は共通contractと端末間受入を担当する。
+
+本人は`recipe-conflicts.resolve`で`adopt`または`keep-current`を明示する。どちらも現在revisionとの一致を検査する。`adopt`は保存されたconflictの全JSON・base・mask参照を再検証し、新しいactive recipe revisionとして適用してP06向けmedia outboxへ通知する。`keep-current`はactive recipeを変えず選択を記録する。元のconflict内容と競合時点のcurrent recipeは、本人が写真を削除するまで読戻し可能に保ち、解決後に履歴から消さない。競合中にcurrent revisionが進んでいたら409を返し、conflictをpendingのまま残す。unsupportedな設定は内容を保持したままread-onlyとし、対応runtimeがない状態で初期値へ置き換えない。
+
+adapterは最新photoとconflict pageを読み直してSDKの`stale`へ対応する。端末内draftは送信前の障害からの回復にも使うが、サーバー保存済みconflictの代わりにはしない。
 
 `RecipeDocument.settings` はSDKのJSON全体を保つ。設定のhashはUTF-8のRFC 8785 canonical JSONのsha256。settings内のbaseとenvelopeのbaseVersionを照合し、work metadataとの互換性をSDKのruntime validatorで確認する。対応するv1〜v9/engineだけを書込可能にし、未知version/engine/描画featureはread-onlyにする。未知フィールドを捨てた再シリアライズ、初期値への置換、部分的に読めた値だけでの上書きをしない。既知versionでも未知の描画項目があれば同じ扱いにする。
 

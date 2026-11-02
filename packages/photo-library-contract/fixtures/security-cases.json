@@ -448,9 +448,138 @@
         "status": 409,
         "invariants": [
           "current_revision_4",
-          "no_lost_update"
+          "no_active_recipe_change",
+          "conflict_payload_retained",
+          "both_revisions_recoverable",
+          "idempotent_retry_same_conflict"
         ],
         "code": "revision_conflict"
+      }
+    },
+    {
+      "id": "recipe-conflict-adopt",
+      "operation": "recipe-conflicts.resolve",
+      "actor": "user-a",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222",
+        "conflictId": "99999999-9999-4999-8999-999999999999",
+        "expectedRevision": 4,
+        "decision": "adopt"
+      },
+      "arrange": {
+        "conflictExpectedRevision": 3,
+        "currentRevision": 4,
+        "conflictSettingsAreSupported": true
+      },
+      "expected": {
+        "status": 200,
+        "invariants": [
+          "new_active_revision_5",
+          "all_conflict_settings_applied",
+          "conflict_record_remains_readable",
+          "mask_references_revalidated",
+          "media_job_bound_to_revision_5"
+        ]
+      }
+    },
+    {
+      "id": "recipe-conflict-unknown-readonly",
+      "operation": "recipes.put",
+      "actor": "user-a",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222",
+        "expectedRevision": 3,
+        "settings": {
+          "v": 10,
+          "engine": "synthetic-future-engine",
+          "futureFeature": {
+            "keep": true
+          }
+        },
+        "baseVersion": null
+      },
+      "arrange": {
+        "currentRevision": 4,
+        "settingsSupported": false
+      },
+      "expected": {
+        "status": 409,
+        "invariants": [
+          "current_revision_4",
+          "unknown_json_retained_exactly",
+          "conflict_read_only_until_supported",
+          "no_active_recipe_change"
+        ],
+        "code": "revision_conflict"
+      }
+    },
+    {
+      "id": "recipe-conflict-keep-current",
+      "operation": "recipe-conflicts.resolve",
+      "actor": "user-a",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222",
+        "conflictId": "99999999-9999-4999-8999-999999999999",
+        "expectedRevision": 4,
+        "decision": "keep-current"
+      },
+      "arrange": {
+        "currentRevision": 4,
+        "conflictResolution": null
+      },
+      "expected": {
+        "status": 200,
+        "invariants": [
+          "active_revision_stays_4",
+          "explicit_choice_recorded",
+          "conflict_record_remains_readable"
+        ]
+      }
+    },
+    {
+      "id": "recipe-conflict-raced",
+      "operation": "recipe-conflicts.resolve",
+      "actor": "user-a",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222",
+        "conflictId": "99999999-9999-4999-8999-999999999999",
+        "expectedRevision": 4,
+        "decision": "adopt"
+      },
+      "arrange": {
+        "currentRevision": 5,
+        "conflictResolution": null
+      },
+      "expected": {
+        "status": 409,
+        "invariants": [
+          "current_revision_5",
+          "no_lost_update",
+          "conflict_remains_pending"
+        ],
+        "code": "revision_conflict"
+      }
+    },
+    {
+      "id": "foreign-recipe-conflict",
+      "operation": "recipe-conflicts.resolve",
+      "actor": "user-b",
+      "request": {
+        "photoId": "22222222-2222-4222-8222-222222222222",
+        "conflictId": "99999999-9999-4999-8999-999999999999",
+        "expectedRevision": 4,
+        "decision": "adopt"
+      },
+      "arrange": {
+        "photoOwner": "user-a"
+      },
+      "expected": {
+        "status": 404,
+        "invariants": [
+          "no_conflict_existence_leak",
+          "no_recipe_change"
+        ],
+        "code": "not_found"
       }
     },
     {

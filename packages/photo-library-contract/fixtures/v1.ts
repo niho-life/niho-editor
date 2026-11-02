@@ -1,7 +1,7 @@
 import { PHOTO_LIMITS } from "../src/v1.ts";
 import type {
-  PersonalPhotoLibrary, Photo, PhotoAsset, PhotoOperationMap, PhotoPage,
-  RecipeDocument, Upload, VersionSet,
+  PersonalPhotoLibrary, Photo, PhotoAsset, PhotoErrorEnvelope, PhotoOperationMap, PhotoPage,
+  RecipeConflict, RecipeConflictPage, RecipeDocument, Upload, VersionSet,
 } from "../src/v1.ts";
 
 /** Synthetic metadata, not decoder fixtures or production authorization evidence. */
@@ -16,6 +16,7 @@ export const IDS = {
   thumbnail: "66666666-6666-4666-8666-666666666666",
   preview: "77777777-7777-4777-8777-777777777777",
   mask: "88888888-8888-4888-8888-888888888888",
+  recipeConflict: "99999999-9999-4999-8999-999999999999",
 } as const;
 export const TIME = "2026-11-01T00:00:00.000Z";
 export const HASH = {
@@ -24,6 +25,8 @@ export const HASH = {
   preview: "c".repeat(64),
   mask: "d".repeat(64),
   settings: "198b7c25b44f10770c7301d31d8144dfedbb0393288d3555b7ce1d17a35ca62c",
+  currentRecipeSettings: "6a02da77857da0d7012bdcdd948ae19829969315b205887cb90133af0f21aaf2",
+  conflictSettings: "ef950b5347a361bc08ef0640555e5fec84bebda93e1f756efc542462833c0c27",
   maskedSettings: "9b830e0cee503e719a24750927cad444d306a77524be110dc1a6b9367077beef",
   futureSettings: "795636badeeefeb888808d3b3b57267a87670352528c7c88159f9de4ea94624b",
   manifest: "c3f175559b61ab5823c166abff9361aed9e2c00a1f090fbe665720f879fe321e",
@@ -155,6 +158,35 @@ export const completedUpload: Upload = {
   ...reservedUpload, state: "stored", result: { kind: "original", photo: storedPhoto },
 };
 export const versions: VersionSet = { revision: 0, versions: [] };
+export const recipeConflict: RecipeConflict = {
+  id: IDS.recipeConflict, expectedRevision: 0, currentRevision: 1,
+  conflictingRecipe: {
+    settings: { ...recipe.settings, exposure: 0.5 }, baseVersion: null,
+    settingsSha256: HASH.conflictSettings, maskSurfaceIds: [],
+  },
+  currentRecipe: {
+    ...recipe, revision: 1, settings: { ...recipe.settings, exposure: 0.25 },
+    settingsSha256: HASH.currentRecipeSettings,
+  },
+  createdAt: TIME,
+  resolution: null, resolvedAt: null, resultingRevision: null,
+};
+export const recipeConflictPage: RecipeConflictPage = {
+  items: [recipeConflict], nextCursor: null, currentRevision: 1,
+};
+export const recipeConflictError: PhotoErrorEnvelope = {
+  error: {
+    code: "revision_conflict", requestId: "synthetic-request", retryable: false,
+    currentRevision: 1, conflictId: IDS.recipeConflict,
+  },
+};
+export const adoptedRecipeConflict: RecipeConflict = {
+  ...recipeConflict, resolution: "adopt", resolvedAt: TIME, resultingRevision: 2,
+};
+export const adoptedConflictRecipe: RecipeDocument = {
+  ...recipe, revision: 2, settings: recipeConflict.conflictingRecipe.settings,
+  settingsSha256: recipeConflict.conflictingRecipe.settingsSha256, updatedAt: TIME,
+};
 
 /** Same shapes for Web, Mac, DB and HTTP tests; no live URL or credentials. */
 export const responses = {
@@ -180,6 +212,10 @@ export const responses = {
   "recipes.put": { value: { ...storedPhoto, recipe: { ...recipe, revision: 1 } }, replayed: false },
   "versions.get": versions,
   "versions.put": { value: { revision: 1, versions: [] }, replayed: false },
+  "recipe-conflicts.list": recipeConflictPage,
+  "recipe-conflicts.resolve": {
+    value: { conflict: adoptedRecipeConflict, recipe: adoptedConflictRecipe }, replayed: false,
+  },
   "media.ensure": { value: storedPhoto.media, replayed: false },
   "photos.trash": { value: trashedPhoto, replayed: false },
   "photos.restore": { value: readyPhoto, replayed: false },
