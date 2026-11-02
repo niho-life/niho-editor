@@ -172,7 +172,8 @@ function isUrlEncoded(value: string | null): boolean {
   return value !== null && /^application\/x-www-form-urlencoded(?:\s*;\s*charset=utf-8)?$/i.test(value.trim());
 }
 
-function badCallback(status = 400): Response {
+function badCallback(status = 400, step = "callback_body"): Response {
+  console.error("editor-web: NIHO Experience authentication failed", { step, status });
   return Response.json({ error: status === 413 ? "payload_too_large" : "bad_request" }, {
     status,
     headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
@@ -180,14 +181,14 @@ function badCallback(status = 400): Response {
 }
 
 async function readCallbackFields(request: Request): Promise<CallbackFields | Response> {
-  if (request.signal.aborted) return badCallback();
-  if (!isUrlEncoded(request.headers.get("content-type"))) return badCallback();
+  if (request.signal.aborted) return badCallback(400, "callback_aborted");
+  if (!isUrlEncoded(request.headers.get("content-type"))) return badCallback(400, "callback_content_type");
   const declared = request.headers.get("content-length");
   if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > MAX_CALLBACK_BODY_BYTES)) {
-    return badCallback(Number(declared) > MAX_CALLBACK_BODY_BYTES ? 413 : 400);
+    return badCallback(Number(declared) > MAX_CALLBACK_BODY_BYTES ? 413 : 400, "callback_content_length");
   }
   const reader = request.body?.getReader();
-  if (!reader) return badCallback();
+  if (!reader) return badCallback(400, "callback_body_missing");
   let rejectAbort!: () => void;
   const abortGate = new Promise<never>((_resolve, reject) => { rejectAbort = () => reject(new Error("aborted")); });
   const onAbort = () => rejectAbort();
@@ -204,11 +205,11 @@ async function readCallbackFields(request: Request): Promise<CallbackFields | Re
       const { done, value } = await Promise.race([reader.read(), deadline, abortGate]);
       if (done) { complete = true; break; }
       total += value.byteLength;
-      if (total > MAX_CALLBACK_BODY_BYTES) return badCallback(413);
+      if (total > MAX_CALLBACK_BODY_BYTES) return badCallback(413, "callback_body_size");
       chunks.push(value);
     }
   } catch {
-    return badCallback();
+    return badCallback(400, "callback_body_read");
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
     request.signal.removeEventListener("abort", onAbort);
@@ -219,20 +220,22 @@ async function readCallbackFields(request: Request): Promise<CallbackFields | Re
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
   let text: string;
-  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return badCallback(); }
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return badCallback(400, "callback_body_encoding"); }
   const fields = new Map<string, string>();
   const parts = text.split("&");
-  if (parts.length !== 2) return badCallback();
+  if (parts.length !== 2) return badCallback(400, "callback_body_fields");
   for (const part of parts) {
     const separator = part.indexOf("=");
-    if (separator <= 0) return badCallback();
+    if (separator <= 0) return badCallback(400, "callback_body_field_name");
     const key = part.slice(0, separator);
-    if ((key !== "code" && key !== "state") || fields.has(key)) return badCallback();
-    try { fields.set(key, decodeURIComponent(part.slice(separator + 1).replace(/\+/g, " "))); } catch { return badCallback(); }
+    if ((key !== "code" && key !== "state") || fields.has(key)) return badCallback(400, "callback_body_field_name");
+    try { fields.set(key, decodeURIComponent(part.slice(separator + 1).replace(/\+/g, " "))); } catch { return badCallback(400, "callback_body_encoding"); }
   }
   const code = fields.get("code");
   const state = fields.get("state");
-  return code && CODE_RE.test(code) && state && STATE_RE.test(state) ? { code, state } : badCallback();
+  return code && CODE_RE.test(code) && state && STATE_RE.test(state)
+    ? { code, state }
+    : badCallback(400, "callback_field_format");
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -536,13 +539,16 @@ export function createNihoExperienceAuthProvider(deps: NihoExperienceAuthDeps = 
     async completeLogin(request: Request): Promise<Response> {
       const nihoOrigin = origin();
       const callbackOrigin = editorOrigin();
-      if (!nihoOrigin || !callbackOrigin || nihoOrigin === callbackOrigin || request.method !== "POST") return badCallback();
+      if (!nihoOrigin || !callbackOrigin || nihoOrigin === callbackOrigin) return badCallback(400, "callback_config");
+      if (request.method !== "POST") return badCallback(400, "callback_method");
       const callbackUrl = new URL(request.url);
-      if (callbackUrl.pathname !== CALLBACK_PATH || callbackUrl.search !== "" || callbackUrl.hash !== "") return badCallback();
+      if (callbackUrl.pathname !== CALLBACK_PATH || callbackUrl.search !== "" || callbackUrl.hash !== "") return badCallback(400, "callback_path");
       const host = request.headers.get("host");
-      if (host === null ? callbackUrl.origin !== callbackOrigin : host.toLowerCase() !== new URL(callbackOrigin).host) return badCallback();
+      if (host === null ? callbackUrl.origin !== callbackOrigin : host.toLowerCase() !== new URL(callbackOrigin).host) {
+        return badCallback(400, "callback_host");
+      }
       const requestOrigin = request.headers.get("origin");
-      if (requestOrigin !== nihoOrigin && requestOrigin !== callbackOrigin) return badCallback();
+      if (requestOrigin !== nihoOrigin && requestOrigin !== callbackOrigin) return badCallback(400, "callback_origin");
       const fields = await readCallbackFields(request);
       if (fields instanceof Response) return fields;
       if (requestOrigin === nihoOrigin) {
