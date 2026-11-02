@@ -5,7 +5,7 @@
 #                                                      # secrets (the AI key's without a version), Artifact Registry,
 #                                                      # assets bucket  (before the first deploy)
 #   scripts/editor-deploy/deploy.sh                    # first build, migration and deploy
-#   scripts/editor-deploy/gcp-bootstrap.sh domain      # custom domain mapping + the DNS record to add (after the first deploy)
+#   scripts/editor-deploy/gcp-bootstrap.sh domain      # UI and optional public API domain mappings + DNS records
 #
 # Secret values are generated here; they are never written to a file or printed. The AI key is not: the owner adds it
 # with scripts/editor-deploy/set-ai-key.sh.
@@ -152,18 +152,22 @@ domain() {
   gcp run services describe "$SERVICE" --region "$GCP_REGION" > /dev/null 2>&1 \
     || die "$SERVICE does not exist yet: run scripts/editor-deploy/deploy.sh first"
   # Domain mappings need the gcloud account to have verified the parent domain (Search Console).
-  if gcp beta run domain-mappings describe --domain "$APP_DOMAIN" --region "$GCP_REGION" > /dev/null 2>&1; then
-    log "domain mapping $APP_DOMAIN already exists"
-  else
-    log "domain mapping $APP_DOMAIN → $SERVICE"
-    gcp beta run domain-mappings create --service "$SERVICE" --domain "$APP_DOMAIN" --region "$GCP_REGION"
-  fi
-  log "DNS records to register (Cloudflare: type CNAME, proxy OFF = \"DNS only\"):"
-  gcp beta run domain-mappings describe --domain "$APP_DOMAIN" --region "$GCP_REGION" \
-    --format='table(status.resourceRecords[0].type:label=TYPE, status.resourceRecords[0].name:label=NAME, status.resourceRecords[0].rrdata:label=VALUE)'
-  log "certificate status (Google issues it after the record resolves; minutes to an hour):"
-  gcp beta run domain-mappings describe --domain "$APP_DOMAIN" --region "$GCP_REGION" \
-    --format='value[separator=" "](status.conditions[0].type, status.conditions[0].status, status.conditions[0].message)'
+  local domain_name
+  while IFS= read -r domain_name; do
+    [[ -n "$domain_name" ]] || continue
+    if gcp beta run domain-mappings describe --domain "$domain_name" --region "$GCP_REGION" > /dev/null 2>&1; then
+      log "domain mapping $domain_name already exists"
+    else
+      log "domain mapping $domain_name → $SERVICE"
+      gcp beta run domain-mappings create --service "$SERVICE" --domain "$domain_name" --region "$GCP_REGION"
+    fi
+    log "DNS record for $domain_name (Cloudflare: type CNAME, proxy OFF = \"DNS only\")"
+    gcp beta run domain-mappings describe --domain "$domain_name" --region "$GCP_REGION" \
+      --format='table(status.resourceRecords[0].type:label=TYPE, status.resourceRecords[0].name:label=NAME, status.resourceRecords[0].rrdata:label=VALUE)'
+    log "certificate status for $domain_name (Google issues it after the record resolves; minutes to an hour)"
+    gcp beta run domain-mappings describe --domain "$domain_name" --region "$GCP_REGION" \
+      --format='value[separator=" "](status.conditions[0].type, status.conditions[0].status, status.conditions[0].message)'
+  done < <(domain_mapping_names)
 }
 
 case "$phase" in

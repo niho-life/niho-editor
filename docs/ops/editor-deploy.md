@@ -8,7 +8,7 @@
 
 | 資源 | 名前（既定） | 内容 |
 | --- | --- | --- |
-| Cloud Run サービス | `niho-editor` | 画面と `/api/pages`。誰でも呼べる（ログインはアプリの中）。min 0 / max 2、`EDITOR_AUTH_MODE` は `deploy.env` の値（既定 `niho`。§13）。要求の時間切れは 300 秒（AI の提案は 1 回の呼び出し 120 秒まで × 分けた要求の数。§10） |
+| Cloud Run サービス | `niho-editor` | 画面、`/api/pages`、公開 API `/v1/*`。誰でも呼べる（ログインはアプリの中）。min 0 / max 2、`EDITOR_AUTH_MODE` は `deploy.env` の値（既定 `niho`。§13）。要求の時間切れは 300 秒（AI の提案は 1 回の呼び出し 120 秒まで × 分けた要求の数。§10） |
 | Cloud Run ジョブ | `niho-editor-migrate` | 配備のたびに 1 回。migration の適用と、アプリ用ロールの作成・権限付与 |
 | Cloud SQL | 既存の共有インスタンスに データベース `niho_editor` | ロール 2 つ: `niho_editor_migrate`（表の所有者。migrate ジョブだけが使う）と `niho_editor_app`（DML だけ。DDL と migration の記録の書き換えは不可） |
 | GCS | 資産バケット（private） | 均一なバケットレベルのアクセス、公開アクセス禁止。実行 ID は作成と閲覧だけ（削除・上書き不可） |
@@ -100,12 +100,12 @@ migration は expand → contract（列の削除は配備の 1 つ後）。適�
 
 ## 6. 独自ドメインと TLS
 
-画面サービスに Cloud Run のドメインマッピングを付ける（証明書は Google が発行・更新。追加費用なし。プレビュー機能なので、止まったときは `run.app` の URL で動く）。
+画面と公開 API の host を、同じ Cloud Run サービス `niho-editor` へ domain mapping する（証明書は Google が発行・更新。追加費用なし。プレビュー機能なので、止まったときは `run.app` の URL で動く）。`APP_DOMAIN` は画面・`EDITOR_ORIGIN`・ログイン callback に使う。任意の `PUBLIC_API_DOMAIN` は公開 API の host だけに使い、設定が空なら API host は作らない。
 
 1. ドメインの所有確認（Search Console）が gcloud のアカウントで済んでいること: `gcloud domains list-user-verified`
-2. `scripts/editor-deploy/gcp-bootstrap.sh domain` — マッピングを作り、DNS に登録する record を表示する
+2. `scripts/editor-deploy/gcp-bootstrap.sh domain` — `APP_DOMAIN` と、設定されていれば `PUBLIC_API_DOMAIN` のマッピングを作り、それぞれの DNS record を表示する
 3. DNS（Cloudflare）に表示された CNAME を **プロキシなし（DNS only）** で登録する
-4. 証明書が出るまで待つ（数分〜1 時間）。`https://<APP_DOMAIN>/api/pages` が 401 と `X-Robots-Tag: noindex, nofollow` を返せば通っている
+4. 証明書が出るまで待つ（数分〜1 時間）。`https://<APP_DOMAIN>/api/pages` が 401 と `X-Robots-Tag: noindex, nofollow`、設定時は `https://<PUBLIC_API_DOMAIN>/v1/<handle>/published.json` が資格なしで 401 と `X-Robots-Tag: noindex` を返せば通っている
 
 ## 7. 本番の起点（公開境界）
 

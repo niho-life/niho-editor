@@ -37,6 +37,9 @@ gcp() {
 check "default AI_MODEL" "$AI_MODEL" "claude-sonnet-5-5"
 check "default AI_MONTHLY_LIMIT_USD" "$AI_MONTHLY_LIMIT_USD" "10"
 check "AI key secret name" "$SECRET_ANTHROPIC_KEY" "niho-editor-anthropic-key"
+check "empty optional API domain" "$PUBLIC_API_DOMAIN" ""
+check "UI domain mapping list without API domain" "$(domain_mapping_names)" "editor.example.com"
+check "UI and API use separate domain mappings" "$(PUBLIC_API_DOMAIN=api.editor.example.com domain_mapping_names | tr '\n' ',' | sed 's/,$//')" "editor.example.com,api.editor.example.com"
 
 ready() { if ai_key_ready; then printf 1; else printf 0; fi; }
 check "no AI key version: AI off" "$(ready)" 0
@@ -111,6 +114,10 @@ check "AI_MODEL with a comma is refused" "$(refused 'AI_MODEL=claude,EDITOR_AUTH
 check "AI_MODEL in capitals is refused" "$(refused 'AI_MODEL=Claude')" 1
 check "a negative limit is refused" "$(refused 'AI_MONTHLY_LIMIT_USD=-1')" 1
 check "a limit that is not a number is refused" "$(refused 'AI_MONTHLY_LIMIT_USD=10,EDITOR_AI_MODE=fake')" 1
+check "a valid API domain is accepted" "$(refused 'PUBLIC_API_DOMAIN=api.editor.example.com')" 0
+check "an API domain URL is refused" "$(refused 'PUBLIC_API_DOMAIN=https://api.editor.example.com')" 1
+check "an API domain path is refused" "$(refused 'PUBLIC_API_DOMAIN=api.editor.example.com/v1')" 1
+check "the API domain cannot equal the UI domain" "$(refused 'PUBLIC_API_DOMAIN=editor.example.com')" 1
 check "a transcription timeout that is not a number is refused" "$(refused 'TRANSCRIBE_TIMEOUT_SEC=20m')" 1
 check "a transcription timeout with a comma is refused" "$(refused 'TRANSCRIBE_TIMEOUT_SEC=600,EDITOR_AUTH_MODE=stub')" 1
 # Outside the app's range the service would not start, so load_deploy_env refuses it here.
