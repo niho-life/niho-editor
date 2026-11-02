@@ -8,9 +8,15 @@
     "test": "node --test test/*.test.mjs",
     "check": "npm run typecheck && npm test"
   },
-  "engines": { "node": "24.x" },
+  "engines": {
+    "node": "24.x"
+  },
   "devDependencies": {
     "@types/node": "24.19.2",
     "typescript": "6.0.3"
+  },
+  "dependencies": {
+    "niho-photo-contract": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.7/niho-photo-contract-0.1.7.tgz",
+    "niho-photo-develop-engine-runtime": "https://github.com/niho-life/niho-photo/releases/download/photo-sdk-v0.1.7/niho-photo-develop-engine-runtime-0.1.7.tgz"
   }
 }
