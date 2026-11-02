@@ -28,7 +28,7 @@ test("every JSON operation has a fixture and a documented HTTP binding", () => {
   }
 });
 
-test("capacity fixtures distinguish used, reservation, trash and physical purge", () => {
+test("capacity fixtures distinguish used, reservation and pending physical purge", () => {
   assert.equal(PHOTO_LIMITS.quotaBytes, 5_368_709_120);
   for (const fixture of [library, emptyLibrary, fullLibrary]) {
     const u = fixture.usage;
@@ -56,6 +56,7 @@ test("metadata distinguishes verification, durable original, failed media and cu
   assert.equal(readyPhoto.media.recipeRevision, readyPhoto.recipe.revision);
   assert.equal(readyPhoto.media.rendererManifestSha256, baseline.engine.manifest.sha256);
   assert.equal(responses["recipes.put"].value.media.state, "processing");
+  // The trashed fixture only preserves the stable v1 wire shape; P07 product flow bypasses it.
   assert.equal(Date.parse(trashedPhoto.purgeAfter) - Date.parse(trashedPhoto.trashedAt), PHOTO_LIMITS.trashRetentionDays * 86_400_000);
 });
 

@@ -429,9 +429,10 @@ export function createCloudPhotoLibrary(options: CloudPhotoLibraryOptions): Clou
       for (const photoId of photoIds) {
         client.assertCurrent();
         try {
-          const response = await client.request("photos.trash", { photoId });
-          if (!isRecord(response) || !Object.hasOwn(response, "value")) throw new CloudPhotoError("invalid_response", null, null, false);
-          parsePhoto(response.value, options.scope.libraryId, photoId);
+          const response = await client.request("photos.purge", { photoId });
+          if (!isRecord(response) || !Object.hasOwn(response, "value") || !isRecord(response.value)) {
+            throw new CloudPhotoError("invalid_response", null, null, false);
+          }
           deleted.push(photoId);
         } catch (error) { if (isCloudPhotoError(error) && error.code === "not_found") deleted.push(photoId); else errors.push(error); }
       }

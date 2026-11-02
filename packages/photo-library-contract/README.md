@@ -18,7 +18,7 @@ const response: PhotoOperationMap["photos.list"]["response"] = structuredClone(r
 ```
 
 - `src/v1.ts`: 型、公開上限、22 operationのmethod/path/idempotency、errorとstatus。
-- `fixtures/v1.ts`: 本人A/Bのsynthetic ID、quota、派生job作成前のpending/処理中/失敗/ready/trash/未知recipe、uploadの予約/検証/完了、永続recipe conflictと明示選択、全JSON operationの応答。assetのhash/sizeは**metadata fixture用のダミー**で、実decodeやcontentのchecksum検証には使わない。
+- `fixtures/v1.ts`: 本人A/Bのsynthetic ID、quota、派生job作成前のpending/処理中/失敗/ready/legacy trash/未知recipe、uploadの予約/検証/完了、永続recipe conflictと明示選択、全JSON operationの応答。P07の新規削除フローは`photos.purge`を直接使い、trash/restoreはv1 wire compatibility fixtureに限る。assetのhash/sizeは**metadata fixture用のダミー**で、実decodeやcontentのchecksum検証には使わない。
 - `fixtures/security-cases.json`: 認証・所有権・容量・並行予約・再送・lease・CAS・競合保持/選択・削除の入力/前提/期待statusとcode。P12がcase IDを実HTTP/DB検証へ接続する。現時点では期待値であり、backendが合格したという記録ではない。
 - `sdk-baseline.json`: SDK 0.1.7 / crate 0.27.0 のpublic releaseから取得したmanifestをsha256で照合し、6 tarballとreceiptのhashを固定。P08が取得bytesを検査して採用する。ここにSDK本体をvendorしない。
 

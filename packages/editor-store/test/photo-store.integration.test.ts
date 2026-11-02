@@ -380,7 +380,43 @@ describe("personal photo store on PostgreSQL", { skip: databaseUrl === undefined
     assert.equal((await getPhotoUpload(pool, owner, staleRejectClaim.id))?.state, "verifying");
   });
 
-  it("keeps quota through trash and pending physical purge, then releases only the confirmed generation", async () => {
+  it("starts immediate purge directly for an active photo and retains quota until physical deletion", async () => {
+    const owner = `synthetic-immediate-purge-${randomUUID()}`;
+    const made = await createOriginal(pool, owner, SHA_A, 123);
+    const input = { idempotencyKey: randomUUID(), requestHash: SHA_A };
+
+    const purge = await beginPhotoPurge(pool, owner, made.completed.photoId, input);
+    assert.ok(purge);
+    assert.equal(purge.replayed, false);
+    assert.equal(purge.job.pendingBytes, 123);
+    assert.equal(await getPhoto(pool, owner, made.completed.photoId), null);
+    assert.deepEqual(await getPhotoUsage(pool, owner), {
+      quotaBytes: PHOTO_QUOTA_BYTES,
+      usedBytes: 123,
+      originalBytes: 123,
+      maskBytes: 0,
+      trashBytes: 0,
+      pendingPurgeBytes: 123,
+      reservedBytes: 0,
+      availableBytes: PHOTO_QUOTA_BYTES - 123,
+    });
+    assert.equal((await pool.query("SELECT lifecycle FROM photos WHERE owner = $1 AND id = $2", [owner, made.completed.photoId])).rows[0]?.lifecycle, "purging");
+
+    const replay = await beginPhotoPurge(pool, owner, made.completed.photoId, input);
+    assert.ok(replay);
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.job.id, purge.job.id);
+    assert.equal(await beginPhotoPurge(pool, owner, made.completed.photoId, { idempotencyKey: randomUUID(), requestHash: SHA_B }), null);
+
+    assert.equal(await confirmPhotoAssetDeleted(pool, owner, purge.job.id, made.completed.assetId, "wrong"), null);
+    assert.equal((await getPhotoUsage(pool, owner)).usedBytes, 123);
+    const completed = await confirmPhotoAssetDeleted(pool, owner, purge.job.id, made.completed.assetId, made.object.objectGeneration);
+    assert.equal(completed?.state, "completed");
+    assert.equal(completed?.pendingBytes, 0);
+    assert.equal((await getPhotoUsage(pool, owner)).usedBytes, 0);
+  });
+
+  it("keeps quota through legacy trash and pending physical purge, then releases only the confirmed generation", async () => {
     const owner = `synthetic-purge-${randomUUID()}`;
     const made = await createOriginal(pool, owner, SHA_A, 123);
     const trashKey = { idempotencyKey: randomUUID(), requestHash: SHA_A };

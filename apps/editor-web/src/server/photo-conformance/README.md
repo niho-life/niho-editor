@@ -9,7 +9,7 @@ P00 の `security-cases.json` 34件を、P03 transfer handler core、P04 catalog
 - generation を持つ合成 storage port に対し、DBに保存した immutable generation で content read すること
 - 合成バイト列を全量hashし、test-only probe の結果とmagic、サイズ、format、pixel上限を照合すること
 - P04の本番route factoryとDB adapterで、写真詳細・hash lookup・cursorのowner境界とcreation watermarkを保つこと（能力と認証portは合成fixture）
-- P07の本番route factoryとDB adapterで、browser/Mac Origin境界、trash/restoreのquota保持とidempotency、purge 202後のpending bytes保持、purge後のrestore拒否、jobのowner境界を保つこと
+- P07の本番route factoryとDB adapterで、browser/Mac Origin境界、active photoからの即時purge開始、202後のpending bytes保持、purge後の復元拒否、jobのowner境界を保つこと。物理delete providerの受入とは区別する
 - P05の本番route factoryとDB adapterで、recipe CASを直列化し、勝者だけをrecipe・receipt・media outboxへcommitすること。同一payloadのreplayと同一keyの変更payload拒否も含む
 - recipe CASと`missing-mask`では、固定SDK0.1.6のNode reader/editability判定とcrate0.27.0の実WASM `validateSettings`をtest-only portへ接続する。manifest/source/WASM hashとruntime版を照合し、別ownerに実在するmaskをP02 writerがcommitしないことを確認する。範囲外の露光量と壊れたmaskも422となり、recipe/receipt/outboxが変わらない
 - `unknown-recipe` ではP00のv10/future engine/future fieldを専用schemaのnewer-writer fixtureとして配置し、P04がopaque JSONを保持して読むことと、SDK 0.1.6/P00 capabilities外のversion/engineをP05 capability guardがvalidatorより先に422で拒否してrecipe/outboxを変えないこと

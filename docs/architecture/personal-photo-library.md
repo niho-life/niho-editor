@@ -96,9 +96,9 @@ prefixは **`/api/photo/v1`**。成功は型どおりのJSON、失敗は `PhotoE
 | recipe-conflicts.list | GET `/photos/{photoId}/recipe-conflicts` | P05 contract / NIHOapp #19559 persistence |
 | recipe-conflicts.resolve | POST `/photos/{photoId}/recipe-conflicts/{conflictId}/resolve` | P05 contract / NIHOapp #19559 persistence |
 | media.ensure | POST `/photos/{photoId}/media` | P06 |
-| photos.trash | POST `/photos/{photoId}/trash` | P07 |
-| photos.restore | POST `/photos/{photoId}/restore` | P07 |
-| photos.purge | POST `/photos/{photoId}/purge` | P07 |
+| photos.trash | POST `/photos/{photoId}/trash` | legacy v1 compatibility only |
+| photos.restore | POST `/photos/{photoId}/restore` | legacy v1 compatibility only |
+| photos.purge | POST `/photos/{photoId}/purge` | P07 product deletion; starts immediately |
 | jobs.get | GET `/jobs/{jobId}` | P07（purge専用） |
 
 `PHOTO_ROUTES` がmethod/path/idempotencyを機械可読にする。必要なmutationは **`Idempotency-Key`** を付ける。keyは本人・operation・リソースでスコープし、正規化したpayload hashをDBで照合する。同じkeyとpayloadは同じリソースの結果＋`replayed:true`、異なるpayloadは409 `idempotency_conflict`。元の認証や現在のリソース状態は再送時にも確認する。purge済みのphotoを古い成功応答で復活させない。
@@ -121,10 +121,10 @@ availableBytes = quotaBytes - usedBytes - reservedBytes
 0 <= usedBytes + reservedBytes <= 5,368,709,120
 ```
 
-- 課金対象は、本人の再生成できない保存済みbinary（原本とマスクの面）。ゴミ箱中と物理削除待ちもusedに含む。trashBytes/pendingPurgeBytesはusedの内数で、加算し直さない。
+- 課金対象は、本人の再生成できない保存済みbinary（原本とマスクの面）。物理削除待ちもusedに含み、pendingPurgeBytesはusedの内数で加算し直さない。trashBytesはlegacy v1 wire compatibilityだけに残す。P07の新規削除フローではtrashBytesを増やさない。
 - 再生成可能なthumbnail/preview/working-copyはサービス側のcache費用。recipe/historyは上限付きmetadataとして写真容量から除外する。これを「全物理使用量が5GB」と説明しない。worker・cache・一時uploadの別上限と清掃は運用で守る。
 - 新規予約はdeclared bytesをreservedへ原子的に足す。sizeは正のsafe integer。検証で元bytesと違えば確定せず、quotaの差額を無断追加しない。確定はreservedからusedへ一度だけ移す。
-- 原本は本人内のsha256＋sizeで重複照合する。本人の検証済み原本が既にあればstartは既存photoを返し、容量追加・上書き・補正の置換をしない。ゴミ箱の同原本は409 `photo_trashed` とし、明示restoreを求める。他人の同hashは照合せず存在を返さない。
+- 原本は本人内のsha256＋sizeで重複照合する。本人の検証済み原本が既にあればstartは既存photoを返し、容量追加・上書き・補正の置換をしない。legacy v1 trash状態の同原本は409 `photo_trashed` とする。P07の新規削除はactive photoから即時purgeを始め、削除後の復元を提供しない。他人の同hashは照合せず存在を返さない。
 - maskはphoto内のdigestで重複照合する。別photoで同じ面を使えばそれぞれ計数する。原本・各photoのmaskはそれぞれ別のquota参照とし、物理dedupを理由にowner境界を混ぜない。
 - 同時予約の勝者だけが残量を取得する。cancel/expiry/失敗の解放も一度だけ。verifyingのleaseを単純な時刻超過だけで解放し、古いworkerをcommit可能なまま残してはいけない。
 
@@ -190,7 +190,7 @@ surface画像はP03のmask uploadで先に保存し、P05がsettingsの参照を
 
 named/auto versionsはSDKのVersionSetに対応させ、現在のrecipeとは別のrevisionで配列をCASする。古い版の適用も現在recipeへのCASで行う。過去版・現在版から参照されるmaskを削除しない。未参照の面は24時間の猶予後、参照確認とfence付きでGCできる。参照が消えた面を使うdraftは再uploadしてから保存する。
 
-version保存でも各settingsを検証し、hash・mask参照・時刻はserverで確定する。requestに含むrecipe revision/hashを権威として使わない。trash中はrecipe/version/mask/mediaの新規書込を拒み、restore後に再取得させる。各非同期処理は開始時のlifecycle世代に束縛し、trash/restore/purgeで世代を変えて遅着結果をfenceする。
+version保存でも各settingsを検証し、hash・mask参照・時刻はserverで確定する。requestに含むrecipe revision/hashを権威として使わない。legacy v1 trash中はrecipe/version/mask/mediaの新規書込を拒む。P07の新規削除は`photos.purge`を使い、lifecycle世代を更新して遅着結果をfenceする。trash/restore wire operationはv1互換性だけに残し、新規P07 product flowから呼ばない。
 
 ## 7. カタログ・同期・削除
 
@@ -204,9 +204,9 @@ cursorはowner・filter・sort・初回の作成watermark・最後のtuple・期
 
 addedAt/updatedAt/期限はserverのUTC時刻で返す。capturedAtのsortにはoffsetが確定した撮影時刻だけを使い、不明ならnullにする。EXIFのtimezone不明の時計表示はinfo側に元の値を残し、serverのtimezoneを撮影地として補わない。
 
-library revisionをupload確定・recipe/history・media公開・trash/restore/purgeで増やす。P04はowner別ETagの条件付GETを提供し、認証後にだけ304を返す。P08はfocus/復帰/保存後に再取得し、可視時だけ既定15秒程度の限定polling、失敗時backoffを使う。隠れた画面で無限pollingしない。WebSocketやリアルタイム共同編集は不要。
+library revisionをupload確定・recipe/history・media公開・purgeで増やす。legacy v1 trash/restoreはwire compatibilityの範囲に限る。P04はowner別ETagの条件付GETを提供し、認証後にだけ304を返す。P08はfocus/復帰/保存後に再取得し、可視時だけ既定15秒程度の限定polling、失敗時backoffを使う。隠れた画面で無限pollingしない。WebSocketやリアルタイム共同編集は不要。
 
-ゴミ箱は30日。restoreで原本・recipe/historyを復帰し、quotaを二重加算しない。明示purgeと保持期限切れpurgeは、先にtombstoneで読み書きを止めてworkerに渡す。物理deleteはimmutable generationを指定し、確認後にだけusedを解放する。失敗中はpendingPurgeBytesとjob状態を本人に返す。recipe/history/mask/派生物/孤立uploadも対象にする。
+P07 product deletionは保持期間を置かず、active photoへの`photos.purge`で即時にtombstoneを立ててworkerへ渡す。削除要求後は写真・補正・派生物を読めず、遅着処理もfenceする。物理deleteはimmutable generationを指定し、確認後にだけusedを解放する。失敗中はpendingPurgeBytesとjob状態を本人に返す。復元UIやP07のrestore経路を提供しない。legacy v1 trash/restore bindingは契約互換用に残し、新規clientでは呼ばない。recipe/history/mask/派生物/孤立uploadも対象にする。
 
 退会イベントは非公開の本人確認済み接続から受け、accountをdeletingにして全session/予約/workerを失効させ、owner全体を同じpurge台帳へ送る。公開clientに任意ownerの削除APIを作らない。通常の復元や古いcompleteはtombstoneを越えられない。backupの保持期間・削除完了の説明・復元時のtombstone再適用をP13の非公開運用に固定し、それが未確定なら出荷しない。
 
@@ -247,7 +247,7 @@ SDK 0.1.5のworkbenchとquery hookは `scopeKey`（`personal:<libraryId>:<actorI
 | #153 P04 | `src/server/photo-catalog/**`、library/photos/list/detail/info/lookupのroute | catalog serializer、ETag、cursor |
 | #154 P05 | `src/server/photo-recipes/**`、recipe/versionsのroute | CAS、history、mask参照検証 |
 | #155 P06 | `workers/photo-media/**`、`src/server/photo-media/**`、mediaのroute | provider/decoder bridge、immutable output、media result |
-| #156 P07 | `workers/photo-purge/**`、`src/server/photo-lifecycle/**`、trash/restore/purge/jobsのroute | fence/tombstone、GCと退会purge |
+| #156 P07 | `workers/photo-purge/**`、`src/server/photo-lifecycle/**`、purge/jobsのroute | 即時purge fence、GCと退会purge |
 | #157 P08 | `packages/photo-cloud-library/**`、同packageのlock/build、専用SDK release workflow、niho-photoのscopeKey接続口 | credential注入式adapter＋contractを含むimmutable配布物。Next/Tauri依存なし |
 | #158 P09 | `apps/editor-web/src/photo/**`（pwa以外）、`src/app/photo/**` | 共用SDKのWeb mount、storage/競合/保存状態UI |
 | #159 P10 | `src/photo/pwa/**`、`public/photo-sw.js`、photo manifestのroute | 同じ/photoから任意install。iPhoneの中断・メモリ・logout受入 |

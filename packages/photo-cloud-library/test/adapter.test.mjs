@@ -58,6 +58,7 @@ function fixtureFetch(overrides = {}) {
     if (path.endsWith(`/photos/${IDS.photo}/versions`) && init.method === "PUT") return json(responses["versions.put"]);
     if (path.endsWith(`/photos/${IDS.photo}/media`)) return json(responses["media.ensure"]);
     if (path.endsWith(`/photos/${IDS.photo}/trash`)) return json(responses["photos.trash"]);
+    if (path.endsWith(`/photos/${IDS.photo}/purge`)) return json(responses["photos.purge"]);
     if (path.includes("/content/")) {
       const size = overrides.contentSize ?? readyPhoto.original.sizeBytes;
       return new Response(new Uint8Array(size), { status: 200, headers: { "content-length": String(size), "content-type": "image/jpeg" } });
@@ -231,7 +232,7 @@ test("既知HTTP errorだけをtyped errorへ写し未知本文・URL・写真�
   assert(!failure.message.includes(readyPhoto.fileName));
 });
 
-test("working-copy状態、versions、mask読取、trash結果をfixtureで写す", async () => {
+test("working-copy状態、versions、mask読取、deleteを即時purgeへ送る", async () => {
   const workingAsset = { ...readyPhoto.original, id: "99999999-9999-4999-8999-999999999999", kind: "working-copy",
     sizeBytes: 16, contentType: "image/jpeg", width: 2560, height: 1707 };
   const readyWithWork = { ...readyPhoto, media: { ...readyPhoto.media, workingCopy: {
@@ -248,6 +249,8 @@ test("working-copy状態、versions、mask読取、trash結果をfixtureで写�
   assert.deepEqual(savedVersions, { kind: "saved", revision: 1, versions: [] });
   const deleted = await fixture.cloud.library.delete([IDS.photo]);
   assert.deepEqual(deleted, { deleted: [IDS.photo], errors: [] });
+  assert.equal(fixture.transport.calls.some((call) => String(call.input).endsWith(`/photos/${IDS.photo}/trash`)), false);
+  assert.equal(fixture.transport.calls.some((call) => String(call.input).endsWith(`/photos/${IDS.photo}/purge`)), true);
 
   const masked = setup({ photo: maskedPhoto, contentSize: mask.sizeBytes });
   const bytes = await masked.cloud.library.loadMaskSurface(IDS.photo, HASH.mask);

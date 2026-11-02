@@ -23,12 +23,6 @@ const databaseDescribe = databaseUrl ? describe : describe.skip;
 const owner = (label: string) => `synthetic-lifecycle-${label}-${randomUUID()}`;
 const key = () => `synthetic_lifecycle_${randomUUID().replaceAll("-", "")}`;
 
-type LifecycleEnvelope = {
-  readonly value: Photo;
-  readonly replayed: boolean;
-  readonly error: { readonly code: string };
-};
-
 function request(method: "GET" | "POST", path: string, input: {
   readonly idempotencyKey?: string;
   readonly origin?: string | null;
@@ -80,18 +74,18 @@ databaseDescribe("P12 lifecycle routes + production PostgreSQL adapter", () => {
   beforeAll(async () => { ({ pool, close } = await openConformanceDatabase(databaseUrl!)); });
   afterAll(async () => { await close?.(); });
 
-  it("cookie-origin: 本番trash routeはbrowserのmissing/untrusted OriginとMacの未許可Originを副作用前に拒否する", async () => {
+  it("cookie-origin: 即時purge routeはbrowserのmissing/untrusted OriginとMacの未許可Originを副作用前に拒否する", async () => {
     const user = owner("origin");
     const photo = await seed(pool, user);
     const before = await lifecycleState(pool, user, photo.id);
 
-    const missing = await routes(pool, user).trash(request("POST", `photos/${photo.id}/trash`, {
+    const missing = await routes(pool, user).purge(request("POST", `photos/${photo.id}/purge`, {
       idempotencyKey: key(), origin: null,
     }), photo.id);
-    const untrusted = await routes(pool, user).trash(request("POST", `photos/${photo.id}/trash`, {
+    const untrusted = await routes(pool, user).purge(request("POST", `photos/${photo.id}/purge`, {
       idempotencyKey: key(), origin: "https://untrusted.example.test",
     }), photo.id);
-    const macUntrusted = await routes(pool, user, "mac-bearer").trash(request("POST", `photos/${photo.id}/trash`, {
+    const macUntrusted = await routes(pool, user, "mac-bearer").purge(request("POST", `photos/${photo.id}/purge`, {
       idempotencyKey: key(), origin: "https://untrusted.example.test",
     }), photo.id);
 
@@ -101,79 +95,66 @@ databaseDescribe("P12 lifecycle routes + production PostgreSQL adapter", () => {
     }
     expect(await lifecycleState(pool, user, photo.id)).toEqual(before);
 
-    const allowed = await routes(pool, user).trash(request("POST", `photos/${photo.id}/trash`, {
+    const allowed = await routes(pool, user).purge(request("POST", `photos/${photo.id}/purge`, {
       idempotencyKey: key(),
     }), photo.id);
-    expect(allowed.status).toBe(200);
-    expect((await allowed.json() as LifecycleEnvelope).value.lifecycle).toBe("trashed");
+    expect(allowed.status).toBe(202);
+    expect(await allowed.json()).toMatchObject({ value: { state: "queued" }, replayed: false });
   });
 
-  it("trash-retains-quota: 実uploadのphotoをtrash/restoreしてquotaを保持し、同一keyだけをreplayする", async () => {
-    const user = owner("trash-quota");
+  it("immediate-purge-start: 保存済みphotoは削除要求ですぐfenceし、物理削除確認までquotaを保持する", async () => {
+    const user = owner("immediate-purge");
     const photo = await seed(pool, user);
     const lifecycle = routes(pool, user);
     const before = await getPhotoUsage(pool, user);
-    const trashKey = key();
+    const purgeKey = key();
 
-    const trashed = await lifecycle.trash(request("POST", `photos/${photo.id}/trash`, {
-      idempotencyKey: trashKey,
+    const purge = await lifecycle.purge(request("POST", `photos/${photo.id}/purge`, {
+      idempotencyKey: purgeKey,
     }), photo.id);
-    expect(trashed.status).toBe(200);
-    const trashedBody = await trashed.json() as LifecycleEnvelope;
-    expect(trashedBody).toMatchObject({ replayed: false, value: { lifecycle: "trashed" } });
-    expect(trashedBody.value.trashedAt).not.toBeNull();
-    expect(trashedBody.value.purgeAfter).not.toBeNull();
-    expect(Date.parse(trashedBody.value.purgeAfter!) - Date.parse(trashedBody.value.trashedAt!))
-      .toBeGreaterThanOrEqual(30 * 24 * 60 * 60_000 - 1_000);
-    expect(await getPhotoUsage(pool, user)).toMatchObject({
-      usedBytes: before.usedBytes,
-      originalBytes: before.originalBytes,
-      trashBytes: before.usedBytes,
-    });
-    expect((await pool.query(
-      "SELECT 1 FROM photos WHERE owner = $1 AND id = $2 AND lifecycle = 'active'",
-      [user, photo.id],
-    )).rowCount).toBe(0);
-
-    const replay = await lifecycle.trash(request("POST", `photos/${photo.id}/trash`, {
-      idempotencyKey: trashKey,
-    }), photo.id);
-    expect(replay.status).toBe(200);
-    expect(await replay.json()).toMatchObject({ replayed: true, value: { lifecycle: "trashed" } });
-    const duplicate = await lifecycle.trash(request("POST", `photos/${photo.id}/trash`, {
-      idempotencyKey: key(),
-    }), photo.id);
-    expect(duplicate.status).toBe(409);
-    expect(await duplicate.json()).toMatchObject({ error: { code: "photo_trashed" } });
-
-    const restoreKey = key();
-    const restored = await lifecycle.restore(request("POST", `photos/${photo.id}/restore`, {
-      idempotencyKey: restoreKey,
-    }), photo.id);
-    expect(restored.status).toBe(200);
-    expect(await restored.json()).toMatchObject({ replayed: false, value: { lifecycle: "active" } });
-    const restoreReplay = await lifecycle.restore(request("POST", `photos/${photo.id}/restore`, {
-      idempotencyKey: restoreKey,
-    }), photo.id);
-    expect(restoreReplay.status).toBe(200);
-    expect(await restoreReplay.json()).toMatchObject({ replayed: true, value: { lifecycle: "active" } });
+    expect(purge.status).toBe(202);
+    const receipt = await purge.json() as { value: { id: string; state: string; pendingBytes: number }; replayed: boolean };
+    expect(receipt).toMatchObject({ replayed: false, value: { state: "queued", pendingBytes: before.usedBytes } });
     expect(await getPhotoUsage(pool, user)).toMatchObject({
       usedBytes: before.usedBytes,
       originalBytes: before.originalBytes,
       trashBytes: 0,
-      pendingPurgeBytes: 0,
+      pendingPurgeBytes: before.usedBytes,
     });
+    expect((await pool.query(
+      "SELECT 1 FROM photos WHERE owner = $1 AND id = $2 AND lifecycle IN ('active', 'trashed')",
+      [user, photo.id],
+    )).rowCount).toBe(0);
+
+    const state = await lifecycleState(pool, user, photo.id);
+    expect(state.photo?.lifecycle).toBe("purging");
+    expect(state.photo?.purge_after).not.toBeNull();
+
+    const replay = await lifecycle.purge(request("POST", `photos/${photo.id}/purge`, {
+      idempotencyKey: purgeKey,
+    }), photo.id);
+    expect(replay.status).toBe(202);
+    expect(await replay.json()).toMatchObject({ replayed: true, value: { id: receipt.value.id } });
+
+    const duplicate = await lifecycle.purge(request("POST", `photos/${photo.id}/purge`, {
+      idempotencyKey: key(),
+    }), photo.id);
+    expect(duplicate.status).toBe(404);
+    expect(await duplicate.json()).toMatchObject({ error: { code: "not_found" } });
+
+    const restore = await lifecycle.restore(request("POST", `photos/${photo.id}/restore`, {
+      idempotencyKey: key(),
+    }), photo.id);
+    expect(restore.status).toBe(404);
+    expect(await restore.json()).toMatchObject({ error: { code: "not_found" } });
   });
 
-  it("pending-purge-retains-quota / restore-after-purge: 202 receiptはdelete確認前のbytesを保持しrestoreで復活しない", async () => {
+  it("pending-purge-retains-quota / no-restore-after-purge: 202 receiptはdelete確認前のbytesを保持し、復元を拒む", async () => {
     const user = owner("pending-purge");
     const photo = await seed(pool, user);
     const lifecycle = routes(pool, user);
     const initial = await getPhotoUsage(pool, user);
 
-    expect((await lifecycle.trash(request("POST", `photos/${photo.id}/trash`, {
-      idempotencyKey: key(),
-    }), photo.id)).status).toBe(200);
     const purgeKey = key();
     const purge = await lifecycle.purge(request("POST", `photos/${photo.id}/purge`, {
       idempotencyKey: purgeKey,
@@ -220,9 +201,6 @@ databaseDescribe("P12 lifecycle routes + production PostgreSQL adapter", () => {
     const foreign = owner("job-b");
     const photo = await seed(pool, user);
     const own = routes(pool, user);
-    expect((await own.trash(request("POST", `photos/${photo.id}/trash`, {
-      idempotencyKey: key(),
-    }), photo.id)).status).toBe(200);
     const purge = await own.purge(request("POST", `photos/${photo.id}/purge`, {
       idempotencyKey: key(),
     }), photo.id);

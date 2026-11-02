@@ -1201,7 +1201,10 @@ export async function beginPhotoPurge(db: Database, owner: OwnerId, photoId: str
       "SELECT lifecycle, lifecycle_epoch::text AS lifecycle_epoch FROM photos WHERE owner = $1 AND id = $2 FOR UPDATE",
       [owner, photoId],
     )).rows[0];
-    if (!current || (current.lifecycle !== "trashed" && !(current.lifecycle === "active" && library.state === "deleting"))) return null;
+    const userDelete = library.state === "active" && current?.lifecycle === "active";
+    const legacyTrashPurge = current?.lifecycle === "trashed";
+    const accountDelete = library.state === "deleting" && current?.lifecycle === "active";
+    if (!current || !(userDelete || legacyTrashPurge || accountDelete)) return null;
     const bytes = await retainedQuotaBytes(client, owner, photoId);
     const epoch = number(current.lifecycle_epoch) + 1;
     await client.query(

@@ -710,21 +710,24 @@
       }
     },
     {
-      "id": "trash-retains-quota",
-      "operation": "photos.trash",
+      "id": "immediate-purge-start",
+      "operation": "photos.purge",
       "actor": "user-a",
       "request": {
         "photoId": "22222222-2222-4222-8222-222222222222"
       },
       "arrange": {
-        "originalStored": true
+        "originalStored": true,
+        "lifecycle": "active",
+        "storageDeleteConfirmed": false
       },
       "expected": {
-        "status": 200,
+        "status": 202,
         "invariants": [
-          "same_used_bytes",
-          "trash_30_days",
-          "hidden_from_active_list"
+          "hidden_immediately",
+          "used_bytes_held",
+          "pending_purge_bytes_in_used",
+          "no_restore"
         ]
       }
     },
@@ -736,7 +739,7 @@
         "photoId": "22222222-2222-4222-8222-222222222222"
       },
       "arrange": {
-        "lifecycle": "trashed",
+        "lifecycle": "active",
         "storageDeleteConfirmed": false
       },
       "expected": {
@@ -749,7 +752,7 @@
       }
     },
     {
-      "id": "restore-after-purge",
+      "id": "restore-after-immediate-purge",
       "operation": "photos.restore",
       "actor": "user-a",
       "request": {

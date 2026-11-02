@@ -219,7 +219,9 @@ export function assertOperationResponse<K extends Exclude<PhotoOperation, "conte
       if (!isRecord(value) || !isRecord(value.upload) || !isRecord(value.ticket)) invalid();
       return;
     case "photos.purge":
-      if (!isRecord(value) || !isRecord(value.value) || !string(value.value.id) || !string(value.value.state)) invalid();
+      if (!isRecord(value) || !isRecord(value.value) || !string(value.value.id) ||
+          !["queued", "running", "completed", "retrying"].includes(String(value.value.state)) ||
+          !integer(value.value.pendingBytes)) invalid();
       return;
     case "jobs.get":
       if (!isRecord(value) || !string(value.id) || !string(value.state) || !integer(value.pendingBytes)) invalid();

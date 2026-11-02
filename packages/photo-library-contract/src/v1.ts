@@ -25,6 +25,7 @@ export const PHOTO_LIMITS = {
   maxPageBytes: 4 * 1024 ** 2,
   maxWorkingCopyMetaBytes: 64 * 1024,
   lookupMaxCount: 100,
+  /** Legacy v1 wire compatibility only; P07 product deletion never enters trash. */
   trashRetentionDays: 30,
   reservationLifetimeSeconds: 24 * 60 * 60,
   uploadTicketMaxSeconds: 15 * 60,
@@ -88,11 +89,11 @@ export interface PhotoCapabilities {
 /** User-visible binary quota; reproducible derivatives and bounded JSON are overhead. */
 export interface QuotaUsage {
   readonly quotaBytes: number;
-  /** All retained originals + mask surfaces, including trash and pending physical purge. */
+  /** All retained originals + mask surfaces, including legacy trash and pending physical purge. */
   readonly usedBytes: number;
   readonly originalBytes: number;
   readonly maskBytes: number;
-  /** Included in usedBytes; not an additional charge. */
+  /** Legacy v1 sub-bucket; new product deletion uses pendingPurgeBytes instead. */
   readonly trashBytes: number;
   /** Included in usedBytes until the immutable generation is confirmed deleted. */
   readonly pendingPurgeBytes: number;
@@ -392,7 +393,9 @@ export interface PhotoOperationMap {
     readonly decision: "adopt" | "keep-current";
   }, MutationReceipt<RecipeConflictResolution>>;
   readonly "media.ensure": Operation<Id & { readonly recipeRevision: number }, MutationReceipt<MediaState>>;
+  /** Legacy v1 compatibility; P07 clients use photos.purge directly. */
   readonly "photos.trash": Operation<Id, MutationReceipt<Photo>>;
+  /** Legacy v1 compatibility; P07 clients never expose restoration. */
   readonly "photos.restore": Operation<Id, MutationReceipt<Photo>>;
   readonly "photos.purge": Operation<Id, MutationReceipt<PurgeJob>>;
   readonly "jobs.get": Operation<{ readonly jobId: JobId }, PurgeJob>;
