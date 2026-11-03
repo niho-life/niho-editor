@@ -99,7 +99,7 @@ describe("Mac Gemini transcription control", () => {
     expect(host.textContent).toContain("Gemini（このMacのCLI）で続ける");
   });
 
-  it("keeps the local result visible after a recording conflict instead of silently starting over", async () => {
+  it("keeps the old checkpoint after a recording conflict and offers a fresh run", async () => {
     (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {};
     native.shell = shell(true);
     statusMock.mockResolvedValue({ run: { status: "failed" }, operationId: "00000000-0000-4000-8000-000000000003" });
@@ -109,8 +109,32 @@ describe("Mac Gemini transcription control", () => {
     expect(host.textContent).toContain("続ける");
     await act(async () => host.querySelector("button")!.click());
     await flush();
-    expect(host.textContent).toContain("終わった区切りはこのMacに残してあります");
-    expect(host.textContent).toContain("Gemini（このMacのCLI）で続ける");
+    expect(host.textContent).toContain("古いcheckpointはこのMacに残しています");
+    expect(host.textContent).toContain("新しい文字起こしを開始できます");
+    expect(host.textContent).toContain("Gemini（このMacのCLI）で文字起こし");
+  });
+
+  it("starts a new operation when changed audio makes the previous run impossible to resume", async () => {
+    (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {};
+    native.shell = shell(true);
+    const previous = { run: { status: "failed" }, operationId: "00000000-0000-4000-8000-000000000003" };
+    statusMock.mockResolvedValue(previous);
+    runMock.mockRejectedValueOnce(new MacGeminiTranscriptionError("changed")).mockResolvedValueOnce(undefined);
+    const succeeded = vi.fn();
+    await act(async () => root.render(<MacGeminiTranscription pageId="p8" hasTranscript={false} onSucceeded={succeeded} />));
+    await flush();
+
+    await act(async () => host.querySelector("button")!.click());
+    await flush();
+    expect(host.textContent).toContain("新しい文字起こしを開始できます");
+    expect(host.textContent).toContain("Gemini（このMacのCLI）で文字起こし");
+
+    await act(async () => host.querySelector("button")!.click());
+    await flush();
+    expect(runMock).toHaveBeenCalledTimes(2);
+    expect(runMock.mock.calls[0]?.[0]).toMatchObject({ operationId: previous.operationId });
+    expect(runMock.mock.calls[1]?.[0]).not.toHaveProperty("operationId");
+    expect(succeeded).toHaveBeenCalledOnce();
   });
 
   it("labels a pending output as a save retry", async () => {

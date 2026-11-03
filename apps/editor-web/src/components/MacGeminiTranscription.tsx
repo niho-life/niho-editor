@@ -11,7 +11,7 @@ const ERROR_TEXT: Record<MacGeminiTranscriptionError["code"], string> = {
   unsupported: "この版のMacアプリはGemini CLI文字起こしに対応していません。アプリを更新してください。",
   unavailable: "このMacでAntigravity CLIまたはgemini-3.8-flashを使えません。CLIの導入とモデルを確かめてください。",
   auth: "Antigravity CLIへのログインが必要です。CLIでログインしてから、もう一度お試しください。",
-  changed: "音声または実行設定が変わりました。終わった区切りはこのMacに残してあります。ページを読み直してから、もう一度お試しください。",
+  changed: "音声または実行設定が変わりました。古いcheckpointはこのMacに残しています。現在の音声で新しい文字起こしを開始できます。",
   checkpoint: "このMacに残した文字起こしの検査に失敗しました。結果を上書きせず停止しました。",
   incomplete: "音声の区切りを書き切れませんでした。終わった区切りまで残してあります。もう一度で続けられます。",
   failed: "Gemini CLIの文字起こしを終えられませんでした。終わった区切りまで残してあります。",
@@ -107,9 +107,16 @@ function MacGeminiTranscriptionPage({ pageId, hasTranscript, disabled, onSucceed
       const known = cause instanceof MacGeminiTranscriptionError ? cause : new MacGeminiTranscriptionError("failed");
       setError(ERROR_TEXT[known.code]);
       setSavePending(known.code === "saving");
-      setResumable(true);
-      const latest = await getMacTranscription(startedPage).catch(() => null);
-      if (active() && latest) setOperationId(latest.operationId);
+      const canStartFresh = known.code === "changed";
+      setResumable(!canStartFresh);
+      if (canStartFresh) {
+        // 音声・revisionが変わって旧runを再開できない場合、次回は新しいoperation IDを発行する。
+        // 旧checkpointはそのrun IDに結び付いたまま保持し、ここでは破棄しない。
+        setOperationId(null);
+      } else {
+        const latest = await getMacTranscription(startedPage).catch(() => null);
+        if (active() && latest) setOperationId(latest.operationId);
+      }
     } finally {
       if (active()) {
         controller.current = null;
