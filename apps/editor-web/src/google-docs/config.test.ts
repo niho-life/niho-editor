@@ -49,9 +49,9 @@ describe("Google ドキュメントの書き出しの方式", () => {
     expect(() => base("http://api.example.test")).toThrow(GoogleDocsConfigError);
   });
 
-  it("returnTo は短い名前だけ", () => {
-    expect(resolveGoogleDocsConfig({ EDITOR_GOOGLE_DOCS_MODE: "niho", EDITOR_NIHO_RETURN_TO: "niho-docs" })).toMatchObject({ returnTo: "niho-docs" });
-    for (const value of ["niho_editor", "niho editor", "NIHO", "-niho", "niho-", "a".repeat(33), "../x"]) {
+  it("returnTo は固定の niho-editor だけ", () => {
+    expect(resolveGoogleDocsConfig({ EDITOR_GOOGLE_DOCS_MODE: "niho", EDITOR_NIHO_RETURN_TO: "niho-editor" })).toMatchObject({ returnTo: "niho-editor" });
+    for (const value of ["niho-docs", "niho_editor", "niho editor", "NIHO", "-niho", "niho-", "a".repeat(33), "../x"]) {
       expect(() => resolveGoogleDocsConfig({ EDITOR_GOOGLE_DOCS_MODE: "niho", EDITOR_NIHO_RETURN_TO: value }), value).toThrow(GoogleDocsConfigError);
     }
   });

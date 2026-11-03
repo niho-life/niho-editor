@@ -4,23 +4,18 @@ import { useEffect, useRef, useState } from "react";
 import { shellMoreItems, type ShellHeaderProps, type ShellMenuItem } from "niho-docs-ui/shell";
 import { ownerOf, samePage, type AttachedPage, type PageOwner } from "./attached-page";
 import { folderExportUrl } from "./folder-client";
-import { googleDocsConnectPath } from "./google-docs-paths";
 import {
   PageActionError,
   deletePageRequest,
   duplicatePageRequest,
-  exportPageToGoogleDoc,
-  googleDocExportStatus,
-  newGoogleDocExportId,
   pageExportUrl,
   type DuplicatedPage,
-  type GoogleDocExportResult,
 } from "./page-actions-client";
 
 export type { AttachedPage, PageOwner };
 
-/** 「…」の Google ドキュメントの項目の id。 */
-const GOOGLE_DOC_ITEM = "export-google-doc";
+/** 単ページと子孫を同じ durable batch 面から選ぶ。 */
+const GOOGLE_DOCS_BATCH_ITEM = "export-google-docs-batch";
 /** 情報パネルの「フォルダを書き出す」（フォルダ＋その中のページの zip）。「…」には出さない。 */
 const FOLDER_EXPORT_ITEM = "export-folder";
 
@@ -33,7 +28,7 @@ const FOLDER_EXPORT_ITEM = "export-folder";
 export function pageMenuItems(shared: boolean | null): ShellMenuItem[] {
   return shellMoreItems(shared === true).flatMap((item) =>
     item.id === "export"
-      ? [{ ...item, hint: ".md" }, { id: GOOGLE_DOC_ITEM, label: "Google ドキュメントへ", icon: item.icon }]
+      ? [{ ...item, hint: ".md" }, { id: GOOGLE_DOCS_BATCH_ITEM, label: "Google ドキュメントへ", icon: item.icon }]
       : [item],
   );
 }
@@ -46,15 +41,6 @@ export const PAGE_MENU_TEXT = {
   unsaved: (action: "書き出し" | "複製" | "削除" | "共有" | "履歴") =>
     action === "履歴" ? "履歴を開く前に変更を保存できませんでした" : `${action}の前に変更を保存できませんでした`,
   duplicateFailed: "複製できませんでした",
-  googleDocFailed: "Google ドキュメントへ書き出せませんでした",
-  /** 方式が閉じている・NIHO 側の許可待ち（503）。 */
-  googleDocUnavailable: "Google ドキュメントへの書き出しは、まだ使えません",
-  /** 受け付けたが、まだできていない（202）。 */
-  googleDocPending: "書き出しを受け付けました。できあがるとGoogleドライブに入ります",
-  /** 送ったが結果が分からない（502 export_result_unknown）。二重に作らないよう、確かめてからやり直す。 */
-  googleDocUnknown: "書き出せたか分かりません。Googleドライブを確かめてから、もう一度お試しください",
-  /** 接続先が変わった・同じ受付で内容が変わった（409）。 */
-  googleDocRestart: "書き出しを始めからやり直してください",
   deleteFailed: "削除できませんでした",
   published: "公開中のページは、先に公開をやめてください",
   signedOut: "ログインし直してください",
@@ -86,10 +72,8 @@ export type PageMenuOptions = {
   focusMore: () => void;
   /** 書き出しのリンクを押す（既定は同じ origin の `<a href download>`）。 */
   download?: (url: string) => void;
-  /** できた Google ドキュメントを開く（既定は新しいタブ）。 */
-  openDocument?: (url: string) => void;
-  /** Google ドキュメントの接続の案内へ移動する（既定は今の窓で移動）。 */
-  goToGoogleDocsConnect?: (path: string) => void;
+  /** 保存後、単ページと子孫に共通の durable batch 面へ移動する。 */
+  goToGoogleDocsBatch?: (path: string) => void;
 };
 
 export type PageMenu = {
@@ -107,11 +91,6 @@ export type PageMenu = {
   askDelete: () => void;
 };
 
-/** できた文書を新しいタブで開く（元の窓から切り離す）。 */
-export function openInNewTab(url: string): void {
-  window.open(url, "_blank", "noopener,noreferrer");
-}
-
 /** 同じ origin の `<a href download>` を押す（本文は fetch で読まない。ファイル名は応答の Content-Disposition）。 */
 export function clickDownload(url: string): void {
   const link = document.createElement("a");
@@ -125,17 +104,6 @@ export function clickDownload(url: string): void {
 /** 今の窓で移動する（接続の案内へ）。 */
 function visit(path: string): void {
   window.location.assign(path);
-}
-
-/** Google ドキュメントの書き出しの失敗の文言（code ごと。接続が要るときは呼ぶ側が案内へ移動する）。 */
-export function googleDocFailureText(error: unknown): string {
-  if (error instanceof PageActionError) {
-    if (error.status === 401) return PAGE_MENU_TEXT.signedOut;
-    if (error.status === 503) return PAGE_MENU_TEXT.googleDocUnavailable;
-    if (error.code === "export_result_unknown") return PAGE_MENU_TEXT.googleDocUnknown;
-    if (error.status === 409) return PAGE_MENU_TEXT.googleDocRestart;
-  }
-  return PAGE_MENU_TEXT.googleDocFailed;
 }
 
 /** 操作の失敗の短い文言（ログイン切れ・公開中は理由を言い、それ以外は fallback）。 */
@@ -156,8 +124,6 @@ export function failureText(error: unknown, fallback: string): string {
 export function usePageMenu(options: PageMenuOptions): PageMenu {
   const [state, setState] = useState<MenuState | null>(null);
   const running = useRef<Owner | null>(null);
-  // Google ドキュメントへの書き出しのうち、結果がまだ分からないものの受付 id（ページごと）
-  const heldExports = useRef(new Map<string, string>());
   const latest = useRef(options);
   useEffect(() => {
     latest.current = options;
@@ -192,60 +158,6 @@ export function usePageMenu(options: PageMenuOptions): PageMenu {
     }
   };
 
-  /**
-   * Google ドキュメントへ書き出す（保存したあと）。本文は送らない（サーバーが保存済みの本文から作る）。
-   * できたら新しいタブで開く。未接続・つなぎ直しが要るとき（409）は接続の案内へ移動する。
-   * 受付の id は、結果が分からないままのあいだ（応答が来なかった・まだできていない）は持ち続ける。次の書き出しは、
-   * 先にその id の状態を確かめ（できていればそれを開く）、受付が無かったときだけ同じ id で送る。
-   * 新しい id にすると、時間切れでも実はできていた文書がもう 1 つできてしまう（設計 §2）。
-   */
-  const exportToGoogleDoc = async (target: Owner) => {
-    const next = typeof window === "undefined" ? null : `${window.location.pathname}${window.location.search}`;
-    const held = heldExports.current.get(target.id);
-    const exportId = held ?? newGoogleDocExportId();
-    // 確定した（できた・始めからやり直し・接続が要る）ら手放す。分からない・まだのときだけ残す
-    const keep = (kept: boolean) => {
-      if (kept) heldExports.current.set(target.id, exportId);
-      else heldExports.current.delete(target.id);
-    };
-    let checking = false;
-    try {
-      let result: GoogleDocExportResult | null = null;
-      if (held !== undefined) {
-        checking = true;
-        try {
-          result = await googleDocExportStatus(held);
-        } catch (error) {
-          // 受付が無い（届いていなかった）なら、同じ id で改めて送る。それ以外は確かめられなかったので送らない
-          if (!(error instanceof PageActionError && error.code === "export_not_found")) throw error;
-        }
-        checking = false;
-      }
-      // まだできていなくて再試行できる（retryable）ときも、同じ id で送り直す
-      if (result === null || (result.status === "pending" && result.retryable)) {
-        result = await exportPageToGoogleDoc(target.id, exportId);
-      }
-      if (result.status === "pending") {
-        keep(true);
-        report(target, (current) => ({ ...current, note: PAGE_MENU_TEXT.googleDocPending }));
-        return;
-      }
-      keep(false);
-      // 文書はできている。別のページへ移っていても、新しいタブで開く（結果を捨てない。複製と同じ考え）
-      (latest.current.openDocument ?? openInNewTab)(result.url);
-    } catch (error) {
-      const code = error instanceof PageActionError ? error.code : null;
-      // 送ったが応答が分からない・状態を確かめられなかったときは、id を残す。それ以外は受付そのものが済んだ（または届かなかった）
-      keep(checking || code === "export_result_unknown");
-      if (code === "drive_not_connected" || code === "drive_reconnect_required") {
-        // 移動は、まだ同じページを開いているときだけ（別のページを見ている人を連れて行かない）
-        if (isCurrent(target)) (latest.current.goToGoogleDocsConnect ?? visit)(googleDocsConnectPath(next));
-        return;
-      }
-      report(target, (current) => ({ ...current, note: googleDocFailureText(error) }));
-    }
-  };
-
   /** 項目を行う。「…」から選んだときは「…」へフォーカスを戻す（情報パネルから押したときは、押したボタンに残す）。 */
   const perform = (item: string, refocus: boolean) => {
     if (!owner) return;
@@ -266,8 +178,10 @@ export function usePageMenu(options: PageMenuOptions): PageMenu {
       void run(target, "書き出し", async () => {
         (latest.current.download ?? clickDownload)(folderExportUrl(target.id));
       });
-    } else if (item === GOOGLE_DOC_ITEM) {
-      void run(target, "書き出し", async () => exportToGoogleDoc(target));
+    } else if (item === GOOGLE_DOCS_BATCH_ITEM) {
+      void run(target, "書き出し", async () => {
+        (latest.current.goToGoogleDocsBatch ?? visit)(`/google-docs/batch/${encodeURIComponent(target.id)}`);
+      });
     } else if (item === "share" || item === "history") {
       const sheet: PageSheet = item;
       void run(target, sheet === "share" ? "共有" : "履歴", async () => latest.current.openSheet(sheet, target));

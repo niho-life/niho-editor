@@ -38,6 +38,26 @@ describe("private job payload cipher", () => {
     expect(visible).not.toContain("synthetic-private-text");
   });
 
+  it("separates Google Docs payloads by owner, job, item, purpose and exact expiry", () => {
+    const cipher = createPrivateJobPayloadCipher({ EDITOR_PRIVATE_JOBS_KEY_RING: JSON.stringify({ active: "v1", keys: { v1: key(1) } }) })!;
+    const google = {
+      owner: "synthetic-owner",
+      jobId: "00000000-0000-4000-8000-000000000010",
+      itemId: "00000000-0000-4000-8000-000000000011",
+      purpose: "google-docs" as const,
+      expiresAt: "2030-01-02T03:04:05.000Z",
+    };
+    const encrypted = cipher.encrypt({ title: "合成の題名", markdown: "合成本文 😀" }, google);
+    expect(cipher.decrypt(encrypted, google)).toEqual({ title: "合成の題名", markdown: "合成本文 😀" });
+    for (const changed of [
+      { ...google, owner: "other-owner" },
+      { ...google, jobId: "00000000-0000-4000-8000-000000000012" },
+      { ...google, itemId: "00000000-0000-4000-8000-000000000013" },
+      { ...google, expiresAt: "2030-01-02T03:04:06.000Z" },
+    ]) expect(() => cipher.decrypt(encrypted, changed)).toThrow("private job payload is unavailable");
+    expect(() => cipher.decrypt(encrypted, binding)).toThrow("private job payload is unavailable");
+  });
+
   it("fails closed for missing, weak, ambiguous or malformed keyrings", () => {
     const invalid: Array<string | undefined> = [
       undefined,

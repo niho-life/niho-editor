@@ -9,6 +9,7 @@ export * from "./photo-store.ts";
 export * from "./storage-usage.ts";
 export * from "./ai-usage.ts";
 export * from "./translations.ts";
+export * from "./google-docs-batches.ts";
 export {
   CONVERSATION_LIST_LIMIT,
   CONVERSATION_MESSAGE_LIMIT,

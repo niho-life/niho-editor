@@ -2,6 +2,7 @@
 import pg from "pg";
 import { EditorStore } from "./store.ts";
 import { purgeExpiredTranslationProposals } from "./translations.ts";
+import { purgeExpiredGoogleDocsBatches } from "./google-docs-batches.ts";
 import { executePurge, parsePurgeMode } from "./purge-command.ts";
 
 let mode;
@@ -13,7 +14,11 @@ const pool = new pg.Pool({ connectionString, max: 1, connectionTimeoutMillis: 10
 try {
   const result = await executePurge(mode, {
     trash: () => new EditorStore(pool).purgeTrash(),
-    privateJobs: () => purgeExpiredTranslationProposals(pool),
+    privateJobs: async () => {
+      const paths = await purgeExpiredTranslationProposals(pool);
+      await purgeExpiredGoogleDocsBatches(pool);
+      return paths;
+    },
   });
   process.stdout.write(`purge: ${result.pages} pages, ${result.assets} asset rows, ${result.pendingObjects} pending object rows (objects are not deleted)\n`);
 } catch {

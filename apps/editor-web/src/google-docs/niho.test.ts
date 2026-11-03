@@ -3,7 +3,7 @@ import { GoogleDocsError, documentUrl, type GoogleDocsCredential, type GoogleDoc
 import { createNihoGoogleDocsGateway, isAuthorizationUrl } from "./niho";
 
 /**
- * NIHO の API（`me/docs-drive/*`）を呼ぶ実装。**Google も niho.life も実際には呼ばない**（偽の fetch を注入する）。
+ * NIHO の Editor 専用 Docs APIを呼ぶ実装。**Google も niho.life も実際には呼ばない**（偽の fetch を注入する）。
  * 固定するのは、旧 NIHO docs の Mac アプリ（`apps/docs/src-tauri/src/google_docs.rs`）から写した契約と検証:
  * path・`Authorization`・本文の形、受け取った値の検証、失敗の対応づけ、token を外へ出さないこと。
  */
@@ -57,7 +57,7 @@ describe("NIHO の API の契約", () => {
     const { client, calls } = gateway([json(200, connected)]);
     expect(await client.connection(credential)).toEqual({ status: "CONNECTED", connectedEmail: "person@example.test", reason: null });
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe("https://niho.life/api/me/docs-drive/connection");
+    expect(calls[0]!.url).toBe("https://niho.life/api/auth/experience-editor-connect/docs-drive/connection");
     expect(calls[0]!.method).toBe("GET");
     expect(calls[0]!.headers.authorization).toBe(`Bearer ${TOKEN}`);
     expect(calls[0]!.body).toBeNull();
@@ -69,7 +69,7 @@ describe("NIHO の API の契約", () => {
       "niho-editor",
     );
     expect(await client.connect(credential)).toBe("https://accounts.google.com/o/oauth2/v2/auth?client_id=synthetic");
-    expect(calls[0]!.url).toBe("https://niho.life/api/me/docs-drive/connect");
+    expect(calls[0]!.url).toBe("https://niho.life/api/auth/experience-editor-connect/docs-drive/connect");
     expect(calls[0]!.method).toBe("POST");
     expect(JSON.parse(calls[0]!.body!)).toEqual({ returnTo: "niho-editor" });
     expect(await client.disconnect(credential)).toEqual({ status: "DISCONNECTED", connectedEmail: null, reason: null });
@@ -82,18 +82,18 @@ describe("NIHO の API の契約", () => {
       json(200, { status: "pending", retryable: true }),
     ]);
     await client.export(credential, { exportId: EXPORT_ID, title: "  合成の題名  ", markdown: "## 見出し\n" });
-    expect(calls[0]!.url).toBe("https://niho.life/api/me/docs-drive/exports");
+    expect(calls[0]!.url).toBe("https://niho.life/api/auth/experience-editor-connect/docs-drive/exports");
     // 題名は前後の空白を落として送る
     expect(JSON.parse(calls[0]!.body!)).toEqual({ exportId: EXPORT_ID, title: "合成の題名", markdown: "## 見出し\n" });
     expect(await client.exportStatus(credential, EXPORT_ID)).toEqual({ exportId: EXPORT_ID, status: "pending", retryable: true });
-    expect(calls[1]!.url).toBe(`https://niho.life/api/me/docs-drive/exports/${EXPORT_ID}`);
+    expect(calls[1]!.url).toBe(`https://niho.life/api/auth/experience-editor-connect/docs-drive/exports/${EXPORT_ID}`);
   });
 
   it("起点の path を保ったまま、区切りごとに足す", async () => {
     const { client, calls } = gateway([json(200, connected)]);
     const local = createNihoGoogleDocsGateway({ apiBase: "https://api.example.test/base/", returnTo: "niho-editor", fetch: (async () => json(200, connected)) as typeof fetch });
     await client.connection(credential);
-    expect(calls[0]!.url).toBe("https://niho.life/api/me/docs-drive/connection");
+    expect(calls[0]!.url).toBe("https://niho.life/api/auth/experience-editor-connect/docs-drive/connection");
     await expect(local.connection(credential)).resolves.toBeTruthy();
   });
 });

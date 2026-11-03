@@ -1,5 +1,5 @@
 import "server-only";
-import type { AuthProvider, Session } from "../auth/types";
+import type { AuthProvider, Session, SessionRequest } from "../auth/types";
 import { resolveGoogleDocsConfig, type GoogleDocsEnv } from "./config";
 import type { GoogleDocsCredential, GoogleDocsGateway } from "./gateway";
 import { createNihoGoogleDocsGateway } from "./niho";
@@ -24,11 +24,11 @@ export function getGoogleDocsGateway(env: GoogleDocsEnv = process.env): GoogleDo
  * 本人の資格情報（NIHO の ID token）。方式が token を出せないあいだは null（503）。
  * token は関数の中にだけ持つ（戻り値を文字列にしても出ない）。ここから先へ値を渡さない。
  */
-export async function getGoogleDocsCredential(auth: AuthProvider, session: Session): Promise<GoogleDocsCredential | null> {
-  if (!auth.apiToken) return null;
+export async function getGoogleDocsCredential(auth: AuthProvider, session: Session, request: SessionRequest): Promise<GoogleDocsCredential | null> {
+  if (!auth.docsApiToken) return null;
   let token: string | null;
   try {
-    token = await auth.apiToken(session);
+    token = await auth.docsApiToken(session, request);
   } catch {
     return null;
   }

@@ -70,6 +70,24 @@ load_private_jobs_deploy_settings() {
   fi
 }
 
+load_google_docs_deploy_settings() {
+  GOOGLE_DOCS_MODE="${GOOGLE_DOCS_MODE:-off}"
+  GOOGLE_DOCS_BATCH_MODE="${GOOGLE_DOCS_BATCH_MODE:-off}"
+  GOOGLE_DOCS_QUEUE=niho-editor-google-docs
+  GOOGLE_DOCS_SWEEP_JOB=niho-editor-google-docs-sweep
+  [[ "$GOOGLE_DOCS_MODE" == niho || "$GOOGLE_DOCS_MODE" == off ]] || die "GOOGLE_DOCS_MODE must be niho or off"
+  [[ "$GOOGLE_DOCS_BATCH_MODE" == cloud-tasks || "$GOOGLE_DOCS_BATCH_MODE" == off ]] || die "GOOGLE_DOCS_BATCH_MODE must be cloud-tasks or off"
+  if [[ "$GOOGLE_DOCS_MODE" == niho ]]; then
+    [[ "$EDITOR_AUTH_MODE" == niho ]] || die "Google Docs requires dedicated NIHO authentication"
+    [[ "${EDITOR_NIHO_API_ORIGIN:-}" == "$EDITOR_NIHO_ORIGIN/api" ]] || die "Google Docs API base must match the dedicated NIHO origin"
+  fi
+  if [[ "$GOOGLE_DOCS_BATCH_MODE" == cloud-tasks ]]; then
+    [[ "$GOOGLE_DOCS_MODE" == niho ]] || die "Google Docs batches require GOOGLE_DOCS_MODE=niho"
+    [[ "$PRIVATE_JOBS_MAINTENANCE" == true && -n "$EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF" ]] || die "Google Docs batches require private job cleanup and a fixed keyring reference"
+    is_https_audience "${EDITOR_GOOGLE_DOCS_NIHO_SERVICE_AUDIENCE:-}" || die "Google Docs batches require a fixed HTTPS service audience"
+  fi
+}
+
 domain_mapping_names() {
   [[ -n "$APP_DOMAIN" ]] && printf '%s\n' "$APP_DOMAIN"
   [[ -n "$PUBLIC_API_DOMAIN" ]] && printf '%s\n' "$PUBLIC_API_DOMAIN"
@@ -197,6 +215,7 @@ load_deploy_env() {
   SECRET_GOOGLE_OAUTH=niho-editor-google-oauth-secret
   load_article_deploy_settings
   load_private_jobs_deploy_settings
+  load_google_docs_deploy_settings
 }
 
 # GCLOUD replaces the binary in the dry-run checks (scripts/editor-deploy/steps-infra.test.sh); the default is gcloud.
@@ -307,6 +326,15 @@ steps_env_vars() {
   [[ "$STEPS_MODE" == cloud-tasks ]] || return 0
   printf '%sEDITOR_STEPS_MODE=cloud-tasks%sEDITOR_STEPS_QUEUE=projects/%s/locations/%s/queues/%s%sEDITOR_STEPS_WORKER_URL=%s%sEDITOR_STEPS_INVOKER_SA=%s' \
     "$ENV_SEP" "$ENV_SEP" "$GCP_PROJECT" "$GCP_REGION" "$STEPS_QUEUE" "$ENV_SEP" "$(service_url "$SERVICE")" "$ENV_SEP" "$TASKS_SA_EMAIL"
+}
+
+google_docs_env_vars() {
+  [[ "$GOOGLE_DOCS_MODE" == niho ]] || return 0
+  printf '%sEDITOR_GOOGLE_DOCS_MODE=niho%sEDITOR_NIHO_API_ORIGIN=%s%sEDITOR_NIHO_RETURN_TO=niho-editor' \
+    "$ENV_SEP" "$ENV_SEP" "$EDITOR_NIHO_API_ORIGIN" "$ENV_SEP"
+  [[ "$GOOGLE_DOCS_BATCH_MODE" == cloud-tasks ]] || return 0
+  printf '%sEDITOR_GOOGLE_DOCS_BATCH_MODE=cloud-tasks%sEDITOR_GOOGLE_DOCS_QUEUE=projects/%s/locations/%s/queues/%s%sEDITOR_GOOGLE_DOCS_WORKER_URL=%s%sEDITOR_GOOGLE_DOCS_INVOKER_SERVICE_ACCOUNT=%s%sEDITOR_GOOGLE_DOCS_NIHO_SERVICE_AUDIENCE=%s' \
+    "$ENV_SEP" "$ENV_SEP" "$GCP_PROJECT" "$GCP_REGION" "$GOOGLE_DOCS_QUEUE" "$ENV_SEP" "$(service_url "$SERVICE")" "$ENV_SEP" "$TASKS_SA_EMAIL" "$ENV_SEP" "$EDITOR_GOOGLE_DOCS_NIHO_SERVICE_AUDIENCE"
 }
 
 # Transcription (#36): same shape as steps_env_vars, with the transcription's own queue and worker routes

@@ -14,8 +14,8 @@ import {
 } from "./gateway";
 
 /**
- * NIHO の API（`me/docs-drive/*`）を本人として呼ぶ実装。旧 NIHO docs の Mac アプリ
- * （`apps/docs/src-tauri/src/google_docs.rs`。この repo に残っている）の契約・検証・失敗の対応づけを写したもの。
+ * NIHO の Editor 専用 API（`auth/experience-editor-connect/docs-drive/*`）を本人として呼ぶ実装。
+ * Google接続・receipt・変換の共通serviceを使う専用caller契約と、失敗の対応づけを固定する。
  *
  * - 呼ぶのは設定で決めた起点（既定 `https://niho.life/api`）の下の決まった path だけ。転送（redirect）は追わない。
  * - 応答は 1 MiB まで・1 回 45 秒で切る。受け取った値は**形を確かめてから**使う（`authorizationUrl` の host と path、`documentId` の文字）。
@@ -26,6 +26,7 @@ import {
  */
 
 type Json = Record<string, unknown>;
+const EDITOR_DOCS_PREFIX = ["auth", "experience-editor-connect", "docs-drive"] as const;
 
 function isRecord(value: unknown): value is Json {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -189,13 +190,13 @@ export function createNihoGoogleDocsGateway(options: NihoGatewayOptions): Google
 
   return {
     async connection(credential) {
-      return parseConnection(await call(credential, { method: "GET", segments: ["me", "docs-drive", "connection"] }));
+      return parseConnection(await call(credential, { method: "GET", segments: [...EDITOR_DOCS_PREFIX, "connection"] }));
     },
     async connect(credential) {
       const body = await call(credential, {
         method: "POST",
-        segments: ["me", "docs-drive", "connect"],
-        body: { returnTo: options.returnTo },
+        segments: [...EDITOR_DOCS_PREFIX, "connect"],
+        body: { returnTo: "niho-editor" },
       });
       const url = isRecord(body) ? body.authorizationUrl : null;
       // host・path を確かめられない URL へは送らない
@@ -203,13 +204,13 @@ export function createNihoGoogleDocsGateway(options: NihoGatewayOptions): Google
       return url;
     },
     async disconnect(credential) {
-      return parseConnection(await call(credential, { method: "DELETE", segments: ["me", "docs-drive", "connection"] }));
+      return parseConnection(await call(credential, { method: "DELETE", segments: [...EDITOR_DOCS_PREFIX, "connection"] }));
     },
     async export(credential, request) {
       if (checkExportRequest(request) !== "ok") throw new GoogleDocsError("invalid_export");
       const body = await call(credential, {
         method: "POST",
-        segments: ["me", "docs-drive", "exports"],
+        segments: [...EDITOR_DOCS_PREFIX, "exports"],
         body: { exportId: request.exportId, title: request.title.trim(), markdown: request.markdown },
         uncertainExport: true,
       });
@@ -217,7 +218,7 @@ export function createNihoGoogleDocsGateway(options: NihoGatewayOptions): Google
     },
     async exportStatus(credential, exportId) {
       if (!isExportId(exportId)) throw new GoogleDocsError("invalid_export");
-      const body = await call(credential, { method: "GET", segments: ["me", "docs-drive", "exports", exportId] });
+      const body = await call(credential, { method: "GET", segments: [...EDITOR_DOCS_PREFIX, "exports", exportId] });
       return parseExport(body, exportId);
     },
   };

@@ -90,6 +90,9 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "page_translation_relations",
       "page_translation_proposals",
       "page_translation_asset_copies",
+      "google_docs_batch_jobs",
+      "google_docs_batch_items",
+      "google_docs_batch_outbox",
       // P02: 本人所有の写真、容量予約、補正・版・mediaと物理削除の台帳
       "photo_libraries",
       "photos",

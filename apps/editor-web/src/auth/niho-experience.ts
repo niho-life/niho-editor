@@ -508,6 +508,17 @@ export function createNihoExperienceAuthProvider(deps: NihoExperienceAuthDeps = 
     };
   }
 
+  async function currentRestrictedApiToken(session: Session, request: SessionRequest): Promise<string | null> {
+    if (session.mode !== "niho" || !session.sessionId) return null;
+    const header = request.headers.get("cookie");
+    if (hasDuplicateCookie(header, EXPERIENCE_EDITOR_ID_TOKEN_COOKIE)) return null;
+    const idToken = cookieValue(header, EXPERIENCE_EDITOR_ID_TOKEN_COOKIE);
+    if (!idToken || !TOKEN_RE.test(idToken)) return null;
+    const current = await readSession(idToken);
+    if (!current || current.actorId !== session.userId || current.connectionId !== session.sessionId || current.expiresAt !== session.expiresAt) return null;
+    return idToken;
+  }
+
   return {
     mode: "niho",
 
@@ -674,14 +685,12 @@ export function createNihoExperienceAuthProvider(deps: NihoExperienceAuthDeps = 
     },
 
     async articleApiToken(session: Session, request: SessionRequest, purpose: "roles" | "article-links"): Promise<string | null> {
-      if ((purpose !== "roles" && purpose !== "article-links") || session.mode !== "niho" || !session.sessionId) return null;
-      const header = request.headers.get("cookie");
-      if (hasDuplicateCookie(header, EXPERIENCE_EDITOR_ID_TOKEN_COOKIE)) return null;
-      const idToken = cookieValue(header, EXPERIENCE_EDITOR_ID_TOKEN_COOKIE);
-      if (!idToken || !TOKEN_RE.test(idToken)) return null;
-      const current = await readSession(idToken);
-      if (!current || current.actorId !== session.userId || current.connectionId !== session.sessionId || current.expiresAt !== session.expiresAt) return null;
-      return idToken;
+      if (purpose !== "roles" && purpose !== "article-links") return null;
+      return currentRestrictedApiToken(session, request);
+    },
+
+    async docsApiToken(session: Session, request: SessionRequest): Promise<string | null> {
+      return currentRestrictedApiToken(session, request);
     },
   };
 }

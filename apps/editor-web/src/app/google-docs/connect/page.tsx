@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { safeReturnTo } from "@/auth/return-to";
 import { GoogleDocsConnectView } from "@/components/GoogleDocsConnectView";
 import type { GoogleDocsConnection } from "@/google-docs/gateway";
@@ -23,7 +24,7 @@ export default async function GoogleDocsConnectPage(props: { searchParams: Promi
   const session = await requireSession(GOOGLE_DOCS_CONNECT_PATH);
   const returnTo = safeReturnTo(typeof next === "string" ? next : null);
   const gateway = getGoogleDocsGateway();
-  const credential = gateway ? await getGoogleDocsCredential(getAuthProvider(), session) : null;
+  const credential = gateway ? await getGoogleDocsCredential(getAuthProvider(), session, { headers: await headers() }) : null;
   let connection: GoogleDocsConnection | null = null;
   let failure = typeof error === "string" ? error : null;
   if (gateway && credential) {

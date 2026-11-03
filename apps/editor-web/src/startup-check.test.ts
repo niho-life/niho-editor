@@ -34,3 +34,15 @@ describe("checkStartupConfig: public API settings (#40)", () => {
     expect(error).not.toHaveBeenCalled();
   });
 });
+
+describe("checkStartupConfig: Google Docs durable batch", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("batch modeだけを開いてruntime設定が欠けた状態では起動を止める", () => {
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    checkStartupConfig({ NODE_ENV: "test", EDITOR_AUTH_MODE: "stub", EDITOR_GOOGLE_DOCS_BATCH_MODE: "cloud-tasks" });
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(error.mock.calls.some(([message]) => String(message).includes("Google Docs batch runtime is incomplete"))).toBe(true);
+  });
+});

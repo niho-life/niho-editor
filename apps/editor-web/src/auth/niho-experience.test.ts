@@ -142,8 +142,11 @@ describe("NIHO Experience editor auth", () => {
     expect(await auth.apiToken?.(session!)).toBeNull();
     expect(await auth.articleApiToken?.(session!, request, "roles")).toBe(ID_TOKEN);
     expect(await auth.articleApiToken?.(session!, request, "article-links")).toBe(ID_TOKEN);
+    expect(await auth.docsApiToken?.(session!, request)).toBe(ID_TOKEN);
     expect(await auth.articleApiToken?.({ ...session!, sessionId: "other-session" }, request, "roles")).toBeNull();
+    expect(await auth.docsApiToken?.({ ...session!, sessionId: "other-session" }, request)).toBeNull();
     expect(await auth.articleApiToken?.(session!, { headers: new Headers({ cookie: `${NIHO_SESSION_COOKIE}=${"P".repeat(100)}` }) }, "roles")).toBeNull();
+    expect(await auth.docsApiToken?.(session!, { headers: new Headers({ cookie: `${NIHO_SESSION_COOKIE}=${"P".repeat(100)}` }) })).toBeNull();
     expect(await (auth.articleApiToken as unknown as (session: Session, request: SessionRequest, purpose: string) => Promise<string | null>)(session!, request, "photo")).toBeNull();
   });
 

@@ -346,5 +346,5 @@ export const googleDocsDeps: GoogleDocsApiDeps = {
   auth: () => getAuthProvider(),
   store: () => getStore(),
   gateway: () => getGoogleDocsGateway(process.env),
-  credential: (session) => getGoogleDocsCredential(getAuthProvider(), session),
+  credential: (session, request) => getGoogleDocsCredential(getAuthProvider(), session, request),
 };

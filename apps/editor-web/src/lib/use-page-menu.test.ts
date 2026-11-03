@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PAGE_MENU_TEXT, googleDocFailureText, pageMenuItems } from "./use-page-menu";
-import { PageActionError } from "./page-actions-client";
+import { pageMenuItems } from "./use-page-menu";
 import { googleDocsConnectPath, GOOGLE_DOCS_CONNECT_PATH } from "./google-docs-paths";
 
 /** 「…」の項目と、Google ドキュメントの失敗の文言（code ごと）。 */
@@ -8,7 +7,7 @@ import { googleDocsConnectPath, GOOGLE_DOCS_CONNECT_PATH } from "./google-docs-p
 describe("「…」の項目", () => {
   it("書き出しは .md と Google ドキュメントの 2 つに分かれる", () => {
     const items = pageMenuItems(null);
-    expect(items.map((item) => item.id)).toEqual(["share", "export", "export-google-doc", "history", "duplicate", "delete"]);
+    expect(items.map((item) => item.id)).toEqual(["share", "export", "export-google-docs-batch", "history", "duplicate", "delete"]);
     const [, markdown, google] = items;
     expect(markdown).toMatchObject({ label: "書き出し", hint: ".md" });
     expect(google).toMatchObject({ label: "Google ドキュメントへ" });
@@ -22,29 +21,6 @@ describe("「…」の項目", () => {
     expect(hintOf(true)).toBe("共有中");
     expect(hintOf(false)).toBeUndefined();
     expect(hintOf(null)).toBeUndefined();
-  });
-});
-
-describe("Google ドキュメントの失敗の文言", () => {
-  const text = (status: number, code: string | null = null) => googleDocFailureText(new PageActionError(status, code));
-
-  it("code ごとに言い分ける", () => {
-    expect(text(401)).toBe(PAGE_MENU_TEXT.signedOut);
-    expect(text(503, "google_docs_unavailable")).toBe(PAGE_MENU_TEXT.googleDocUnavailable);
-    expect(text(503, "app_not_allowed")).toBe(PAGE_MENU_TEXT.googleDocUnavailable);
-    expect(text(502, "export_result_unknown")).toBe(PAGE_MENU_TEXT.googleDocUnknown);
-    expect(text(409, "drive_connection_changed")).toBe(PAGE_MENU_TEXT.googleDocRestart);
-    expect(text(409, "export_payload_conflict")).toBe(PAGE_MENU_TEXT.googleDocRestart);
-    expect(text(502, "google_docs_failed")).toBe(PAGE_MENU_TEXT.googleDocFailed);
-    expect(text(500)).toBe(PAGE_MENU_TEXT.googleDocFailed);
-    expect(googleDocFailureText(new Error("boom"))).toBe(PAGE_MENU_TEXT.googleDocFailed);
-  });
-
-  it("文言に内部の情報を混ぜない", () => {
-    for (const message of Object.values(PAGE_MENU_TEXT)) {
-      if (typeof message !== "string") continue;
-      expect(message).not.toMatch(/https?:|token|Bearer/i);
-    }
   });
 });
 

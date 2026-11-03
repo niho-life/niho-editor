@@ -3,12 +3,22 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 /** Secret Manager から runtime だけが受け取る keyring。通常の page 保存には使わない。 */
 export type PrivateJobsEnv = { readonly EDITOR_PRIVATE_JOBS_KEY_RING?: string | undefined };
 
-export type PrivateJobBinding = {
+export type ManagedTranslationPrivateJobBinding = {
   readonly owner: string;
   readonly proposalId: string;
   readonly purpose: "managed-translation";
   readonly expiresAt: string;
 };
+
+export type GoogleDocsPrivateJobBinding = {
+  readonly owner: string;
+  readonly jobId: string;
+  readonly itemId: string;
+  readonly purpose: "google-docs";
+  readonly expiresAt: string;
+};
+
+export type PrivateJobBinding = ManagedTranslationPrivateJobBinding | GoogleDocsPrivateJobBinding;
 
 export type EncryptedPrivateJobPayload = {
   readonly keyId: string;
@@ -42,13 +52,25 @@ function keyBytes(value: unknown): Uint8Array | null {
 }
 
 function bindingBytes(binding: PrivateJobBinding): Uint8Array {
-  if (
-    typeof binding.owner !== "string" || binding.owner.length < 1 || binding.owner.length > 256
-    || !UUID.test(binding.proposalId)
-    || binding.purpose !== "managed-translation"
-    || new Date(binding.expiresAt).toISOString() !== binding.expiresAt
-  ) throw new TypeError("editor-web: invalid private job binding");
-  return Buffer.from(JSON.stringify([binding.owner, binding.proposalId.toLowerCase(), binding.purpose, binding.expiresAt]), "utf8");
+  if (typeof binding.owner !== "string" || binding.owner.length < 1 || binding.owner.length > 256
+    || new Date(binding.expiresAt).toISOString() !== binding.expiresAt) {
+    throw new TypeError("editor-web: invalid private job binding");
+  }
+  if (binding.purpose === "managed-translation") {
+    if (!UUID.test(binding.proposalId)) throw new TypeError("editor-web: invalid private job binding");
+    // Existing managed-translation envelopes depend on these exact bytes. Do not add a version or field here.
+    return Buffer.from(JSON.stringify([binding.owner, binding.proposalId.toLowerCase(), binding.purpose, binding.expiresAt]), "utf8");
+  }
+  if (binding.purpose === "google-docs" && UUID.test(binding.jobId) && UUID.test(binding.itemId)) {
+    return Buffer.from(JSON.stringify([
+      binding.owner,
+      binding.jobId.toLowerCase(),
+      binding.itemId.toLowerCase(),
+      binding.purpose,
+      binding.expiresAt,
+    ]), "utf8");
+  }
+  throw new TypeError("editor-web: invalid private job binding");
 }
 
 function envelope(value: EncryptedPrivateJobPayload): { keyId: string; nonce: Buffer; ciphertext: Buffer; tag: Buffer } {
