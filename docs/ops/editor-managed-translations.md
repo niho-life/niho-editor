@@ -21,3 +21,5 @@ keyringのshapeはJSONでactive key IDとkeysの辞書。IDは短い識別子、
 停止はkeyring参照を空にした公式revisionへ戻す。新規生成を閉じた後もcleanup jobは現在のimageのまま継続し、旧imageのCLIへ差し替えない。jobの失敗はCloud Run executionで確認し、固定command/argsとapp DB接続を復旧する。候補を捨てても既存原文・英語ページ・公開snapshotを消さない。復旧時は候補の期限と現在source/target revisionを照合し、版不一致を上書きで解消しない。採用/期限/owner purgeで暗号化候補の内容を消す。keyを消しても本文purgeの代替としない。
 
 画面受入はowner指示で省略。実配備SHA、migration結果、認証無し拒否、合成本人での候補/確認と公開分離のHTTP readbackは別途証跡に残す。本書の存在だけで有効化/配備済みと扱わない。
+
+録音ブロックは元ページに属する音声assetを参照し、画像の複製では独立化できない。音声を参照したまま壊れた英語ページを作らないため、録音ブロックを含む原文はprovider送信前に拒否し、文字起こしを文章ページへ分ける案内を出す。原文・音声・既存英語版は変更しない。コード等の参照を持たない非翻訳構造は維持する。

@@ -155,6 +155,20 @@ describe("managed translation API", () => {
     expect(f.recordUsage).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects page-bound audio before a provider call or durable proposal", async () => {
+    const f = fixture();
+    const current = f.deps.store()!;
+    const response = await generateTranslationRoute(request({ operationId: OPERATION_ID }), PAGE_ID, {
+      ...f.deps, store: () => ({ ...current, source: async () => ({ ...source, source: {
+        ...source.source, blocks: [...source.source.blocks, { type: "recording", attrs: { assetId: PROPOSAL_ID } }],
+      } }) }),
+    });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "translation_recording_requires_text_page" });
+    expect(f.complete).not.toHaveBeenCalled();
+    expect(f.getRecord()).toBeNull();
+  });
+
   it("rejects browser-supplied text before reading source or calling the provider", async () => {
     const f = fixture();
     const response = await generateTranslationRoute(request({ operationId: OPERATION_ID, title: "browser-controlled text" }), PAGE_ID, f.deps);

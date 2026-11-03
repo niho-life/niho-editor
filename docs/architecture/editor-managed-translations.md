@@ -34,7 +34,7 @@ Experienceの初期面は英語guidesのまま。日本語URLを捏造してhref
 
 1. 生成は既存 `resolveAiCompose` のAnthropicClient/設定・JST月次usage/予算を使い、実行前に送信先と従量対象を示して本人が「APIで英語案を作る」を選ぶ。Macの既定CLI設定から、無説明に有料APIへfallbackしない。既存clientの構造化応答・usageエラー処理は再利用するが、`buildComposePrompt` の24,000文字clampを翻訳に使わない（省略は不可）。初期上限は翻訳対象20,000 codepoints/256 fields。超過はproviderを呼ぶ前に説明して拒否し、分割を案内する。
 2. 新しいCloud Tasks基盤を翻訳専用に作ることは必須にしない。固定入力を持つproposal/operation/generation/leaseで1回の生成を占有し、同時・応答消失の再送は同じproposalを返す。request停止/provider失敗は候補を採用せず固定codeで失敗する。新しい明示再実行だけが別generationを開始する。モデルが返した値だけを英語ページへ自動保存しない。
-3. field pathはtitle、lead、本文のtext、写真alt/captionなど人間の文だけ。リンクURL/asset ID/構造/mark/credit/ライセンスを維持し、codeやrecording等の非対象は勝手に変換/削除しない。対象外を事前に説明し、未知構造・上限・未知/missing/duplicate pathsを拒否する。CONFIRMの未確認印をモデルが消すことも許可しない。
+3. field pathはtitle、lead、本文のtext、写真alt/captionなど人間の文だけ。リンクURL/asset ID/構造/mark/credit/ライセンスを維持し、code等の非対象は勝手に変換/削除しない。録音参照を含む原文は下記の境界で受付前に拒否する。対象外を事前に説明し、未知構造・上限・未知/missing/duplicate pathsを拒否する。CONFIRMの未確認印をモデルが消すことも許可しない。
 4. relationは現在の同ownerのsource ja→target en。初回採用は非公開の英語ページを作り、再翻訳はproposalとして比較してからtargetのexpectedRevisionとsourceRevisionを照合して採用する。sourceの保存後に並行変更があれば候補を保持して409。既存英語の公開snapshot/手編集を自動上書きしない。source更新・target手編集でreviewed revisionを古くし、次の公開/更新まで人が固有名詞/価格/時刻/個人情報/写真altを確認する。元から独立した英語ページには翻訳条件を足さない。
 5. 既存 `duplicatePage` は画像の資産を複製しないため、そのまま使って画像付きの英語ページにしない。Editor ObjectStorageは現在read/stat/startUploadだけで、PhotoObjectStorage.copyは独立製品なので流用しない。Editor側に固定object path/非上書きのcopy portを追加し、GCSではsource generation固定・destination generation=0のrewrite/copyとmetadataを照合する。新しいdelete/overwrite権限は要求しない。sourceのasset metadataを固定し、新target用の独立asset ID/object keyへ写してからrelation/pageのDB確定をCASする。コピーoperation/mappingをproposalに追跡し、同じproposalの再送では同じ宛先へ収束する。失敗/中断時に原本や既存英語を壊さず、未採用copyを追跡不能な孤立物にしない。元ページ側のpurge/GCが英語側の独立objectへ届かないことをテストする。
 6. sourceがtrash/purgeされた場合は原文不明を示し、既存公開snapshotは変えない。次の公開は原文を復元して確認するか、本人が現在英語本文を確認して「原文との対応を外して独立した英語ページにする」を明示するまで止める。対応解除は公開操作ではなく、writer/カテゴリ/写真/関連体験の現在検査も省略しない。新しい大きな多言語CMSをExperienceに作らない。
@@ -48,3 +48,5 @@ Experienceの初期面は英語guidesのまま。日本語URLを捏造してhref
 ## 定期削除の接続
 
 候補の有効期間を23時間50分とし、5分おきの専用private-jobs jobが期限切れpayloadを消す。正常稼働時に24時間以内へ収め、無操作のままの永続化を防ぐ。APIも期限切れを拒否する。暗号鍵が設定されてもmaintenanceフラグが無ければ生成を閉じる。jobはapp DB資格だけで、固定の`--private-jobs-only`以外へ切替できず、通常ページ/ゴミ箱/objectを削除しない。Scheduler identityは対象jobのexecute権限だけを持ち、鍵/DBや引数overrideへ届かない。構成と障害時の復旧は運用手順を参照。
+
+録音ブロックは元ページに属する音声assetを参照し、画像の複製では独立化できない。音声を参照したまま壊れた英語ページを作らないため、録音ブロックを含む原文はprovider送信前に拒否し、文字起こしを文章ページへ分ける案内を出す。原文・音声・既存英語版は変更しない。コード等の参照を持たない非翻訳構造は維持する。

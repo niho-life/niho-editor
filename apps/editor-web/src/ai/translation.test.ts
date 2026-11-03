@@ -21,7 +21,6 @@ const page = (): TranslationPageSnapshot => ({
     { type: "blockquote", content: [{ type: "paragraph", content: [{ type: "text", text: "静かな道です" }] }] },
     { type: "image", attrs: { assetId: IMAGE, alt: "浜辺", caption: "朝の海", credit: "Synthetic photographer", consent: true } },
     { type: "codeBlock", attrs: { language: "sh" }, content: [{ type: "text", text: "echo 日本語" }] },
-    { type: "recording", attrs: { assetId: AUDIO } },
     { type: "horizontalRule" },
   ],
 });
@@ -41,7 +40,7 @@ describe("managed translation field contract", () => {
       "blocks[2].attrs.caption",
       `assets[${IMAGE}].alt`,
     ]);
-    expect(result.plan.omissions).toEqual(expect.arrayContaining(["コードブロック", "録音ブロック", "区切り線", "写真クレジット（原文を維持）"]));
+    expect(result.plan.omissions).toEqual(expect.arrayContaining(["コードブロック", "区切り線", "写真クレジット（原文を維持）"]));
     expect(result.plan.fields.some((field) => field.text.includes("echo"))).toBe(false);
   });
 
@@ -74,6 +73,11 @@ describe("managed translation field contract", () => {
     expect(parseManagedTranslationOutput({ translations: complete.map((field, index) => index === 0 ? { path: "unknown", text: field.text } : field) }, complete)).toEqual({ ok: false, reason: "unknown_path" });
     const changed = complete.map((field) => field.path === "blocks[0].content[0].text" ? { ...field, text: "Meet at seven [CONFIRM: summer time]" } : field);
     expect(parseManagedTranslationOutput({ translations: changed }, complete)).toEqual({ ok: false, reason: "confirm_changed" });
+  });
+
+  it("refuses audio references instead of leaving assets bound to the source page", () => {
+    expect(planManagedTranslation({ ...page(), blocks: [...page().blocks, { type: "recording", attrs: { assetId: AUDIO } }] }))
+      .toEqual({ ok: false, reason: "recording_requires_text_page" });
   });
 
   it("rejects unknown AST and all provider-bound input over either fixed limit", () => {

@@ -44,6 +44,7 @@ const FIELD_STYLE = {
 function messageOf(error: unknown): string {
   if (!(error instanceof TranslationRequestError)) return "翻訳の状態を更新できませんでした。時間をおいてもう一度お試しください。";
   const messages: Record<string, string> = {
+    translation_recording_requires_text_page: "録音を含む本文は、文字起こしを文章のページに分けてから英語案を作ってください。",
     translation_unknown_structure: "このページには翻訳に未対応の本文構造があります。本文を確認してください。",
     translation_too_many_fields: "翻訳対象が256項目を超えています。ページを分けてください。",
     translation_too_large: "翻訳対象が20,000文字を超えています。ページを分けてください。",
@@ -243,7 +244,7 @@ export function PageTranslation({ pageId, lang, saveFirst }: Props) {
     <section aria-label="英語版を作る" style={PANEL_STYLE}>
       <h3>英語版を作る</h3>
       <p>保存済みの題名・リード・本文・画像の代替テキストとキャプションをAnthropic APIへ送り、従量対象の英語案を作ります。候補は確認・採用するまでページや公開版を変更しません。</p>
-      <p>上限は20,000文字・256項目です。コード、録音、画像ID・URL・リンク・書式・クレジット・許諾は翻訳せず維持します。未対応構造や欠落した結果は全体を採用しません。</p>
+      <p>上限は20,000文字・256項目です。コード、画像ID・URL・リンク・書式・クレジット・許諾は翻訳せず維持します。録音を含む本文は、文章のページに分けてから英語案を作ってください。未対応構造や欠落した結果は全体を採用しません。</p>
       {omissions.length > 0 && <p>今回の対象外: {omissions.join("、")}</p>}
       <button type="button" className="es-btn niho-primary-surface" disabled={busy !== null || loading} onClick={() => void generate()}>
         {busy === "generate" ? "APIで英語案を作っています…" : relation ? "APIで英語案を作り直す" : "APIで英語案を作る"}

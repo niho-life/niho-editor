@@ -29,7 +29,7 @@ export type TranslationPlan = {
 
 export type TranslationPlanResult =
   | { readonly ok: true; readonly plan: TranslationPlan }
-  | { readonly ok: false; readonly reason: "unknown_structure" | "too_many_fields" | "too_large" | "no_fields" };
+  | { readonly ok: false; readonly reason: "unknown_structure" | "recording_requires_text_page" | "too_many_fields" | "too_large" | "no_fields" };
 
 export type TranslationCandidate = TranslationPageSnapshot & {
   readonly fields: readonly TranslationField[];
@@ -58,6 +58,7 @@ export function planManagedTranslation(page: TranslationPageSnapshot): Translati
   if (!accepted.ok) return { ok: false, reason: "unknown_structure" };
   const fields: TranslationField[] = [];
   const omissions = new Set<string>();
+  let hasRecording = false;
   addField(fields, "title", page.title);
   addField(fields, "lead", page.lead);
 
@@ -66,7 +67,7 @@ export function planManagedTranslation(page: TranslationPageSnapshot): Translati
     if (!value || typeof value.type !== "string") return;
     const code = inCode || value.type === "codeBlock";
     if (value.type === "codeBlock") omissions.add("コードブロック");
-    if (value.type === "recording") omissions.add("録音ブロック");
+    if (value.type === "recording") hasRecording = true;
     if (value.type === "horizontalRule") omissions.add("区切り線");
     if (value.type === "image") {
       const attrs = record(value.attrs);
@@ -79,6 +80,8 @@ export function planManagedTranslation(page: TranslationPageSnapshot): Translati
     if (Array.isArray(value.content)) value.content.forEach((child, index) => visit(child, `${path}.content[${index}]`, code));
   };
   accepted.blocks.forEach((block, index) => visit(block, `blocks[${index}]`, false));
+  // Audio is page-owned and is not cloned by the image-copy path. Do not create a dangling reference.
+  if (hasRecording) return { ok: false, reason: "recording_requires_text_page" };
   for (const asset of page.assets ?? []) addField(fields, `assets[${asset.assetId.toLowerCase()}].alt`, asset.alt);
 
   if (fields.length === 0) return { ok: false, reason: "no_fields" };
