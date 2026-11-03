@@ -73,12 +73,6 @@
 /* ===== 左の一覧 ===== */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb{display:flex;flex-direction:column;min-height:0;height:100%;background:var(--ed-canvas);border-right:1px solid var(--ed-line)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-top{display:flex;align-items:center;gap:6px;padding:14px 12px 10px;min-height:58px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-appnav{padding:2px 8px 8px;border-bottom:1px solid var(--ed-line)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-appnav ul{list-style:none;margin:0;padding:0}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-app-link{display:flex;align-items:center;gap:9px;width:100%;min-height:40px;padding:8px 10px;border-radius:10px;text-align:left;color:var(--ed-ink);font:inherit}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-app-link:hover{background:var(--ed-sand-2)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-app-link--on{background:var(--ed-white);box-shadow:0 1px 3px rgba(28,28,26,.08),0 0 0 1px var(--ed-line);font-weight:600}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-app-link .es-ico{width:18px;height:18px;flex:none;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-newwrap{position:relative;display:flex}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-newbtn{width:30px;height:30px;border-radius:50%;background:var(--ed-primary-bg);color:var(--ed-primary-ink);display:grid;place-items:center;flex:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-newbtn:hover{background:var(--ed-primary-bg-hover)}
