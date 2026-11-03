@@ -185,16 +185,17 @@ describe("Mac の新しい editor の画面", () => {
     expect(markdown).toContain("足した段落");
   });
 
-  it("限定 AST の外の要素があるページは、黙って欠けさせず開かずに知らせる", async () => {
+  it("表を本文として開いて、保管庫の Markdown を変えない", async () => {
     const bridge = editorBridge();
     const created = await bridge.createPage(null, { kind: "doc", title: "表のあるページ", createdAt: new Date().toISOString() });
     await bridge.writePage(null, created.id, "| a | b |\n| --- | --- |\n| 1 | 2 |\n");
     const { container } = await render(bridge);
     await click(rows(container)[0]!);
 
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("開けない要素");
-    expect(container.querySelector("textarea.page-title")).toBeNull();
-    // 本文のファイルは変えない
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(title(container).value).toBe("表のあるページ");
+    expect(body(container).state.doc.firstChild?.type.name).toBe("table");
+    // 開いただけでは本文のファイルを変えない
     expect(bridge.outside.docs[created.id]).toContain("| a | b |");
   });
 

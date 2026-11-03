@@ -6,12 +6,11 @@ import {
   settingsProblem,
   type EditorSettings,
   type EditorSettingsPatch,
-  type SettingsRecipe,
 } from "@niho/editor-store";
 import { describe, expect, it } from "vitest";
 import type { AuthProvider } from "../auth/types";
 import { DEFAULT_RECIPES, toRecipeInputs, type RecipeDef } from "../steps/recipes";
-import { getSettings, patchSettings, type SettingsApiDeps, type SettingsDto } from "./settings-api";
+import { duplicateSettingsRecipe, getSettings, patchSettings, type SettingsApiDeps, type SettingsDto, type SettingsRecipeInput } from "./settings-api";
 
 const ORIGIN = "http://editor.test";
 // 合成の値だけを使う
@@ -34,7 +33,7 @@ function authAs(userId: string | null): AuthProvider {
 
 /**
  * 本物と同じ決まりの、覚えておくだけの store（渡した項目を入れ替える・検証を通らない値は投げる）。
- * 手順は表と同じで、行が無い人の最初の読み出しで既定の 3 つを入れる（recipe-source.ts と同じ決まり）。
+ * 手順は表と同じで、行が無い人の最初の読み出しで既定の 4 つを入れる（recipe-source.ts と同じ決まり）。
  */
 function memoryStore() {
   const rows = new Map<string, EditorSettings>();
@@ -63,21 +62,23 @@ function memoryStore() {
   };
 }
 
-function deps(userId: string | null, store: ReturnType<typeof memoryStore> | null): SettingsApiDeps {
-  return { auth: () => authAs(userId), settings: () => store };
+function deps(userId: string | null, store: ReturnType<typeof memoryStore> | null, duplicateRecipe?: SettingsApiDeps["duplicateRecipe"]): SettingsApiDeps {
+  return { auth: () => authAs(userId), settings: () => store, ...(duplicateRecipe ? { duplicateRecipe } : {}) };
 }
 
-function request(method: string, body?: unknown, headers: Record<string, string> = {}): Request {
+function request(method: string, body?: unknown, headers: Record<string, string> = {}, path = "/api/settings"): Request {
   const init: RequestInit = {
     method,
     headers: { host: "editor.test", ...(method === "GET" ? {} : { origin: ORIGIN, "content-type": "application/json" }), ...headers },
   };
   if (body !== undefined) init.body = typeof body === "string" ? body : JSON.stringify(body);
-  return new Request(`${ORIGIN}/api/settings`, init);
+  return new Request(`${ORIGIN}${path}`, init);
 }
 
 const read = (d: SettingsApiDeps) => getSettings(request("GET"), d);
 const write = (body: unknown, d: SettingsApiDeps, headers?: Record<string, string>) => patchSettings(request("PATCH", body, headers), d);
+const duplicate = (recipeId: string, d: SettingsApiDeps, headers: Record<string, string> = {}) =>
+  duplicateSettingsRecipe(request("POST", undefined, headers, `/api/settings/recipes/${recipeId}/duplicate`), recipeId, d);
 
 async function settingsOf(response: Response): Promise<SettingsDto> {
   expect(response.status).toBe(200);
@@ -85,8 +86,8 @@ async function settingsOf(response: Response): Promise<SettingsDto> {
 }
 
 /** 効いている手順の並び（PATCH はこの形の全部を送る）。 */
-function effective(dto: SettingsDto): SettingsRecipe[] {
-  return dto.recipes.map(({ id, name, guide, steps }) => ({ id, name, guide, steps }));
+function effective(dto: SettingsDto): SettingsRecipeInput[] {
+  return dto.recipes.map(({ id, name, guide, steps, terms, samples }) => ({ id, name, guide, steps, terms, samples }));
 }
 
 describe("GET /api/settings", () => {
@@ -99,6 +100,7 @@ describe("GET /api/settings", () => {
     const dto = await settingsOf(await read(deps(OWNER, memoryStore())));
     expect(dto.aiLang).toBe("same");
     expect(dto.glossary).toEqual([]);
+    expect(dto.aboutName).toBe("");
     expect(dto.recipes.map((recipe) => [recipe.id, recipe.isDefault, recipe.modified])).toEqual([
       ["tpl-1", true, false],
       ["tpl-2", true, false],
@@ -113,6 +115,45 @@ describe("GET /api/settings", () => {
     const store = memoryStore();
     await write({ aiLang: "en" }, deps(OWNER, store));
     expect((await settingsOf(await read(deps("synthetic-owner-b", store)))).aiLang).toBe("same");
+  });
+});
+
+describe("POST /api/settings/recipes/{id}/duplicate", () => {
+  it("requires the owner and same origin, then returns the atomically duplicated recipe list", async () => {
+    const store = memoryStore();
+    const recipes = await store.recipes(OWNER);
+    const d = deps(OWNER, store, async (owner, recipeId) => {
+      const current = await store.recipes(owner);
+      const source = current.find((recipe) => recipe.id === recipeId);
+      if (!source) return { status: "not_found" };
+      const copy: RecipeDef = {
+        ...source,
+        id: "r-copy",
+        name: "記事制作のコピー",
+        steps: source.steps.map((step) => ({ ...step, id: `copy-${step.id}` })),
+        terms: source.terms.map((term) => ({ ...term, variants: [...term.variants] })),
+        samples: source.samples.map((sample) => ({ ...sample, id: `copy-${sample.id}` })),
+      };
+      const next = [...current, copy];
+      store.recipeRows.set(owner, next);
+      return { status: "created", recipes: next };
+    });
+
+    expect((await duplicate("tpl-1", deps(null, store, d.duplicateRecipe))).status).toBe(401);
+    expect((await duplicate("tpl-1", d, { origin: "https://other.example" })).status).toBe(403);
+    const response = await duplicate("tpl-1", d);
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as { settings: SettingsDto };
+    expect(body.settings.recipes).toHaveLength(recipes.length + 1);
+    expect(body.settings.recipes.at(-1)).toMatchObject({ id: "r-copy", name: "記事制作のコピー", isDefault: false });
+  });
+
+  it("returns 404 for a missing source and 409 when a limit prevents copying", async () => {
+    const store = memoryStore();
+    const missing = deps(OWNER, store, async () => ({ status: "not_found" }));
+    expect((await duplicate("tpl-404", missing)).status).toBe(404);
+    const limited = deps(OWNER, store, async () => ({ status: "limit" }));
+    expect(await (await duplicate("tpl-1", limited)).json()).toEqual({ error: "recipe_limit" });
   });
 });
 
@@ -134,12 +175,24 @@ describe("PATCH /api/settings", () => {
     expect(await settingsOf(await read(d))).toEqual(saved);
   });
 
+  it("saves 呼び名 without replacing the existing 自己紹介", async () => {
+    const store = memoryStore();
+    const d = deps(OWNER, store);
+    await write({ about: "既存の自己紹介を残す" }, d);
+    const saved = await settingsOf(await write({ aboutName: "  合成\n呼び名  " }, d));
+    expect(saved.aboutName).toBe("合成 呼び名");
+    expect(saved.about).toBe("既存の自己紹介を残す");
+    expect(await settingsOf(await read(d))).toEqual(saved);
+  });
+
   it("refuses an unknown key, an unknown language and a glossary over the limits with 400, writing nothing", async () => {
     const store = memoryStore();
     const d = deps(OWNER, store);
     for (const body of [
       { nope: 1 },
       { aiLang: "fr" },
+      { aboutName: "あ".repeat(SETTINGS_LIMITS.aboutNameChars + 1) },
+      { aboutName: "改行以外の制御\u0000" },
       { glossary: [{ term: "" }] },
       { glossary: Array.from({ length: SETTINGS_LIMITS.glossary + 1 }, (_, i) => ({ term: `t${i}`, reading: "", variants: [], note: "" })) },
       "not json at all",
@@ -154,13 +207,13 @@ describe("PATCH /api/settings", () => {
     const d = deps(OWNER, store);
     const before = await settingsOf(await read(d));
     for (const recipe of before.recipes) {
-      expect(recipe.defaults, recipe.id).toEqual({ name: recipe.name, guide: recipe.guide, steps: recipe.steps });
+      expect(recipe.defaults, recipe.id).toEqual({ name: recipe.name, guide: recipe.guide, steps: recipe.steps, terms: recipe.terms, samples: recipe.samples });
     }
 
     // 1 つに手を入れてから、応答の `defaults` で置き換えて送ると、保存した写しが消えて既定に戻る
     const edited = effective(before).map((recipe) => (recipe.id === "tpl-2" ? { ...recipe, name: "議事録（短め）" } : recipe));
     const saved = await settingsOf(await write({ recipes: edited }, d));
-    // 既定の 3 つも行として保存される（手を入れた分だけではない）
+    // 既定の 4 つも行として保存される（手を入れた分だけではない）
     expect(store.recipeRows.get(OWNER)?.map((recipe) => [recipe.id, recipe.name])).toEqual([
       ["tpl-1", "記事制作"],
       ["tpl-2", "議事録（短め）"],
@@ -189,7 +242,6 @@ describe("PATCH /api/settings", () => {
       ["tpl-4", false],
     ]);
     expect(saved.recipes[1]?.name).toBe("議事録（短め）");
-    // 工程のプロファイルは画面が送らないので、表の値がそのまま残る
     expect(store.recipeRows.get(OWNER)?.[1]?.steps.map((step) => step.profile)).toEqual(DEFAULT_RECIPES[1]!.steps.map((step) => step.profile));
 
     const back = await settingsOf(await write({ recipes: effective(before) }, d));
@@ -201,8 +253,8 @@ describe("PATCH /api/settings", () => {
     const store = memoryStore();
     const d = deps(OWNER, store);
     const base = effective(await settingsOf(await read(d)));
-    const copy: SettingsRecipe = { ...base[0]!, id: "r-copy", name: "記事制作のコピー" };
-    const added: SettingsRecipe = { id: "r-talk", name: "対談", guide: "", steps: [{ id: "s-1", name: "まとめ", instruction: "まとめる。" }] };
+    const copy: SettingsRecipeInput = { ...base[0]!, id: "r-copy", name: "記事制作のコピー" };
+    const added: SettingsRecipeInput = { id: "r-talk", name: "対談", guide: "", steps: [{ id: "s-1", name: "まとめ", instruction: "まとめる。" }], terms: [], samples: [] };
     const saved = await settingsOf(await write({ recipes: [...base, copy, added] }, d));
     expect(saved.recipes.map((recipe) => [recipe.id, recipe.isDefault])).toEqual([
       ["tpl-1", true],
@@ -219,7 +271,7 @@ describe("PATCH /api/settings", () => {
     expect(removed.recipes.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3", "tpl-4", "r-talk"]);
   });
 
-  it("refuses a 手順 list that drops a default, repeats one, or renumbers a default's 段階", async () => {
+  it("refuses a 手順 list that drops a default, repeats one, removes or renumbers a default 段階, but accepts reordering", async () => {
     const store = memoryStore();
     const d = deps(OWNER, store);
     const base = effective(await settingsOf(await read(d)));
@@ -232,6 +284,30 @@ describe("PATCH /api/settings", () => {
     ];
     for (const body of bodies) expect((await write(body, d)).status, JSON.stringify(body).slice(0, 60)).toBe(400);
     expect(store.rows.size).toBe(0);
+    const reordered = base.map((recipe) => recipe.id === "tpl-1" ? { ...recipe, steps: [...recipe.steps].reverse() } : recipe);
+    const accepted = await settingsOf(await write({ recipes: reordered }, d));
+    expect(accepted.recipes[0]?.steps.map((step) => step.id)).toEqual([...DEFAULT_RECIPES[0]!.steps].reverse().map((step) => step.id));
+  });
+
+  it("preserves profile, terms and sample metadata when an older screen omits them", async () => {
+    const store = memoryStore();
+    const d = deps(OWNER, store);
+    const current = effective(await settingsOf(await read(d)));
+    const enriched = current.map((recipe) => recipe.id === "tpl-1" ? {
+      ...recipe,
+      terms: [{ term: "合成語", reading: "ごうせいご", variants: ["合成語句"], note: "保持する" }],
+      samples: [{ id: "sample-1", name: "合成のお手本", chars: 123, sourceUrl: "https://example.test/sample" }],
+      steps: recipe.steps.map((step) => ({ ...step, profile: "light" })),
+    } : recipe);
+    await write({ recipes: enriched }, d);
+    const oldPayload = enriched.map(({ id, name, guide, steps }) => ({
+      id, name, guide,
+      steps: steps.map(({ id: stepId, name: stepName, instruction }) => ({ id: stepId, name: stepName, instruction })),
+    }));
+    const saved = await settingsOf(await write({ recipes: oldPayload }, d));
+    expect(saved.recipes[0]?.terms).toEqual(enriched[0]?.terms);
+    expect(saved.recipes[0]?.samples).toEqual(enriched[0]?.samples);
+    expect(saved.recipes[0]?.steps[0]?.profile).toBe("light");
   });
 
   it("changes only what was passed", async () => {
@@ -245,7 +321,7 @@ describe("PATCH /api/settings", () => {
 
   it("never hands the response a key the screen does not need", async () => {
     const dto = await settingsOf(await read(deps(OWNER, memoryStore())));
-    expect(Object.keys(dto).sort()).toEqual(["about", "aiLang", "glossary", "limits", "recipes"]);
-    expect(Object.keys(dto.recipes[0]!).sort()).toEqual(["defaults", "guide", "id", "isDefault", "modified", "name", "steps"]);
+    expect(Object.keys(dto).sort()).toEqual(["about", "aboutName", "aiLang", "glossary", "limits", "recipes"]);
+    expect(Object.keys(dto.recipes[0]!).sort()).toEqual(["defaults", "guide", "id", "isDefault", "modified", "name", "samples", "steps", "terms", "unusableReason"]);
   });
 });

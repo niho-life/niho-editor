@@ -129,8 +129,8 @@ export async function startImageUpload(
 }
 
 /** ticket の url へ画像を直接 PUT する。412（既に置いてある）は成功と同じに扱い、続けて完了を呼べばよい。 */
-export async function putImage(ticket: ImageUploadTicket, body: Blob, fetchImpl: FetchLike = fetch): Promise<void> {
-  const response = await fetchImpl(ticket.url, { method: "PUT", headers: { ...ticket.headers }, body, credentials: "omit", cache: "no-store" });
+export async function putImage(ticket: ImageUploadTicket, body: Blob, fetchImpl: FetchLike = fetch, signal?: AbortSignal): Promise<void> {
+  const response = await fetchImpl(ticket.url, { method: "PUT", headers: { ...ticket.headers }, body, credentials: "omit", cache: "no-store", signal });
   await response.body?.cancel().catch(() => undefined);
   if (response.ok || response.status === 412) return;
   // 保存先の応答の本文は読まない（中身を出さない）
@@ -144,6 +144,16 @@ export async function completeImageUpload(pageId: string, assetId: string, fetch
     credentials: "same-origin",
     cache: "no-store",
   });
+  if (!response.ok) throw await failure(response);
+  const data = await readJson(response);
+  const image = isPlainObject(data) ? toImage(data.image) : null;
+  if (!image) throw new ImageUploadError(500);
+  return image;
+}
+
+/** 画像の公開メタデータ（掲載許諾など）を読む。画像本体は返さない。 */
+export async function getImageMetadata(assetId: string, fetchImpl: FetchLike = fetch): Promise<ImageResponse> {
+  const response = await fetchImpl(`/api/assets/${encodeURIComponent(assetId)}/meta`, { credentials: "same-origin", cache: "no-store" });
   if (!response.ok) throw await failure(response);
   const data = await readJson(response);
   const image = isPlainObject(data) ? toImage(data.image) : null;
@@ -173,12 +183,22 @@ export async function saveImageMeta(assetId: string, patch: Partial<ImageMeta>, 
 
 /** サーバーが断った理由を、画面に出す理由に写す（分からないものは failed）。 */
 function problemOf(error: unknown): ImageProblem {
+  if (error instanceof ImageUploadError && error.error === "page_full") return "page_full";
   if (error instanceof ImageUploadError && error.error === "bad_request") {
     if (error.reason === "content_type") return "content_type";
     if (error.reason === "too_large") return "too_large";
     if (error.reason === "too_many") return "too_many";
   }
   return "failed";
+}
+
+/** A failed upload must not keep its page reservation. The server removes only uploading assets. */
+export async function cancelImageUpload(pageId: string, assetId: string, fetchImpl: FetchLike = fetch): Promise<void> {
+  await fetchImpl(`/api/pages/${encodeURIComponent(pageId)}/images/${encodeURIComponent(assetId)}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    cache: "no-store",
+  });
 }
 
 /**
@@ -188,16 +208,22 @@ function problemOf(error: unknown): ImageProblem {
 export function createPageImages(options: { fetch?: FetchLike } = {}): PageImages {
   const fetchImpl = options.fetch ?? ((...args: Parameters<FetchLike>) => fetch(...args));
   return {
-    upload: async (file, pageId) => {
+    upload: async (file, pageId, signal) => {
       if (!isAllowedImageType(file.type)) return { ok: false, problem: "content_type" };
       if (!isAllowedImageSize(file.size)) return { ok: false, problem: "too_large" };
+      let startedAssetId: string | null = null;
       try {
         const sha256 = await imageSha256(file);
-        const started = await startImageUpload(pageId, { contentType: file.type.toLowerCase(), sizeBytes: file.size, sha256 }, { fetch: fetchImpl });
-        if (started.upload) await putImage(started.upload, file, fetchImpl);
+        if (signal?.aborted) throw new DOMException("Upload cancelled", "AbortError");
+        const started = await startImageUpload(pageId, { contentType: file.type.toLowerCase(), sizeBytes: file.size, sha256 }, { fetch: fetchImpl, idempotencyKey: crypto.randomUUID() });
+        startedAssetId = started.upload ? started.assetId : null;
+        if (signal?.aborted) throw new DOMException("Upload cancelled", "AbortError");
+        if (started.upload) await putImage(started.upload, file, fetchImpl, signal);
+        if (signal?.aborted) throw new DOMException("Upload cancelled", "AbortError");
         const image = await completeImageUpload(pageId, started.assetId, fetchImpl);
         return { ok: true, assetId: image.assetId, meta: { alt: image.alt, credit: image.credit, consent: image.consent } };
       } catch (error) {
+        if (startedAssetId) await cancelImageUpload(pageId, startedAssetId, fetchImpl).catch(() => undefined);
         return { ok: false, problem: problemOf(error) };
       }
     },

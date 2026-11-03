@@ -191,6 +191,13 @@ describe("RecordingAudios（1 ページに音声を複数）", () => {
     expect(rows[2]).toContain("音声は削除されました");
   });
 
+  it("削除済みなどでPart番号に穴がある場合、その音声が欠落していると一覧に出す", async () => {
+    await mount([part(), part({ partIndex: 2, offsetSec: 1200, sourceName: "音声 3.m4a" })]);
+    const missing = container!.querySelector('[data-audio-part="1"]');
+    expect(missing?.getAttribute("data-audio-part-state")).toBe("missing");
+    expect(missing?.textContent).toContain("音声 2が見つかりません");
+  });
+
   it("取り込みの途中の音声（2 本目以降）にだけ「取り消す」が出て、押すとその行を消して録音を読み直す", async () => {
     const calls: Array<{ method: string; path: string }> = [];
     vi.stubGlobal(

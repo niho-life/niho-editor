@@ -1,10 +1,10 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, type CSSProperties, type ReactNode } from "react";
 
 /**
  * 共有ページ（`/s/{token}`）の本文を React の要素にする（#34）。HTML の文字列は作らず、注入もしない。
  * 本文は TipTap の doc の content（ブロックの配列）。描くのは:
- * paragraph・heading（2 は h2、それ以外は h3）・bulletList・orderedList・listItem・blockquote・callout・horizontalRule・hardBreak・text・image。
- * mark は bold・italic・link だけ（他の mark は無視して文字だけ）。リンクは https・http・mailto の絶対 URL だけを
+ * paragraph・heading・リスト・表・コード・引用・区切り線・改行・文字・画像。
+ * mark は bold・italic・strike・code・link。リンクは https・http・mailto の絶対 URL だけを
  * リンクにし（javascript:・data:・相対・資格情報つきは文字だけ）、常に rel="noopener noreferrer nofollow ugc" を付ける。
  * 未知のノードは投げずに子だけを描く。再帰は深さ 64 で止める。
  *
@@ -76,16 +76,22 @@ function renderText(node: JsonNode, key: number): ReactNode {
   let href: string | null = null;
   let bold = false;
   let italic = false;
+  let strike = false;
+  let code = false;
   if (Array.isArray(node.marks)) {
     for (const mark of node.marks) {
       if (!isNode(mark)) continue;
       if (mark.type === "bold") bold = true;
       else if (mark.type === "italic") italic = true;
+      else if (mark.type === "strike") strike = true;
+      else if (mark.type === "code") code = true;
       else if (mark.type === "link" && isNode(mark.attrs)) href = safeShareHref(mark.attrs.href);
     }
   }
   if (italic) element = <em>{element}</em>;
   if (bold) element = <strong>{element}</strong>;
+  if (strike) element = <s>{element}</s>;
+  if (code) element = <code>{element}</code>;
   if (href) {
     element = (
       <a href={href} rel={SHARED_LINK_REL}>
@@ -94,6 +100,13 @@ function renderText(node: JsonNode, key: number): ReactNode {
     );
   }
   return <Fragment key={key}>{element}</Fragment>;
+}
+
+function tableCellProps(node: JsonNode): { colSpan?: number; rowSpan?: number; style?: CSSProperties } {
+  const attrs = isNode(node.attrs) ? node.attrs : {};
+  const span = (value: unknown) => Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= 100 ? value as number : undefined;
+  const align = attrs.align === "left" || attrs.align === "center" || attrs.align === "right" ? attrs.align : null;
+  return { colSpan: span(attrs.colspan), rowSpan: span(attrs.rowspan), style: align ? { textAlign: align } : undefined };
 }
 
 function renderNode(value: unknown, key: number, depth: number, assetSrc: AssetSrc | null): ReactNode {
@@ -117,6 +130,22 @@ function renderNode(value: unknown, key: number, depth: number, assetSrc: AssetS
       );
     case "bulletList":
       return <ul key={key}>{renderChildren(value, depth, assetSrc)}</ul>;
+    case "taskList":
+      return <ul key={key} data-type="taskList">{renderChildren(value, depth, assetSrc)}</ul>;
+    case "taskItem": {
+      const checked = isNode(value.attrs) && value.attrs.checked === true;
+      return <li key={key} data-checked={checked}><span aria-label={checked ? "完了" : "未完了"}>{checked ? "☑" : "☐"}</span>{renderChildren(value, depth, assetSrc)}</li>;
+    }
+    case "table":
+      return <div key={key} className="shared-table" role="region" aria-label="本文の表" tabIndex={0}><table><tbody>{renderChildren(value, depth, assetSrc)}</tbody></table></div>;
+    case "tableRow":
+      return <tr key={key}>{renderChildren(value, depth, assetSrc)}</tr>;
+    case "tableHeader":
+      return <th key={key} scope="col" {...tableCellProps(value)}>{renderChildren(value, depth, assetSrc)}</th>;
+    case "tableCell":
+      return <td key={key} {...tableCellProps(value)}>{renderChildren(value, depth, assetSrc)}</td>;
+    case "codeBlock":
+      return <pre key={key}><code>{typeof value.content === "string" ? value.content : Array.isArray(value.content) ? value.content.filter(isNode).map((part) => typeof part.text === "string" ? part.text : "").join("") : ""}</code></pre>;
     case "orderedList": {
       const start = isNode(value.attrs) && Number.isInteger(value.attrs.start) && (value.attrs.start as number) > 1 ? (value.attrs.start as number) : undefined;
       return (

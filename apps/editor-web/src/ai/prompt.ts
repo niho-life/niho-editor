@@ -58,7 +58,7 @@ export function buildPrompt(request: AiRequest): AiPrompt {
   ].join("\n");
   const glossary = glossaryTable(request.glossary);
   const paragraphs = request.paragraphs.map((paragraph) => JSON.stringify({ index: paragraph.index, kind: paragraph.kind, text: paragraph.text })).join("\n");
-  const about = aboutSection(request.about ?? "");
+  const about = aboutSection(request.about);
   const references = referencesSection(request.references ?? []);
   const user = [
     "## 頼むこと",

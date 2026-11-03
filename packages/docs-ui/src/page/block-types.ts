@@ -7,13 +7,13 @@ import type { ShellIconName } from "../shell/types";
 /**
  * 本文のブロックの種類（「/」と「＋」のブロックの一覧、書式の帯の「行の種類」で共有する）。
  * 限定 AST（blocks.ts）とこのエディタの schema（page-extensions.ts）で作れるものだけを並べる。
- * 見出し 1・コード・チェック・録音・音声ファイルは出さない（録音は作る手段がまだ無い）。
+ * 見出し 1・録音・音声ファイルは出さない（録音は作る手段がまだ無い）。
  * 画像（#33）はファイル選択を開く（選んだ画像を private bucket に入れてから、その行に入れる）。
  */
 
-export type BlockChoiceId = "paragraph" | "h2" | "h3" | "bullet" | "ordered" | "quote" | "callout" | "hr" | "image";
-/** 行の種類（区切り線・画像は行の種類ではないので除く）。 */
-export type LineTypeId = Exclude<BlockChoiceId, "hr" | "image">;
+export type BlockChoiceId = "paragraph" | "h2" | "h3" | "bullet" | "task" | "ordered" | "quote" | "callout" | "hr" | "image" | "table" | "codeBlock";
+/** 行の種類（区切り線・画像・表・コードブロックは行の種類ではないので除く）。 */
+export type LineTypeId = Exclude<BlockChoiceId, "hr" | "image" | "table" | "codeBlock">;
 
 export type BlockChoice = {
   id: BlockChoiceId;
@@ -31,16 +31,19 @@ export const BLOCK_CHOICES: readonly BlockChoice[] = [
   { id: "h2", label: "見出し 2", icon: "h", hint: "##", aliases: ["h2", "heading", "midashi", "みだし", "見出し2"] },
   { id: "h3", label: "見出し 3", icon: "h", hint: "###", aliases: ["h3", "heading", "midashi", "みだし", "見出し3"] },
   { id: "bullet", label: "箇条書き", icon: "list", hint: "-", aliases: ["bullet", "list", "ul", "kajougaki", "risuto", "りすと", "かじょうがき"] },
+  { id: "task", label: "チェックリスト", hint: "- [ ]", aliases: ["task", "check", "checklist", "todo", "checklist", "ちぇっく", "チェック"] },
   { id: "ordered", label: "番号付き", icon: "list", hint: "1.", aliases: ["number", "numbered", "ordered", "list", "ol", "bangou", "ばんごう", "番号"] },
   { id: "quote", label: "引用", hint: ">", aliases: ["quote", "blockquote", "inyou", "いんよう"] },
   // ローマ字は「kakoi」。「kakomi」にすると「mi」を含むので /mi（見出し）に混ざる（別名は部分一致なので「kako」で当たる）
   { id: "callout", label: "囲み", hint: "", aliases: ["callout", "note", "box", "aside", "kakoi", "かこみ", "囲い", "メモ", "補足"] },
   { id: "hr", label: "区切り線", icon: "minus", hint: "---", aliases: ["divider", "hr", "line", "rule", "kugiri", "くぎり", "くぎりせん"] },
   { id: "image", label: "画像", icon: "img", hint: "", aliases: ["image", "img", "photo", "picture", "gazou", "がぞう", "しゃしん", "写真"] },
+  { id: "table", label: "表", hint: "", aliases: ["table", "grid", "hyō", "hyou", "ひょう", "表"] },
+  { id: "codeBlock", label: "コードブロック", hint: "```", aliases: ["code", "codeblock", "fence", "コード", "こーど"] },
 ];
 
 export const LINE_TYPE_CHOICES: readonly (BlockChoice & { id: LineTypeId })[] = BLOCK_CHOICES.filter(
-  (choice): choice is BlockChoice & { id: LineTypeId } => choice.id !== "hr" && choice.id !== "image",
+  (choice): choice is BlockChoice & { id: LineTypeId } => choice.id !== "hr" && choice.id !== "image" && choice.id !== "table" && choice.id !== "codeBlock",
 );
 
 /** 「/」のあとに打った文字で絞る（docs-ui の「/」と同じ規則: 名前・別名に含む、または書き始めと一致。全角・大文字も同じに扱う）。 */
@@ -59,6 +62,7 @@ export function lineTypeOf(state: EditorState): LineTypeId | null {
     if (node.type.name === "blockquote") return "quote";
     if (node.type.name === "callout") return "callout";
     if (node.type.name === "listItem") return $from.node(depth - 1).type.name === "orderedList" ? "ordered" : "bullet";
+    if (node.type.name === "taskItem") return "task";
   }
   return "paragraph";
 }
@@ -82,6 +86,8 @@ export function setLineType(editor: Editor, id: LineTypeId): boolean {
     }
     case "bullet":
       return editor.isActive("bulletList") ? chain.run() : chain.toggleBulletList().run();
+    case "task":
+      return editor.isActive("taskList") ? chain.run() : chain.toggleTaskList().run();
     case "ordered":
       return editor.isActive("orderedList") ? chain.run() : chain.toggleOrderedList().run();
     case "quote":
@@ -184,6 +190,8 @@ export function fillBlankLine(editor: Editor, id: BlockChoiceId, target: { range
         .run();
     case "bullet":
       return chain.toggleBulletList().run();
+    case "task":
+      return chain.toggleTaskList().run();
     case "ordered":
       return chain.toggleOrderedList().run();
     case "quote":
@@ -197,6 +205,10 @@ export function fillBlankLine(editor: Editor, id: BlockChoiceId, target: { range
       // 行は空の段落のままにして、ファイル選択を開く（選んだ画像はアップロードが済んでから、この行に入る）。
       // 画像の口・ページが無ければ false（画像のノードが理由を本文の下に出す）
       return chain.command(({ commands }) => (typeof commands.choosePageImage === "function" ? commands.choosePageImage() : false)).run();
+    case "table":
+      return chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+    case "codeBlock":
+      return chain.setCodeBlock().run();
   }
 }
 

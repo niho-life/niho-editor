@@ -147,6 +147,8 @@ function FakePage() {
   return (
     <>
       <textarea className="page-title" aria-label="タイトル" defaultValue="Morning walk" />
+      <textarea data-page-lead="" aria-label="公開用リード" />
+      <input data-page-cover="" type="file" aria-label="カバー画像を選ぶ" />
       <div className="doc" contentEditable suppressContentEditableWarning tabIndex={-1} aria-label="本文" />
       <button type="button" data-saved onClick={() => frame.pageSaved(PAGE)}>
         保存した
@@ -291,6 +293,7 @@ describe("公開のシート", () => {
     const problems = [
       { id: "title", message: "題名を入れてください", fix: "body" as const },
       { id: "headings", message: "本文に見出しを 1 つ以上入れてください", fix: "body" as const },
+      { id: "step-title", message: "工程の段階名が題名のままです", fix: "body" as const },
     ];
     const plan = nihoPlan({ problems, primary: null, selection: { handle: "niho", range: "live", extras: NONE, slug: null } });
     server({ sheets: [sheet(), plan] });
@@ -304,10 +307,32 @@ describe("公開のシート", () => {
     await click(container!.querySelectorAll<HTMLButtonElement>(".es-need button")[1]);
     expect(dialog()).toBeNull();
     expect(document.activeElement).toBe($(".doc"));
+
+    await click($(".es-pubbtn"));
+    await click(container!.querySelectorAll<HTMLButtonElement>(".es-need button")[2]);
+    expect(dialog()).toBeNull();
+    expect(document.activeElement).toBe($("textarea.page-title"));
   });
 
-  it("「直す」: editor に欄の無い条件（カバー写真など）はシートを開いたまま、まだ直せないと一言", async () => {
-    const plan = nihoPlan({ problems: [{ id: "cover", message: "カバー写真を選んでください", fix: "cover" }], primary: null });
+  it("「直す」: リードとカバーの問題はそれぞれの欄へ移る", async () => {
+    const problems = [
+      { id: "lead", message: "リードを入れてください", fix: "lead" as const },
+      { id: "cover", message: "カバー写真を選んでください", fix: "cover" as const },
+    ];
+    server({ sheets: [sheet(), nihoPlan({ problems, primary: null })] });
+    await mount();
+    await click($(".es-pubbtn"));
+    await click(byText("button", "直す"));
+    expect(dialog()).toBeNull();
+    expect(document.activeElement).toBe($("[data-page-lead]"));
+    await click($(".es-pubbtn"));
+    await click(container!.querySelectorAll<HTMLButtonElement>(".es-need button")[1]);
+    expect(dialog()).toBeNull();
+    expect(document.activeElement).toBe($("[data-page-cover]"));
+  });
+
+  it("「直す」: editor に欄の無い条件はシートを開いたまま、まだ直せないと一言", async () => {
+    const plan = nihoPlan({ problems: [{ id: "category", message: "カテゴリを選んでください", fix: "category" }], primary: null });
     server({ sheets: [sheet(), plan] });
     await mount();
     await click($(".es-pubbtn"));

@@ -115,6 +115,9 @@ export function RecordingAudios({
   const micStatus = mic.capture.status;
   const micBusy = micStatus === "requesting" || micStatus === "recording" || micStatus === "stopping";
   const locked = busy || micBusy || disabled === true;
+  const sortedAudios = [...audios].sort((a, b) => a.partIndex - b.partIndex);
+  const lastPartIndex = sortedAudios.at(-1)?.partIndex ?? -1;
+  const partRows = Array.from({ length: lastPartIndex + 1 }, (_, partIndex) => ({ partIndex, part: sortedAudios.find((audioPart) => audioPart.partIndex === partIndex) ?? null }));
 
   const startMic = async () => {
     setMessage(null);
@@ -158,8 +161,12 @@ export function RecordingAudios({
     >
       <h3 className="es-note">音声</h3>
       <ul style={LIST_STYLE}>
-        {audios.map((part) => (
-          <li key={part.partIndex} className="es-note" data-audio-part={part.partIndex}>
+        {partRows.map(({ partIndex, part }) => part === null ? (
+          <li key={partIndex} className="es-note" data-audio-part={partIndex} data-audio-part-state="missing">
+            音声 {partIndex + 1}が見つかりません。ここから先の時刻は再生できない場合があります。
+          </li>
+        ) : (
+          <li key={part.partIndex} className="es-note" data-audio-part={part.partIndex} data-audio-part-state={part.status === "uploaded" && isAudioExpired(part, now) ? "expired" : part.status}>
             音声 {part.partIndex + 1}
             {part.sourceName ? `（${part.sourceName}）` : ""} · {partDetail(part, now)}
             {part.status !== "uploaded" && part.partIndex > 0 && (

@@ -15,6 +15,8 @@ beforeAll(() => {
 
 /** 合成の資産の id（実在の資産ではない）。 */
 const ASSET_ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
+const text = (value: string) => ({ type: "text", text: value });
+const paragraph = (value: { type: string; text: string }) => ({ type: "paragraph", content: [value] });
 
 let editor: Editor | null = null;
 
@@ -53,17 +55,43 @@ function flatten(value: unknown): string {
 }
 
 describe("the page editor schema matches the limited AST", () => {
+  it("restores checklist state and edits table rows and columns without changing saved content", () => {
+    const current = makeEditor({ type: "doc", content: [
+      { type: "taskList", content: [{ type: "taskItem", attrs: { checked: true }, content: [paragraph(text("完了"))] }] },
+      { type: "table", content: [
+        { type: "tableRow", content: [{ type: "tableHeader", content: [paragraph(text("項目"))] }] },
+        { type: "tableRow", content: [{ type: "tableCell", content: [paragraph(text("本文"))] }] },
+      ] },
+    ] });
+    const before = savedBlocks(current);
+    expect(JSON.stringify(before)).toContain('"checked":true');
+    current.commands.setContent({ type: "doc", content: before });
+    expect(savedBlocks(current).slice(0, 2)).toEqual(before.slice(0, 2));
+    const table = current.state.doc.child(1);
+    const cellPosition = 1 + current.state.doc.child(0).nodeSize + 1 + table.child(0).nodeSize + 1;
+    current.commands.setTextSelection(cellPosition);
+    expect(current.chain().focus().addRowAfter().run()).toBe(true);
+    expect(current.chain().focus().addColumnAfter().run()).toBe(true);
+    expect(savedBlocks(current).find((block) => block.type === "table")).toMatchObject({ content: [
+      { content: [{ type: "tableHeader" }, { type: "tableHeader" }] },
+      { content: [{ type: "tableCell" }, { type: "tableCell" }] },
+      { content: [{ type: "tableCell" }, { type: "tableCell" }] },
+    ] });
+    expect(current.chain().focus().deleteRow().run()).toBe(true);
+    expect(current.chain().focus().deleteColumn().run()).toBe(true);
+    expect(savedBlocks(current).find((block) => block.type === "table")).toMatchObject({ content: [{ content: [{ type: "tableHeader" }] }, { content: [{ type: "tableCell" }] }] });
+  });
   it("only has nodes and marks the AST allows", () => {
     const current = makeEditor();
     const nodes = Object.keys(current.schema.nodes).filter((name) => name !== "doc");
-    const allowed = new Set([...BLOCK_NODE_NAMES, ...INLINE_NODE_NAMES, "listItem"]);
+    const allowed = new Set([...BLOCK_NODE_NAMES, ...INLINE_NODE_NAMES, "listItem", "taskItem", "tableRow", "tableCell", "tableHeader"]);
     expect(nodes.filter((name) => !allowed.has(name))).toEqual([]);
     expect(Object.keys(current.schema.marks).filter((name) => !MARK_NAMES.includes(name))).toEqual([]);
   });
 
   it("differs from the AST only by what has no way to be created yet (recording)", () => {
     const current = makeEditor();
-    const missing = [...BLOCK_NODE_NAMES, ...INLINE_NODE_NAMES, "listItem"].filter((name) => !(name in current.schema.nodes));
+    const missing = [...BLOCK_NODE_NAMES, ...INLINE_NODE_NAMES, "listItem", "taskItem", "tableRow", "tableCell", "tableHeader"].filter((name) => !(name in current.schema.nodes));
     // 画像・囲み（#33）は入れ方があるので schema にある。録音はまだ作る手段が無い
     expect(missing.sort()).toEqual(["recording"]);
     expect(MARK_NAMES.filter((name) => !(name in current.schema.marks))).toEqual([]);
@@ -117,7 +145,7 @@ describe("the page editor schema matches the limited AST", () => {
     const current = new Editor({
       element,
       extensions: buildPageExtensions(),
-      content: { type: "doc", content: [{ type: "codeBlock", content: [{ type: "text", text: "x" }] }] },
+      content: { type: "doc", content: [{ type: "unknownBlock", content: [{ type: "text", text: "x" }] }] },
       enableContentCheck: true,
       onContentError: () => {
         contentError = true;
@@ -195,13 +223,14 @@ describe("pasting HTML", () => {
     for (const label of ["js", "JS", "data", "rel", "mail"]) expect(text).toContain(label);
   });
 
-  it("turns code, tables and task lists into plain text blocks instead of unknown nodes", () => {
+  it("keeps code, tables and task lists as editable nodes", () => {
     const blocks = paste(
       makeEditor(),
       `<pre><code>const a = 1;</code></pre><table><tr><td>セル</td></tr></table><ul><li><input type="checkbox" checked> やること</li></ul>`,
     );
     const text = flatten(blocks);
-    expect(text).toContain("const a = 1;");
+    expect(blocks.map((block) => block.type)).toEqual(["codeBlock", "table", "taskList", "paragraph"]);
+    expect(text).toContain('"checked":true');
     expect(text).toContain("セル");
     expect(text).toContain("やること");
     expect(validateBlocks(blocks).ok).toBe(true);

@@ -1,6 +1,6 @@
 /**
  * 端末の下書き（IndexedDB）。正本はサーバーで、ここはサーバーへ届くまで一時的に持っているだけ（Issue #33・#30 §2）。
- * ページごと（key は pageId）に `{ baseRevision, title, blocks, lang, savedAt }` を 1 つ持つ（lang は言語を持つ前の下書きには無い）。
+ * ページごと（key は pageId）に `{ baseRevision, title, blocks, lang, cover, lead, savedAt }` を 1 つ持つ。古い下書きは追加項目を持たない。
  * 入力のたびに（300ms のまとめ。変換中は書かない）書き、サーバーへの保存がその内容で成功したら消す。
  * IndexedDB が使えない・容量を超えた・例外のときは、画面を壊さず「端末への保持なし」として続ける（`onResult` で知らせる）。
  * 容量の管理・「この端末で作業する」の選択・同期は持たない（#50）。
@@ -11,6 +11,7 @@
  */
 
 import type { PageLang } from "@niho/editor-store";
+import { MAX_LEAD_CHARS } from "./page-limits";
 import { UNCREATED_REVISION, sameContent } from "./page-save";
 import { isPageLang } from "./pages-client";
 
@@ -27,6 +28,8 @@ export type PageDraft = {
    * （そのときは言語を戻さず、比べない）。
    */
   lang?: PageLang;
+  cover?: string | null;
+  lead?: string | null;
   /** 端末に書いた時刻（ISO 8601）。 */
   savedAt: string;
 };
@@ -45,6 +48,7 @@ export type DraftStorage = {
 export const DRAFT_DB_NAME = "niho-editor";
 export const DRAFT_STORE = "page-drafts";
 const DRAFT_DB_VERSION = 1;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function isPageDraft(value: unknown): value is PageDraft {
   if (typeof value !== "object" || value === null) return false;
@@ -55,7 +59,9 @@ function isPageDraft(value: unknown): value is PageDraft {
     draft.baseRevision >= UNCREATED_REVISION &&
     typeof draft.title === "string" &&
     Array.isArray(draft.blocks) &&
-    typeof draft.savedAt === "string"
+    typeof draft.savedAt === "string" &&
+    (draft.cover === undefined || draft.cover === null || (typeof draft.cover === "string" && UUID_PATTERN.test(draft.cover))) &&
+    (draft.lead === undefined || draft.lead === null || (typeof draft.lead === "string" && Array.from(draft.lead).length <= MAX_LEAD_CHARS))
   );
 }
 
@@ -176,7 +182,7 @@ export type RestoreDecision =
   | { action: "conflict"; draft: PageDraft };
 
 /** 開いたときの下書きの扱い（言語は、下書きとサーバーの両方が持つときだけ比べる）。 */
-export function decideRestore(draft: PageDraft | null, server: { title: string; blocks: unknown[]; revision: number; lang?: PageLang }): RestoreDecision {
+export function decideRestore(draft: PageDraft | null, server: { title: string; blocks: unknown[]; revision: number; lang?: PageLang; cover?: string | null; lead?: string | null }): RestoreDecision {
   if (!draft) return { action: "none" };
   if (sameContent(draft, server)) return { action: "discard" };
   return draft.baseRevision === server.revision ? { action: "load", draft } : { action: "conflict", draft };

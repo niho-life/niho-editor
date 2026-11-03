@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { DocsPageShareState } from "@niho/docs-core";
 import type { Block, DuplicatedPage, OwnerId, PageShareState } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
-import { exportMarkdown } from "../export/markdown";
+import { exportFullMarkdown, MarkdownExportError } from "../export/markdown";
 import { ROBOTS_HEADER_VALUE, errorResponse, expectedOrigin, guarded, isSameOriginRequest, jsonResponse, notFoundResponse } from "./http";
 
 /**
@@ -141,7 +141,13 @@ export function exportMarkdownRoute(request: Request, id: string, deps: ShareApi
     if (!store) return errorResponse("unavailable");
     const page = await store.getPage(session.userId, id);
     if (!page) return notFoundResponse();
-    return new Response(exportMarkdown(page.blocks), {
+    let markdown: string;
+    try { markdown = exportFullMarkdown(page.blocks); }
+    catch (error) {
+      if (error instanceof MarkdownExportError) return jsonResponse(422, { error: "unsupported_markdown", reason: error.message });
+      throw error;
+    }
+    return new Response(markdown, {
       status: 200,
       headers: {
         "Content-Type": "text/markdown; charset=utf-8",

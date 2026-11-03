@@ -1,4 +1,5 @@
 export * from "./types.ts";
+export { PAGE_MAX_BYTES, PAGE_IMAGE_MAX_COUNT, IMAGE_MAX_BYTES, pageSizeBytes, pageImageIds } from "./page-size.ts";
 export * from "./photo-store.ts";
 export * from "./storage-usage.ts";
 export * from "./ai-usage.ts";
@@ -119,6 +120,7 @@ export {
   RECIPE_ORIGINS,
   addRecipes,
   cleanRecipe,
+  duplicateRecipeWithSamples,
   isRecipeOrigin,
   isRecipeSample,
   isRecipeStep,
@@ -128,13 +130,16 @@ export {
   recipesProblem,
   seedRecipes,
   type RecipeInput,
+  type DuplicateRecipeResult,
   type RecipeOrigin,
   type RecipeProblem,
   type RecipeSample,
   type RecipeStep,
   type StoredRecipe,
 } from "./recipes.ts";
+export * from "./recipe-samples.ts";
 export * from "./step-runs.ts";
+export * from "./step-basis.ts";
 export {
   InvalidRecordingError,
   RECORDING_ENGINE_MAX_CHARS,
@@ -171,6 +176,7 @@ export {
   IMAGE_UPLOAD_STATUSES,
   InvalidImageError,
   completeImageUpload,
+  cancelImageUpload,
   countPageImages,
   findImageUploadByKey,
   imageAsset,

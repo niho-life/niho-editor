@@ -32,7 +32,7 @@ import {
 export const UNCREATED_REVISION = 0;
 
 /** 題名・本文・言語。言語の分からないもの（古い端末の下書き・言語の無い応答）は lang を持たず、言語を比べない。 */
-export type PageContent = { title: string; blocks: unknown[]; lang?: PageLang };
+export type PageContent = { title: string; blocks: unknown[]; lang?: PageLang; cover?: string | null; lead?: string | null };
 
 /** JSON の値として等しいか（object のキーの順・undefined の項目によらない）。 */
 export function jsonEqual(a: unknown, b: unknown): boolean {
@@ -61,6 +61,8 @@ function canonicalBlocks(blocks: unknown[]): unknown[] {
 /** 題名と本文（と、両方が持っていれば言語）が同じか。 */
 export function sameContent(a: PageContent, b: PageContent): boolean {
   if (a.lang !== undefined && b.lang !== undefined && a.lang !== b.lang) return false;
+  if (a.cover !== undefined && b.cover !== undefined && a.cover !== b.cover) return false;
+  if (a.lead !== undefined && b.lead !== undefined && a.lead !== b.lead) return false;
   return a.title === b.title && jsonEqual(canonicalBlocks(a.blocks), canonicalBlocks(b.blocks));
 }
 
@@ -82,7 +84,13 @@ export function classifySaveFailure(error: unknown): SaveFailure {
 
 /** 競合の応答のページの題名・本文・言語（言語が無ければ持たない）。 */
 function contentOf(page: ConflictPage): PageContent {
-  return { title: page.title, blocks: page.blocks, ...(page.lang !== undefined ? { lang: page.lang } : {}) };
+  return {
+    title: page.title,
+    blocks: page.blocks,
+    ...(page.lang !== undefined ? { lang: page.lang } : {}),
+    ...(page.cover !== undefined ? { cover: page.cover } : {}),
+    ...(page.lead !== undefined ? { lead: page.lead } : {}),
+  };
 }
 
 /** 届いたかどうか分からない失敗（応答が無い・読めない・5xx。サーバーは書いたかもしれない）。 */
@@ -132,7 +140,13 @@ export function createPageSaver(options: {
 
   const apply = (patch: PageBody): PageContent => {
     const lang = patch.lang ?? server.lang;
-    return { title: patch.title ?? server.title, blocks: patch.blocks ?? server.blocks, ...(lang !== undefined ? { lang } : {}) };
+    return {
+      title: patch.title ?? server.title,
+      blocks: patch.blocks ?? server.blocks,
+      ...(lang !== undefined ? { lang } : {}),
+      ...(patch.cover !== undefined || server.cover !== undefined ? { cover: patch.cover === undefined ? server.cover! : patch.cover } : {}),
+      ...(patch.lead !== undefined || server.lead !== undefined ? { lead: patch.lead === undefined ? server.lead! : patch.lead } : {}),
+    };
   };
   const settle = (next: number, content: PageContent) => {
     revision = next;

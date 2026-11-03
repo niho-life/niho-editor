@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
 import { useRouter } from "next/navigation";
-import type { PageKind } from "@niho/editor-store";
+import type { Block, PageKind } from "@niho/editor-store";
 import { ShellSteps, ShellStepsStart, type ShellStepsAction } from "niho-docs-ui/shell";
-import { StepsRequestError, cancelStepRun, getSteps, isStepRunDone, startStepRun, type StepRecipeChoice, type StepRun } from "@/lib/steps-client";
+import { StepsRequestError, cancelStepRun, getStepPartialOutput, getSteps, isStepRunDone, startStepRun, updateStepRunRecipe, type StepRecipeChoice, type StepRun, type StepRunStep } from "@/lib/steps-client";
 import {
   isStepRunActive,
   stepBandActions,
@@ -54,6 +54,57 @@ function notifyDone(recipes: readonly StepRecipeChoice[], run: StepRun): void {
 function askNotifyPermission(): void {
   if (typeof Notification === "undefined" || Notification.permission !== "default") return;
   void Notification.requestPermission().catch(() => undefined);
+}
+
+function blockText(value: unknown): string {
+  if (Array.isArray(value)) return value.map(blockText).join("");
+  if (typeof value !== "object" || value === null) return "";
+  const node = value as Record<string, unknown>;
+  if (node.type === "text") return typeof node.text === "string" ? node.text : "";
+  if (node.type === "hardBreak") return "\n";
+  const children = Array.isArray(node.content) ? node.content.map(blockText).join("") : "";
+  if (node.type === "heading") return "#".repeat(node.attrs && typeof node.attrs === "object" && (node.attrs as Record<string, unknown>).level === 3 ? 3 : 2) + " " + children;
+  if (node.type === "bulletList") return Array.isArray(node.content) ? node.content.map((item) => "• " + blockText(item)).join("\n") : "";
+  if (node.type === "callout") return children.split("\n").map((line) => "▌ " + line).join("\n");
+  return children;
+}
+
+function partialText(blocks: readonly Block[]): string {
+  return blocks.map((block) => blockText(block)).filter(Boolean).join("\n\n");
+}
+
+/** Native details/summary provides keyboard open/close. The body is fetched only on first explicit expansion. */
+function StepPartialOutputDisclosure({ parentId, runId, step }: { parentId: string; runId: string; step: StepRunStep }) {
+  const [content, setContent] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const loaded = useRef(false);
+
+  const onToggle = (event: SyntheticEvent<HTMLDetailsElement>) => {
+    if (!event.currentTarget.open || loading || loaded.current) return;
+    loaded.current = true;
+    setLoading(true);
+    void getStepPartialOutput(parentId, runId, step.index)
+      .then((blocks) => setContent(partialText(blocks)))
+      .catch((reason: unknown) => {
+        loaded.current = false;
+        setError(reason instanceof StepsRequestError && reason.status === 401
+          ? "ログインが切れています。もう一度ログインしてください。"
+          : reason instanceof StepsRequestError && reason.status === 404
+            ? "この途中出力はもう利用できません。手順の状態を読み直してください。"
+            : "途中出力を読み出せませんでした。しばらくしてからもう一度お試しください。");
+      })
+      .finally(() => setLoading(false));
+  };
+
+  return (
+    <details className="es-stepband-partial" onToggle={onToggle}>
+      <summary>「{step.name}」の途中までの出力を確認</summary>
+      {loading && <p role="status">読み込み中です。</p>}
+      {error && <p role="status">{error}</p>}
+      {content !== null && <pre aria-label="途中までの出力">{content || "表示できる本文がありません。"}</pre>}
+    </details>
+  );
 }
 
 /**
@@ -209,7 +260,7 @@ export function PageSteps({
       {run && (
         <ShellSteps
           band
-          title={`${stepRecipeName(recipes, run.recipe)}の手順`}
+          title={`${run.recipeName ?? stepRecipeName(recipes, run.recipe)}の手順`}
           steps={stepBandSteps(run)}
           currentId={pageId}
           note={notice ?? stepBandNote(run)}
@@ -220,6 +271,24 @@ export function PageSteps({
           onAction={onAction}
         />
       )}
+      {run && run.recipeRevision !== undefined && (
+        <div className="es-stepband-note" role="status">
+          使用中の手順: 第{run.recipeRevision}版{run.currentRevision !== null && run.currentRevision !== undefined ? `（現在: 第${run.currentRevision}版）` : ""}
+          {run.currentRevision !== null && run.currentRevision !== undefined && run.currentRevision !== run.recipeRevision && (
+            <details>
+              <summary>手順が新しくなっています。変更内容を見る</summary>
+              <ul>{(run.designChanges ?? []).map((change, index) => <li key={`${index}-${change}`}>{change}</li>)}</ul>
+              <p>更新後、必要な段階は「作り直す」で実行してください。段階の追加・削除・並び替えがある場合は、最初から作り直してください。</p>
+              <button type="button" disabled={busy || isStepRunActive(run)} onClick={() => void send(() => updateStepRunRecipe(root, run.id, run.recipeRevision!))}>
+                今の設計に更新
+              </button>
+            </details>
+          )}
+        </div>
+      )}
+      {run?.steps.filter((step) => step.state === "failed" && step.hasPartialOutput).map((step) => (
+        <StepPartialOutputDisclosure key={run.id + ":" + step.id + ":" + step.tries} parentId={root} runId={run.id} step={step} />
+      ))}
       {!run && notice && (
         <p className="es-stepband-note" role="status">
           {notice}

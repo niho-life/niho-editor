@@ -95,7 +95,8 @@
     "lucide-react": "1.58.0",
     "niho-ui": "*",
     "@tiptap/extension-bubble-menu": "3.31.3",
-    "@tiptap/extension-floating-menu": "3.31.3"
+    "@tiptap/extension-floating-menu": "3.31.3",
+    "@tiptap/extension-table": "3.31.3"
   },
   "devDependencies": {
     "@niho/docs-core": "file:../docs-core",
@@ -103,6 +104,7 @@
     "@tiptap/extension-list": "3.31.3",
     "@tiptap/pm": "3.31.3",
     "@tiptap/starter-kit": "3.31.3",
+    "@tiptap/extension-table": "3.31.3",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^24",
     "@types/react": "^18.3.31",

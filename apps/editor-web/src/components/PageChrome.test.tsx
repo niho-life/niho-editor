@@ -47,11 +47,14 @@ const MADE: Record<BlockChoiceId, JSONContent> = {
   h2: { type: "heading", attrs: { level: 2 } },
   h3: { type: "heading", attrs: { level: 3 } },
   bullet: { type: "bulletList", content: [{ type: "listItem", content: [paragraph()] }] },
+  task: { type: "taskList", content: [{ type: "taskItem", attrs: { checked: false }, content: [paragraph()] }] },
   ordered: { type: "orderedList", content: [{ type: "listItem", content: [paragraph()] }] },
   quote: { type: "blockquote", content: [paragraph()] },
   callout: { type: "callout", content: [paragraph()] },
   hr: { type: "horizontalRule" },
   image: paragraph(),
+  table: { type: "table", content: Array.from({ length: 3 }, (_, row) => ({ type: "tableRow", content: Array.from({ length: 3 }, () => ({ type: row === 0 ? "tableHeader" : "tableCell", attrs: { colspan: 1, rowspan: 1, colwidth: null, align: null }, content: [paragraph()] })) })) },
+  codeBlock: { type: "codeBlock" },
 };
 
 /** PageEditor と同じ並び（`.be` の中に本文と PageChrome）だけを描く。 */
@@ -213,6 +216,7 @@ describe("the format bar above the selected text", () => {
     expect(savedBlocks(editor)).toEqual([
       { type: "paragraph", content: [{ type: "text", text: "合成", marks: [{ type: "bold" }] }, { type: "text", text: "の本文です" }] },
     ]);
+    expect(editor.isActive("bold")).toBe(true);
     expect(labelled("太字")!.getAttribute("aria-pressed")).toBe("true");
 
     await click(labelled("斜体")!);
@@ -245,7 +249,7 @@ describe("the format bar above the selected text", () => {
       await select(editor, 2, 4);
       await click(labelled("行の種類")!);
       const lineMenu = menu("行の種類");
-      expect(itemNames(lineMenu)).toEqual(["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "囲み"]);
+      expect(itemNames(lineMenu)).toEqual(["テキスト", "見出し 2", "見出し 3", "箇条書き", "チェックリスト", "番号付き", "引用", "囲み"]);
       await click(menuItem(lineMenu, name));
       expect(menu("行の種類")).toBeNull();
       return savedBlocks(editor).slice(0, 1);
@@ -396,7 +400,7 @@ describe("the AI button of the format bar", () => {
 });
 
 describe("the 「/」 block list", () => {
-  const ALL = ["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "囲み", "区切り線", "画像"];
+  const ALL = ["テキスト", "見出し 2", "見出し 3", "箇条書き", "チェックリスト", "番号付き", "引用", "囲み", "区切り線", "画像", "表", "コードブロック"];
 
   it("opens on 「/」 in an empty line with the blocks this body can hold (no recording), keeping focus in the body", async () => {
     const editor = await renderHarness(doc(paragraph()));
@@ -436,7 +440,7 @@ describe("the 「/」 block list", () => {
       ["見出し", ["見出し 2", "見出し 3"]],
       ["inyou", ["引用"]],
       ["りすと", ["箇条書き"]],
-      ["list", ["箇条書き", "番号付き"]],
+      ["list", ["箇条書き", "チェックリスト", "番号付き"]],
       ["ばんごう", ["番号付き"]],
       ["---", ["区切り線"]],
       ["##", ["見出し 2"]],
@@ -457,8 +461,8 @@ describe("the 「/」 block list", () => {
     await cursorAt(editor, 1);
     await type(editor, "/");
     await press(editor.view.dom, "ArrowUp");
-    // ↑ は末尾へ回る（今の末尾は「画像」）
-    expect(menuItem(slashMenu(), "画像").className).toContain("es-mi--on");
+    // ↑ は末尾へ回る
+    expect(menuItem(slashMenu(), "コードブロック").className).toContain("es-mi--on");
     await press(editor.view.dom, "Escape");
     expect(slashMenu()).toBeNull();
     expect(savedBlocks(editor)).toEqual([paragraph("/")]);

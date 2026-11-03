@@ -57,6 +57,7 @@ export function restoreVersion(request: Request, id: string, versionParam: strin
     if (!result) return notFoundResponse();
     if (result.status === "conflict") return conflictResponse(result.page);
     if (result.status === "unrestorable") return errorResponse("unrestorable");
+    if (result.status === "page_full") return errorResponse("page_full");
     return jsonResponse(200, { page: result.page });
   });
 }

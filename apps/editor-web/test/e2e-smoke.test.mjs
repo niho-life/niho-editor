@@ -313,7 +313,8 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.equal((await write("PATCH", `/api/pages/${page.id}`, { title: "x", baseRevision: 1 }, { origin: "https://evil.example" })).status, 403);
     assert.equal((await fetch(`${base}/api/pages/${page.id}`, { method: "DELETE", headers: { origin: "https://evil.example" } })).status, 403);
     assert.equal((await write("POST", "/api/pages", {}, { origin: "https://evil.example" })).status, 403);
-    const big = JSON.stringify({ baseRevision: 1, blocks: [{ type: "paragraph", content: [{ type: "text", text: "a".repeat(1024 * 1024) }] }] });
+    // ページ要求は30 MiBの内容とJSON envelopeを許す。上限を確実に越える31 MiBを送る。
+    const big = JSON.stringify({ baseRevision: 1, blocks: [{ type: "paragraph", content: [{ type: "text", text: "a".repeat(31 * 1024 * 1024) }] }] });
     assert.equal((await write("PATCH", `/api/pages/${page.id}`, big)).status, 413);
     assert.equal((await write("PATCH", `/api/pages/${page.id}`, "{")).status, 400);
     assert.equal((await write("PATCH", `/api/pages/${page.id}`, "title=x", { "content-type": "text/plain" })).status, 400);

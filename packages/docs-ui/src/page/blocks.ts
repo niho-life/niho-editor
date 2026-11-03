@@ -13,8 +13,8 @@ export type Block = { readonly [key: string]: unknown };
  * それ以外（HTML・未知の node・mark・属性、javascript: のリンクなど）は保存前に断る。
  * 保存する値は入力をそのまま返さず、許す形だけで組み直した写し（`blocks`）にする。
  *
- * - ブロック: 段落・見出し（2・3）・箇条書き・番号付き・引用・囲み・区切り線・画像・録音
- * - 行の中: 文字（太字・斜体・リンク）・改行
+ * - ブロック: 段落・見出し（2・3）・箇条書き・チェックリスト・番号付き・表・コード・引用・囲み・区切り線・画像・録音
+ * - 行の中: 文字（太字・斜体・取り消し線・インラインコード・リンク）・改行
  * - 画像・録音は資産の id だけを持つ（URL・HTML・外部の src は持たない）。画像の実体は private bucket で、描くときに
  *   サーバーが中継する（apps/editor-web の src/image/image-paths.ts・src/server/images-api.ts）。録音の実体の扱いは #36。
  */
@@ -32,7 +32,7 @@ const MAX_CREDIT_CHARS = IMAGE_CREDIT_MAX_CHARS;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-type Content = "inline" | "blocks" | "listItems" | "none";
+type Content = "inline" | "code" | "blocks" | "listItems" | "taskItems" | "tableRows" | "tableCells" | "none";
 
 type NodeSpec = {
   content: Content;
@@ -84,6 +84,16 @@ const NODES: Record<string, NodeSpec> = {
     },
   },
   bulletList: { content: "listItems", nonEmpty: true, attrs: (raw) => pick("bulletList", raw, []) },
+  taskList: { content: "taskItems", nonEmpty: true, attrs: (raw) => pick("taskList", raw, []) },
+  taskItem: {
+    content: "blocks",
+    nonEmpty: true,
+    attrs: (raw) => {
+      const { checked } = pick("taskItem", raw, ["checked"]);
+      if (checked !== undefined && typeof checked !== "boolean") fail("taskItem", "checked must be a boolean");
+      return { checked: checked === true };
+    },
+  },
   orderedList: {
     content: "listItems",
     nonEmpty: true,
@@ -98,6 +108,19 @@ const NODES: Record<string, NodeSpec> = {
     },
   },
   listItem: { content: "blocks", nonEmpty: true, attrs: (raw) => pick("listItem", raw, []) },
+  table: { content: "tableRows", nonEmpty: true, attrs: (raw) => pick("table", raw, []) },
+  tableRow: { content: "tableCells", nonEmpty: true, attrs: (raw) => pick("tableRow", raw, []) },
+  tableCell: { content: "blocks", nonEmpty: true, attrs: tableCellAttrs },
+  tableHeader: { content: "blocks", nonEmpty: true, attrs: tableCellAttrs },
+  codeBlock: {
+    content: "code",
+    attrs: (raw) => {
+      const { language } = pick("codeBlock", raw, ["language"]);
+      if (language === undefined || language === null || language === "") return {};
+      if (typeof language !== "string" || language.length > 32 || !/^[a-zA-Z0-9_+#.-]+$/.test(language)) fail("codeBlock", "invalid language");
+      return { language };
+    },
+  },
   blockquote: { content: "blocks", nonEmpty: true, attrs: (raw) => pick("blockquote", raw, []) },
   callout: { content: "blocks", nonEmpty: true, attrs: (raw) => pick("callout", raw, []) },
   horizontalRule: { content: "none", attrs: (raw) => pick("horizontalRule", raw, []) },
@@ -132,12 +155,26 @@ const NODES: Record<string, NodeSpec> = {
   },
 };
 
+function tableCellAttrs(raw: Record<string, unknown>): Record<string, unknown> {
+  const { colspan = 1, rowspan = 1, colwidth = null, align = null } = pick("tableCell", raw, ["colspan", "rowspan", "colwidth", "align"]);
+  if (!Number.isSafeInteger(colspan) || (colspan as number) < 1 || (colspan as number) > 100) fail("tableCell", "invalid colspan");
+  if (!Number.isSafeInteger(rowspan) || (rowspan as number) < 1 || (rowspan as number) > 100) fail("tableCell", "invalid rowspan");
+  if (colwidth !== null && (!Array.isArray(colwidth) || colwidth.length !== colspan || colwidth.some((width) => width !== null && (!Number.isSafeInteger(width) || (width as number) < 1 || (width as number) > 10_000)))) {
+    fail("tableCell", "invalid colwidth");
+  }
+  if (align !== null && align !== "left" && align !== "center" && align !== "right") fail("tableCell", "invalid align");
+  return { colspan, rowspan, colwidth, align };
+}
+
 /** doc の直下・引用・囲み・項目の中に置けるブロック。 */
 const BLOCK_TYPES: ReadonlySet<string> = new Set([
   "paragraph",
   "heading",
   "bulletList",
+  "taskList",
   "orderedList",
+  "table",
+  "codeBlock",
   "blockquote",
   "callout",
   "horizontalRule",
@@ -149,7 +186,7 @@ const BLOCK_TYPES: ReadonlySet<string> = new Set([
 export const BLOCK_NODE_NAMES: readonly string[] = [...BLOCK_TYPES];
 /** 行の中に置ける node の名前。 */
 export const INLINE_NODE_NAMES: readonly string[] = ["text", "hardBreak"];
-export const MARK_NAMES: readonly string[] = ["bold", "italic", "link"];
+export const MARK_NAMES: readonly string[] = ["bold", "italic", "strike", "code", "link"];
 
 /** リンク先として保存してよいか。 */
 export function isSafeLinkHref(href: unknown): href is string {
@@ -222,15 +259,32 @@ function parseChildren(path: string, spec: NodeSpec, raw: unknown, depth: number
     return undefined;
   }
   if (spec.content === "inline") return raw.map((child, index) => parseInline(`${path}.content[${index}]`, child));
-  return raw.map((child, index) => parseNode(`${path}.content[${index}]`, child, depth + 1, spec.content === "listItems" ? "listItem" : "block"));
+  if (spec.content === "code") {
+    return raw.map((child, index) => {
+      const here = `${path}.content[${index}]`;
+      if (!isPlainObject(child) || child.type !== "text" || typeof child.text !== "string" || child.text.length === 0 || child.text.includes("\u0000")) fail(here, "code block content must be plain text");
+      keysWithin(here, child, ["type", "text"]);
+      return { type: "text", text: child.text };
+    });
+  }
+  const role = spec.content === "listItems" ? "listItem"
+    : spec.content === "taskItems" ? "taskItem"
+      : spec.content === "tableRows" ? "tableRow"
+        : spec.content === "tableCells" ? "tableCell" : "block";
+  return raw.map((child, index) => parseNode(`${path}.content[${index}]`, child, depth + 1, role));
 }
 
-function parseNode(path: string, raw: unknown, depth: number, role: "block" | "listItem"): Block {
+function parseNode(path: string, raw: unknown, depth: number, role: "block" | "listItem" | "taskItem" | "tableRow" | "tableCell"): Block {
   if (depth > MAX_BLOCK_NESTING) fail(path, "nested too deeply");
   if (!isPlainObject(raw) || typeof raw.type !== "string") fail(path, "node must have a type");
   const type = raw.type;
   const here = `${path}(${type})`;
-  if (role === "listItem" ? type !== "listItem" : !BLOCK_TYPES.has(type)) fail(here, `"${type}" is not allowed here`);
+  const allowed = role === "listItem" ? type === "listItem"
+    : role === "taskItem" ? type === "taskItem"
+      : role === "tableRow" ? type === "tableRow"
+        : role === "tableCell" ? type === "tableCell" || type === "tableHeader"
+          : BLOCK_TYPES.has(type);
+  if (!allowed) fail(here, `"${type}" is not allowed here`);
   const spec = NODES[type];
   if (!spec) fail(here, "unknown node");
   keysWithin(here, raw, ["type", "attrs", "content"]);
@@ -239,6 +293,8 @@ function parseNode(path: string, raw: unknown, depth: number, role: "block" | "l
   const attrs = spec.attrs ? spec.attrs(attrsRaw) : {};
   const content = parseChildren(here, spec, raw.content, depth);
   if (type === "listItem" && content?.[0]?.type !== "paragraph") fail(here, "a list item starts with a paragraph");
+  if (type === "taskItem" && content?.[0]?.type !== "paragraph") fail(here, "a task item starts with a paragraph");
+  if ((type === "tableCell" || type === "tableHeader") && content?.[0]?.type !== "paragraph") fail(here, "a table cell starts with a paragraph");
   const out: Record<string, unknown> = { type };
   if (Object.keys(attrs).length > 0) out.attrs = attrs;
   if (content) out.content = content;

@@ -329,7 +329,7 @@ describe("POST /api/pages/{id}/ai/proposals", () => {
     const page = await store.createPage("user-a", { blocks: [p("合成の 一")], lang: "ja" });
     const glossary = [{ term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌"], note: "合成" }];
     const stub = stubBackend(() => ({ edits: [], inserts: [] }));
-    const settings: EditorSettings = { aiLang: "en", glossary, recipes: [], about: "" };
+    const settings: EditorSettings = { aiLang: "en", glossary, recipes: [], aboutName: "", about: "" };
     const d = deps("user-a", store, { ai: () => stub.backend, settings });
     expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
     expect(stub.calls[0]?.glossary).toEqual(glossary);
@@ -1105,14 +1105,14 @@ describe("the person's context goes into the proposal (「あなたについて�
     const store = memoryStore();
     const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
     const stub = stubBackend(() => ({ edits: [], inserts: [] }));
-    const settings: EditorSettings = { ...DEFAULT_EDITOR_SETTINGS, about: "合成の自己紹介です。" };
+    const settings: EditorSettings = { ...DEFAULT_EDITOR_SETTINGS, aboutName: "合成の呼び名", about: "合成の自己紹介です。" };
     const d = deps("user-a", store, {
       ai: () => stub.backend,
       settings,
       references: [{ title: "同じフォルダのページ", blocks: [p("参考の本文")] }],
     });
     expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
-    expect(stub.calls[0]?.about).toBe("合成の自己紹介です。");
+    expect(stub.calls[0]?.about).toEqual({ name: "合成の呼び名", text: "合成の自己紹介です。" });
     expect(stub.calls[0]?.references).toEqual([{ title: "同じフォルダのページ", text: "参考の本文" }]);
   });
 
@@ -1139,12 +1139,12 @@ describe("the person's context goes into the proposal (「あなたについて�
     const store = memoryStore();
     const long = await store.createPage("user-a", { blocks: [p("あ".repeat(3_000)), p("い".repeat(3_000))] });
     const stub = stubBackend(() => ({ edits: [], inserts: [] }));
-    const settings: EditorSettings = { ...DEFAULT_EDITOR_SETTINGS, about: "合成の自己紹介です。" };
+    const settings: EditorSettings = { ...DEFAULT_EDITOR_SETTINGS, aboutName: "合成の呼び名", about: "合成の自己紹介です。" };
     const d = deps("user-a", store, { ai: () => stub.backend, settings, references: [{ title: "参考", blocks: [p("参考の本文")] }] });
     expect((await propose(long.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
     expect(stub.calls).toHaveLength(2);
     for (const call of stub.calls) {
-      expect(call.about).toBe("合成の自己紹介です。");
+      expect(call.about).toEqual({ name: "合成の呼び名", text: "合成の自己紹介です。" });
       expect(call.references).toEqual([{ title: "参考", text: "参考の本文" }]);
     }
   });

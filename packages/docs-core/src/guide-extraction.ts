@@ -107,6 +107,11 @@ function sampleLabel(name: string): string {
   return name.replace(/[\r\n<>]+/g, " ").trim() || "名前の無い文書";
 }
 
+/** Keep imported document text inside its prompt boundary even when it contains XML-like instructions. */
+function promptDocumentText(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 export type GuideExtractionPrompt = { systemPrompt: string; userPrompt: string; chars: number };
 
 /** 抽出の依頼（システム側＝決まり、ユーザー側＝お手本の文書と数えた数値）。 */
@@ -118,7 +123,7 @@ export function buildGuideExtractionPrompt(samples: readonly GuideSample[]): Gui
     if (sample.truncatedFrom !== undefined) {
       lines.push(`（長い文書のため、全 ${sample.truncatedFrom.toLocaleString("ja-JP")} 字のうち先頭だけを渡します）`);
     }
-    lines.push(`<document index="${number}">\n${sample.text.trim()}\n</document>`);
+    lines.push(`<document index="${number}">\n${promptDocumentText(sample.text.trim())}\n</document>`);
     parts.push(lines.join("\n"));
   });
   const userPrompt = parts.join("\n\n");

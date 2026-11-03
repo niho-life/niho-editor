@@ -26,14 +26,21 @@ const answer = JSON.stringify({
 
 /** 送られたプロンプトを覚える偽の往復（段階の実行器は道具を渡さない `converse` を使う）。 */
 function stubClient(reply: (round: number) => Promise<{ text: string; stopReason?: string; usage: { model: string; inputTokens: number; outputTokens: number } }>) {
-  const calls: { system: string; user: string; messages: unknown[] }[] = [];
+  const calls: { system: string; user: string; messages: unknown[]; maxTokens?: number; thinking?: { type: "adaptive" }; outputConfig?: { effort: "low" | "medium" | "high" } }[] = [];
   const client: AnthropicClient = {
     complete: async () => {
       throw new Error("the step executor uses converse");
     },
     converse: async (input) => {
       const first = input.messages[0] as { content?: unknown } | undefined;
-      calls.push({ system: input.system, user: typeof first?.content === "string" ? first.content : "", messages: input.messages });
+      calls.push({
+        system: input.system,
+        user: typeof first?.content === "string" ? first.content : "",
+        messages: input.messages,
+        ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
+        ...(input.thinking ? { thinking: input.thinking } : {}),
+        ...(input.outputConfig ? { outputConfig: input.outputConfig } : {}),
+      });
       const answer = await reply(calls.length - 1);
       return { text: answer.text, toolCalls: [], stopReason: answer.stopReason ?? "end_turn", usage: answer.usage };
     },
@@ -64,7 +71,15 @@ function memoryUsage(start: Partial<AiUsageTotals> = {}): StepUsageStore & { tot
   };
 }
 
-function setup(options: { client?: AnthropicClient; usage?: StepUsageStore | null; limitUsd?: number | null; provider?: "claude" | null } = {}) {
+function setup(options: {
+  client?: AnthropicClient;
+  usage?: StepUsageStore | null;
+  limitUsd?: number | null;
+  provider?: "claude" | null;
+  monotonicNowMs?: () => number;
+  stepBudgetMs?: number;
+  env?: Readonly<Record<string, string | undefined>>;
+} = {}) {
   const backend: AiComposeBackend = {
     client: options.client ?? okClient().client,
     model: "claude-sonnet-5-5",
@@ -77,12 +92,14 @@ function setup(options: { client?: AnthropicClient; usage?: StepUsageStore | nul
     usage: () => (options.usage === undefined ? memoryUsage() : options.usage),
     limitUsd: () => options.limitUsd ?? null,
     now,
-    env: {},
+    ...(options.monotonicNowMs ? { monotonicNowMs: options.monotonicNowMs } : {}),
+    ...(options.stepBudgetMs === undefined ? {} : { stepBudgetMs: options.stepBudgetMs }),
+    env: options.env ?? {},
   };
   return createAiStepExecutor(deps);
 }
 
-const input = { recipe: tpl1, stepIndex: 0, owner: OWNER, parentBlocks: transcript, previousBlocks: null };
+const input = { recipe: tpl1, stepIndex: 0, owner: OWNER, parentBlocks: transcript, backgroundBlocks: [], previousBlocks: null };
 
 describe("the real step executor", () => {
   it("turns the model's output into blocks and reports the usage", async () => {
@@ -95,11 +112,31 @@ describe("the real step executor", () => {
     expect(output.usage).toEqual({ inputTokens: 1_000, outputTokens: 500, model: "claude-sonnet-5-5" });
   });
 
-  it("sends the step, the guide and the source of this step (the parent body on step 0, the previous result after it)", async () => {
+  it("applies the frozen step profile to effort and the bounded output ceiling", async () => {
+    const client = okClient();
+    const longInput = { ...input, parentBlocks: [{ type: "paragraph", content: [{ type: "text", text: "合".repeat(24_000) }] }] as Block[] };
+    const cases = [
+      ["light", "low", 32_000],
+      ["standard", "medium", 12_000],
+      ["advanced", "high", 20_000],
+    ] as const;
+    for (const [profile, effort, expectedMaxTokens] of cases) {
+      const recipe = { ...tpl1, steps: tpl1.steps.map((step, index) => index === 0 ? { ...step, profile } : step) };
+      await setup({ client: client.client, env: { EDITOR_AI_MAX_TOKENS: "32000" } }).run({ ...longInput, recipe });
+      expect(client.calls.at(-1)).toMatchObject({
+        maxTokens: expectedMaxTokens,
+        thinking: { type: "adaptive" },
+        outputConfig: { effort },
+      });
+    }
+  });
+
+  it("sends the source and every earlier result in order", async () => {
     const first = okClient();
     await setup({ client: first.client }).run(input);
     expect(first.calls[0]!.user).toContain(`手順「${tpl1.name}」の段階 1/${tpl1.steps.length}「${tpl1.steps[0]!.name}」`);
     expect(first.calls[0]!.user).toContain("合成の座談会の文字起こし\n\n二つ目の段落");
+    expect(first.calls[0]!.user).not.toContain("背景情報（親フォルダ）");
 
     const second = okClient();
     await setup({ client: second.client }).run({
@@ -107,9 +144,38 @@ describe("the real step executor", () => {
       stepIndex: 1,
       previousBlocks: [{ type: "paragraph", content: [{ type: "text", text: "段階 1 の結果" }] }],
     });
-    expect(second.calls[0]!.user).toContain("### 前の段階の結果");
+    expect(second.calls[0]!.user).toContain("### 工程 1 の結果");
     expect(second.calls[0]!.user).toContain("段階 1 の結果");
-    expect(second.calls[0]!.user).not.toContain("合成の座談会の文字起こし");
+    expect(second.calls[0]!.user).toContain("合成の座談会の文字起こし");
+  });
+
+  it("uses the captured folder fields, settings and stable reference labels", async () => {
+    const call = okClient();
+    const prior = (text: string): Block[] => [{ type: "paragraph", content: [{ type: "text", text }] }];
+    await setup({ client: call.client }).run({
+      ...input,
+      stepIndex: 2,
+      backgroundBlocks: prior("合成の親フォルダ背景"),
+      previousBlocks: prior("二番目"),
+      materials: {
+        parentBlocks: transcript,
+        backgroundBlocks: prior("合成の親フォルダ背景"),
+        upstream: [{ id: tpl1.steps[0]!.id, blocks: prior("一番目") }, { id: tpl1.steps[1]!.id, blocks: prior("二番目") }],
+        refs: [{ id: "synthetic-ref", blocks: prior("参考の本文"), title: "変更される題名" }],
+        fields: { entities: [{ name: "合成人物", reading: "ごうせい", role: "取材相手", note: "" }], terms: [{ term: "合成語", reading: "", variants: [], note: "" }] },
+        settings: { aiLang: "en", glossary: [], aboutName: "合成の筆者", about: "合成の説明" },
+      },
+    });
+    const prompt = call.calls[0]!.user;
+    expect(prompt.indexOf("合成の座談会の文字起こし")).toBeLessThan(prompt.indexOf("一番目"));
+    expect(prompt.indexOf("一番目")).toBeLessThan(prompt.indexOf("二番目"));
+    expect(prompt).toContain("### 参考 1");
+    expect(prompt).not.toContain("変更される題名");
+    expect(prompt).toContain("合成人物");
+    expect(prompt).toContain("合成語");
+    expect(prompt).toContain("出力の言語: en");
+    expect(prompt).toContain("合成の筆者");
+    expect(prompt).toContain("## 背景情報（親フォルダ）\n<untrusted_data>\n合成の親フォルダ背景\n</untrusted_data>");
   });
 
   it("records the estimated cost of the call", async () => {
@@ -224,7 +290,7 @@ describe("the real step executor", () => {
       compose: () => ({ client: client.client, model: "claude-sonnet-5-5", provider: "claude", route: "server", engine: "anthropic:claude-sonnet-5-5" }),
       usage: () => memoryUsage(),
       limitUsd: () => null,
-      settings: () => async () => ({ aiLang: "en", glossary: [{ term: "NIHO", reading: "ニホ", variants: [], note: "" }], recipes: [], about: "" }),
+      settings: () => async () => ({ aiLang: "en", glossary: [{ term: "NIHO", reading: "ニホ", variants: [], note: "" }], recipes: [], aboutName: "", about: "" }),
       now,
       env: {},
     });
@@ -239,7 +305,7 @@ describe("the real step executor", () => {
       compose: () => ({ client: client.client, model: "claude-sonnet-5-5", provider: "claude", route: "server", engine: "anthropic:claude-sonnet-5-5" }),
       usage: () => memoryUsage(),
       limitUsd: () => null,
-      settings: () => async () => ({ aiLang: "same", glossary: [], recipes: [], about: "合成の自己紹介です。" }),
+      settings: () => async () => ({ aiLang: "same", glossary: [], recipes: [], aboutName: "合成の呼び名", about: "合成の自己紹介です。" }),
       references: () => async () => [
         { id: "ref-1", title: "同じフォルダのページ", kind: "note", blocks: [{ type: "paragraph", content: [{ type: "text", text: "参考の本文" }] }] },
       ],
@@ -248,6 +314,7 @@ describe("the real step executor", () => {
     });
     await executor.run({ ...input, parentPageId: "00000000-0000-4000-8000-0000000000aa" });
     expect(client.calls[0]!.user).toContain("## あなたについて");
+    expect(client.calls[0]!.user).toContain("呼び名: 合成の呼び名");
     expect(client.calls[0]!.user).toContain("合成の自己紹介です。");
     expect(client.calls[0]!.user).toContain("## 参考（同じフォルダのほかのページ）");
     expect(client.calls[0]!.user).toContain("参考の本文");
@@ -323,6 +390,30 @@ describe("the real step executor", () => {
     // 失敗の文そのものには本文を入れない（ログに流れるのは message と code）
     expect((error as Error).message).toBe("step failed: output_too_long");
     expect((error as Error).message).not.toContain("書けた");
+  });
+
+  it("stops before a continuation can overrun the task deadline and keeps parsed partial blocks", async () => {
+    let elapsed = 0;
+    const written = '{"blocks":[{"kind":"heading","level":2,"text":"途中まで"},{"kind":"paragraph","text":"続き';
+    const client = stubClient(async () => {
+      elapsed = 1_600;
+      return { text: written, stopReason: "max_tokens", usage: { model: "claude-sonnet-5-5", inputTokens: 10, outputTokens: 10 } };
+    });
+    const error = await setup({
+      client: client.client,
+      monotonicNowMs: () => elapsed,
+      stepBudgetMs: 2_500,
+      env: { EDITOR_AI_TIMEOUT_MS: "1000" },
+    }).run(input).catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(StepError);
+    expect((error as StepError).code).toBe("step_time_limit");
+    expect((error as StepError).retryable).toBe(false);
+    expect((error as StepError).partial).toEqual([
+      { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "途中まで" }] },
+    ]);
+    expect((error as Error).message).toBe("step failed: step_time_limit");
+    expect(client.calls).toHaveLength(1);
   });
 
   it("has no partial text on the other failures", async () => {

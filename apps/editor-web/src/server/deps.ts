@@ -9,11 +9,13 @@ import {
   discardAudioPart,
   completeAudioUpload,
   completeImageUpload,
+  cancelImageUpload,
   countPageImages,
   createRecordingPage,
   duplicatePage,
   enableShare,
   enqueueTranscription,
+  finalStepPageNames,
   failRun,
   findImageUploadByKey,
   getRecording,
@@ -183,7 +185,10 @@ export const publishDeps: PublishApiDeps = {
   auth: () => getAuthProvider(),
   ports: (session) => {
     const pool = getPool();
-    return pool ? wirePublishPorts(pgPublishStore(pool), session, { drafts: pgDraftFingerprints(pool) }) : null;
+    return pool ? wirePublishPorts(pgPublishStore(pool), session, {
+      drafts: pgDraftFingerprints(pool),
+      finalStepNames: (owner, pageId) => finalStepPageNames(pool, owner, pageId),
+    }) : null;
   },
 };
 
@@ -213,7 +218,7 @@ export const audioStreamDeps: AudioStreamApiDeps = {
   auth: () => getAuthProvider(),
   store: () => {
     const pool = getPool();
-    return pool ? { audioInfo: (owner, pageId) => audioInfo(pool, owner, pageId) } : null;
+    return pool ? { listAudioParts: (owner, pageId) => listAudioParts(pool, owner, pageId) } : null;
   },
   storage: () => getStorage(process.env),
 };
@@ -248,6 +253,7 @@ export const imageDeps: ImageApiDeps = {
     return {
       startImageUpload: (owner, input) => startImageUpload(pool, owner, input),
       completeImageUpload: (owner, assetId, stored) => completeImageUpload(pool, owner, assetId, stored),
+      cancelImageUpload: (owner, pageId, assetId) => cancelImageUpload(pool, owner, pageId, assetId),
       imageAsset: (owner, assetId) => imageAsset(pool, owner, assetId),
       updateImageMeta: (owner, assetId, patch) => updateImageMeta(pool, owner, assetId, patch),
       countPageImages: (owner, pageId) => countPageImages(pool, owner, pageId),

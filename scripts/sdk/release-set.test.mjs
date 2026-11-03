@@ -52,7 +52,7 @@ function fixture({ docsSource = 'export const DocsApp = () => null;\nexport type
     scripts: { test: "do-not-publish" },
     peerDependencies: {
       "@niho/docs-core": "*", "@tiptap/core": "3.31.3", "@tiptap/extension-bubble-menu": "3.31.3",
-      "@tiptap/extension-floating-menu": "3.31.3", "@tiptap/extension-list": "3.31.3", "@tiptap/pm": "3.31.3",
+      "@tiptap/extension-floating-menu": "3.31.3", "@tiptap/extension-list": "3.31.3", "@tiptap/extension-table": "3.31.3", "@tiptap/pm": "3.31.3",
       "@tiptap/react": "3.31.3", "@tiptap/starter-kit": "3.31.3", "@tiptap/suggestion": "3.31.3",
       "lucide-react": "1.58.0", "markdown-it": "^14.3.2", "niho-ui": "*", "prosemirror-markdown": "^1.13.8",
       "prosemirror-search": "^1.1.1", react: "^18 || ^19", "react-dom": "^18 || ^19",

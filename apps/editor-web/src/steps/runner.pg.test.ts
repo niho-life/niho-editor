@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { EditorStore } from "@niho/editor-store";
+import { EditorStore, seedRecipes } from "@niho/editor-store";
 import { applyMigrations } from "@niho/editor-store/migrate";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { StepError, fakeExecutor, type StepExecutor } from "./executor";
 import { createInlineQueue } from "./inline";
 import { MemoryTaskQueue, taskName } from "./queue";
-import { DEFAULT_RECIPES, findRecipeIn } from "./recipes";
+import { DEFAULT_RECIPES, findRecipeIn, toRecipeInputs } from "./recipes";
 import { runAttempt } from "./runner";
 import { pgStepRunStore } from "./store";
 
@@ -25,6 +25,7 @@ describe.skipIf(databaseUrl === undefined)("runAttempt with PostgreSQL", () => {
     const client = await pool.connect();
     try {
       await applyMigrations(client);
+      await seedRecipes(client, OWNER, toRecipeInputs(DEFAULT_RECIPES));
     } finally {
       client.release();
     }

@@ -88,7 +88,7 @@ function isBlockChoiceId(id: string): id is BlockChoiceId {
 }
 
 function isLineTypeId(id: string): id is LineTypeId {
-  return id !== "hr" && BLOCK_IDS.has(id);
+  return id !== "hr" && id !== "image" && id !== "table" && id !== "codeBlock" && BLOCK_IDS.has(id);
 }
 
 function blockMenuItems(choices: readonly BlockChoice[]): ShellMenuItem[] {
@@ -364,7 +364,7 @@ function Chrome({ editor, onAi, onTools }: { editor: Editor; onAi?: () => void; 
   const lastDismiss = useRef<{ kind: Panel["kind"]; at: number } | null>(null);
 
   // 押されている状態（太字・斜体）は ShellBubbleMenu が描いたときの値を出す。選択の移動・コマンドのたびに描き直させる
-  useEditorState({ editor, selector: ({ editor: current }) => ({ bold: current.isActive("bold"), italic: current.isActive("italic") }) });
+  const inTable = useEditorState({ editor, selector: ({ editor: current }) => current.isActive("table") });
 
   /** 外のクリックで閉じた直後に、同じメニューを開くボタンが押されたか（＝閉じたいだけ）。 */
   const recentlyDismissed = (kind: Panel["kind"]) => {
@@ -444,6 +444,8 @@ function Chrome({ editor, onAi, onTools }: { editor: Editor; onAi?: () => void; 
     else if (action === "text-type") openLineType();
     else if (action === "bold") editor.chain().focus().toggleBold().run();
     else if (action === "italic") editor.chain().focus().toggleItalic().run();
+    else if (action === "strike") editor.chain().focus().toggleStrike().run();
+    else if (action === "code") editor.chain().focus().toggleCode().run();
     else if (action === "link") openLink();
     else if (action === "heading") setLineType(editor, line === "h2" ? "paragraph" : "h2");
     else if (action === "list") setLineType(editor, line === "bullet" ? "paragraph" : "bullet");
@@ -468,6 +470,15 @@ function Chrome({ editor, onAi, onTools }: { editor: Editor; onAi?: () => void; 
       {root && (
         <>
           <ShellBubbleMenu editor={editor} onTextType={openLineType} onLink={openLink} onAi={onAi} textType={currentLineTypeName(editor)} />
+          {inTable && (
+            <div className="es-tablebar" role="toolbar" aria-label="表の操作">
+              <button type="button" onMouseDown={keepFocus} onClick={() => editor.chain().focus().addRowAfter().run()}>行を追加</button>
+              <button type="button" onMouseDown={keepFocus} onClick={() => editor.chain().focus().addColumnAfter().run()}>列を追加</button>
+              <button type="button" onMouseDown={keepFocus} onClick={() => editor.chain().focus().deleteRow().run()}>行を削除</button>
+              <button type="button" onMouseDown={keepFocus} onClick={() => editor.chain().focus().deleteColumn().run()}>列を削除</button>
+              <button type="button" onMouseDown={keepFocus} onClick={() => editor.chain().focus().deleteTable().run()}>表を削除</button>
+            </div>
+          )}
           {/* 帯の plugin の登録より後に動かすため、その後ろに置く */}
           <FormatBarRoute editor={editor} root={root} />
         </>

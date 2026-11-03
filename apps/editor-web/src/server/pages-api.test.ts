@@ -22,7 +22,7 @@ import {
 } from "@niho/editor-store";
 import { stubAuthProvider } from "../auth/stub";
 import { AuthTemporarilyUnavailable, type AuthProvider } from "../auth/types";
-import { MAX_BODY_BYTES } from "./http";
+import { PAGE_BODY_MAX_BYTES } from "./http";
 import { createPage, deletePage, getPage, listPages, movePage, patchPage, type PagesApiDeps, type PagesStore } from "./pages-api";
 import { listTrash, restoreFromTrash } from "./trash-api";
 import { getVersion, listVersions, restoreVersion } from "./versions-api";
@@ -351,10 +351,10 @@ describe("/api/pages", () => {
     expect(store.rows.get(trashed.id)?.deleted).toBe(true);
   });
 
-  it("answers 413 above 1 MiB and 400 to bodies that are not JSON, not the right shape, or without a valid baseRevision", async () => {
+  it("answers 413 above the page body limit and 400 to bodies that are not JSON, not the right shape, or without a valid baseRevision", async () => {
     const store = memoryStore();
     const page = await store.createPage("user-a");
-    const big = JSON.stringify({ title: "x", baseRevision: 1, blocks: [{ type: "paragraph", content: [{ type: "text", text: "a".repeat(MAX_BODY_BYTES) }] }] });
+    const big = JSON.stringify({ title: "x", baseRevision: 1, blocks: [{ type: "paragraph", content: [{ type: "text", text: "a".repeat(PAGE_BODY_MAX_BYTES) }] }] });
     expect((await patchPage(request("PATCH", `/api/pages/${page.id}`, big), page.id, deps("user-a", store))).status).toBe(413);
     expect((await createPage(request("POST", "/api/pages", big), deps("user-a", store))).status).toBe(413);
 

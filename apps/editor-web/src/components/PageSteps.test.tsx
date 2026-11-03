@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Block, SettingsRecipe } from "@niho/editor-store";
 import type { AuthProvider } from "@/auth/types";
-import { cancelStepRun, createStepRun, getSteps, type StepsApiDeps } from "@/server/steps-api";
+import { cancelStepRun, createStepRun, getStepPartialOutput, getSteps, updateStepRunRecipe, type StepsApiDeps } from "@/server/steps-api";
 import { StepError, fakeBlocks, type StepExecutor } from "@/steps/executor";
 import { MemoryStepRunStore } from "@/steps/memory-store";
 import { MemoryTaskQueue } from "@/steps/queue";
@@ -24,7 +24,8 @@ import { PageSteps } from "./PageSteps";
 
 const ORIGIN = "http://editor.test";
 const TRANSCRIPT: Block[] = [{ type: "paragraph", content: [{ type: "text", text: "合成の文字起こし" }] }];
-const STEPS_PATH = /^\/api\/pages\/([^/]+)\/steps(?:\/runs(?:\/([^/]+)\/cancel)?)?$/;
+const STEPS_PATH = /^\/api\/pages\/([^/]+)\/steps(?:\/runs(?:\/([^/]+)\/(cancel|update-recipe))?)?$/;
+const PARTIAL_PATH = /^\/api\/pages\/([^/]+)\/steps\/runs\/([^/]+)\/steps\/(\d+)\/partial$/;
 
 const notUsed = async (): Promise<Response> => {
   throw new Error("the steps API never calls the login routes");
@@ -37,7 +38,7 @@ const notUsed = async (): Promise<Response> => {
 function server(saved: readonly SettingsRecipe[] = []) {
   const store = new MemoryStepRunStore();
   const queue = new MemoryTaskQueue();
-  const recipes = recipesOf(saved);
+  let recipes = recipesOf(saved);
   const recording = store.addPage("user-a", { kind: "rec", blocks: TRANSCRIPT });
   const auth: AuthProvider = {
     mode: "stub",
@@ -62,11 +63,17 @@ function server(saved: readonly SettingsRecipe[] = []) {
     headers.set("host", "editor.test");
     if (method !== "GET") headers.set("origin", ORIGIN);
     const request = new Request(url, { ...init, method, headers });
+    const partialMatch = PARTIAL_PATH.exec(url.pathname);
+    if (method === "GET" && partialMatch) {
+      return getStepPartialOutput(request, decodeURIComponent(partialMatch[1]!), decodeURIComponent(partialMatch[2]!), partialMatch[3]!, deps);
+    }
     const match = STEPS_PATH.exec(url.pathname);
     if (!match) throw new Error(`the test server does not serve ${url.pathname}`);
     const id = decodeURIComponent(match[1]!);
     if (method === "GET") return getSteps(request, id, deps);
-    if (match[2]) return cancelStepRun(request, id, decodeURIComponent(match[2]), deps);
+    if (match[2]) return match[3] === "cancel"
+      ? cancelStepRun(request, id, decodeURIComponent(match[2]), deps)
+      : updateStepRunRecipe(request, id, decodeURIComponent(match[2]), deps);
     return createStepRun(request, id, deps);
   });
   /** 積まれている段階を、積まれなくなるまで実行する（本番は Cloud Tasks の worker）。 */
@@ -75,14 +82,14 @@ function server(saved: readonly SettingsRecipe[] = []) {
       for (const task of tasks) await runAttempt({ store, recipes: async () => recipes, executor, queue }, task);
     }
   };
-  return { store, queue, deps, recipes, recording, calls, fetchImpl, work };
+  return { store, queue, deps, recipes, setRecipes(next: typeof recipes) { recipes = next; }, recording, calls, fetchImpl, work };
 }
 
 /** `failAt` の段階だけ（やり直せない失敗で）落ちる実行器。ほかの段階は成功する。 */
-function executorFailingAt(failAt: number | null, code = "invalid_output"): StepExecutor {
+function executorFailingAt(failAt: number | null, code = "invalid_output", partial?: Block[]): StepExecutor {
   return {
     async run(input) {
-      if (input.stepIndex === failAt) throw new StepError(code, false);
+      if (input.stepIndex === failAt) throw new StepError(code, false, partial);
       return { blocks: fakeBlocks(input) };
     },
   };
@@ -157,6 +164,53 @@ const pressEntry = (label: string) => press(label, ".es-makefrom");
 const pressAction = (label: string) => press(label, ".es-redo");
 
 describe("PageSteps（手順の帯）", () => {
+  it("polling does not fetch partial text; opening the keyboard disclosure fetches it on demand", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("記事にする");
+    await settle();
+    const partial: Block[] = [{ type: "paragraph", content: [{ type: "text", text: "画面で確認する合成の途中出力" }] }];
+    await api.work(executorFailingAt(0, "output_too_long", partial));
+    await wait(4_000);
+
+    const disclosure = container!.querySelector<HTMLDetailsElement>(".es-stepband-partial");
+    expect(disclosure).not.toBeNull();
+    expect(disclosure!.querySelector("summary")?.textContent).toContain("途中までの出力を確認");
+    expect(container!.textContent).not.toContain("画面で確認する合成の途中出力");
+    expect(api.calls.some((call) => call.endsWith("/partial"))).toBe(false);
+
+    await act(async () => {
+      disclosure!.open = true;
+      disclosure!.dispatchEvent(new Event("toggle"));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(api.calls.some((call) => call.endsWith("/partial"))).toBe(true);
+    expect(container!.textContent).toContain("画面で確認する合成の途中出力");
+  });
+
+  it("shows the pinned revision and asks for a reviewed design update", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("記事にする");
+    await settle();
+    expect(container!.textContent).toContain("使用中の手順: 第1版");
+    await pressAction("やめる");
+    await settle();
+    api.setRecipes(api.recipes.map((recipe) => recipe.id === "tpl-1"
+      ? { ...recipe, revision: 2, steps: recipe.steps.map((step, index) => index === 0 ? { ...step, name: "新しい段階" } : step) }
+      : recipe));
+    await unmount();
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    expect(container!.textContent).toContain("手順が新しくなっています。変更内容を見る");
+    expect(container!.textContent).toContain("名前: 文字起こし修正 → 新しい段階");
+    await press("今の設計に更新", ".es-stepband-note");
+    await settle();
+    expect(container!.textContent).toContain("使用中の手順: 第2版（現在: 第2版）");
+    expect(api.calls.some((call) => call.includes("update-recipe"))).toBe(true);
+  });
   it("録音ページでは「この録音から」の入口を出し、押すと手順が始まって帯が出る", async () => {
     const api = server();
     vi.stubGlobal("fetch", api.fetchImpl);
@@ -262,10 +316,10 @@ describe("PageSteps（手順の帯）", () => {
     await back();
     expect(band()).toEqual([
       { label: "文字起こし修正", say: "済み", state: "done" },
-      { label: "記事方針", say: "前提変更", state: "stale" },
-      { label: "記事本文", say: "前提変更", state: "stale" },
+      { label: "記事方針", say: "元にしたページが変わりました。", state: "stale" },
+      { label: "記事本文", say: "元にしたページが変わりました。", state: "stale" },
     ]);
-    expect(note()).toBe("上流のページが変わりました。「記事方針」から作り直すと印が消えます。");
+    expect(note()).toBe("元にしたページが変わりました。「記事方針」から作り直すと印が消えます。");
     expect(bandActions()).toEqual(["「記事方針」からやり直す", "はじめから作り直す"]);
 
     // その段階から作り直すと、前提変更の印は消える（段階 0 は作り直さない）

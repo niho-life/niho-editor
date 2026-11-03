@@ -26,7 +26,7 @@ type Patch = {
 function createServer(initial?: Partial<RecordingData>) {
   const state = {
     revision: 1,
-    durationSec: 125,
+    durationSec: 125 as number | null,
     data: {
       segments: [
         { start: 0, end: 4, text: "最初の段落です。", speaker: 1 },
@@ -98,6 +98,8 @@ function createServer(initial?: Partial<RecordingData>) {
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
+const MEDIA_DESCRIPTOR_NAMES = ["paused", "currentTime", "duration"] as const;
+const ORIGINAL_MEDIA_DESCRIPTORS = new Map(MEDIA_DESCRIPTOR_NAMES.map((name) => [name, Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, name)]));
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -108,6 +110,12 @@ afterEach(async () => {
   root = null;
   container = null;
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  for (const name of MEDIA_DESCRIPTOR_NAMES) {
+    const descriptor = ORIGINAL_MEDIA_DESCRIPTORS.get(name);
+    if (descriptor) Object.defineProperty(HTMLMediaElement.prototype, name, descriptor);
+    else Reflect.deleteProperty(HTMLMediaElement.prototype, name);
+  }
 });
 
 async function settle(ms = 0) {
@@ -135,11 +143,48 @@ async function mount(server = createServer()) {
 }
 
 const paragraphs = () => [...container!.querySelectorAll<HTMLElement>(".es-seg p")];
+const seekSlider = () => container!.querySelector<HTMLInputElement>('input[aria-label="再生位置"]');
 const whoOf = () => [...container!.querySelectorAll(".es-who > span")].map((node) => node.textContent);
 const status = () => container!.querySelector("[data-save-state]")!;
 const chip = (name: string) => container!.querySelector<HTMLButtonElement>(`button[aria-label="${name} の名前を変える"]`)!;
 const buttonByText = (text: string) => [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === text)!;
 const notice = () => container!.querySelector("[data-transcript-notice]")?.textContent ?? "";
+
+function installAudioMedia() {
+  type State = { paused: boolean; currentTime: number; duration: number };
+  const states = new WeakMap<HTMLMediaElement, State>();
+  const state = (audio: HTMLMediaElement) => {
+    let current = states.get(audio);
+    if (!current) {
+      current = { paused: true, currentTime: 0, duration: 600 };
+      states.set(audio, current);
+    }
+    return current;
+  };
+  Object.defineProperties(HTMLMediaElement.prototype, {
+    paused: { configurable: true, get() { return state(this).paused; } },
+    currentTime: { configurable: true, get() { return state(this).currentTime; }, set(value: number) { state(this).currentTime = value; } },
+    duration: { configurable: true, get() { return state(this).duration; } },
+  });
+  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(function (this: HTMLMediaElement) {
+    state(this).paused = false;
+    this.dispatchEvent(new Event("play"));
+    return Promise.resolve();
+  });
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(function (this: HTMLMediaElement) {
+    state(this).paused = true;
+    this.dispatchEvent(new Event("pause"));
+  });
+  return {
+    finish(audio: HTMLMediaElement) {
+      state(audio).paused = true;
+      audio.dispatchEvent(new Event("ended"));
+    },
+    currentTime(audio: HTMLMediaElement) { return state(audio).currentTime; },
+    setDuration(audio: HTMLMediaElement, duration: number) { state(audio).duration = duration; },
+  };
+}
 
 function write(element: HTMLElement, text: string) {
   act(() => {
@@ -582,6 +627,122 @@ describe("RecordingTranscript: timestamps", () => {
     expect(container!.querySelectorAll(".es-who time")).toHaveLength(4);
     act(() => buttonByText("タイムスタンプ").click());
     expect(container!.querySelectorAll(".es-who time")).toHaveLength(0);
+  });
+});
+
+describe("RecordingTranscript: multiple audio parts", () => {
+  const audio = { status: "uploaded", bytes: 64, contentType: "audio/mp4", expiresAt: "2030-02-01T00:00:00.000Z" };
+  const part = (partIndex: number, offsetSec: number, durationSec: number | null, extra: Record<string, unknown> = {}) => ({
+    partIndex, status: "uploaded", bytes: 64, contentType: "audio/mp4", durationSec, offsetSec, sourceName: `part-${partIndex}.m4a`, expiresAt: "2030-02-01T00:00:00.000Z", ...extra,
+  });
+
+  it("uses browser metadata for a single part when saved and transcript lengths are unknown", async () => {
+    const media = installAudioMedia();
+    const server = createServer();
+    server.state.durationSec = null;
+    server.state.getOnly = { audio, audios: [part(0, 0, null)], candidates: [] };
+    await mount(server);
+    await until(() => seekSlider() !== null);
+    const element = container!.querySelector<HTMLAudioElement>("audio")!;
+
+    media.setDuration(element, Number.POSITIVE_INFINITY);
+    act(() => element.dispatchEvent(new Event("durationchange")));
+    expect(seekSlider()!.disabled).toBe(true);
+
+    media.setDuration(element, 37);
+    act(() => element.dispatchEvent(new Event("loadedmetadata")));
+    expect(seekSlider()!.max).toBe("37");
+    expect(seekSlider()!.disabled).toBe(false);
+  });
+
+  it("does not use one part's metadata as the total when multiple part lengths are unknown", async () => {
+    const media = installAudioMedia();
+    const server = createServer();
+    server.state.durationSec = null;
+    server.state.getOnly = { audio, audios: [part(0, 0, null), part(1, 600, null)], candidates: [] };
+    await mount(server);
+    await until(() => seekSlider() !== null);
+    const element = container!.querySelector<HTMLAudioElement>("audio")!;
+    media.setDuration(element, 37);
+    act(() => element.dispatchEvent(new Event("loadedmetadata")));
+    expect(seekSlider()!.max).toBe("600");
+    expect(seekSlider()!.disabled).toBe(false);
+  });
+
+  it("plays the next uploaded part automatically at the boundary", async () => {
+    const media = installAudioMedia();
+    const server = createServer();
+    server.state.getOnly = { audio, audios: [part(0, 0, 600), part(1, 600, 300)], candidates: [] };
+    await mount(server);
+    await until(() => container!.querySelector('[data-playback-part]') !== null);
+    const element = container!.querySelector<HTMLAudioElement>("audio")!;
+    expect(element.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio?part=0`);
+    act(() => container!.querySelector<HTMLButtonElement>('[aria-label="再生"]')!.click());
+    expect(container!.querySelector('[data-playback-part]')?.textContent).toBe("音声 1を再生中");
+
+    await act(async () => media.finish(element));
+    await settle();
+    expect(element.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio?part=1`);
+    await act(async () => {
+      element.dispatchEvent(new Event("loadedmetadata"));
+      element.dispatchEvent(new Event("seeked"));
+    });
+    await settle();
+    expect(container!.querySelector('[data-playback-part]')?.textContent).toBe("音声 2を再生中");
+    expect(media.currentTime(element)).toBe(0);
+  });
+
+  it("seeks on the full recording timeline and translates the position into the selected part", async () => {
+    const media = installAudioMedia();
+    const server = createServer({ segments: [{ start: 650, end: 660, text: "後半の段落です。", speaker: 1 }] });
+    server.state.getOnly = { audio, audios: [part(0, 0, 600), part(1, 600, 300)], candidates: [] };
+    await mount(server);
+    await until(() => container!.querySelector('[data-playback-part]') !== null);
+    const element = container!.querySelector<HTMLAudioElement>("audio")!;
+    await act(async () => container!.querySelector<HTMLButtonElement>('[aria-label="10:50 から再生"]')!.click());
+    await settle();
+    expect(element.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio?part=1`);
+    await act(async () => {
+      element.dispatchEvent(new Event("loadedmetadata"));
+      element.dispatchEvent(new Event("seeked"));
+    });
+    expect(media.currentTime(element)).toBe(50);
+    expect(container!.querySelector('[data-playback-part]')?.textContent).toBe("音声 2を再生中");
+    expect(container!.querySelector<HTMLInputElement>('[aria-label="再生位置"]')?.max).toBe("900");
+    expect(container!.querySelector<HTMLInputElement>('[aria-label="再生位置"]')?.getAttribute("aria-valuetext")).toBe("10:50 / 15:00");
+  });
+
+  it("moves between available parts with labelled keyboard-operable buttons", async () => {
+    installAudioMedia();
+    const server = createServer();
+    server.state.getOnly = { audio, audios: [part(0, 0, 600), part(1, 600, 300)], candidates: [] };
+    await mount(server);
+    await until(() => container!.querySelector('[data-playback-part]') !== null);
+    const element = container!.querySelector<HTMLAudioElement>("audio")!;
+    const next = container!.querySelector<HTMLButtonElement>('[aria-label="次の音声Part"]')!;
+    expect(next.disabled).toBe(false);
+    expect(next.tagName).toBe("BUTTON");
+    act(() => next.click());
+    await settle();
+    expect(element.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio?part=1`);
+    await act(async () => element.dispatchEvent(new Event("loadedmetadata")));
+    act(() => container!.querySelector<HTMLButtonElement>('[aria-label="前の音声Part"]')!.click());
+    await settle();
+    expect(element.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio?part=0`);
+    expect(container!.querySelector('[data-playback-part]')?.textContent).toBe("音声 1を選択中");
+  });
+
+  it("does not jump across a missing part when seeking, and announces its state", async () => {
+    const media = installAudioMedia();
+    const server = createServer({ segments: [{ start: 650, end: 660, text: "欠落区間の段落です。", speaker: 1 }] });
+    server.state.getOnly = { audio, audios: [part(0, 0, 600), part(2, 1200, 300)], candidates: [] };
+    await mount(server);
+    await until(() => container!.querySelector('[data-playback-part]') !== null);
+    const element = container!.querySelector<HTMLAudioElement>("audio")!;
+    await act(async () => container!.querySelector<HTMLButtonElement>('[aria-label="10:50 から再生"]')!.click());
+    expect(element.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio?part=0`);
+    expect(container!.querySelector("[data-playback-notice]")?.textContent).toContain("音声 2 が見つかりません");
+    expect(media.currentTime(element)).toBe(0);
   });
 });
 

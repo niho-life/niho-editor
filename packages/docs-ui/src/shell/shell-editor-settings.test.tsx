@@ -7,9 +7,9 @@ import { EDITOR_SETTINGS_TEXT, EditorSettingsPage, type EditorSettingsPageProps,
 const noop = () => undefined;
 
 const RECIPES: EditorSettingsRecipe[] = [
-  { id: "tpl-1", name: "記事制作", guide: "## 構成", steps: [{ id: "k7m2q9xa", name: "文字起こし修正", instruction: "整える。" }], isDefault: true, modified: false },
-  { id: "tpl-2", name: "議事録", guide: "", steps: [{ id: "d9c3x7mf", name: "議事録", instruction: "" }], isDefault: true, modified: true },
-  { id: "r-talk", name: "対談", guide: "", steps: [{ id: "s-1", name: "まとめ", instruction: "" }], isDefault: false, modified: false },
+  { id: "tpl-1", name: "記事制作", guide: "## 構成", steps: [{ id: "k7m2q9xa", name: "文字起こし修正", instruction: "整える。", profile: "light" }], terms: [], samples: [], isDefault: true, modified: false },
+  { id: "tpl-2", name: "議事録", guide: "", steps: [{ id: "d9c3x7mf", name: "議事録", instruction: "", profile: "standard" }], terms: [], samples: [], isDefault: true, modified: true },
+  { id: "r-talk", name: "対談", guide: "", steps: [{ id: "s-1", name: "まとめ", instruction: "", profile: "advanced" }], terms: [], samples: [], isDefault: false, modified: false },
 ];
 
 function props(patch: Partial<EditorSettingsPageProps> = {}): EditorSettingsPageProps {
@@ -24,6 +24,7 @@ function props(patch: Partial<EditorSettingsPageProps> = {}): EditorSettingsPage
     onTermsDraft: noop,
     onCancelTerms: noop,
     onSaveTerms: noop,
+    aboutName: "合成の呼び名",
     about: "合成の自己紹介です。",
     aboutDraft: null,
     onEditAbout: noop,
@@ -32,6 +33,7 @@ function props(patch: Partial<EditorSettingsPageProps> = {}): EditorSettingsPage
     onSaveAbout: noop,
     recipes: RECIPES,
     recipeDraft: null,
+    recipeValidation: null,
     onEditRecipe: noop,
     onRecipeDraft: noop,
     onCancelRecipe: noop,
@@ -46,7 +48,7 @@ function props(patch: Partial<EditorSettingsPageProps> = {}): EditorSettingsPage
     transcription: { engine: "deepgram", timeoutSec: 1200, maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30, extensions: ["m4a", "mp3"] },
     storageUsage: { imageBytes: "1073741824", audioBytes: "4096", totalBytes: "1073745920" },
     storageUsageNote: null,
-    limits: { glossary: 200, recipes: 20, steps: 12, aboutChars: 2_000 },
+    limits: { glossary: 200, recipes: 20, steps: 12, aboutChars: 2_000, aboutNameChars: 80 },
     ...patch,
   };
 }
@@ -135,7 +137,7 @@ describe("EditorSettingsPage", () => {
   });
 
   it("hides 手順を追加 and 複製 once the limit is reached", () => {
-    const markup = html({ limits: { glossary: 200, recipes: RECIPES.length, steps: 12, aboutChars: 2_000 } });
+    const markup = html({ limits: { glossary: 200, recipes: RECIPES.length, steps: 12, aboutChars: 2_000, aboutNameChars: 80 } });
     expect(markup).not.toContain("手順を追加");
     expect(markup).not.toContain('aria-label="記事制作を複製"');
   });
@@ -176,8 +178,31 @@ describe("EditorSettingsPage", () => {
     expect(added).not.toContain(EDITOR_SETTINGS_TEXT.fixedSteps);
     // 段階が 1 つだけのときは消させない（段階のない手順は実行できない）
     expect(added).not.toContain('aria-label="この段階を削除（段階 1）"');
-    const two = { ...RECIPES[2]!, steps: [...RECIPES[2]!.steps, { id: "s-2", name: "下書き", instruction: "" }] };
+    const two = { ...RECIPES[2]!, steps: [...RECIPES[2]!.steps, { id: "s-2", name: "下書き", instruction: "", profile: "standard" }] };
     expect(html({ recipeDraft: two })).toContain('aria-label="この段階を削除（段階 1）"');
+  });
+
+  it("lets a recipe attach examples and explicitly review/apply guide and term proposals", () => {
+    const recipe = { ...RECIPES[2]!, samples: [{ id: "sample-a", name: "合成見本.md", chars: 24 }] };
+    const markup = html({
+      recipeDraft: recipe,
+      sampleUrl: "https://example.test/guide.md",
+      extraction: {
+        sampleIds: ["sample-a"],
+        guide: "## 文書の目的と読者\\n読む人に伝える。",
+        candidates: [{ term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌"], note: "駅名" }],
+      },
+      selectedExtractionTerms: ["北鎌倉:0"],
+    });
+    expect(markup).toContain("ファイルから取り込む");
+    expect(markup).toContain("公開WebページのURL");
+    expect(markup).toContain("お手本から抽出する");
+    expect(markup).toContain("文書ガイドに置き換える");
+    expect(markup).toContain("選んだ固有名詞を追加");
+    expect(markup).toContain("本文はこの手順の利用者データとして保存");
+    expect(markup).not.toContain("お手本文書本文のサンプル");
+    expect(unlabeledButtons(markup)).toEqual([]);
+    expect(unlabeledInputs(markup)).toEqual([]);
   });
 
   it("names every button and labels every field, in every state", () => {
@@ -208,20 +233,21 @@ describe("「あなたについて」", () => {
   it("shows the summary and the editor, and says it is not the author information of a published page", () => {
     expect(text()).toContain("あなたについて");
     expect(text()).toContain("合成の自己紹介です。");
-    const editing = text({ aboutDraft: "合成の自己紹介です。" });
+    const editing = text({ aboutDraft: { name: "合成の呼び名", text: "合成の自己紹介です。" } });
     expect(editing).toContain(EDITOR_SETTINGS_TEXT.aboutHelp);
+    expect(editing).toContain("呼び名（AI向け）");
     expect(editing).toContain("2,000 字");
   });
 
   it("says when it is empty, and marks the save as not allowed when it is too long", () => {
-    expect(text({ about: "" })).toContain(EDITOR_SETTINGS_TEXT.empty);
-    const over = html({ aboutDraft: "あ".repeat(2_001) });
-    expect(over).toContain("長すぎるので保存できません");
+    expect(text({ aboutName: "", about: "" })).toContain(EDITOR_SETTINGS_TEXT.empty);
+    const over = html({ aboutDraft: { name: "合成の呼び名", text: "あ".repeat(2_001) } });
+    expect(over).toContain("パーソナライズが長すぎるので保存できません");
     expect(over).toMatch(/aria-label="あなたについてを保存"[^>]*aria-disabled="true"|aria-disabled="true"[^>]*aria-label="あなたについてを保存"/);
   });
 
   it("keeps every button and input labelled", () => {
-    const markup = html({ aboutDraft: "合成の自己紹介です。" });
+    const markup = html({ aboutDraft: { name: "合成の呼び名", text: "合成の自己紹介です。" } });
     expect(unlabeledButtons(markup)).toEqual([]);
     expect(unlabeledInputs(markup)).toEqual([]);
   });
@@ -229,10 +255,11 @@ describe("「あなたについて」", () => {
   /** gallery は型で守られていない（どの tsconfig にも入っていない）ので、渡し忘れても画面が落ちないこと。 */
   it("still renders when the caller does not pass it at all", () => {
     const without = props();
-    for (const key of ["about", "aboutDraft", "onEditAbout", "onAboutDraft", "onCancelAbout", "onSaveAbout"]) {
+    for (const key of ["about", "aboutName", "aboutDraft", "onEditAbout", "onAboutDraft", "onCancelAbout", "onSaveAbout"]) {
       delete (without as unknown as Record<string, unknown>)[key];
     }
     delete (without.limits as unknown as Record<string, unknown>).aboutChars;
+    delete (without.limits as unknown as Record<string, unknown>).aboutNameChars;
     const markup = renderToStaticMarkup(<EditorSettingsPage {...without} />);
     expect(markup).toContain("あなたについて");
     expect(markup).toContain(EDITOR_SETTINGS_TEXT.empty);

@@ -1,4 +1,4 @@
-import type { GlossaryEntry } from "@niho/docs-core";
+import type { About, GlossaryEntry } from "@niho/docs-core";
 import { AnthropicError, type AnthropicClient, type ToolCall } from "./anthropic";
 import { MAX_CHAT_INPUT_CHARS } from "./chat-limits";
 import { aboutSection } from "./references";
@@ -94,7 +94,7 @@ export type ChatPage = { id: string; title: string; kind: string };
 /** 会話の過去のやりとり（人の指示と AI の返答だけ。道具の中身は渡さない）。 */
 export type ChatHistoryTurn = { role: "user" | "assistant"; text: string };
 
-export function buildChatSystem(options: { glossary?: readonly GlossaryEntry[]; lang?: "ja" | "en"; about?: string } = {}): string {
+export function buildChatSystem(options: { glossary?: readonly GlossaryEntry[]; lang?: "ja" | "en"; about?: About } = {}): string {
   const lines = [
     "あなたは NIHO editor の編集の手伝いです。道具を使ってページの本文を読み書きします。",
     "",
@@ -108,7 +108,7 @@ export function buildChatSystem(options: { glossary?: readonly GlossaryEntry[]; 
     "- create_page: 新しいページを作る",
   ];
   if (options.lang) lines.push("", `返答と本文の言語: ${options.lang}`);
-  const about = aboutSection(options.about ?? "");
+  const about = aboutSection(options.about);
   if (about) lines.push("", about);
   const glossary = (options.glossary ?? []).filter((entry) => entry.term.length > 0);
   if (glossary.length > 0) {

@@ -78,6 +78,20 @@ describe("presets", () => {
 });
 
 describe("buildRequest", () => {
+  it("carries the same personal context into every split request", () => {
+    const about = { name: "合成の呼び名", text: "短く箇条書きで書いてください。" };
+    const result = buildRequest(
+      { blocks: [p("あ".repeat(3_000)), p("い".repeat(3_000))], lang: "ja" },
+      tidy,
+      undefined,
+      { about },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.requests).toHaveLength(2);
+    for (const request of result.requests) expect(request.about).toEqual(about);
+  });
+
   it("sends paragraphs and headings as editable, other blocks with text as context, by top-level index", () => {
     const request = requestFor(samplePage());
     expect(request).toEqual({
