@@ -54,14 +54,14 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function body(run: MacTranscriptionRun, candidateId: string | null = run.candidateId) {
+function body(run: MacTranscriptionRun) {
   return {
     run: { ...transcriptionRunBody(run.run), executor: "mac-cli" as const },
     generation: run.generation,
     operationId: run.operationId,
     settings: run.settings,
     audioManifest: run.audioManifest.map((part) => ({ ...part })),
-    candidateId,
+    candidateId: run.candidateId,
   };
 }
 
@@ -69,9 +69,9 @@ function conflict(reason: string): Response {
   return jsonResponse(409, { error: "cannot_start", reason });
 }
 
-function startResponse(result: StartMacTranscriptionResult, candidateId: string | null): Response {
+function startResponse(result: StartMacTranscriptionResult): Response {
   if (result.status === "created" || result.status === "existing") {
-    return jsonResponse(result.status === "created" ? 202 : 200, body(result, candidateId ?? result.candidateId));
+    return jsonResponse(result.status === "created" ? 202 : 200, body(result));
   }
   return conflict(result.status);
 }
@@ -84,7 +84,7 @@ async function startFor(
 ): Promise<Response> {
   const first = await store.start(owner, pageId, { operationId, terms: [] });
   if (!first) return notFoundResponse();
-  if (first.status !== "has_transcript") return startResponse(first, null);
+  if (first.status !== "has_transcript") return startResponse(first);
 
   // 既存本文は上書きしない。今の正本を採用中の案として保存し、Mac の結果は新しい案へ入れる。
   const [recording, candidates] = await Promise.all([store.getRecording(owner, pageId), store.listCandidates(owner, pageId)]);
@@ -100,7 +100,7 @@ async function startFor(
   if (added.status === "too_many") return conflict("too_many_candidates");
   const started = await store.start(owner, pageId, { operationId, candidate: added.candidate.id, terms: [] });
   if (!started) return notFoundResponse();
-  return startResponse(started, added.candidate.id);
+  return startResponse(started);
 }
 
 /** POST /recording/transcription/mac — start / complete / fail / stop。server runner や API key には依存しない。 */
