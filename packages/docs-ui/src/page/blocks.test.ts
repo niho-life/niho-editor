@@ -39,7 +39,7 @@ describe("validateBlocks: what a page may contain", () => {
       { type: "blockquote", content: [paragraph(text("引用"))] },
       { type: "callout", content: [paragraph(text("囲み"))] },
       { type: "horizontalRule" },
-      { type: "image", attrs: { assetId: ASSET, alt: "代替", credit: "撮影 NIHO", consent: true } },
+      { type: "image", attrs: { assetId: ASSET, alt: "代替", caption: "朝の海", credit: "撮影 NIHO", consent: true } },
       { type: "recording", attrs: { assetId: ASSET } },
       { type: "paragraph" },
     ];
@@ -131,6 +131,7 @@ describe("validateBlocks: what a page may not contain", () => {
     expect(validateBlocks([{ type: "image" }]).ok).toBe(false);
     expect(validateBlocks([{ type: "image", attrs: { assetId: ASSET, consent: "yes" } }]).ok).toBe(false);
     expect(validateBlocks([{ type: "image", attrs: { assetId: ASSET, alt: "あ".repeat(1001) } }]).ok).toBe(false);
+    expect(validateBlocks([{ type: "image", attrs: { assetId: ASSET, caption: "あ".repeat(1001) } }]).ok).toBe(false);
     expect(validateBlocks([{ type: "image", attrs: { assetId: ASSET, credit: "あ".repeat(501) } }]).ok).toBe(false);
   });
 

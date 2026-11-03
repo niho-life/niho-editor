@@ -1,4 +1,4 @@
-import { IMAGE_ALT_MAX_CHARS, IMAGE_CREDIT_MAX_CHARS } from "./image-limits";
+import { IMAGE_ALT_MAX_CHARS, IMAGE_CAPTION_MAX_CHARS, IMAGE_CREDIT_MAX_CHARS } from "./image-limits";
 
 /**
  * 本文のブロック（JSON の値の配列の 1 つ）。正本の型は `@niho/editor-store` の `Block` で、同じ形をここにも置く
@@ -28,6 +28,7 @@ export const LINK_PROTOCOLS: readonly string[] = ["https:", "http:", "mailto:"];
 
 /** 画像の alt・クレジットの上限（DB の assets・画像の上限（image-limits.ts）と同じ 1 か所から）。 */
 const MAX_ALT_CHARS = IMAGE_ALT_MAX_CHARS;
+const MAX_CAPTION_CHARS = IMAGE_CAPTION_MAX_CHARS;
 const MAX_CREDIT_CHARS = IMAGE_CREDIT_MAX_CHARS;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -127,12 +128,16 @@ const NODES: Record<string, NodeSpec> = {
   image: {
     content: "none",
     attrs: (raw) => {
-      const { assetId, alt, credit, consent } = pick("image", raw, ["assetId", "alt", "credit", "consent"]);
+      const { assetId, alt, caption, credit, consent } = pick("image", raw, ["assetId", "alt", "caption", "credit", "consent"]);
       if (typeof assetId !== "string" || !UUID_PATTERN.test(assetId)) fail("image", "assetId must be a uuid");
       const out: Record<string, unknown> = { assetId };
       if (alt !== undefined && alt !== null) {
         if (!isText(alt, MAX_ALT_CHARS)) fail("image", "invalid alt");
         out.alt = alt;
+      }
+      if (caption !== undefined && caption !== null) {
+        if (!isText(caption, MAX_CAPTION_CHARS)) fail("image", "invalid caption");
+        out.caption = caption;
       }
       if (credit !== undefined && credit !== null) {
         if (!isText(credit, MAX_CREDIT_CHARS)) fail("image", "invalid credit");

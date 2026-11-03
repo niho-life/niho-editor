@@ -36,6 +36,9 @@ else
   [[ "$serving" == "$IMAGE:"* ]] || die "$SERVICE is not serving an image of $IMAGE (first deploy needs a build)"
   TAG="${serving#"$IMAGE:"}"
 fi
+if [[ -n "$EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF" ]] && ! private_jobs_infra_ready; then
+  die "private jobs cleanup is not ready: deploy once without the keyring reference, then run private-jobs-infra.sh"
+fi
 CONNECTION="$(cloudsql_connection_name)"
 SERVICE_URL="$(service_url "$SERVICE")"
 
@@ -122,6 +125,17 @@ gcp run jobs deploy "$MIGRATE_JOB" \
   --max-retries 0 --task-timeout 10m --memory 512Mi --labels "$COST_LABEL" \
   --execute-now --wait
 
+# This job receives only the app DB credential, never the migrator URL or private-payload keys.
+if [[ "$PRIVATE_JOBS_MAINTENANCE" == true ]]; then
+  log "private jobs: deploy bounded payload cleanup"
+  gcp run jobs deploy "$PRIVATE_JOBS_JOB" --region "$GCP_REGION" --image "$IMAGE-migrate:$TAG" \
+    --service-account "$RUNNER_SA_EMAIL" --set-cloudsql-instances "$CONNECTION" \
+    --network "$VPC_NETWORK" --subnet "$VPC_SUBNET" --vpc-egress private-ranges-only \
+    --set-secrets "DATABASE_URL=$SECRET_DATABASE_URL:latest" --set-env-vars "NODE_ENV=production" \
+    --command node --args packages/editor-store/src/purge-cli.ts,--private-jobs-only \
+    --tasks 1 --parallelism 1 --max-retries 1 --task-timeout 300s --memory 512Mi --labels "$COST_LABEL"
+fi
+
 log "deploy $SERVICE with $IMAGE:$TAG"
 # The service is reachable by anyone (people sign in inside the app); the app refuses every caller with no session.
 gcp run deploy "$SERVICE" \
@@ -134,7 +148,7 @@ gcp run deploy "$SERVICE" \
   --add-cloudsql-instances "$CONNECTION" \
   --network "$VPC_NETWORK" --subnet "$VPC_SUBNET" --vpc-egress private-ranges-only \
   --set-secrets "$(service_secrets "$ai" "$tr" "$google" "$gem")" \
-  --set-env-vars "$(service_env_vars "$ai" "$tr" "$gem")$(steps_env_vars)$(transcribe_env_vars)" \
+  --set-env-vars "$(service_env_vars "$ai" "$tr" "$gem")$(steps_env_vars)$(transcribe_env_vars)$(private_jobs_env_vars)" \
   --labels "$COST_LABEL,commit=${TAG:0:12}"
 
 # 一度でも特定の revision へ traffic を割り当てる（docs/ops/editor-deploy.md §9 の戻し方）と、Cloud Run は以降のデプロイもその割り当てを

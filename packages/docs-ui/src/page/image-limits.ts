@@ -13,6 +13,8 @@ export const PAGE_MAX_BYTES = 30 * 1024 * 1024;
 export const IMAGE_PAGE_MAX_COUNT = 100;
 /** alt・クレジットの上限（DB の assets の CHECK・限定 AST と同じ値。ここが 1 か所）。 */
 export const IMAGE_ALT_MAX_CHARS = 1000;
+/** 公開本文の写真キャプション。credit（撮影者・提供元）とは別で、翻訳対象になる。 */
+export const IMAGE_CAPTION_MAX_CHARS = 1000;
 export const IMAGE_CREDIT_MAX_CHARS = 500;
 
 /** 受け付ける種類（この 5 つだけ。SVG は script を持てるので入れない）。 */

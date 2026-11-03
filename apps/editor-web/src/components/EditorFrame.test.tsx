@@ -1705,17 +1705,30 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     }
     /** 版の一覧・戻す・保存を受ける合成のサーバー（戻したあとの本文は「戻した本文」、revision は 5）。 */
     function restoringServer(calls: Array<{ method: string; url: string; body: unknown }>) {
+      let serverRevision = 4;
       vi.stubGlobal(
         "fetch",
         vi.fn(async (url: string, init: RequestInit) => {
           const sent = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
-          calls.push({ method: String(init.method), url, body: sent });
+          calls.push({ method: init.method ?? "GET", url, body: sent });
           if (url.endsWith("/versions")) return json(200, { versions: [{ version: 1, reason: "autosave", createdAt: UPDATED_AT, blockCount: 1 }] });
           if (url.endsWith("/restore")) {
+            serverRevision = 5;
             return json(200, { page: { id: A, kind: "note", title: "合成の題名", lang: "ja", blocks: paragraph("戻した本文"), revision: 5, createdAt: UPDATED_AT, updatedAt: "2026-10-31T02:59:00.000Z" } });
           }
+          if (url.endsWith("/translation")) {
+            return json(200, {
+              page: { id: A, lang: "en", revision: serverRevision },
+              relation: null,
+              proposal: null,
+              provider: { destination: "Anthropic API", metered: true },
+            });
+          }
           if (url.endsWith("/share")) return json(200, { share: { status: "PRIVATE", publicId: null, url: null, updatedAt: null } });
-          if (init.method === "PATCH") return json(200, { page: { id: A, revision: (sent!.baseRevision as number) + 1 } });
+          if (init.method === "PATCH") {
+            serverRevision = (sent!.baseRevision as number) + 1;
+            return json(200, { page: { id: A, revision: serverRevision } });
+          }
           return json(500, { error: "internal" });
         }),
       );
@@ -1824,13 +1837,35 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       type Call = { method: string; url: string; body: Record<string, unknown> | null };
       /** 保存（PATCH）を受ける合成のサーバー。`answer` で応答を差し替える（既定は revision を 1 つ進める）。 */
       function savingServer(calls: Call[], answer?: (body: Record<string, unknown>) => Response | undefined | Promise<Response | undefined>) {
+        let serverRevision = 1;
         vi.stubGlobal(
           "fetch",
           vi.fn(async (url: string, init: RequestInit) => {
             const sent = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
-            calls.push({ method: String(init.method), url, body: sent });
+            calls.push({ method: init.method ?? "GET", url, body: sent });
+            if (init.method === undefined && url.endsWith("/translation")) {
+              return json(200, {
+                page: { id: A, lang: "en", revision: serverRevision },
+                relation: null,
+                proposal: null,
+                provider: { destination: "Anthropic API", metered: true },
+              });
+            }
             const custom = sent ? await answer?.(sent) : undefined;
-            return custom ?? json(200, { page: { id: A, revision: (sent!.baseRevision as number) + 1 } });
+            if (custom) {
+              if (custom.status === 409) {
+                const conflict = await custom.clone().json() as { page?: { revision?: unknown } };
+                if (typeof conflict.page?.revision === "number") serverRevision = conflict.page.revision;
+              } else if (custom.ok && init.method === "PATCH") {
+                serverRevision = (sent!.baseRevision as number) + 1;
+              }
+              return custom;
+            }
+            if (init.method === "PATCH") {
+              serverRevision = (sent!.baseRevision as number) + 1;
+              return json(200, { page: { id: A, revision: serverRevision } });
+            }
+            return json(500, { error: "unexpected" });
           }),
         );
       }
@@ -1875,12 +1910,13 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
         await tick();
         expect(tip()).toBe("自分だけ · 保存済み");
         expect(railAlert()).toBeUndefined();
+        expect(calls).toContainEqual({ method: "GET", url: `/api/pages/${A}/translation`, body: null });
 
         // 次の保存は、言語を保存したあとの revision の上に（revision をずらさない・競合にしない）
         await typeTitle("合成の題名 2");
         await saveNow();
         await tick();
-        expect(calls.at(-1)).toEqual({ method: "PATCH", url: `/api/pages/${A}`, body: { title: "合成の題名 2", baseRevision: 2 } });
+        expect(calls.filter((call) => call.method === "PATCH").at(-1)).toEqual({ method: "PATCH", url: `/api/pages/${A}`, body: { title: "合成の題名 2", baseRevision: 2 } });
 
         // 一覧の行の言語も替わった（エディタが下書きを読み直している間は、一覧の行の言語を出す）
         await rerender(<FakePage page={fakePage(null)} />);
@@ -1912,7 +1948,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
         await act(async () => inRail("English")!.click());
         await tick();
         expect(railAlert()).toBeUndefined();
-        expect(calls.at(-1)?.body).toEqual({ lang: "en", baseRevision: 2 });
+        expect(calls.filter((call) => call.method === "PATCH").at(-1)?.body).toEqual({ lang: "en", baseRevision: 2 });
         expect(pressedLang()).toEqual(["English"]);
       });
 
@@ -1948,7 +1984,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
         // 上書きのあとは普通に変えられる
         await act(async () => inRail("English")!.click());
         await tick();
-        expect(calls.at(-1)?.body).toEqual({ lang: "en", baseRevision: 4 });
+        expect(calls.filter((call) => call.method === "PATCH").at(-1)?.body).toEqual({ lang: "en", baseRevision: 4 });
         expect(pressedLang()).toEqual(["English"]);
       });
 
@@ -1960,7 +1996,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
         await openRail();
         await act(async () => inRail("English")!.click());
         await tick();
-        expect(calls.at(-1)).toEqual({ method: "PATCH", url: `/api/pages/${A}`, body: { lang: "en", baseRevision: 4 } });
+        expect(calls.filter((call) => call.method === "PATCH").at(-1)).toEqual({ method: "PATCH", url: `/api/pages/${A}`, body: { lang: "en", baseRevision: 4 } });
         await restoreFirstVersion();
         // 戻すのは言語を保存したあとの revision の上に
         expect(calls.find((call) => call.url.endsWith("/restore"))?.body).toEqual({ baseRevision: 5 });
@@ -1970,7 +2006,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
         await typeTitle("合成の題名 2");
         await saveNow();
         await tick();
-        expect(calls.at(-1)).toEqual({ method: "PATCH", url: `/api/pages/${A}`, body: { title: "合成の題名 2", baseRevision: 5 } });
+        expect(calls.filter((call) => call.method === "PATCH").at(-1)).toEqual({ method: "PATCH", url: `/api/pages/${A}`, body: { title: "合成の題名 2", baseRevision: 5 } });
       });
 
       it("keeps the language in the device's draft until it reaches the server, and a draft with another language opens in that language and saves it", async () => {

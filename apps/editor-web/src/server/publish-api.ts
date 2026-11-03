@@ -250,10 +250,11 @@ export async function loadPublishSheet(
     // 選択の既定は、公開している（やめたものを含む）発信先
     const handle = query.handle ?? publication?.handle ?? null;
     const taken = handle === null || publication?.handle === handle ? [] : await takenUnder(tx, handle, query.slug ?? slugFromTitle(page.title, page.id), pageId);
-    return { page, assets, publication, version, handle, taken };
+    const reviewProblem = handle === null ? null : await tx.reviewGate?.(actorId, pageId, handle) ?? null;
+    return { page, assets, publication, version, handle, taken, reviewProblem };
   });
   if (!read) return null;
-  const { page, assets, publication, version, handle, taken } = read;
+  const { page, assets, publication, version, handle, taken, reviewProblem } = read;
 
   const same = publication !== null && publication.handle === handle ? publication : null;
   const selection: SheetSelection | null =
@@ -354,12 +355,12 @@ export async function loadPublishSheet(
     extras: plan.extras.map((entry) => ({ ...entry })),
     selectionError: plan.selectionError,
     storageBlock: plan.storageBlock,
-    problems: [...plan.problems.map((problem) => ({ ...problem })), ...(photosBlocked ? [{ ...PHOTOS_UNAVAILABLE }] : [])],
+    problems: [...plan.problems.map((problem) => ({ ...problem })), ...(reviewProblem ? [{ ...reviewProblem }] : []), ...(photosBlocked ? [{ ...PHOTOS_UNAVAILABLE }] : [])],
     notices: plan.notices.map((notice) => ({ ...notice })),
     url: plan.url,
     slug: { ...plan.slug },
     slugPrefix: selectedDeclaration?.ok ? destinationUrl(selectedDeclaration.value, "") : null,
-    primary: photosBlocked ? null : plan.primary,
+    primary: photosBlocked || reviewProblem !== null ? null : plan.primary,
     changesDestination: plan.changesDestination,
     canStop: plan.canStop,
   };

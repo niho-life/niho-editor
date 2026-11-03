@@ -1,22 +1,21 @@
-// npm run purge-trash — DATABASE_URL の DB で、ゴミ箱に 30 日より長くあるページを完全に消す。接続先の値・消した資産の位置は表示しない。
-// 資産の実体（bucket の object）はここでは消さない（数だけを出す）。
+// Private-payload mode never deletes pages or objects; arguments and failures never print private data.
 import pg from "pg";
 import { EditorStore } from "./store.ts";
+import { purgeExpiredTranslationProposals } from "./translations.ts";
+import { executePurge, parsePurgeMode } from "./purge-command.ts";
 
+let mode;
+try { mode = parsePurgeMode(process.argv.slice(2)); }
+catch { process.stderr.write("purge: invalid arguments\n"); process.exit(2); }
 const connectionString = process.env.DATABASE_URL;
-if (!connectionString) {
-  process.stderr.write("purge-trash: DATABASE_URL is not set\n");
-  process.exit(2);
-}
-
-const pool = new pg.Pool({ connectionString, max: 1 });
+if (!connectionString) { process.stderr.write("purge: DATABASE_URL is not set\n"); process.exit(2); }
+const pool = new pg.Pool({ connectionString, max: 1, connectionTimeoutMillis: 10_000 });
 try {
-  const { pages, assetPaths } = await new EditorStore(pool).purgeTrash();
-  process.stdout.write(`purge-trash: ${pages} pages purged, ${assetPaths.length} asset rows removed (objects are not deleted)\n`);
-} catch (error) {
-  const message = error instanceof Error ? error.message : "unknown error";
-  process.stderr.write(`purge-trash: failed: ${message}\n`);
-  process.exitCode = 1;
-} finally {
-  await pool.end().catch(() => undefined);
-}
+  const result = await executePurge(mode, {
+    trash: () => new EditorStore(pool).purgeTrash(),
+    privateJobs: () => purgeExpiredTranslationProposals(pool),
+  });
+  process.stdout.write(`purge: ${result.pages} pages, ${result.assets} asset rows, ${result.pendingObjects} pending object rows (objects are not deleted)\n`);
+} catch {
+  process.stderr.write("purge: failed\n"); process.exitCode = 1;
+} finally { await pool.end().catch(() => undefined); }

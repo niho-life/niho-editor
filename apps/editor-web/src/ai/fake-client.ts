@@ -120,7 +120,23 @@ export function createFakeClient(): AnthropicClient {
     converse,
     async complete(input: CompleteInput): Promise<Completion> {
       input.signal?.throwIfAborted();
-      const text = composeAnswer(input.user);
+      let text: string;
+      if (input.system.startsWith("You are the NIHO editor managed translation engine.")) {
+        let fields: unknown = null;
+        try {
+          fields = (JSON.parse(input.user) as { fields?: unknown }).fields;
+        } catch {
+          fields = null;
+        }
+        const translations = Array.isArray(fields)
+          ? fields.flatMap((field) => isRecord(field) && typeof field.path === "string" && typeof field.text === "string"
+            ? [{ path: field.path, text: `[fake en] ${field.text}` }]
+            : [])
+          : [];
+        text = JSON.stringify({ translations });
+      } else {
+        text = composeAnswer(input.user);
+      }
       const sent = countChars(input.system) + countChars(input.user);
       return { text, usage: usageOf(sent, countChars(text)) };
     },

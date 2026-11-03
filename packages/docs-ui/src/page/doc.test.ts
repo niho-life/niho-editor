@@ -11,20 +11,20 @@ describe("blocks and the TipTap doc", () => {
     expect(docFromBlocks(blocks)).toEqual({ type: "doc", content: blocks });
   });
 
-  it("keeps the four image attributes through the round trip, and the server accepts them", () => {
-    const full = imageNode({ assetId: ASSET, alt: "合成の写真", credit: "合成の提供元", consent: true });
-    expect(full).toEqual({ type: "image", attrs: { assetId: ASSET, alt: "合成の写真", credit: "合成の提供元", consent: true } });
+  it("keeps image caption and rights attributes through the round trip, and the server accepts them", () => {
+    const full = imageNode({ assetId: ASSET, alt: "合成の写真", caption: "合成の説明", credit: "合成の提供元", consent: true });
+    expect(full).toEqual({ type: "image", attrs: { assetId: ASSET, alt: "合成の写真", caption: "合成の説明", credit: "合成の提供元", consent: true } });
     const result = validateBlocks([full]);
     expect(result.ok && result.blocks[0]).toEqual(full);
     // 保存した形から読み直しても同じ（往復で落ちない）
-    expect(imageAttrsOf(result.ok ? result.blocks[0] : null)).toEqual({ assetId: ASSET, alt: "合成の写真", credit: "合成の提供元", consent: true });
+    expect(imageAttrsOf(result.ok ? result.blocks[0] : null)).toEqual({ assetId: ASSET, alt: "合成の写真", caption: "合成の説明", credit: "合成の提供元", consent: true });
   });
 
   it("treats an empty alt or credit as none, and never carries a URL", () => {
     const bare = imageNode({ assetId: ASSET, alt: "", credit: null });
-    expect(bare).toEqual({ type: "image", attrs: { assetId: ASSET, alt: null, credit: null, consent: false } });
+    expect(bare).toEqual({ type: "image", attrs: { assetId: ASSET, alt: null, caption: null, credit: null, consent: false } });
     expect(validateBlocks([bare]).ok).toBe(true);
-    expect(imageAttrsOf(bare)).toEqual({ assetId: ASSET, alt: null, credit: null, consent: false });
+    expect(imageAttrsOf(bare)).toEqual({ assetId: ASSET, alt: null, caption: null, credit: null, consent: false });
     expect(JSON.stringify(bare)).not.toContain("http");
     expect(JSON.stringify(bare)).not.toContain("src");
   });

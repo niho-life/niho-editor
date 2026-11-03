@@ -4,6 +4,8 @@ import {
   isByteRange,
   isObjectPath,
   type ObjectStorage,
+  type CopyObjectInput,
+  type CopiedObject,
   type ReadObject,
   type ReadObjectOptions,
   type StartUploadInput,
@@ -29,13 +31,14 @@ export const FAKE_TICKET_TTL_MS = 60 * 60 * 1000;
 export const FAKE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 type Session = { objectPath: string; contentType: string; sizeBytes: number; expiresAtMs: number };
-type FakeObject = { bytes: Uint8Array; contentType: string | null };
+type FakeObject = { bytes: Uint8Array; contentType: string | null; generation: string; copiedFromGeneration?: string; copiedFromObjectPath?: string };
 
 export type FakeStorageState = {
   sessions: Map<string, Session>;
   completedSessions: Map<string, Session>;
   objects: Map<string, FakeObject>;
   partials: Map<string, Uint8Array>;
+  nextGeneration: number;
 };
 
 /** ok: 置いた / not_found: token が無い・期限切れ / exists: 同じ場所に既にある / too_large: 上限を超える */
@@ -50,7 +53,7 @@ export interface FakeStorage extends ObjectStorage {
 }
 
 export function createFakeStorageState(): FakeStorageState {
-  return { sessions: new Map(), completedSessions: new Map(), objects: new Map(), partials: new Map() };
+  return { sessions: new Map(), completedSessions: new Map(), objects: new Map(), partials: new Map(), nextGeneration: 1 };
 }
 
 /** バイト列を 1 つの chunk で流す。 */
@@ -86,7 +89,27 @@ export function createFakeStorage(options: { state?: FakeStorageState; now?: () 
     async stat(objectPath: string): Promise<StoredObject | null> {
       if (!isObjectPath(objectPath)) throw new StorageError("rejected");
       const object = state.objects.get(objectPath);
-      return object ? { sizeBytes: object.bytes.byteLength, contentType: object.contentType } : null;
+      return object ? { sizeBytes: object.bytes.byteLength, contentType: object.contentType, generation: object.generation } : null;
+    },
+    async copyObject(input: CopyObjectInput): Promise<CopiedObject> {
+      if (!isObjectPath(input.sourceObjectPath) || !isObjectPath(input.targetObjectPath) || input.sourceObjectPath === input.targetObjectPath) throw new StorageError("rejected");
+      const source = state.objects.get(input.sourceObjectPath);
+      if (!source) throw new StorageError("rejected");
+      if (!/^[1-9][0-9]{0,30}$/.test(input.sourceGeneration) || input.sourceGeneration !== source.generation) throw new StorageError("rejected");
+      const generation = input.sourceGeneration;
+      const existing = state.objects.get(input.targetObjectPath);
+      if (existing) {
+        if (existing.copiedFromGeneration !== generation || existing.copiedFromObjectPath !== input.sourceObjectPath || existing.bytes.byteLength !== source.bytes.byteLength || existing.contentType !== source.contentType) throw new StorageError("rejected");
+      } else {
+        state.objects.set(input.targetObjectPath, {
+          bytes: source.bytes.slice(),
+          contentType: source.contentType,
+          generation: String(state.nextGeneration++),
+          copiedFromGeneration: generation,
+          copiedFromObjectPath: input.sourceObjectPath,
+        });
+      }
+      return { sourceGeneration: generation, sizeBytes: source.bytes.byteLength, contentType: source.contentType };
     },
     async readObject(objectPath: string, options: ReadObjectOptions = {}): Promise<ReadObject | null> {
       if (!isObjectPath(objectPath)) throw new StorageError("rejected");
@@ -130,9 +153,9 @@ export function createFakeStorage(options: { state?: FakeStorageState; now?: () 
           return "partial";
         }
         state.partials.delete(token);
-        state.objects.set(session.objectPath, { bytes: joined, contentType: contentType ?? session.contentType });
+        state.objects.set(session.objectPath, { bytes: joined, contentType: contentType ?? session.contentType, generation: String(state.nextGeneration++) });
       } else {
-        state.objects.set(session.objectPath, { bytes: bytes.slice(), contentType: contentType ?? session.contentType });
+        state.objects.set(session.objectPath, { bytes: bytes.slice(), contentType: contentType ?? session.contentType, generation: String(state.nextGeneration++) });
       }
       state.completedSessions.set(token, session);
       state.sessions.delete(token);

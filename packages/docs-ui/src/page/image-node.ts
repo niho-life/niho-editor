@@ -8,7 +8,7 @@ import { IMAGE_NODE_NAME, imageNode } from "./doc";
 import { imageFilesFrom } from "./paste";
 
 /**
- * 本文の画像のノード（#33）。限定 AST（blocks.ts の `image`）と同じ属性（assetId・alt・credit・consent）だけを持つ。
+ * 本文の画像のノード（#33）。限定 AST（blocks.ts の `image`）と同じ属性だけを持つ。
  *
  * - 置けるのはブロックの位置（block・atom・draggable）。描くのは React の NodeView（ImageNodeView.tsx）で、
  *   `src` はサーバーの中継（`/api/assets/{id}`）。**外の `<img src>` は読み取らない**（本文に URL を持たせない。hotlink を作らない）。
@@ -130,7 +130,7 @@ declare module "@tiptap/core" {
   interface Commands<ReturnType> {
     pageImage: {
       /** 済んだ資産の画像を入れる（空の段落の上なら、その行を画像にする）。 */
-      insertPageImage: (attrs: { assetId: string; alt?: string | null; credit?: string | null; consent?: boolean }) => ReturnType;
+      insertPageImage: (attrs: { assetId: string; alt?: string | null; caption?: string | null; credit?: string | null; consent?: boolean }) => ReturnType;
       /** ファイル選択を開く（「/」「＋」の一覧の「画像」）。口・ページが無ければ理由を出して false。 */
       choosePageImage: () => ReturnType;
     };
@@ -159,6 +159,11 @@ export const PageImage = Node.create<PageImageOptions>({
         default: null,
         parseHTML: (element) => element.getAttribute("alt") || null,
         renderHTML: (attributes) => (typeof attributes.alt === "string" && attributes.alt !== "" ? { alt: attributes.alt } : {}),
+      },
+      caption: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-caption") || null,
+        renderHTML: (attributes) => (typeof attributes.caption === "string" && attributes.caption !== "" ? { "data-caption": attributes.caption } : {}),
       },
       credit: {
         default: null,

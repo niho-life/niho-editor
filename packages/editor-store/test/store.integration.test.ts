@@ -87,6 +87,9 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "recipe_sample_extractions",
       "page_fields",
       "page_opens",
+      "page_translation_relations",
+      "page_translation_proposals",
+      "page_translation_asset_copies",
       // P02: 本人所有の写真、容量予約、補正・版・mediaと物理削除の台帳
       "photo_libraries",
       "photos",
