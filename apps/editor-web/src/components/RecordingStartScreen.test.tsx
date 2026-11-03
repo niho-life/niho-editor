@@ -265,6 +265,7 @@ describe("RecordingStartScreen", () => {
     const accept = fileInput().accept.split(",");
     expect(accept.slice(0, 2)).toEqual([".vtt", "text/vtt"]);
     expect(accept).toEqual(expect.arrayContaining([".m4a", ".mp3", ".wav", ".aac", ".ogg", ".flac", ".webm", "audio/mp4", "audio/webm"]));
+    expect(accept).toContain(".aifc");
     expect(fileInput().hidden).toBe(true);
     expect(container!.textContent).toContain(".m4a .mp3 .wav .aac .ogg .flac .webm、文字起こし済みの .vtt も");
   });
@@ -493,6 +494,34 @@ describe("RecordingStartScreen（音声ファイル）", () => {
     expect(container!.textContent).not.toContain("空.m4a");
     expect(calls("/api/recordings/audio/start")).toHaveLength(0);
     expect(FakeXhr.created).toHaveLength(0);
+  });
+
+  it("explains that Web cannot import AIFC and clears an earlier selection", async () => {
+    const { fetchMock, calls } = audioApi();
+    vi.stubGlobal("fetch", fetchMock);
+    await mount();
+    await choose(audioFile("選択済み.m4a"));
+    await settle();
+    expect(container!.textContent).toContain("選択済み.m4a");
+
+    await choose(new File(["fixture"], "会議.AIFC", { type: "audio/aiff" }));
+
+    expect(alertText()).toContain("AIFCはWeb版では直接取り込めません");
+    expect(alertText()).toContain("端末内の音声変換アプリ");
+    expect(alertText()).toContain("PCM WAVまたはFLAC");
+    expect(container!.textContent).not.toContain("選択済み.m4a");
+    expect(calls("/api/recordings/audio/start")).toHaveLength(0);
+    expect(FakeXhr.created).toHaveLength(0);
+  });
+
+  it("discloses unsupported AIFC when it is skipped beside a supported audio file", async () => {
+    vi.stubGlobal("fetch", audioApi().fetchMock);
+    await mount({ limits: LIMITS });
+    await chooseMany([new File(["fixture"], "会議.aifc", { type: "audio/aiff" }), audioFile("会議.m4a")]);
+
+    expect(status()).toContain("音声だけを取り込みます。");
+    expect(status()).toContain("AIFCはWeb版では直接取り込めません");
+    expect(status()).toContain("端末内の音声変換アプリ");
   });
 
   it("cancels while sending: keeps the file, says so politely, and takes it in again with the same key", async () => {

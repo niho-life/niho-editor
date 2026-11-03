@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, type CSSProperties, type DragEvent } from "react";
-import { AUDIO_FILE_ACCEPT, isAudioFileName } from "@/lib/audio-formats";
+import { AUDIO_FILE_PICKER_ACCEPT, isAudioFileName, unsupportedAudioFormatMessage } from "@/lib/audio-formats";
 import { probeAudioDuration } from "@/lib/audio-duration";
 import { AudioUploadError, audioUploadMessage, discardAudioPartUpload, uploadAudioPart, type AudioPartView, type UploadAudioFileInput } from "@/lib/audio-upload-client";
 import type { MicRecording } from "@/lib/mic-recorder";
@@ -20,6 +20,20 @@ function sizeLabel(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   if (bytes < 1024 ** 3) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+}
+
+function isVttFile(file: File): boolean {
+  return file.name.toLowerCase().endsWith(".vtt") || file.type === "text/vtt";
+}
+
+function skippedFilesNotice(files: readonly File[]): string | null {
+  if (files.length === 0) return null;
+  const audioNotice = unsupportedAudioFormatMessage(files.map((file) => file.name));
+  const hasVtt = files.some(isVttFile);
+  const hasOther = files.some((file) => !isVttFile(file) && unsupportedAudioFormatMessage([file.name]) === null);
+  return [audioNotice, hasVtt ? "文字起こし済みの .vtt は「文字起こしを足す」から追加できます。" : null, hasOther ? "対応形式以外のファイルはスキップしました。" : null]
+    .filter((text): text is string => text !== null)
+    .join(" ");
 }
 
 /** 1 本の音声の説明（長さ・大きさ・状態・期限）。状態は文で出す（色だけで表さない）。 */
@@ -73,22 +87,33 @@ export function RecordingAudios({
   const addFiles = async (files: readonly File[]) => {
     if (running.current || disabled) return;
     const chosen = files.filter((file) => isAudioFileName(file.name));
+    const skippedNotice = skippedFilesNotice(files.filter((file) => !isAudioFileName(file.name)));
     if (chosen.length === 0) {
-      setMessage({ kind: "error", text: "足せるのは音声ファイルです。文字起こし済みの .vtt は「文字起こしを足す」から足せます。" });
+      const unsupportedNotice = unsupportedAudioFormatMessage(files.map((file) => file.name));
+      const otherNotice = unsupportedNotice ? skippedNotice?.replace(unsupportedNotice, "").trim() : null;
+      setMessage({
+        kind: "error",
+        text: unsupportedNotice ? [unsupportedNotice, otherNotice].filter(Boolean).join(" ") : "足せるのは音声ファイルです。文字起こし済みの .vtt は「文字起こしを足す」から足せます。",
+      });
       return;
     }
     running.current = true;
     setBusy(true);
     let added = 0;
     for (const file of chosen) {
-      setMessage({ kind: "info", text: chosen.length > 1 ? `音声を足しています（${added + 1}/${chosen.length} 本目）` : "音声を足しています" });
+      const progressMessage = chosen.length > 1 ? `音声を足しています（${added + 1}/${chosen.length} 本目）` : "音声を足しています";
+      setMessage({ kind: "info", text: skippedNotice ? `${progressMessage} ${skippedNotice}` : progressMessage });
       const duration = await probeAudioDuration(file).catch(() => null);
-      if (!(await send(file, duration))) break;
+      if (!(await send(file, duration))) {
+        if (skippedNotice) setMessage((current) => current ? { ...current, text: `${current.text} ${skippedNotice}` } : { kind: "info", text: skippedNotice });
+        break;
+      }
       added += 1;
       onChanged();
     }
     if (added === chosen.length) {
-      setMessage({ kind: "info", text: `音声を ${added} 本足しました。文字起こしをやり直すと 1 本につながります` });
+      const successMessage = `音声を ${added} 本足しました。文字起こしをやり直すと 1 本につながります`;
+      setMessage({ kind: "info", text: skippedNotice ? `${successMessage} ${skippedNotice}` : successMessage });
     }
     running.current = false;
     setBusy(false);
@@ -251,7 +276,7 @@ export function RecordingAudios({
       <input
         ref={input}
         type="file"
-        accept={AUDIO_FILE_ACCEPT}
+        accept={AUDIO_FILE_PICKER_ACCEPT}
         multiple
         hidden
         tabIndex={-1}
