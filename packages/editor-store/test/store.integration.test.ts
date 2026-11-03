@@ -54,7 +54,7 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
     );
     // page_shares は共有リンク（0004）、ai_usage は AI の使用量（0005）、step_runs・step_attempts は手順の実行（0006。ページの表とは別）、page_recordings は録音の文字起こし（0007）、
     // transcription_runs は文字起こしの実行（0012）、editor_settings はアカウントの設定（0013）、ai_conversations・ai_messages・ai_message_changes は AI チャット、ai_usage_device は CLI の使用量（0022・0025）
-    // page_recording_audios は 2 本目以降の音声・page_recording_candidates は文字起こしの案（#36 段 3b-4）、recipes は手順（#37）
+    // page_recording_audios は 2 本目以降の音声・page_recording_candidates は文字起こしの案（#36 段 3b-4）、candidate_versions/operations は候補履歴（#236）、recipes は手順（#37）
     // publications（作り直し）・publication_versions・publication_redirects・site_connections・site_connection_keys・preview_tokens は公開（0009）
     const documented = [
       "pages",
@@ -75,6 +75,8 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "editor_settings",
       "page_recording_audios",
       "page_recording_candidates",
+      "page_recording_candidate_versions",
+      "page_recording_candidate_operations",
       "ai_conversations",
       "ai_messages",
       "ai_message_changes",

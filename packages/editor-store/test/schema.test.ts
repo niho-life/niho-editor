@@ -131,11 +131,18 @@ describe("migration files", () => {
     assert.doesNotMatch(sql, /\bUPDATE\b|\bDELETE\s+FROM\b|\bDROP\b/i);
   });
 
-  it("contains no records, secrets, credentials, real addresses, or token columns", async () => {
+  it("does not embed records, secrets, credentials, real addresses, or token columns", async () => {
     for (const file of await readMigrations()) {
       const sql = file.sql;
       // COPY は文としてだけ見る（0009 の値 'copy-on-import' は文ではない）
-      assert.doesNotMatch(withoutRoutineBodies(sql), /\bINSERT\s+INTO\b|\bCOPY\s/i, `${file.name} must not carry records`);
+      let statements = withoutRoutineBodies(sql);
+      if (file.name.endsWith("_recording_candidate_history.sql")) {
+        // 履歴導入時は既存の候補そのものから初期版を移す。SQLに固定レコードを埋め込むのとは異なる。
+        const backfill = /\bINSERT\s+INTO\s+page_recording_candidate_versions\s*\(\s*candidate_id,\s*version,\s*name,\s*engine,\s*language,\s*segments,\s*speaker_names,\s*duration_sec,\s*reason,\s*created_at\s*\)\s*SELECT\s+id,\s*revision,\s*name,\s*engine,\s*language,\s*segments,\s*speaker_names,\s*duration_sec,\s*'initial',\s*created_at\s+FROM\s+page_recording_candidates\s*;/i;
+        assert.match(statements, backfill, `${file.name} must snapshot existing candidates`);
+        statements = statements.replace(backfill, "");
+      }
+      assert.doesNotMatch(statements, /\bINSERT\s+INTO\b|\bCOPY\s/i, `${file.name} must not embed records`);
       assert.doesNotMatch(sql, /-----BEGIN [A-Z ]*PRIVATE KEY-----/);
       assert.doesNotMatch(sql, /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i, "credential URL");
       assert.doesNotMatch(sql, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i, "e-mail address");
