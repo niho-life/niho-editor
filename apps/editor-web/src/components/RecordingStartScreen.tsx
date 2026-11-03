@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import { RecordingStart, type RecordingHow, type RecordingNext } from "niho-docs-ui/shell";
-import { AUDIO_FILE_ACCEPT, AUDIO_FILE_EXTENSIONS_LABEL, isAudioFileName } from "@/lib/audio-formats";
+import { AUDIO_FILE_EXTENSIONS_LABEL, AUDIO_FILE_PICKER_ACCEPT, isAudioFileName, unsupportedAudioFormatMessage } from "@/lib/audio-formats";
 import { probeAudioDuration } from "@/lib/audio-duration";
 import { audioLimitsNote, audioUploadMessage, checkAudioFile, getAudioLimitsCached, uploadAudioPart, type AudioLimits } from "@/lib/audio-upload-client";
 import type { MicRecording } from "@/lib/mic-recorder";
@@ -78,6 +78,7 @@ export function RecordingStartScreen({
   const [fileDuration, setFileDuration] = useState<number | null>(null);
   const [limits, setLimits] = useState<AudioLimits | null>(given ?? null);
   const [message, setMessage] = useState<Message | null>(null);
+  const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   // 前回の録音（画面を閉じた・取り込めなかった控え）
@@ -176,36 +177,66 @@ export function RecordingStartScreen({
     });
   };
 
+  const clearFileSelection = () => {
+    fileRef.current = null;
+    setFile(null);
+    setFileDuration(null);
+    setExtra([]);
+  };
+
   /**
-   * 選んだファイル（何本でも）。1 本目が音声なら、音声だけを順番に取る（.vtt が混ざっていたら、それは録音ページで足せると言う）。
-   * 1 本目が .vtt なら、.vtt は 1 つずつ（残りは無視する）。
+   * 最初に見つかった対応形式の音声は順に取り込み、.vtt は 1 つだけ取り込む。
+   * AIFC/AIFF/CAFなど選択した未対応形式は、除外したことと端末内変換の方法を知らせる。
    */
   const choose = (chosen: readonly File[]) => {
-    const picked = chosen[0];
-    if (!picked || locked) return;
+    if (chosen.length === 0 || locked) return;
+    const picked = chosen.find((file) => isVtt(file) || isAudioFileName(file.name)) ?? chosen[0]!;
     setHow("file");
     setCreated(null);
+    setSelectionNotice(null);
     if (isVtt(picked)) {
       const problem = vttRejection(picked);
-      setMessage(problem ?? (chosen.length > 1 ? { kind: "info", text: "文字起こし（.vtt）は 1 つずつ取り込めます。残りは録音ページで足せます。" } : null));
-      if (!problem) {
-        fileRef.current = picked;
-        setFile(picked);
-        setFileDuration(null);
-        setExtra([]);
+      if (problem) {
+        clearFileSelection();
+        setMessage(problem);
+        return;
       }
+      fileRef.current = picked;
+      setFile(picked);
+      setFileDuration(null);
+      setExtra([]);
+      const skippedAudio = chosen.filter((file) => !isVtt(file) && isAudioFileName(file.name));
+      const unsupportedGuidance = unsupportedAudioFormatMessage(chosen.map((file) => file.name));
+      setSelectionNotice(unsupportedGuidance ? `未対応の音声は取り込みません。${unsupportedGuidance}` : null);
+      const vttCount = chosen.filter(isVtt).length;
+      const otherSkipped = chosen.some((file) => !isVtt(file) && !isAudioFileName(file.name) && unsupportedAudioFormatMessage([file.name]) === null);
+      const info = vttCount > 1 && skippedAudio.length === 0 && !otherSkipped
+        ? "文字起こし（.vtt）は 1 つずつ取り込めます。残りは録音ページで足せます。"
+        : [
+            vttCount > 1 ? "文字起こし（.vtt）は 1 つずつ取り込めます。残りは録音ページで足せます。" : null,
+            skippedAudio.length > 0 ? "音声は録音ページで足せます。" : null,
+            otherSkipped ? "対応形式以外のファイルは取り込みません。" : null,
+          ].filter(Boolean).join(" ") || null;
+      setMessage(info ? { kind: "info", text: info } : null);
       return;
     }
     if (isAudioFileName(picked.name)) {
       const audios = chosen.filter((file) => isAudioFileName(file.name));
       setExtra(audios.slice(1));
       chooseAudio(picked);
-      if (audios.length < chosen.length) {
-        setMessage({ kind: "info", text: "音声だけを取り込みます。文字起こし（.vtt）は録音ページで足せます。" });
-      }
+      const skipped = chosen.filter((file) => !isAudioFileName(file.name));
+      const unsupportedGuidance = unsupportedAudioFormatMessage(skipped.map((file) => file.name));
+      setSelectionNotice(unsupportedGuidance ? `未対応の音声は取り込みません。${unsupportedGuidance}` : null);
+      const skippedVtt = skipped.some(isVtt);
+      const otherSkipped = skipped.some((file) => !isVtt(file) && unsupportedAudioFormatMessage([file.name]) === null);
+      const notices = [skippedVtt ? "文字起こし（.vtt）は録音ページで足せます。" : null, otherSkipped ? "対応形式以外のファイルは取り込みません。" : null].filter(Boolean);
+      if (skipped.length > 0) setMessage({ kind: "info", text: `音声だけを取り込みます。${notices.join(" ")}` });
       return;
     }
-    setMessage(UNKNOWN_FILE);
+    clearFileSelection();
+    setSelectionNotice(null);
+    const unsupportedNotice = unsupportedAudioFormatMessage([picked.name]);
+    setMessage(unsupportedNotice ? { kind: "error", text: unsupportedNotice } : UNKNOWN_FILE);
   };
 
   const importChosenVtt = async (vttFile: File) => {
@@ -228,6 +259,7 @@ export function RecordingStartScreen({
   };
 
   const startMic = async () => {
+    setSelectionNotice(null);
     setMessage(null);
     setConfirmDiscard(false);
     const failed = await mic.start();
@@ -327,7 +359,9 @@ export function RecordingStartScreen({
     ? `${extra.length > 0 ? `ほかに ${extra.length} 本 · ` : ""}${fileDuration !== null ? `${formatClock(fileDuration)} · ` : ""}${sizeLabel(file.size)} · 別のファイルを選ぶ`
     : "";
   const progress = audio.progress;
-  const statusText = progress ? AUDIO_STAGE_LABELS[progress.stage] : message?.kind === "info" ? message.text : "";
+  const statusText = [progress ? AUDIO_STAGE_LABELS[progress.stage] : message?.kind === "info" ? message.text : "", selectionNotice]
+    .filter((text): text is string => Boolean(text))
+    .join(" ");
   const alertText = message?.kind === "error" ? message.text : micError;
 
   return (
@@ -345,6 +379,7 @@ export function RecordingStartScreen({
             if (locked) return;
             setHow(nextHow);
             setConfirmDiscard(false);
+            if (nextHow !== "file") setSelectionNotice(null);
             if (nextHow === "file") input.current?.click();
           }}
           file={file ? { name: file.name, detail: fileDetail } : undefined}
@@ -364,7 +399,7 @@ export function RecordingStartScreen({
       <input
         ref={input}
         type="file"
-        accept={`.vtt,text/vtt,${AUDIO_FILE_ACCEPT}`}
+        accept={`.vtt,text/vtt,${AUDIO_FILE_PICKER_ACCEPT}`}
         multiple
         hidden
         tabIndex={-1}

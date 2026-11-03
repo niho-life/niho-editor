@@ -254,6 +254,29 @@ describe("RecordingAudios（1 ページに音声を複数）", () => {
     expect(fileInput().multiple).toBe(true);
   });
 
+  it("AIFCを取り込まず理由を示し、対応音声と混在した場合もスキップを知らせる", async () => {
+    const { fetchMock, calls } = partsApi();
+    vi.stubGlobal("fetch", fetchMock);
+    await mount([part()]);
+    expect(fileInput().accept.split(",")).toContain(".aifc");
+
+    await choose([new File(["fixture"], "会議.aifc", { type: "audio/aiff" })]);
+    await until(() => alertText() !== "");
+    expect(alertText()).toContain("AIFCはWeb版では直接取り込めません");
+    expect(calls(/\/recording\/audio\/parts$/)).toHaveLength(0);
+
+    await choose([
+      audioFile("音声 2.m4a"),
+      new File(["fixture"], "会議.aifc", { type: "audio/aiff" }),
+      new File(["WEBVTT\n"], "字幕.vtt", { type: "text/vtt" }),
+    ]);
+    await until(() => statusText().includes("足しました"));
+    expect(statusText()).toContain("AIFCはWeb版では直接取り込めません");
+    expect(statusText()).toContain("文字起こし済みの .vtt は「文字起こしを足す」から追加できます。");
+    expect(calls(/\/recording\/audio\/parts$/)).toHaveLength(1);
+    expect(calls(/\/complete$/)).toHaveLength(1);
+  });
+
   it("送れなかったら理由を出す（足した分は残る）", async () => {
     let fail = false;
     const { fetchMock } = partsApi();

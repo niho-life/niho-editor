@@ -17,8 +17,19 @@ export const AUDIO_FILE_FORMATS: Readonly<Record<string, readonly string[]>> = O
 
 export const AUDIO_FILE_EXTENSIONS: readonly string[] = Object.freeze(Object.keys(AUDIO_FILE_FORMATS));
 
-/** ファイルを選ぶ欄の accept（拡張子と種類）。 */
+/** サーバーが取り込める形式の accept（拡張子と種類）。 */
 export const AUDIO_FILE_ACCEPT = [...AUDIO_FILE_EXTENSIONS.map((extension) => `.${extension}`), ...new Set(Object.values(AUDIO_FILE_FORMATS).flat())].join(",");
+
+const GUIDANCE_ONLY_AUDIO_EXTENSIONS = ["aif", "aiff", "aifc", "caf"] as const;
+const GUIDANCE_ONLY_AUDIO_EXTENSION_SET: ReadonlySet<string> = new Set(GUIDANCE_ONLY_AUDIO_EXTENSIONS);
+const GUIDANCE_ONLY_AUDIO_MIME_TYPES = ["audio/aiff", "audio/x-aiff", "audio/aifc", "audio/x-aifc", "audio/caf", "audio/x-caf"] as const;
+
+/** 形式の説明を表示できるよう、未対応形式も選べる欄の accept。アップロード許可の一覧には使わない。 */
+export const AUDIO_FILE_PICKER_ACCEPT = [
+  ...AUDIO_FILE_ACCEPT.split(","),
+  ...GUIDANCE_ONLY_AUDIO_EXTENSIONS.map((extension) => `.${extension}`),
+  ...GUIDANCE_ONLY_AUDIO_MIME_TYPES,
+].join(",");
 
 /** 画面に出す拡張子の並び（例: `.m4a .mp3 .wav .aac .ogg .flac .webm`）。 */
 export const AUDIO_FILE_EXTENSIONS_LABEL = AUDIO_FILE_EXTENSIONS.map((extension) => `.${extension}`).join(" ");
@@ -40,6 +51,19 @@ export function extensionOfName(name: string): string | null {
   const dot = name.lastIndexOf(".");
   if (dot <= 0 || dot === name.length - 1) return null;
   return name.slice(dot + 1).toLowerCase();
+}
+
+/** Webからの取込は未対応だが、選択時に説明を出す形式。 */
+export function unsupportedAudioExtension(name: string): string | null {
+  const extension = extensionOfName(name);
+  return extension !== null && GUIDANCE_ONLY_AUDIO_EXTENSION_SET.has(extension) ? extension : null;
+}
+
+/** Webで直接取り込めない音声形式の説明。端末内で変換して再選択できるよう案内する。 */
+export function unsupportedAudioFormatMessage(fileNames: readonly string[]): string | null {
+  const formats = [...new Set(fileNames.map(unsupportedAudioExtension).filter((extension): extension is string => extension !== null))];
+  if (formats.length === 0) return null;
+  return `${formats.map((extension) => extension.toUpperCase()).join("・")}はWeb版では直接取り込めません。端末内の音声変換アプリでPCM WAVまたはFLACに変換してから選び直してください。`;
 }
 
 /** content type からパラメータ（`;codecs=opus` など）を除き、小文字にする。 */

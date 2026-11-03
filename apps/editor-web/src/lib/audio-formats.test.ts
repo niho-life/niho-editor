@@ -4,12 +4,15 @@ import {
   AUDIO_FILE_ACCEPT,
   AUDIO_FILE_EXTENSIONS_LABEL,
   AUDIO_FILE_FORMATS,
+  AUDIO_FILE_PICKER_ACCEPT,
   AUDIO_NAME_MAX_CHARS,
   baseContentType,
   contentTypeForAudio,
   extensionOfName,
   isAudioFileName,
   isSafeAudioName,
+  unsupportedAudioExtension,
+  unsupportedAudioFormatMessage,
 } from "./audio-formats";
 
 describe("audio formats（ブラウザ側の写し）", () => {
@@ -22,6 +25,14 @@ describe("audio formats（ブラウザ側の写し）", () => {
     expect(AUDIO_FILE_EXTENSIONS_LABEL).toBe(".m4a .mp3 .wav .aac .ogg .flac .webm");
     expect(AUDIO_FILE_ACCEPT.split(",")).toEqual(expect.arrayContaining([".m4a", ".webm", "audio/webm", "audio/x-m4a"]));
     expect(AUDIO_FILE_ACCEPT).not.toContain("vtt");
+    expect(AUDIO_FILE_ACCEPT).not.toContain(".aifc");
+    expect(AUDIO_FILE_PICKER_ACCEPT.split(",")).toEqual(expect.arrayContaining([".aif", ".aiff", ".aifc", ".caf", "audio/aiff"]));
+    expect(unsupportedAudioExtension("meeting.AIFC")).toBe("aifc");
+    expect(unsupportedAudioExtension("meeting.AIFF")).toBe("aiff");
+    expect(unsupportedAudioExtension("meeting.wav")).toBeNull();
+    expect(unsupportedAudioFormatMessage(["meeting.aifc", "voice.CAF", "other.aifc"])).toBe(
+      "AIFC・CAFはWeb版では直接取り込めません。端末内の音声変換アプリでPCM WAVまたはFLACに変換してから選び直してください。",
+    );
   });
 
   it("reads extensions and content types the same way as the server", () => {
