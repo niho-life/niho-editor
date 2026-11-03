@@ -1,5 +1,5 @@
 import { candidatesDeps } from "@/server/deps";
-import { deleteCandidateRoute, getCandidateRoute } from "@/server/recording-candidates-api";
+import { deleteCandidateRoute, getCandidateRoute, updateCandidateRoute } from "@/server/recording-candidates-api";
 
 export const dynamic = "force-dynamic";
 
@@ -15,4 +15,10 @@ export async function GET(request: Request, context: Context): Promise<Response>
 export async function DELETE(request: Request, context: Context): Promise<Response> {
   const { id, candidateId } = await context.params;
   return deleteCandidateRoute(request, id, candidateId, candidatesDeps);
+}
+
+/** 名前、または非採用案の本文・話者名を candidate revision CAS で保存する。 */
+export async function PATCH(request: Request, context: Context): Promise<Response> {
+  const { id, candidateId } = await context.params;
+  return updateCandidateRoute(request, id, candidateId, candidatesDeps);
 }

@@ -69,6 +69,24 @@ describe("0007_page_recordings.sql", () => {
   });
 });
 
+describe("recording_candidate_history migration", () => {
+  it("adds candidate CAS, bounded immutable versions, idempotency receipts, adopted sync, and run revision fencing", async () => {
+    const file = (await readMigrations()).find((candidate) => candidate.name.endsWith("_recording_candidate_history.sql"));
+    assert.ok(file);
+    const sql = withoutComments(file.sql);
+    assert.match(sql, /ALTER TABLE page_recording_candidates\s+ADD COLUMN revision integer NOT NULL DEFAULT 1/);
+    assert.match(sql, /CREATE TABLE page_recording_candidate_versions/);
+    assert.match(sql, /REFERENCES page_recording_candidates \(id\) ON DELETE CASCADE/);
+    assert.match(sql, /LIMIT 100/);
+    assert.match(sql, /recording_candidate_force_revision/);
+    assert.match(sql, /CREATE TABLE page_recording_candidate_operations/);
+    assert.match(sql, /page_recording_candidate_operations_gc_idx/);
+    assert.match(sql, /AFTER UPDATE OF engine, language, segments, speaker_names, duration_sec ON page_recordings/);
+    assert.match(sql, /ADD COLUMN candidate_revision integer/);
+    assert.match(sql, /transcription_runs_candidate_revision_pair/);
+  });
+});
+
 describe("recordingDataProblem", () => {
   const valid: RecordingData = {
     segments: [segment("最初の段落", 1), segment("二つ目", 2, 1, 2.5), segment("時刻なし", null, null, null)],

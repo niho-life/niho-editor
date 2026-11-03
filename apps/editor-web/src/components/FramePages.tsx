@@ -104,7 +104,7 @@ export function OpenPage({
       pageId={id}
       kind={summary.kind}
       parentId={summary.parent}
-      media={summary.kind === "rec" ? <RecordingTranscript pageId={id} /> : null}
+      media={summary.kind === "rec" ? <RecordingTranscript key={id} pageId={id} /> : null}
       onBodyReplaced={onBodyReplaced}
     >
       {editor}

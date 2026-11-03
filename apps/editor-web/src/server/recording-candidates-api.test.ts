@@ -4,11 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 import type { AuthProvider } from "../auth/types";
 import type { TranscriptionDispatcher } from "../transcription/dispatch";
 import {
+  CANDIDATE_WRITE_BODY_MAX_BYTES,
   addCandidateRoute,
   adoptCandidateRoute,
   deleteCandidateRoute,
+  getCandidateVersionRoute,
   getCandidateRoute,
+  listCandidateVersionsRoute,
+  restoreCandidateVersionRoute,
   retryCandidateRoute,
+  updateCandidateRoute,
   type CandidatesApiDeps,
   type CandidatesStore,
 } from "./recording-candidates-api";
@@ -36,12 +41,14 @@ const recording = (extra: Partial<Recording> = {}): Recording => ({
 
 const view = (extra: Partial<RecordingCandidateView> = {}): RecordingCandidateView => ({
   id: randomUUID(),
+  revision: 1,
   name: "Deepgram",
   engine: "deepgram",
   language: "ja",
   durationSec: 600,
   adopted: true,
   state: "ready",
+  busy: false,
   segmentCount: 1,
   preview: ["合成のはじめの段落"],
   createdAt: "2030-01-01T00:00:00.000Z",
@@ -90,6 +97,13 @@ function memoryStore(behaviour: Behaviour = {}) {
       listed = [...(listed.length > 0 ? listed : [view({ name: input.primaryName })]), candidate];
       return { status: "created", candidate, candidates: listed };
     },
+    updateCandidate: async () => {
+      const candidate = behaviour.full ?? { ...view(), segments: recording().segments, speakerNames: recording().speakerNames };
+      return candidate ? { status: "ok", candidate, replayed: false } : null;
+    },
+    listVersions: async () => [],
+    getVersion: async () => null,
+    restoreVersion: async () => ({ status: "version_missing" }),
     adoptCandidate: async () => {
       calls.push("adoptCandidate");
       return behaviour.adopt === undefined ? { status: "ok", recording: recording({ revision: 3 }), candidates: [view({ adopted: false }), view({ name: "Fake", adopted: true })] } : behaviour.adopt;
@@ -152,11 +166,17 @@ const add = (d: CandidatesApiDeps, body: unknown = {}, headers: Record<string, s
 const get = (d: CandidatesApiDeps, candidateId: string) =>
   getCandidateRoute(request("GET", `/api/pages/${PAGE}/recording/candidates/${candidateId}`), PAGE, candidateId, d);
 const adopt = (d: CandidatesApiDeps, candidateId: string, headers: Record<string, string> = {}) =>
-  adoptCandidateRoute(request("POST", `/api/pages/${PAGE}/recording/candidates/${candidateId}/adopt`, undefined, headers), PAGE, candidateId, d);
+  adoptCandidateRoute(request("POST", `/api/pages/${PAGE}/recording/candidates/${candidateId}/adopt`, {
+    expectedCandidateRevision: 1,
+    expectedRecordingRevision: 2,
+    operationId: "99999999-9999-4999-8999-999999999999",
+  }, headers), PAGE, candidateId, d);
 const remove = (d: CandidatesApiDeps, candidateId: string, headers: Record<string, string> = {}) =>
   deleteCandidateRoute(request("DELETE", `/api/pages/${PAGE}/recording/candidates/${candidateId}`, undefined, headers), PAGE, candidateId, d);
 const retry = (d: CandidatesApiDeps, candidateId: string, headers: Record<string, string> = {}) =>
   retryCandidateRoute(request("POST", `/api/pages/${PAGE}/recording/candidates/${candidateId}/transcribe`, undefined, headers), PAGE, candidateId, d);
+const update = (d: CandidatesApiDeps, candidateId: string, body: unknown, headers: Record<string, string> = {}) =>
+  updateCandidateRoute(request("PATCH", `/api/pages/${PAGE}/recording/candidates/${candidateId}`, body, headers), PAGE, candidateId, d);
 
 describe("POST /api/pages/{id}/recording/candidates", () => {
   it("案を作って実行を積み、名前はエンジンの名前（同じ名前があれば数を足す）", async () => {
@@ -166,6 +186,7 @@ describe("POST /api/pages/{id}/recording/candidates", () => {
     const body = await response.json();
     expect(body.candidate).toEqual({
       id: expect.any(String),
+      revision: 1,
       name: "開発の偽物",
       engine: "fake",
       engineLabel: "開発の偽物",
@@ -173,6 +194,7 @@ describe("POST /api/pages/{id}/recording/candidates", () => {
       durationSec: null,
       adopted: false,
       state: "pending",
+      busy: false,
       segmentCount: 0,
       preview: [],
       createdAt: expect.any(String),
@@ -351,5 +373,54 @@ describe("GET・採用・もう一度（/recording/candidates/{candidateId}）",
     expect((await retry(deps("user-a", memoryStore({ full: null }).store), id)).status).toBe(404);
     expect((await retry(deps(null, store), id)).status).toBe(401);
     expect((await retry(deps("user-a", store), id, { origin: "http://evil.test" })).status).toBe(403);
+  });
+});
+
+describe("候補の編集・履歴・復元", () => {
+  const id = "8b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e";
+  const operationId = "99999999-9999-4999-8999-999999999999";
+
+  it("PATCHはstrict body・同一origin・上限を守り、revisionとoperation IDをstoreへ渡す", async () => {
+    const full: RecordingCandidate = { ...view({ id, revision: 4, adopted: false }), segments: recording().segments, speakerNames: recording().speakerNames };
+    const { store } = memoryStore({ full });
+    const updateSpy = vi.fn(store.updateCandidate);
+    store.updateCandidate = updateSpy;
+    const response = await update(deps("user-a", store), id, {
+      expectedRevision: 4,
+      operationId,
+      name: "編集した案",
+      segments: full.segments,
+      speakerNames: full.speakerNames,
+    });
+    expect(response.status).toBe(200);
+    expect(updateSpy.mock.calls[0]?.[3]).toMatchObject({ expectedRevision: 4, operationId, name: "編集した案" });
+    expect((await update(deps("user-a", store), id, { expectedRevision: 4, operationId, unknown: true })).status).toBe(400);
+    expect((await update(deps("user-a", store), id, { expectedRevision: 4, operationId }, { origin: "http://evil.test" })).status).toBe(403);
+    expect((await update(deps(null, store), id, { expectedRevision: 4, operationId })).status).toBe(401);
+    expect((await update(deps("user-a", store), id, "{}", { "content-length": String(CANDIDATE_WRITE_BODY_MAX_BYTES + 1) })).status).toBe(413);
+  });
+
+  it("履歴はowner境界のstoreだけを使い、一覧・詳細・復元を別操作として返す", async () => {
+    const { store } = memoryStore();
+    store.listVersions = async (owner, pageId, candidateId) => owner === "user-a" && pageId === PAGE && candidateId === id
+      ? [{ version: 2, reason: "edit", name: "編集版", segmentCount: 1, createdAt: "2030-01-02T00:00:00.000Z" }]
+      : null;
+    store.getVersion = async (owner, pageId, candidateId, version) => owner === "user-a" && pageId === PAGE && candidateId === id && version === 2
+      ? { version: 2, reason: "edit", name: "編集版", segmentCount: 1, createdAt: "2030-01-02T00:00:00.000Z", engine: "fake", language: "ja", durationSec: 5, segments: recording().segments, speakerNames: recording().speakerNames }
+      : null;
+    const list = await listCandidateVersionsRoute(request("GET", `/api/pages/${PAGE}/recording/candidates/${id}/versions`), PAGE, id, deps("user-a", store));
+    expect(list.status).toBe(200);
+    expect((await list.json()).versions[0]).toEqual({ version: 2, reason: "edit", name: "編集版", segmentCount: 1, createdAt: "2030-01-02T00:00:00.000Z" });
+    expect((await getCandidateVersionRoute(request("GET", "/x"), PAGE, id, "2", deps("user-a", store))).status).toBe(200);
+    expect((await getCandidateVersionRoute(request("GET", "/x"), PAGE, id, "x", deps("user-a", store))).status).toBe(404);
+
+    const restored = { ...view({ id, revision: 5, adopted: false }), segments: recording().segments, speakerNames: recording().speakerNames };
+    const restoreSpy = vi.fn(async () => ({ status: "ok" as const, candidate: restored, replayed: false }));
+    store.restoreVersion = restoreSpy;
+    const response = await restoreCandidateVersionRoute(
+      request("POST", "/x", { expectedRevision: 4, operationId }), PAGE, id, "2", deps("user-a", store),
+    );
+    expect(response.status).toBe(200);
+    expect(restoreSpy.mock.calls[0]?.slice(0, 4)).toEqual(["user-a", PAGE, id, 2]);
   });
 });

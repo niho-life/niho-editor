@@ -57,6 +57,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
   const [snapshot, setSnapshot] = useState<RecordingSnapshot | null>(null);
   const [drafts, setDrafts] = useState<Drafts>({});
   const [saving, setSaving] = useState(false);
+  const [adopting, setAdopting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   // 書いている途中（段落・話者の入力に input があり、まだ blur・変換の確定をしていない）。下書きになる前の入力も失わないための印
@@ -324,6 +325,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
         if (!composing.current) setTyping(false);
       }}
     >
+      <div inert={adopting} aria-busy={adopting} data-recording-controls="">
       {audio && (
         <RecordingTranscription pageId={pageId} audio={audio} engine={snapshot.defaultEngine ?? null} hasTranscript={hasSegments} onSucceeded={reloadAfterTranscription} onHasTranscript={reloadAfterTranscription} showMacCli={!hasSegments} />
       )}
@@ -399,9 +401,16 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
           disabled={saving}
         />
       )}
+      </div>
+      {adopting && <p role="status">案を採用しています。完了後に本文を編集できます。</p>}
       {audio && hasSegments && (
         <RecordingCandidates
           pageId={pageId}
+          recordingRevision={snapshot.recording.revision}
+          adoptedContent={{
+            segments: snapshot.recording.segments.map((segment, index) => drafts[index] ? { ...segment, text: drafts[index].text } : segment),
+            speakerNames: snapshot.recording.speakerNames,
+          }}
           candidates={snapshot.candidates ?? []}
           engines={snapshot.engines ?? []}
           defaultEngine={snapshot.defaultEngine ?? null}
@@ -410,7 +419,11 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
             applySnapshot(next);
             setNotice(null);
           }}
+          onConflictSnapshot={applySnapshot}
+          onAdoptingChange={setAdopting}
           onChanged={reloadCandidates}
+          onSeek={player ? playback.seekTo : undefined}
+          adoptDisabled={unsaved}
           disabled={saving}
         />
       )}
