@@ -9,6 +9,10 @@ function put(token: string, body: BodyInit | null, headers: Record<string, strin
   return new Request(`http://editor.test${FAKE_STORAGE_PATH}${token}`, { method: "PUT", headers: { "content-type": "audio/mp4", ...headers }, body });
 }
 
+function status(token: string, total = 3): Request {
+  return put(token, null, { "content-range": `bytes */${total}` });
+}
+
 async function ticketToken(storage: ReturnType<typeof createFakeStorage>): Promise<string> {
   const ticket = await storage.startUpload({ objectPath: PATH, contentType: "audio/mp4", sizeBytes: 3, origin: null });
   return ticket.url.slice(FAKE_STORAGE_PATH.length);
@@ -45,6 +49,25 @@ describe("dev fake storage route", () => {
     expect(exists.status, "never overwrites").toBe(412);
     expect((await fakeStoragePutRoute(put("A".repeat(43), new Uint8Array([1])), "A".repeat(43), deps)).status).toBe(404);
     expect((await fakeStoragePutRoute(put("..%2F", new Uint8Array([1])), "../", deps)).status).toBe(404);
+  });
+
+  it("matches GCS status queries, partial ranges and an already saved chunk replay", async () => {
+    const storage = createFakeStorage();
+    const token = await ticketToken(storage);
+    const deps = { env: { NODE_ENV: "development" }, storage: () => storage };
+    const first = await fakeStoragePutRoute(put(token, new Uint8Array([1, 2]), { "content-range": "bytes 0-1/3" }), token, deps);
+    expect(first.status).toBe(308);
+    expect(first.headers.get("range")).toBe("bytes=0-1");
+    const queried = await fakeStoragePutRoute(status(token), token, deps);
+    expect(queried.status).toBe(308);
+    expect(queried.headers.get("range")).toBe("bytes=0-1");
+    const replay = await fakeStoragePutRoute(put(token, new Uint8Array([1, 2]), { "content-range": "bytes 0-1/3" }), token, deps);
+    expect(replay.status).toBe(308);
+    expect(replay.headers.get("range")).toBe("bytes=0-1");
+    const final = await fakeStoragePutRoute(put(token, new Uint8Array([3]), { "content-range": "bytes 2-2/3" }), token, deps);
+    expect(final.status).toBe(200);
+    expect((await fakeStoragePutRoute(status(token), token, deps)).status).toBe(200);
+    expect(await storage.stat(PATH)).toEqual({ sizeBytes: 3, contentType: "audio/mp4" });
   });
 
   it("answers 404 in production and whenever storage is not fake, without storing anything", async () => {

@@ -13,6 +13,7 @@ export const SHELL_COMMANDS = {
   capabilities: "shell_capabilities",
   micStatus: "shell_mic_status",
   recordingStart: "shell_recording_start",
+  recordingStartV2: "shell_recording_start_recoverable",
   recordingStop: "shell_recording_stop",
   recordingDiscard: "shell_recording_discard",
   recordingRead: "shell_recording_read",
@@ -21,6 +22,16 @@ export const SHELL_COMMANDS = {
   stagingDiscard: "shell_staging_discard",
   transcribeLocal: "shell_transcribe_local",
   transcribeStop: "shell_transcribe_stop",
+  localAudioBegin: "shell_local_audio_begin",
+  localAudioChunk: "shell_local_audio_chunk",
+  localAudioFinish: "shell_local_audio_finish",
+  localDiscard: "shell_local_discard",
+  audioPrepare: "shell_audio_prepare",
+  audioPrepareResume: "shell_audio_prepare_resume",
+  audioPreparedChunk: "shell_audio_prepared_chunk",
+  audioRecovery: "shell_audio_recovery",
+  audioPreparedCommit: "shell_audio_prepared_commit",
+  audioRecoveryDiscard: "shell_audio_recovery_discard",
   aiEngines: "shell_ai_engines",
   aiTurn: "shell_ai_turn",
   aiStop: "shell_ai_stop",
@@ -57,6 +68,10 @@ export type ShellFeatures = {
   recording: boolean;
   /** 端末内の文字起こし（同梱の niho-speech）。 */
   localTranscription: boolean;
+  /** server音声のchunk staging・結果再送に対応するApple端末内経路。旧版では undefined。 */
+  localTranscriptionV2?: boolean;
+  /** native file/mic の固定変換・chunk upload・復旧。旧版では undefined。 */
+  nativeAudioV2?: boolean;
   /** CLI の AI（Claude Code・Codex CLI・Antigravity CLI）。 */
   cliAi: boolean;
   /** Antigravity CLIで録音を固定設定の10分区切りで文字起こしできる新しいshell。旧版では undefined。 */
@@ -106,7 +121,30 @@ export type ShellStagedFile = {
 export type ShellStagedAudio = { stagingId: string; files: ShellStagedFile[] };
 
 /** 端末内の文字起こしの出どころ。 */
-export type ShellAudioSource = { kind: "recording"; recordingId: string } | { kind: "staged"; stagingId: string };
+export type ShellAudioSource =
+  | { kind: "recording"; recordingId: string }
+  | { kind: "staged"; stagingId: string }
+  | { kind: "server"; files: number };
+
+export type ShellPreparedAudioFile = {
+  index: number;
+  name: string;
+  bytes: number;
+  contentType: "audio/wav";
+  sha256: string;
+  durationSec: number;
+  offsetSec: number;
+};
+
+export type ShellAudioRecovery = {
+  stagingId: string;
+  ownerScope: string;
+  /** native 一時音声を最初に作った時刻。再開しても変えず、30日保持を延長しない。 */
+  createdAtMs: number;
+  state: "recording" | "preparing" | "ready" | "failed";
+  source: { kind: "recording"; recordingId: string } | { kind: "staged"; stagingId: string };
+  files: ShellPreparedAudioFile[];
+};
 
 // ---------------------------------------------------------------------------
 // 端末内の文字起こし
@@ -236,7 +274,8 @@ export type ShellGeminiAudioSource =
   | { kind: "recording"; recordingId: string }
   | { kind: "staged"; stagingId: string };
 
-export type ShellGeminiAudioStage = { receivedBytes: number; complete: boolean };
+/** server 正本の音声を native の私有 staging へ受け取る共通の進捗。engine/provider の意味は持たない。 */
+export type ShellAudioStage = { receivedBytes: number; complete: boolean };
 export type ShellGeminiPreparedPart = { startSec: number; endSec: number; soundSec: number };
 export type ShellGeminiPreparedFile = { durationSec: number; parts: ShellGeminiPreparedPart[] };
 export type ShellGeminiTurn = { finalEvent: ShellAiEvent | null };

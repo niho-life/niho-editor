@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 import { audioInfo, listAudioParts, type AudioInfo, type AudioPart } from "./recording-audio.ts";
-import { writeCandidateSegments } from "./recording-candidates.ts";
+import { addRecordingCandidateLocked, listRecordingCandidates, writeCandidateSegments } from "./recording-candidates.ts";
 import {
   CONTROL_CHARACTERS,
   InvalidRecordingError,
@@ -39,7 +39,7 @@ import type { OwnerId, PageLang, Queryable } from "./types.ts";
 /** server runner で使えるエンジン。Mac CLI は専用開始口だけで作り、ここへは混ぜない。 */
 export const TRANSCRIPTION_ENGINES = ["deepgram", "fake", "gemini"] as const;
 export type TranscriptionEngineName = (typeof TRANSCRIPTION_ENGINES)[number];
-export type TranscriptionLedgerEngineName = TranscriptionEngineName | "gemini-cli";
+export type TranscriptionLedgerEngineName = TranscriptionEngineName | "gemini-cli" | "apple-local";
 
 export const TRANSCRIPTION_RUN_STATUSES = ["queued", "running", "succeeded", "failed"] as const;
 export type TranscriptionRunStatus = (typeof TRANSCRIPTION_RUN_STATUSES)[number];
@@ -68,7 +68,7 @@ export type TranscriptionRunView = {
   status: TranscriptionRunStatus;
   engine: TranscriptionLedgerEngineName;
   /** 古い呼び出し側では未指定＝server。API応答では常に明示する。 */
-  executor?: "server" | "mac-cli";
+  executor?: "server" | "mac-cli" | "mac-local";
   language: PageLang;
   errorCode: TranscriptionErrorCode | null;
   createdAt: string;
@@ -113,6 +113,8 @@ export type EnqueueTranscriptionResult =
 
 /** Mac の Antigravity CLI 実行で固定する設定。画面や native から任意のモデル・分割秒を渡さない。 */
 export const MAC_CLI_TRANSCRIPTION_SETTINGS = Object.freeze({ model: "gemini-3.8-flash", effort: "low", targetSec: 600 } as const);
+/** Apple 端末内認識で固定する設定。provider/model の課金表示とは混ぜない。 */
+export const MAC_LOCAL_TRANSCRIPTION_SETTINGS = Object.freeze({ engine: "apple-speech", speakerMode: "auto" } as const);
 
 export type MacAudioManifestPart = {
   partIndex: number;
@@ -130,6 +132,12 @@ export type MacTranscriptionStartInput = {
   candidate?: string | null;
 };
 
+export type MacLocalTranscriptionStartInput = {
+  operationId: string;
+  language?: PageLang;
+  candidate?: string | null;
+};
+
 export type MacTranscriptionRun = {
   run: TranscriptionRunView;
   generation: number;
@@ -142,6 +150,19 @@ export type MacTranscriptionRun = {
 export type StartMacTranscriptionResult =
   | ({ status: "created" | "existing" } & MacTranscriptionRun)
   | { status: "audio_not_ready" | "audio_expired" | "has_transcript" | "candidate_missing" | "other_run_active" | "operation_conflict" };
+
+export type MacLocalTranscriptionRun = {
+  run: TranscriptionRunView;
+  generation: number;
+  operationId: string;
+  settings: typeof MAC_LOCAL_TRANSCRIPTION_SETTINGS;
+  audioManifest: MacAudioManifestPart[];
+  candidateId: string | null;
+};
+
+export type StartMacLocalTranscriptionResult =
+  | ({ status: "created" | "existing" } & MacLocalTranscriptionRun)
+  | { status: "audio_not_ready" | "audio_expired" | "candidate_missing" | "too_many_candidates" | "other_run_active" | "operation_conflict" };
 
 /** 実行する側が claim した run。audio は本人の・ゴミ箱でないページの音声（無ければ null）。 */
 export type ClaimedTranscription = {
@@ -180,7 +201,7 @@ type RunRow = {
   id: string;
   status: TranscriptionRunStatus;
   engine: TranscriptionLedgerEngineName;
-  executor: "server" | "mac-cli";
+  executor: "server" | "mac-cli" | "mac-local";
   language: PageLang;
   error_code: TranscriptionErrorCode | null;
   created_at: Date;
@@ -271,9 +292,19 @@ function sameMacSettings(value: unknown): boolean {
   );
 }
 
+function sameMacLocalSettings(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const settings = value as Record<string, unknown>;
+  return settings.engine === MAC_LOCAL_TRANSCRIPTION_SETTINGS.engine && settings.speakerMode === MAC_LOCAL_TRANSCRIPTION_SETTINGS.speakerMode;
+}
+
 type LockRow = {
   base_revision: number;
   language: PageLang;
+  engine: string | null;
+  duration_sec: number | null;
+  segments: RecordingSegment[];
+  speaker_names: Record<string, string>;
   audio_status: "none" | "uploading" | "uploaded";
   expired: boolean;
   has_segments: boolean;
@@ -286,7 +317,8 @@ type LockRow = {
 // 本人の・ゴミ箱でないページの録音を押さえる（同じページの開始を直列にする）。$1 owner / $2 page id。
 // 期限は DB の時計で比べる（期限が無い行は、期限切れとしない。消えていれば実行のときに audio_missing になる）。
 const LOCK_RECORDING_SQL = `
-SELECT r.language, r.audio_status, r.revision AS base_revision,
+SELECT r.language, r.engine, r.duration_sec::float8 AS duration_sec, r.segments, r.speaker_names,
+       r.audio_status, r.revision AS base_revision,
        COALESCE(r.audio_expires_at <= clock_timestamp(), false) AS expired,
        jsonb_array_length(r.segments) > 0 AS has_segments,
        EXISTS (
@@ -433,7 +465,7 @@ type MacRunRow = RunRow & {
 };
 
 const MAC_RUN_COLUMNS = `${RUN_COLUMNS}, t.base_revision, t.generation, t.operation_id, t.settings, t.audio_manifest, t.page_id, t.owner`;
-const FIND_MAC_OPERATION_SQL = `SELECT ${MAC_RUN_COLUMNS} FROM transcription_runs AS t WHERE t.owner = $1 AND t.operation_id = $2 AND t.executor = 'mac-cli'`;
+const FIND_MAC_OPERATION_SQL = `SELECT ${MAC_RUN_COLUMNS} FROM transcription_runs AS t WHERE t.owner = $1 AND t.operation_id = $2 AND t.executor IN ('mac-cli', 'mac-local')`;
 const INSERT_MAC_RUN_SQL = `
 INSERT INTO transcription_runs AS t
   (owner, page_id, engine, executor, status, language, diarize, replace, terms, candidate, base_revision,
@@ -451,6 +483,48 @@ function macRun(row: MacRunRow): MacTranscriptionRun {
     audioManifest: row.audio_manifest as MacAudioManifestPart[],
     candidateId: row.candidate,
   };
+}
+
+const INSERT_MAC_LOCAL_RUN_SQL = `
+INSERT INTO transcription_runs AS t
+  (owner, page_id, engine, executor, status, language, diarize, replace, terms, candidate, base_revision,
+   candidate_revision, generation, operation_id, settings, audio_manifest, started_at)
+VALUES ($1, $2, 'apple-local', 'mac-local', 'running', $3, true, false, $4::jsonb, $5::uuid, $6, $7,
+        1, $8::uuid, $9::jsonb, $10::jsonb, clock_timestamp())
+RETURNING ${MAC_RUN_COLUMNS}`;
+
+function macLocalRun(row: MacRunRow): MacLocalTranscriptionRun {
+  return {
+    run: toView(row),
+    generation: row.generation,
+    operationId: row.operation_id,
+    settings: MAC_LOCAL_TRANSCRIPTION_SETTINGS,
+    audioManifest: row.audio_manifest as MacAudioManifestPart[],
+    candidateId: row.candidate,
+  };
+}
+
+const MAC_LOCAL_CANDIDATE_NAME = "Apple（このMac内）";
+const PRIMARY_CANDIDATE_NAMES: Readonly<Record<string, string>> = {
+  deepgram: "Deepgram",
+  fake: "開発の偽物",
+  "vtt-import": "取り込んだ字幕",
+  gemini: "Gemini",
+  "gemini-cli": "Gemini（このMacのCLI）",
+  "apple-local": MAC_LOCAL_CANDIDATE_NAME,
+};
+
+function availableMacLocalCandidateName(existing: readonly string[]): string {
+  const names = new Set(existing);
+  if (!names.has(MAC_LOCAL_CANDIDATE_NAME)) return MAC_LOCAL_CANDIDATE_NAME;
+  for (let suffix = 2; ; suffix += 1) {
+    const name = `${MAC_LOCAL_CANDIDATE_NAME} ${suffix}`;
+    if (!names.has(name)) return name;
+  }
+}
+
+function primaryCandidateName(engine: string | null): string {
+  return engine === null ? "はじめの案" : PRIMARY_CANDIDATE_NAMES[engine] ?? engine;
 }
 
 /**
@@ -484,7 +558,7 @@ export async function startMacTranscription(
           return null;
         }
         await rollback(client);
-        return prior.page_id === pageId ? { status: "existing", ...macRun(prior) } : { status: "operation_conflict" };
+        return prior.page_id === pageId && prior.executor === "mac-cli" ? { status: "existing", ...macRun(prior) } : { status: "operation_conflict" };
       }
       const recording = (await client.query<LockRow>(LOCK_RECORDING_SQL, [owner, pageId])).rows[0];
       if (!recording) {
@@ -495,7 +569,7 @@ export async function startMacTranscription(
       const concurrent = (await client.query<MacRunRow>(FIND_MAC_OPERATION_SQL, [owner, input.operationId])).rows[0];
       if (concurrent) {
         await rollback(client);
-        return concurrent.page_id === pageId ? { status: "existing", ...macRun(concurrent) } : { status: "operation_conflict" };
+        return concurrent.page_id === pageId && concurrent.executor === "mac-cli" ? { status: "existing", ...macRun(concurrent) } : { status: "operation_conflict" };
       }
       if (recording.audio_status !== "uploaded" || recording.parts_uploading) {
         await rollback(client);
@@ -548,7 +622,107 @@ export async function startMacTranscription(
         (error as { code?: unknown }).code === "23505" &&
         (error as { constraint?: unknown }).constraint === "transcription_runs_mac_operation_idx") {
         const prior = (await client.query<MacRunRow>(FIND_MAC_OPERATION_SQL, [owner, input.operationId])).rows[0];
-        if (prior) return prior.page_id === pageId ? { status: "existing", ...macRun(prior) } : { status: "operation_conflict" };
+        if (prior) return prior.page_id === pageId && prior.executor === "mac-cli" ? { status: "existing", ...macRun(prior) } : { status: "operation_conflict" };
+      }
+      if (isInvalidTextRepresentation(error)) return null;
+      throw error;
+    }
+  } finally {
+    client.release();
+  }
+}
+
+/** Apple 端末内認識の run を running で作る。Cloud Tasks には積まず、Mac 専用 route だけが確定する。 */
+export async function startMacLocalTranscription(
+  pool: Connectable,
+  owner: OwnerId,
+  pageId: string,
+  input: MacLocalTranscriptionStartInput,
+): Promise<StartMacLocalTranscriptionResult | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId)) return null;
+  if (!isPageId(input.operationId)) throw new TypeError("editor-store: operation id must be a UUID");
+  if (input.language !== undefined && input.language !== "ja" && input.language !== "en") throw new TypeError("editor-store: language must be ja or en");
+  const candidate = input.candidate ?? null;
+  if (candidate !== null && !isPageId(candidate)) throw new TypeError("editor-store: candidate must be a UUID");
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    try {
+      const recording = (await client.query<LockRow>(LOCK_RECORDING_SQL, [owner, pageId])).rows[0];
+      if (!recording) {
+        await rollback(client);
+        return null;
+      }
+      // recording lock の内側で operation を照合する。同じページへの同時POST/応答消失後の再送は同じ run へ収束する。
+      const prior = (await client.query<MacRunRow>(FIND_MAC_OPERATION_SQL, [owner, input.operationId])).rows[0];
+      if (prior) {
+        await rollback(client);
+        return prior.page_id === pageId && prior.executor === "mac-local" ? { status: "existing", ...macLocalRun(prior) } : { status: "operation_conflict" };
+      }
+      if (recording.audio_status !== "uploaded" || recording.parts_uploading) {
+        await rollback(client);
+        return { status: "audio_not_ready" };
+      }
+      if (recording.expired || recording.parts_expired) {
+        await rollback(client);
+        return { status: "audio_expired" };
+      }
+      if (await activeRun(client, owner, pageId)) {
+        await rollback(client);
+        return { status: "other_run_active" };
+      }
+      const parts = await listAudioParts(client, owner, pageId);
+      if (parts.length === 0 || parts.some((part) => part.status !== "uploaded")) {
+        await rollback(client);
+        return { status: "audio_not_ready" };
+      }
+      let targetCandidate = candidate;
+      let candidateRevision = candidate === null
+        ? null
+        : (await client.query<{ revision: number }>(CANDIDATE_EXISTS_SQL, [owner, pageId, candidate])).rows[0]?.revision ?? null;
+      if (candidate !== null && candidateRevision === null) {
+        await rollback(client);
+        return { status: "candidate_missing" };
+      }
+      if (targetCandidate === null && recording.has_segments) {
+        const existing = await listRecordingCandidates(client, owner, pageId);
+        const added = await addRecordingCandidateLocked(client, owner, pageId, recording, {
+          name: availableMacLocalCandidateName(existing.map((item) => item.name)),
+          primaryName: primaryCandidateName(recording.engine),
+          engine: "apple-local",
+          language: input.language ?? recording.language,
+        });
+        if (added.status === "too_many") {
+          await rollback(client);
+          return { status: "too_many_candidates" };
+        }
+        targetCandidate = added.candidateId;
+        candidateRevision = (await client.query<{ revision: number }>(CANDIDATE_EXISTS_SQL, [owner, pageId, targetCandidate])).rows[0]?.revision ?? null;
+        if (candidateRevision === null) throw new Error("editor-store: inserted candidate disappeared");
+      }
+      const inserted = await client.query<MacRunRow>(INSERT_MAC_LOCAL_RUN_SQL, [
+        owner,
+        pageId,
+        input.language ?? recording.language,
+        JSON.stringify([]),
+        targetCandidate,
+        recording.base_revision,
+        candidateRevision,
+        input.operationId,
+        JSON.stringify(MAC_LOCAL_TRANSCRIPTION_SETTINGS),
+        JSON.stringify(audioManifest(parts)),
+      ]);
+      const row = inserted.rows[0];
+      if (!row) throw new Error("editor-store: insert returned no Mac local transcription run");
+      await client.query("COMMIT");
+      return { status: "created", ...macLocalRun(row) };
+    } catch (error) {
+      await rollback(client);
+      if (typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505") {
+        const prior = (await client.query<MacRunRow>(FIND_MAC_OPERATION_SQL, [owner, input.operationId])).rows[0];
+        if (prior) return prior.page_id === pageId && prior.executor === "mac-local" ? { status: "existing", ...macLocalRun(prior) } : { status: "operation_conflict" };
       }
       if (isInvalidTextRepresentation(error)) return null;
       throw error;
@@ -634,6 +808,78 @@ export async function resumeMacTranscription(
   }
 }
 
+const RESUME_MAC_LOCAL_SQL = `
+UPDATE transcription_runs AS t
+   SET status = 'running', error_code = NULL, generation = t.generation + 1,
+       started_at = clock_timestamp(), finished_at = NULL
+ WHERE t.id = $1 AND t.owner = $2 AND t.operation_id = $3 AND t.generation = $4
+   AND t.executor = 'mac-local' AND t.status = 'failed'
+RETURNING ${MAC_RUN_COLUMNS}`;
+
+/** 停止・端末内認識失敗後の同じ run を、同じ音声集合・設定のまま次の世代で再開する。 */
+export async function resumeMacLocalTranscription(
+  pool: Connectable,
+  owner: OwnerId,
+  pageId: string,
+  runId: string,
+  operationId: string,
+  generation: number,
+): Promise<MacLocalTranscriptionRun | null> {
+  assertOwner(owner);
+  if (![pageId, runId, operationId].every(isPageId) || !Number.isSafeInteger(generation) || generation < 1) return null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    try {
+      const row = (await client.query<MacRunRow>(`SELECT ${MAC_RUN_COLUMNS} FROM transcription_runs AS t WHERE t.id = $1 FOR UPDATE`, [runId])).rows[0];
+      if (!row || row.owner !== owner || row.page_id !== pageId || row.operation_id !== operationId || row.generation !== generation || row.executor !== "mac-local") {
+        await rollback(client);
+        return null;
+      }
+      if (row.status === "running") {
+        await rollback(client);
+        return macLocalRun(row);
+      }
+      if (row.status !== "failed" || !sameMacLocalSettings(row.settings)) {
+        await rollback(client);
+        return null;
+      }
+      const recording = (await client.query<LockRow>(LOCK_RECORDING_SQL, [owner, pageId])).rows[0];
+      if (!recording || recording.audio_status !== "uploaded" || recording.parts_uploading || recording.expired || recording.parts_expired) {
+        await rollback(client);
+        return null;
+      }
+      if (row.candidate === null && recording.base_revision !== row.base_revision) {
+        await rollback(client);
+        return null;
+      }
+      if (row.candidate !== null) {
+        const current = (await client.query<{ revision: number }>(CANDIDATE_EXISTS_SQL, [owner, pageId, row.candidate])).rows[0];
+        if (!current || current.revision !== row.candidate_revision) {
+          await rollback(client);
+          return null;
+        }
+      }
+      if (!sameManifest(row.audio_manifest, audioManifest(await listAudioParts(client, owner, pageId))) || await activeRun(client, owner, pageId)) {
+        await rollback(client);
+        return null;
+      }
+      const resumed = (await client.query<MacRunRow>(RESUME_MAC_LOCAL_SQL, [runId, owner, operationId, generation])).rows[0];
+      if (!resumed) {
+        await rollback(client);
+        return null;
+      }
+      await client.query("COMMIT");
+      return macLocalRun(resumed);
+    } catch (error) {
+      await rollback(client);
+      throw error;
+    }
+  } finally {
+    client.release();
+  }
+}
+
 type ClaimRow = RunRow & { owner: string; page_id: string; diarize: boolean; replace: boolean; terms: unknown; generation: number; candidate: string | null };
 
 // queued の run だけを running にして世代を 1 つ進める（同時に何本来ても 1 本だけが通る）。$1 run id。
@@ -685,7 +931,7 @@ type FinishLockRow = {
   engine: TranscriptionLedgerEngineName;
   candidate: string | null;
   candidate_revision: number | null;
-  executor: "server" | "mac-cli";
+  executor: "server" | "mac-cli" | "mac-local";
   operation_id: string | null;
   audio_manifest: unknown;
 };
@@ -741,7 +987,7 @@ UPDATE transcription_runs
    SET status = 'failed',
        error_code = $3,
        finished_at = GREATEST(clock_timestamp(), COALESCE(started_at, created_at))
- WHERE id = $1 AND generation = $2 AND executor = 'mac-cli' AND status = 'running'`;
+ WHERE id = $1 AND generation = $2 AND executor = $4 AND status = 'running'`;
 
 function cleanOutput(output: TranscriptionOutput): { segments: RecordingSegment[]; durationSec: number | null } {
   if (!output || !Array.isArray(output.segments)) throw new InvalidRecordingError("segments");
@@ -765,7 +1011,7 @@ function cleanOutput(output: TranscriptionOutput): { segments: RecordingSegment[
  * - それ以外: page_recordings の段落・話者名（空）・エンジン・長さを書いて revision を 1 進め、ページの更新時刻も進め、run を succeeded にする
  * 世代が違う・running でない・不正な id は何もしない（stale）。結果の形が規則に合わなければ InvalidRecordingError（何も書かない）。
  */
-type MacFinishGuard = { owner: OwnerId; pageId: string; operationId: string };
+type MacFinishGuard = { owner: OwnerId; pageId: string; operationId: string; executor: "mac-cli" | "mac-local" };
 
 async function finishRunChecked(
   pool: Connectable,
@@ -784,7 +1030,7 @@ async function finishRunChecked(
     try {
       const run = (await client.query<FinishLockRow>(LOCK_RUN_SQL, [runId])).rows[0];
       if (
-        mac && run?.status === "succeeded" && run.generation === generation && run.executor === "mac-cli" &&
+        mac && run?.status === "succeeded" && run.generation === generation && run.executor === mac.executor &&
         run.owner === mac.owner && run.page_id === mac.pageId && run.operation_id === mac.operationId
       ) {
         // 保存応答だけ失われた再送。本文は再反映せず、同じ成功を返す。
@@ -797,20 +1043,20 @@ async function finishRunChecked(
       }
       let macRecording: LockRow | null = null;
       if (mac) {
-        if (run.executor !== "mac-cli" || run.owner !== mac.owner || run.page_id !== mac.pageId || run.operation_id !== mac.operationId) {
+        if (run.executor !== mac.executor || run.owner !== mac.owner || run.page_id !== mac.pageId || run.operation_id !== mac.operationId) {
           await rollback(client);
           return "stale";
         }
         macRecording = (await client.query<LockRow>(LOCK_RECORDING_SQL, [run.owner, run.page_id])).rows[0] ?? null;
         const pageExists = macRecording && (await client.query(LOCK_ACTIVE_PAGE_SQL, [run.owner, run.page_id])).rowCount === 1;
         if (!macRecording || !pageExists) {
-          await client.query(FAIL_MAC_INTERNAL_SQL, [runId, generation, "internal"]);
+          await client.query(FAIL_MAC_INTERNAL_SQL, [runId, generation, "internal", mac.executor]);
           await client.query("COMMIT");
           return "superseded";
         }
         const current = audioManifest(await listAudioParts(client, run.owner, run.page_id));
         if (!sameManifest(run.audio_manifest, current)) {
-          await client.query(FAIL_MAC_INTERNAL_SQL, [runId, generation, "internal"]);
+          await client.query(FAIL_MAC_INTERNAL_SQL, [runId, generation, "internal", mac.executor]);
           await client.query("COMMIT");
           return "superseded";
         }
@@ -829,7 +1075,7 @@ async function finishRunChecked(
       }
       if (run.candidate !== null) {
         if (mac && (await client.query(CANDIDATE_EXISTS_SQL, [run.owner, run.page_id, run.candidate])).rowCount !== 1) {
-          await client.query(FAIL_MAC_INTERNAL_SQL, [runId, generation, "internal"]);
+          await client.query(FAIL_MAC_INTERNAL_SQL, [runId, generation, "internal", mac.executor]);
           await client.query("COMMIT");
           return "superseded";
         }
@@ -838,7 +1084,7 @@ async function finishRunChecked(
         const written = await writeCandidateSegments(client, run.candidate, run.candidate_revision, { segments: clean.segments, durationSec: clean.durationSec, engine: run.engine });
         if (written !== "written") {
           // 案が消えた、または開始後に手編集された: 遅着結果を書かずに失敗にする
-          await client.query(mac ? FAIL_MAC_INTERNAL_SQL : FAIL_SERVER_SQL, [runId, generation, "internal"]);
+          await client.query(mac ? FAIL_MAC_INTERNAL_SQL : FAIL_SERVER_SQL, mac ? [runId, generation, "internal", mac.executor] : [runId, generation, "internal"]);
           await client.query("COMMIT");
           return "superseded";
         }
@@ -853,7 +1099,7 @@ async function finishRunChecked(
         : serverRecording;
       if (!recording || recording.current_revision !== run.base_revision || (recording.has_segments && !run.replace)) {
         // 開始後に録音・段落が変わった（または録音が無くなった）: replace指定でも利用者の編集を上書きしない
-        await client.query(mac ? FAIL_MAC_INTERNAL_SQL : FAIL_SERVER_SQL, [runId, generation, "internal"]);
+        await client.query(mac ? FAIL_MAC_INTERNAL_SQL : FAIL_SERVER_SQL, mac ? [runId, generation, "internal", mac.executor] : [runId, generation, "internal"]);
         await client.query("COMMIT");
         return "superseded";
       }
@@ -889,7 +1135,22 @@ export function finishMacTranscription(
 ): Promise<FinishTranscriptionResult> {
   assertOwner(owner);
   if (!isPageId(pageId) || !isPageId(operationId)) return Promise.resolve("stale");
-  return finishRunChecked(pool, runId, generation, output, { owner, pageId, operationId });
+  return finishRunChecked(pool, runId, generation, output, { owner, pageId, operationId, executor: "mac-cli" });
+}
+
+/** 本人の同一 operation だけが Apple 端末内認識 run を確定できる。 */
+export function finishMacLocalTranscription(
+  pool: Connectable,
+  owner: OwnerId,
+  pageId: string,
+  runId: string,
+  operationId: string,
+  generation: number,
+  output: TranscriptionOutput,
+): Promise<FinishTranscriptionResult> {
+  assertOwner(owner);
+  if (!isPageId(pageId) || !isPageId(operationId)) return Promise.resolve("stale");
+  return finishRunChecked(pool, runId, generation, output, { owner, pageId, operationId, executor: "mac-local" });
 }
 
 /**
@@ -909,7 +1170,7 @@ UPDATE transcription_runs
    SET status = 'failed', error_code = $6,
        finished_at = GREATEST(clock_timestamp(), COALESCE(started_at, created_at))
  WHERE id = $1 AND owner = $2 AND page_id = $3 AND operation_id = $4 AND generation = $5
-   AND executor = 'mac-cli' AND status = 'running'`;
+   AND executor = $7 AND status = 'running'`;
 
 /** Mac からの停止・失敗。owner / page / operation / generation が一致する実行中の行だけを終える。 */
 export async function failMacTranscription(
@@ -923,7 +1184,23 @@ export async function failMacTranscription(
 ): Promise<boolean> {
   assertOwner(owner);
   if (!isPageId(pageId) || !isPageId(runId) || !isPageId(operationId) || !Number.isSafeInteger(generation) || generation < 1 || !isTranscriptionErrorCode(errorCode)) return false;
-  const result = await db.query(FAIL_MAC_SQL, [runId, owner, pageId, operationId, generation, errorCode]);
+  const result = await db.query(FAIL_MAC_SQL, [runId, owner, pageId, operationId, generation, errorCode, "mac-cli"]);
+  return result.rowCount === 1;
+}
+
+/** Apple 端末内認識からの停止・失敗。正確な owner / page / operation / generation だけを終える。 */
+export async function failMacLocalTranscription(
+  db: Queryable,
+  owner: OwnerId,
+  pageId: string,
+  runId: string,
+  operationId: string,
+  generation: number,
+  errorCode: TranscriptionErrorCode,
+): Promise<boolean> {
+  assertOwner(owner);
+  if (!isPageId(pageId) || !isPageId(runId) || !isPageId(operationId) || !Number.isSafeInteger(generation) || generation < 1 || !isTranscriptionErrorCode(errorCode)) return false;
+  const result = await db.query(FAIL_MAC_SQL, [runId, owner, pageId, operationId, generation, errorCode, "mac-local"]);
   return result.rowCount === 1;
 }
 
@@ -977,6 +1254,30 @@ export async function macTranscriptionStatus(db: Queryable, owner: OwnerId, page
   try {
     const row = (await db.query<MacRunRow>(MAC_STATUS_SQL, [owner, pageId])).rows[0];
     return row ? macRun(row) : null;
+  } catch (error) {
+    if (isInvalidTextRepresentation(error)) return null;
+    throw error;
+  }
+}
+
+const MAC_LOCAL_STATUS_SQL = `
+SELECT ${MAC_RUN_COLUMNS}
+  FROM page_recordings AS r
+  JOIN pages AS p ON p.owner = r.owner AND p.id = r.page_id
+  JOIN LATERAL (
+    SELECT * FROM transcription_runs AS x
+     WHERE x.owner = r.owner AND x.page_id = r.page_id AND x.executor = 'mac-local'
+     ORDER BY x.created_at DESC, x.id DESC LIMIT 1
+  ) AS t ON true
+ WHERE r.owner = $1 AND r.page_id = $2 AND p.deleted_at IS NULL`;
+
+/** 本人の最新 Apple 端末内認識 run。別 owner / 削除済みページでは見えない。 */
+export async function macLocalTranscriptionStatus(db: Queryable, owner: OwnerId, pageId: string): Promise<MacLocalTranscriptionRun | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId)) return null;
+  try {
+    const row = (await db.query<MacRunRow>(MAC_LOCAL_STATUS_SQL, [owner, pageId])).rows[0];
+    return row ? macLocalRun(row) : null;
   } catch (error) {
     if (isInvalidTextRepresentation(error)) return null;
     throw error;

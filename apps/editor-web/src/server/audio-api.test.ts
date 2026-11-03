@@ -10,6 +10,7 @@ import {
   audioLimitsRoute,
   completeAudioPartRoute,
   discardAudioPartRoute,
+  nativeAudioContextRoute,
   completeAudioRoute,
   startAudioPartRoute,
   startAudioRoute,
@@ -42,6 +43,7 @@ function memoryStore() {
   const inputs: Array<{ owner: string; input: StartAudioRecordingInput }> = [];
   const find = (owner: string, id: string) => rows.find((row) => row.page.id === id && row.owner === owner && !row.deleted) ?? null;
   const store: AudioStore = {
+    getOrCreateNativeAudioCacheNamespace: async (owner, authMode) => `${owner}:${authMode}`,
     startAudioRecording: async (owner, input) => {
       inputs.push({ owner, input });
       const existing = input.uploadKey === null ? undefined : rows.find((row) => row.owner === owner && row.uploadKey === input.uploadKey);
@@ -161,8 +163,8 @@ const notUsed = async (): Promise<Response> => {
   throw new Error("the audio API never calls the login routes");
 };
 
-function authAs(userId: string | null): AuthProvider {
-  return { mode: "stub", getSession: async () => (userId ? { userId, mode: "stub" } : null), beginLogin: notUsed, completeLogin: notUsed, logout: notUsed };
+function authAs(userId: string | null, mode: "niho" | "google" | "stub" = "stub"): AuthProvider {
+  return { mode, getSession: async () => (userId ? { userId, mode } : null), beginLogin: notUsed, completeLogin: notUsed, logout: notUsed };
 }
 
 function deps(userId: string | null, store: AudioStore | null, storage: ObjectStorage | null, extra: Partial<AudioApiDeps> = {}): AudioApiDeps {
@@ -219,6 +221,56 @@ describe("GET /api/recordings/audio/limits", () => {
     const anonymous = await audioLimitsRoute(request("GET", "/api/recordings/audio/limits"), { auth: () => authAs(null) });
     expect(anonymous.status).toBe(401);
     expect(await anonymous.text()).toBe('{"error":"unauthorized"}');
+  });
+});
+
+describe("GET /api/recordings/audio/native-context", () => {
+  const namespaces = new Map<string, string>();
+  const contextStore = (failure?: Error): AudioStore => ({
+    ...memoryStore().store,
+    getOrCreateNativeAudioCacheNamespace: async (owner, mode) => {
+      if (failure) throw failure;
+      const key = `${owner}:${mode}`;
+      const value = namespaces.get(key) ?? randomUUID();
+      namespaces.set(key, value);
+      return value;
+    },
+  });
+
+  it("returns a stable opaque owner scope and separates owner and auth mode", async () => {
+    namespaces.clear();
+    const store = contextStore();
+    const first = await nativeAudioContextRoute(request("GET", "/api/recordings/audio/native-context"), { auth: () => authAs("user-a", "niho"), store: () => store });
+    const second = await nativeAudioContextRoute(request("GET", "/api/recordings/audio/native-context"), { auth: () => authAs("user-a", "niho"), store: () => store });
+    const other = await nativeAudioContextRoute(request("GET", "/api/recordings/audio/native-context"), { auth: () => authAs("user-b", "niho"), store: () => store });
+    const otherMode = await nativeAudioContextRoute(request("GET", "/api/recordings/audio/native-context"), { auth: () => authAs("user-a", "google"), store: () => store });
+    const firstBody = await first.json();
+    expect(firstBody.ownerScope).toMatch(/^[a-f0-9]{64}$/);
+    expect((await second.json()).ownerScope).toBe(firstBody.ownerScope);
+    expect((await other.json()).ownerScope).not.toBe(firstBody.ownerScope);
+    expect((await otherMode.json()).ownerScope).not.toBe(firstBody.ownerScope);
+    expect(JSON.stringify(firstBody)).not.toContain("user-a");
+  });
+
+  it("requires authentication before the store and returns 503 without DB", async () => {
+    const touched = vi.fn();
+    const store = contextStore();
+    expect((await nativeAudioContextRoute(request("GET", "/api/recordings/audio/native-context"), {
+      auth: () => authAs(null), store: () => { touched(); return store; },
+    })).status).toBe(401);
+    expect(touched).not.toHaveBeenCalled();
+    expect((await nativeAudioContextRoute(request("GET", "/api/recordings/audio/native-context"), {
+      auth: () => authAs("user-a"), store: () => null,
+    })).status).toBe(503);
+  });
+
+  it("returns 503 on a DB error without exposing owner or credentials", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const response = await nativeAudioContextRoute(request("GET", "/api/recordings/audio/native-context"), {
+      auth: () => authAs("opaque-niho-user-a", "niho"), store: () => contextStore(new Error("synthetic database failure")),
+    });
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe('{"error":"unavailable"}');
   });
 });
 

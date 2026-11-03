@@ -1,4 +1,9 @@
 export * from "./types.ts";
+export {
+  EDITOR_AUTH_MODES,
+  getOrCreateNativeAudioCacheNamespace,
+  type EditorAuthMode,
+} from "./native-audio-cache.ts";
 export { PAGE_MAX_BYTES, PAGE_IMAGE_MAX_COUNT, IMAGE_MAX_BYTES, pageSizeBytes, pageImageIds } from "./page-size.ts";
 export * from "./photo-store.ts";
 export * from "./storage-usage.ts";
@@ -255,25 +260,33 @@ export {
   enqueueTranscription,
   failRun,
   failMacTranscription,
+  failMacLocalTranscription,
   finishRun,
   finishMacTranscription,
+  finishMacLocalTranscription,
   isTranscriptionErrorCode,
   isTranscriptionTerm,
   latestRun,
   macTranscriptionStatus,
+  macLocalTranscriptionStatus,
   listQueuedRuns,
   requeueRun,
   resumeMacTranscription,
+  resumeMacLocalTranscription,
   sweepStaleRuns,
   transcriptionStatus,
   startMacTranscription,
+  startMacLocalTranscription,
   MAC_CLI_TRANSCRIPTION_SETTINGS,
+  MAC_LOCAL_TRANSCRIPTION_SETTINGS,
   type ClaimedTranscription,
   type EnqueueTranscriptionInput,
   type EnqueueTranscriptionResult,
   type FinishTranscriptionResult,
   type MacAudioManifestPart,
   type MacTranscriptionRun,
+  type MacLocalTranscriptionRun,
+  type MacLocalTranscriptionStartInput,
   type MacTranscriptionStartInput,
   type QueuedTranscriptionRun,
   type TranscriptionEngineName,
@@ -283,4 +296,5 @@ export {
   type TranscriptionRunStatus,
   type TranscriptionRunView,
   type StartMacTranscriptionResult,
+  type StartMacLocalTranscriptionResult,
 } from "./transcription-runs.ts";

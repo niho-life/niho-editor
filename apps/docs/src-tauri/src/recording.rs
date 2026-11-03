@@ -184,6 +184,15 @@ impl Recorder {
     path.is_file().then_some(path)
   }
 
+  /// 保存に失敗した CAF を含む、現在使っていない回収可能な録音。path は native 内だけで使う。
+  pub fn recoverable_file(&self, id: &str) -> Option<PathBuf> {
+    self
+      .leftovers()
+      .into_iter()
+      .find(|item| item.recording_id == id)
+      .map(|item| PathBuf::from(item.path))
+  }
+
   fn owner_path(&self, id: &str) -> PathBuf {
     self.dir.join(format!(".{id}{OWNER_SUFFIX}"))
   }

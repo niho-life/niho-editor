@@ -55,11 +55,37 @@ async function readBytes(request: Request, limit: number): Promise<Uint8Array | 
 export async function fakeStoragePutRoute(request: Request, token: string, deps: FakeStorageRouteDeps): Promise<Response> {
   if (!fakeStorageEnabled(deps.env)) return notFoundResponse();
   if (!FAKE_TOKEN_PATTERN.test(token)) return notFoundResponse();
+  const contentRange = request.headers.get("content-range");
+  const storage = deps.storage();
+  const statusMatch = /^bytes \*\/(\d+)$/.exec(contentRange ?? "");
+  if (statusMatch) {
+    const bytes = await readBytes(request, 0);
+    if (!bytes) return errorResponse("bad_request");
+    const result = storage.fakeUploadStatus(token, Number(statusMatch[1]));
+    if (result.status === "complete") return new Response(null, { status: 200 });
+    if (result.status === "partial") {
+      return new Response(null, {
+        status: 308,
+        headers: result.receivedBytes > 0 ? { Range: `bytes=0-${result.receivedBytes - 1}` } : undefined,
+      });
+    }
+    if (result.status === "exists") return jsonResponse(412, { error: "precondition_failed" });
+    if (result.status === "range_mismatch") return errorResponse("bad_request");
+    return notFoundResponse();
+  }
+  const match = contentRange === null ? null : /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange);
+  if (contentRange !== null && !match) return errorResponse("bad_request");
   const bytes = await readBytes(request, FAKE_STORAGE_MAX_BYTES);
   if (!bytes) return errorResponse("payload_too_large");
-  const result = deps.storage().putFakeObject(token, bytes, request.headers.get("content-type"));
-  if (result === "ok") return jsonResponse(200, { size: String(bytes.byteLength) });
+  const range = match ? { start: Number(match[1]), end: Number(match[2]), total: Number(match[3]) } : undefined;
+  const result = storage.putFakeObject(token, bytes, request.headers.get("content-type"), range);
+  if (result === "ok") return jsonResponse(200, { size: String(range?.total ?? bytes.byteLength) });
+  if (result === "partial") {
+    const received = storage.fakeUploadStatus(token, range?.total ?? bytes.byteLength);
+    return new Response(null, { status: 308, headers: received.status === "partial" && received.receivedBytes > 0 ? { Range: `bytes=0-${received.receivedBytes - 1}` } : undefined });
+  }
   if (result === "exists") return jsonResponse(412, { error: "precondition_failed" });
   if (result === "too_large") return errorResponse("payload_too_large");
+  if (result === "range_mismatch") return errorResponse("bad_request");
   return notFoundResponse();
 }

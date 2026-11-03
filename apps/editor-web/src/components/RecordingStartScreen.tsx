@@ -14,6 +14,7 @@ import { AUDIO_STAGE_LABELS, useAudioImport } from "@/lib/use-audio-import";
 import { micErrorMessage, useMicCapture } from "@/lib/use-mic-capture";
 import { transcriptionServiceNote } from "@/recording/candidate-names";
 import { useEditorFrame } from "./EditorFrame";
+import { MacNativeAudioImport } from "./MacNativeAudioImport";
 
 type Message = { kind: "info" | "error"; text: string };
 
@@ -374,6 +375,10 @@ export function RecordingStartScreen({
         }}
       />
       <div className="es-start" aria-busy={busy}>
+        <MacNativeAudioImport onCreated={(page) => {
+          frame.pageCreated(page.id, page.title, "rec");
+          router.push(`/p/${page.id}`);
+        }} />
         {kept.map((take) => (
           <div key={take.id} style={PANEL_STYLE} role="group" aria-label="前回の録音" data-mic-kept={take.finished ? "stopped" : "interrupted"}>
             <span className="es-note">

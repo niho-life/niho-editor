@@ -17,6 +17,7 @@ const ENGINE_LABELS: Readonly<Record<string, string>> = {
   "vtt-import": "取り込んだ字幕",
   gemini: "Gemini",
   "gemini-cli": "Gemini（このMacのCLI）",
+  "apple-local": "Apple（このMac内）",
   "this-mac": "この Mac",
 };
 
@@ -34,6 +35,8 @@ export function transcriptionServiceNote(engine: string | null): string {
       return "文字起こしを始めると、音声は Google Gemini に送られます";
     case "gemini-cli":
       return "このMacのAntigravity CLIから音声をGoogle Geminiへ送ります";
+    case "apple-local":
+      return "Appleの端末内音声認識を使います。音声は外部providerへ送られません";
     case "fake":
       return "開発用エンジンで文字起こしします。音声は外部サービスへ送られません";
     case "this-mac":

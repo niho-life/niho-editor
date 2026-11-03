@@ -40,6 +40,8 @@ check "AI key secret name" "$SECRET_ANTHROPIC_KEY" "niho-editor-anthropic-key"
 check "empty optional API domain" "$PUBLIC_API_DOMAIN" ""
 check "UI domain mapping list without API domain" "$(domain_mapping_names)" "editor.example.com"
 check "UI and API use separate domain mappings" "$(PUBLIC_API_DOMAIN=api.editor.example.com domain_mapping_names | tr '\n' ',' | sed 's/,$//')" "editor.example.com,api.editor.example.com"
+check "assets bucket CORS keeps the exact editor origin and exposes resumable offsets" "$(assets_bucket_cors)" \
+  '[{"origin":["https://editor.example.com"],"method":["PUT"],"responseHeader":["Content-Type","Range","Content-Range"],"maxAgeSeconds":3600}]'
 
 ready() { if ai_key_ready; then printf 1; else printf 0; fi; }
 check "no AI key version: AI off" "$(ready)" 0

@@ -2690,6 +2690,8 @@ pub fn run() {
         },
         Arc::new(secrets::app_store(&data_dir, dev, Some(log.clone()))),
       ));
+      let recorder = Arc::new(Recorder::new(data_dir.join(recording::RECORDINGS_DIR)));
+      let _ = shell::sweep_expired_audio_recovery(&data_dir, &recorder);
       app.manage(AppState {
         runner: Arc::new(api_ai::ProviderRouter {
           local: Arc::new(local_ai::LocalAiRunner::new(runtime)),
@@ -2701,7 +2703,7 @@ pub fn run() {
         audio_jobs: Mutex::new(HashMap::new()),
         api,
         deepgram_jobs: Mutex::new(HashMap::new()),
-        recorder: Arc::new(Recorder::new(data_dir.join(recording::RECORDINGS_DIR))),
+        recorder,
         personal_ops: Mutex::new(HashMap::new()),
         pc_gate: pc_runner::Gate::default(),
         data_dir: data_dir.clone(),
@@ -2766,6 +2768,7 @@ pub fn run() {
       shell::shell_capabilities,
       shell::shell_mic_status,
       shell::shell_recording_start,
+      shell::shell_recording_start_recoverable,
       shell::shell_recording_stop,
       shell::shell_recording_discard,
       shell::shell_recording_read,
@@ -2774,6 +2777,16 @@ pub fn run() {
       shell::shell_staging_discard,
       shell::shell_transcribe_local,
       shell::shell_transcribe_stop,
+      shell::shell_local_audio_begin,
+      shell::shell_local_audio_chunk,
+      shell::shell_local_audio_finish,
+      shell::shell_local_discard,
+      shell::shell_audio_prepare,
+      shell::shell_audio_prepare_resume,
+      shell::shell_audio_prepared_chunk,
+      shell::shell_audio_recovery,
+      shell::shell_audio_prepared_commit,
+      shell::shell_audio_recovery_discard,
       shell_ai::shell_ai_engines,
       shell_ai::shell_ai_turn,
       shell_ai::shell_ai_stop,

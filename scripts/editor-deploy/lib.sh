@@ -154,6 +154,11 @@ app_origin() {
   if [[ -n "$APP_DOMAIN" ]]; then printf 'https://%s' "$APP_DOMAIN"; else service_url "$SERVICE"; fi
 }
 
+# Assets bucket の browser upload CORS。origin は editor だけで、resumable upload の308から Rangeを読めるようにする。
+assets_bucket_cors() {
+  printf '[{"origin":["%s"],"method":["PUT"],"responseHeader":["Content-Type","Range","Content-Range"],"maxAgeSeconds":3600}]' "$(app_origin)"
+}
+
 secret_has_version() {
   [[ -n "$(gcp secrets versions list "$1" --filter='state:ENABLED' --format='value(name)' --limit 1)" ]]
 }

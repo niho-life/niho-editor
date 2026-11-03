@@ -9,6 +9,7 @@ import {
   type ShellAiTurn,
   type ShellAiTurnRequest,
   type ShellAudioSource,
+  type ShellAudioRecovery,
   type ShellCapabilities,
   type ShellCommand,
   type ShellMicStatus,
@@ -19,7 +20,7 @@ import {
   type ShellTranscribeOptions,
   type ShellTranscript,
   type ShellGeminiAudioSource,
-  type ShellGeminiAudioStage,
+  type ShellAudioStage,
   type ShellGeminiPreparedFile,
   type ShellGeminiTurn,
 } from "./shell-contract";
@@ -36,6 +37,7 @@ export type ShellBridge = {
   micStatus: (request: boolean) => Promise<ShellMicStatus>;
   /** 録音を始める。進み（Started・Level）と、画面が止めずに終わったとき（Done・Error）は `onEvent` に来る。 */
   recordingStart: (recordingId: string, onEvent: (event: ShellRecordingEvent) => void) => Promise<{ device: string | null }>;
+  recordingStartV2: (recordingId: string, ownerScope: string, onEvent: (event: ShellRecordingEvent) => void) => Promise<{ stagingId: string; device: string | null }>;
   recordingStop: (recordingId: string) => Promise<ShellRecording>;
   recordingDiscard: (recordingId: string) => Promise<void>;
   /** 書き出した音声のバイト列（1 回 512 MB まで）。画面がサーバーへ上げる。 */
@@ -52,12 +54,23 @@ export type ShellBridge = {
     onEvent: (event: ShellTranscribeEvent) => void,
   ) => Promise<ShellTranscript[]>;
   transcribeStop: (jobId: string) => Promise<boolean>;
+  localAudioBegin: (jobId: string, partIndex: number, bytes: number, contentType: string, sha256: string) => Promise<ShellAudioStage>;
+  localAudioChunk: (jobId: string, partIndex: number, offset: number, chunk: Uint8Array) => Promise<number>;
+  localAudioFinish: (jobId: string, partIndex: number) => Promise<void>;
+  /** server保存成功後だけ、Apple端末内認識の音声と保存待ち結果を消す。 */
+  localDiscard: (jobId: string) => Promise<void>;
+  audioPrepare: (jobId: string, source: Exclude<ShellAudioSource, { kind: "server" }>, ownerScope: string) => Promise<ShellAudioRecovery>;
+  audioPrepareResume: (jobId: string, stagingId: string, ownerScope: string) => Promise<ShellAudioRecovery>;
+  audioPreparedChunk: (stagingId: string, ownerScope: string, index: number, offset: number) => Promise<Uint8Array>;
+  audioRecovery: (ownerScope: string) => Promise<ShellAudioRecovery[]>;
+  audioPreparedCommit: (stagingId: string, ownerScope: string) => Promise<void>;
+  audioRecoveryDiscard: (stagingId: string, ownerScope: string) => Promise<void>;
   /** この Mac で使える CLI の AI（数秒かかる）。 */
   aiEngines: () => Promise<ShellAiEngine[]>;
   /** CLI の AI を 1 回動かす。進みは `onEvent`、最後のイベントと本文の差分は結果に。止めるのは `aiStop(turnId)`。 */
   aiTurn: (turnId: string, request: ShellAiTurnRequest, onEvent: (envelope: ShellAiEnvelope) => void) => Promise<ShellAiTurn>;
   aiStop: (turnId: string) => Promise<boolean>;
-  geminiAudioBegin: (jobId: string, partIndex: number, bytes: number, contentType: string, sha256: string) => Promise<ShellGeminiAudioStage>;
+  geminiAudioBegin: (jobId: string, partIndex: number, bytes: number, contentType: string, sha256: string) => Promise<ShellAudioStage>;
   /** 4 MiB 以下のchunkをoffset順に渡す。 */
   geminiAudioChunk: (jobId: string, partIndex: number, offset: number, chunk: Uint8Array) => Promise<number>;
   geminiAudioFinish: (jobId: string, partIndex: number) => Promise<void>;
@@ -97,6 +110,8 @@ export function createShellBridge(transport: ShellTransport): ShellBridge {
     micStatus: (request) => invoke<ShellMicStatus>(SHELL_COMMANDS.micStatus, { request }),
     recordingStart: (recordingId, onEvent) =>
       invoke<{ device: string | null }>(SHELL_COMMANDS.recordingStart, { recordingId, onEvent: channel(onEvent) }),
+    recordingStartV2: (recordingId, ownerScope, onEvent) =>
+      invoke<{ stagingId: string; device: string | null }>(SHELL_COMMANDS.recordingStartV2, { recordingId, ownerScope, onEvent: channel(onEvent) }),
     recordingStop: (recordingId) => invoke<ShellRecording>(SHELL_COMMANDS.recordingStop, { recordingId }),
     recordingDiscard: (recordingId) => invoke<void>(SHELL_COMMANDS.recordingDiscard, { recordingId }),
     recordingRead: async (recordingId) => bytes(await invoke<unknown>(SHELL_COMMANDS.recordingRead, { recordingId })),
@@ -113,12 +128,25 @@ export function createShellBridge(transport: ShellTransport): ShellBridge {
         onEvent: channel(onEvent),
       }),
     transcribeStop: (jobId) => invoke<boolean>(SHELL_COMMANDS.transcribeStop, { jobId }),
+    localAudioBegin: (jobId, partIndex, size, contentType, sha256) =>
+      invoke<ShellAudioStage>(SHELL_COMMANDS.localAudioBegin, { jobId, partIndex, bytes: size, contentType, sha256 }),
+    localAudioChunk: (jobId, partIndex, offset, chunk) =>
+      invoke<number>(SHELL_COMMANDS.localAudioChunk, { jobId, partIndex, offset, chunk }),
+    localAudioFinish: (jobId, partIndex) => invoke<void>(SHELL_COMMANDS.localAudioFinish, { jobId, partIndex }),
+    localDiscard: (jobId) => invoke<void>(SHELL_COMMANDS.localDiscard, { jobId }),
+    audioPrepare: (jobId, source, ownerScope) => invoke<ShellAudioRecovery>(SHELL_COMMANDS.audioPrepare, { jobId, source, ownerScope }),
+    audioPrepareResume: (jobId, stagingId, ownerScope) => invoke<ShellAudioRecovery>(SHELL_COMMANDS.audioPrepareResume, { jobId, stagingId, ownerScope }),
+    audioPreparedChunk: async (stagingId, ownerScope, index, offset) =>
+      bytes(await invoke<unknown>(SHELL_COMMANDS.audioPreparedChunk, { stagingId, ownerScope, index, offset })),
+    audioRecovery: (ownerScope) => invoke<ShellAudioRecovery[]>(SHELL_COMMANDS.audioRecovery, { ownerScope }),
+    audioPreparedCommit: (stagingId, ownerScope) => invoke<void>(SHELL_COMMANDS.audioPreparedCommit, { stagingId, ownerScope }),
+    audioRecoveryDiscard: (stagingId, ownerScope) => invoke<void>(SHELL_COMMANDS.audioRecoveryDiscard, { stagingId, ownerScope }),
     aiEngines: () => invoke<ShellAiEngine[]>(SHELL_COMMANDS.aiEngines),
     aiTurn: (turnId, request, onEvent) =>
       invoke<ShellAiTurn>(SHELL_COMMANDS.aiTurn, { turnId, request, onEvent: channel(onEvent) }),
     aiStop: (turnId) => invoke<boolean>(SHELL_COMMANDS.aiStop, { turnId }),
     geminiAudioBegin: (jobId, partIndex, size, contentType, sha256) =>
-      invoke<ShellGeminiAudioStage>(SHELL_COMMANDS.geminiAudioBegin, { jobId, partIndex, bytes: size, contentType, sha256 }),
+      invoke<ShellAudioStage>(SHELL_COMMANDS.geminiAudioBegin, { jobId, partIndex, bytes: size, contentType, sha256 }),
     geminiAudioChunk: (jobId, partIndex, offset, chunk) =>
       invoke<number>(SHELL_COMMANDS.geminiAudioChunk, { jobId, partIndex, offset, chunk }),
     geminiAudioFinish: (jobId, partIndex) => invoke<void>(SHELL_COMMANDS.geminiAudioFinish, { jobId, partIndex }),
