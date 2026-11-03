@@ -707,9 +707,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           sidebar={
             <ShellSidebar
               items={items}
-              appLinks={[{ id: "photo", label: "写真", icon: "img" }]}
-              currentAppLinkId={pathname === "/photo" ? "photo" : undefined}
-              onAppLinkSelect={(id) => { if (id === "photo") router.push("/photo"); }}
               currentId={currentId}
               onSelect={select}
               onToggleFolder={toggleFolder}

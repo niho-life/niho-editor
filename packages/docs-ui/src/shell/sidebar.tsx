@@ -2,14 +2,10 @@ import { useRef, type ReactNode } from "react";
 import { Icon } from "./icons";
 import { ShellMenu } from "./menu";
 import { NewPageMenu, type NewPageKind } from "./new-page-menu";
-import type { ShellIconName, ShellListItem, ShellMenuItem } from "./types";
+import type { ShellListItem, ShellMenuItem } from "./types";
 
 export type ShellSidebarProps = {
   items: ShellListItem[];
-  /** ページ一覧とは別のアプリ内route。個人ライブラリなどの独立画面に使う。 */
-  appLinks?: ReadonlyArray<{ id: string; label: string; icon?: ShellIconName }>;
-  currentAppLinkId?: string;
-  onAppLinkSelect?: (id: string) => void;
   currentId?: string;
   onSelect?: (id: string) => void;
   /** フォルダの行の開閉を押した（開いているかは呼ぶ側が持ち、閉じているフォルダの中の行は渡さない）。 */
@@ -131,7 +127,7 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder }: { node
  * 1行は題名と時刻。2行目は公開先・録音・作成中のときだけ。下は本人の行ひとつ。
  * 一覧は 1 本の木（フォルダ＝子を持てるページ）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
  */
-export function ShellSidebar({ items, appLinks, currentAppLinkId, onAppLinkSelect, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, listEnd, recent, me }: ShellSidebarProps) {
+export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, listEnd, recent, me }: ShellSidebarProps) {
   const newButton = useRef<HTMLButtonElement | null>(null);
   const meButton = useRef<HTMLButtonElement | null>(null);
   return (
@@ -187,25 +183,6 @@ export function ShellSidebar({ items, appLinks, currentAppLinkId, onAppLinkSelec
           </>
         )}
       </div>
-      {appLinks && appLinks.length > 0 && (
-        <nav className="es-sb-appnav" aria-label="アプリ">
-          <ul>
-            {appLinks.map((item) => (
-              <li key={item.id}>
-                <button
-                  type="button"
-                  className={`es-app-link${item.id === currentAppLinkId ? " es-app-link--on" : ""}`}
-                  aria-current={item.id === currentAppLinkId ? "page" : undefined}
-                  onClick={() => onAppLinkSelect?.(item.id)}
-                >
-                  {item.icon && <Icon name={item.icon} />}
-                  <span>{item.label}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </nav>
-      )}
       <nav className="es-sb-list" aria-label="ページの一覧">
         {recent && (
           <div className="es-sb-group">

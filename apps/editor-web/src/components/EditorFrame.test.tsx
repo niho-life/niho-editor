@@ -123,6 +123,14 @@ function chunkResponse(pages: PageSummary[], next: string | null): Response {
 }
 
 describe("EditorFrame", () => {
+  it("写真への導線や空のアプリ欄を出さず、ページ一覧を表示する", async () => {
+    await mount({ pages: [page(PAGE_ID, "合成のページ")] });
+    const sidebar = container!.querySelector('aside[aria-label="ページ"]')!;
+    expect(sidebar.querySelector('nav[aria-label="アプリ"]')).toBeNull();
+    expect(buttonByText("写真", sidebar)).toBeUndefined();
+    expect(rows()).toEqual(["合成のページ"]);
+  });
+
   it("空の新規ページでも、入力せずに公開と右側の設定を使える", async () => {
     nav.pathname = "/p/new";
     window.history.replaceState(null, "", "/p/new");
@@ -141,13 +149,6 @@ describe("EditorFrame", () => {
     expect(container!.querySelector(".es-rail")?.textContent).toContain("文字数0");
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(fetcher.mock.calls[0]).toMatchObject(["/api/pages", { method: "POST" }]);
-  });
-
-  it("opens NIHO photo from app navigation", async () => {
-    await mount();
-    expect(container!.querySelector(".es-sb-appnav")?.textContent).toContain("写真");
-    await click(".es-app-link");
-    expect(nav.push).toHaveBeenCalledWith("/photo");
   });
 
   it("loads the next chunk when the end of the list comes near, one request at a time, deduped, until next is null", async () => {
