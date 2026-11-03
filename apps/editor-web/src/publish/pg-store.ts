@@ -27,6 +27,7 @@ import {
   listConnections,
   listDraftAssets,
   listPublicationsByHandle,
+  managedTranslationReviewProblem,
   listRedirectsTo,
   putConnection,
   putConnectionKey,
@@ -93,6 +94,19 @@ function transactionOf(client: Queryable, isOpen: () => boolean): ConnectionTx {
     getPage: async (pageId) => {
       const page = await getDraftPage(db(), pageId, { lock: true });
       return page ? toDraftPage(page) : null;
+    },
+    reviewGate: async (actorId, pageId, handle) => {
+      if (handle !== "exp") return null;
+      const problem = await managedTranslationReviewProblem(db(), actorId, pageId);
+      if (problem === null) return null;
+      const message = problem === "source_missing"
+        ? "翻訳元が見つかりません。対応を復元するか、確認して独立した英語ページにしてください"
+        : problem === "source_updated"
+          ? "日本語の原文が更新されています。英語との対応を確認してください"
+          : problem === "target_updated"
+            ? "英語版が更新されています。公開前に内容を確認してください"
+            : "管理翻訳の言語設定を確認してください";
+      return { id: `translation-${problem}`, message, fix: "body" };
     },
     listAssets: async (pageId) => (await listDraftAssets(db(), pageId)).map(toAssetRecord),
     getPublication: async (pageId) => {

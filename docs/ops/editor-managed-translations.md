@@ -1,0 +1,19 @@
+# 確認付き英訳の運用
+
+設計は[managed translations](../architecture/editor-managed-translations.md)。Experience向け英語ページの作成を補助する機能で、生成・採用・人の確認・公開を別操作にする。既存の独立した英語ページと本人サイトの接続は維持する。
+
+## 有効化の前提
+
+親sourceと本sourceをmergeし、公式migrationとWeb配備を行う。AIは既存のAnthropic設定・JST月次予算/usageを使う。MacのCLI利用から有料APIへ自動切替しない。利用者の「APIで英語案を作る」に送信先と課金対象を示す。実際の原稿/実providerへの試験送信は、合成providerの対象検証とは分ける。
+
+一時候補をDBへ平文で複製しないため、runtime専用の暗号化keyringが必要。ownerがSecret Managerへ投入し、`deploy.env`の`EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF`へ`secret-name:固定数値版`だけを指定する。値は設定/ログ/PRに書かない。AIは鍵の作成・投入・読出を行わない。runtime IDだけにそのSecretの読取権限を付け、build/CI/migratorへ渡さない。Secret未設定/不正ならこの機能は閉じ、通常の文書編集を継続する。
+
+keyringのshapeはJSONでactive key IDとkeysの辞書。IDは短い識別子、値はbase64の32bytes。最大8 keys、最大4096bytes。内容はownerの安全な入力経路だけで管理する。AES-256-GCMはowner/proposal/purpose/expiryをAADに束縛する。候補の最長24hの保持が終わるまで旧keyを残した新しい固定版を指定し、公式再配備後に不要な古いSecret版を無効化する。`:latest`や値を含むコマンド引数は使わない。
+
+## 検証と復旧
+
+合成fixtureで他owner拒否、原文/英語の同時編集、候補生成の再送/遅着、providerの不正path/上限/失敗、画像copy中断、原文削除、確認前の公開拒否を確かめる。生成だけではページ/公開版を変えず、初回採用は非公開EN page、再翻訳は比較後の明示採用だけとする。英語の手編集や原文更新後はreviewの版を古くする。原文不明時は既存公開版を保ち、次の更新を止める。本人が現在の英語を確認して独立化できる。
+
+停止はkeyring参照を空にした公式revisionへ戻す。候補を捨てても既存原文・英語ページ・公開snapshotを消さない。復旧時は候補の期限と現在source/target revisionを照合し、版不一致を上書きで解消しない。採用/期限/owner purgeで暗号化候補の内容を消す。keyを消しても本文purgeの代替としない。
+
+画面受入はowner指示で省略。実配備SHA、migration結果、認証無し拒否、合成本人での候補/確認と公開分離のHTTP readbackは別途証跡に残す。本書の存在だけで有効化/配備済みと扱わない。

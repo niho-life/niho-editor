@@ -27,7 +27,7 @@ function fakeFetch(...responses: Array<Response | Error | ((call: Call) => Respo
 
 const tokenResponse = (expiresIn = 3600) => new Response(JSON.stringify({ access_token: TOKEN, expires_in: expiresIn, token_type: "Bearer" }), { status: 200 });
 const started = () => new Response(null, { status: 200, headers: { Location: SESSION } });
-const objectResponse = (size = "4096", contentType = "audio/mp4") => new Response(JSON.stringify({ size, contentType }), { status: 200 });
+const objectResponse = (size = "4096", contentType = "audio/mp4", generation = "7") => new Response(JSON.stringify({ size, contentType, generation }), { status: 200 });
 
 function headersOf(call: Call): Record<string, string> {
   return Object.fromEntries(Object.entries((call.init.headers ?? {}) as Record<string, string>).map(([key, value]) => [key.toLowerCase(), value]));
@@ -165,12 +165,12 @@ describe("GCS storage: checking an object", () => {
   it("GETs the object metadata with the bearer token and reads size and contentType", async () => {
     const { fetch, calls } = fakeFetch(objectResponse("2147483648", "audio/mp4"));
     const storage = createGcsStorage({ bucket: BUCKET, fetch, accessToken: async () => TOKEN });
-    expect(await storage.stat(OBJECT)).toEqual({ sizeBytes: 2_147_483_648, contentType: "audio/mp4" });
+    expect(await storage.stat(OBJECT)).toEqual({ sizeBytes: 2_147_483_648, contentType: "audio/mp4", generation: "7" });
     const call = calls[0]!;
     const url = new URL(call.url);
     expect(url.origin).toBe("https://storage.googleapis.com");
     expect(call.url.startsWith(`https://storage.googleapis.com/storage/v1/b/${BUCKET}/o/audio%2F6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11?`)).toBe(true);
-    expect(url.searchParams.get("fields")).toBe("size,contentType");
+    expect(url.searchParams.get("fields")).toBe("size,contentType,generation");
     expect(call.init.method).toBe("GET");
     expect(call.init.redirect).toBe("error");
     expect(headersOf(call)).toEqual({ authorization: `Bearer ${TOKEN}` });
@@ -179,8 +179,8 @@ describe("GCS storage: checking an object", () => {
   it("answers null for 404, and maps the other failures", async () => {
     const missing = createGcsStorage({ bucket: BUCKET, fetch: fakeFetch(new Response(null, { status: 404 })).fetch, accessToken: async () => TOKEN });
     expect(await missing.stat(OBJECT)).toBeNull();
-    const noType = createGcsStorage({ bucket: BUCKET, fetch: fakeFetch(new Response(JSON.stringify({ size: "0" }), { status: 200 })).fetch, accessToken: async () => TOKEN });
-    expect(await noType.stat(OBJECT)).toEqual({ sizeBytes: 0, contentType: null });
+    const noType = createGcsStorage({ bucket: BUCKET, fetch: fakeFetch(new Response(JSON.stringify({ size: "0", generation: "9" }), { status: 200 })).fetch, accessToken: async () => TOKEN });
+    expect(await noType.stat(OBJECT)).toEqual({ sizeBytes: 0, contentType: null, generation: "9" });
     const cases: Array<[Response | Error, "unavailable" | "rejected"]> = [
       [new Error("socket hang up"), "unavailable"],
       [new Response(null, { status: 401 }), "unavailable"],
@@ -197,6 +197,53 @@ describe("GCS storage: checking an object", () => {
       const storage = createGcsStorage({ bucket: BUCKET, fetch: fakeFetch(response).fetch, accessToken: async () => TOKEN });
       expect((await failureOf(storage.stat(OBJECT))).code).toBe(code);
     }
+  });
+});
+
+describe("GCS storage: generation-pinned copy", () => {
+  const SOURCE = "image/6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
+  const TARGET = "image/7f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d22";
+  const metadata = (path: "source" | "target" = "source") => new Response(JSON.stringify({
+    size: "3",
+    contentType: "image/png",
+    generation: path === "source" ? "17" : "18",
+    metadata: path === "target" ? { nihoSourceGeneration: "17" } : {},
+  }), { status: 200 });
+
+  it("pins the source generation and requires destination generation zero", async () => {
+    const rewritten = new Response(JSON.stringify({
+      done: true,
+      resource: { size: "3", contentType: "image/png", metadata: { nihoSourceGeneration: "17" } },
+    }), { status: 200 });
+    const { fetch, calls } = fakeFetch(metadata(), rewritten);
+    const storage = createGcsStorage({ bucket: BUCKET, fetch, accessToken: async () => TOKEN });
+    await expect(storage.copyObject!({ sourceObjectPath: SOURCE, targetObjectPath: TARGET, sourceGeneration: "17" })).resolves.toEqual({
+      sourceGeneration: "17", sizeBytes: 3, contentType: "image/png",
+    });
+    expect(calls).toHaveLength(2);
+    const rewrite = calls[1]!;
+    const url = new URL(rewrite.url);
+    expect(url.pathname).toContain(`/o/${encodeURIComponent(SOURCE)}/rewriteTo/b/${BUCKET}/o/${encodeURIComponent(TARGET)}`);
+    expect(url.searchParams.get("ifSourceGenerationMatch")).toBe("17");
+    expect(url.searchParams.get("ifGenerationMatch")).toBe("0");
+    expect(rewrite.init.redirect).toBe("error");
+    expect(JSON.parse(String(rewrite.init.body))).toEqual({ contentType: "image/png", metadata: { nihoSourceGeneration: "17" } });
+  });
+
+  it("treats a 412 as an idempotent retry only when destination metadata matches", async () => {
+    const { fetch } = fakeFetch(metadata(), new Response(null, { status: 412 }), metadata("target"));
+    const storage = createGcsStorage({ bucket: BUCKET, fetch, accessToken: async () => TOKEN });
+    await expect(storage.copyObject!({ sourceObjectPath: SOURCE, targetObjectPath: TARGET, sourceGeneration: "17" })).resolves.toMatchObject({ sourceGeneration: "17" });
+
+    const mismatch = createGcsStorage({ bucket: BUCKET, fetch: fakeFetch(metadata(), new Response(null, { status: 412 }), metadata()).fetch, accessToken: async () => TOKEN });
+    await expect(mismatch.copyObject!({ sourceObjectPath: SOURCE, targetObjectPath: TARGET, sourceGeneration: "17" })).rejects.toMatchObject({ code: "rejected" });
+  });
+
+  it("refuses a changed source generation before starting rewrite", async () => {
+    const { fetch, calls } = fakeFetch(metadata());
+    const storage = createGcsStorage({ bucket: BUCKET, fetch, accessToken: async () => TOKEN });
+    await expect(storage.copyObject!({ sourceObjectPath: SOURCE, targetObjectPath: TARGET, sourceGeneration: "16" })).rejects.toMatchObject({ code: "rejected" });
+    expect(calls).toHaveLength(1);
   });
 });
 

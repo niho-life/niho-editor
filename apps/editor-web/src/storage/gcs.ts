@@ -3,6 +3,8 @@ import {
   isByteRange,
   isObjectPath,
   type ByteRange,
+  type CopiedObject,
+  type CopyObjectInput,
   type ObjectStorage,
   type ReadObject,
   type ReadObjectOptions,
@@ -175,6 +177,29 @@ export function createGcsStorage(options: GcsStorageOptions): ObjectStorage {
     return `Bearer ${token}`;
   };
 
+  type CopyMetadata = { sizeBytes: number; contentType: string | null; generation: string; copiedFromGeneration: string | null };
+  const copyMetadata = async (objectPath: string): Promise<CopyMetadata | null> => {
+    const url = `${GCS_JSON_BASE}${bucket}/o/${encodeURIComponent(objectPath)}?fields=size%2CcontentType%2Cgeneration%2Cmetadata`;
+    const response = await send(doFetch, url, { method: "GET", headers: { Authorization: await authorization() } }, timeoutMs);
+    if (response.status === 404) {
+      await discard(response);
+      return null;
+    }
+    if (!response.ok) {
+      await discard(response);
+      throw failure(response.status);
+    }
+    const body = await readJson(response);
+    if (typeof body !== "object" || body === null) throw new StorageError("unavailable");
+    const { size, contentType, generation, metadata } = body as { size?: unknown; contentType?: unknown; generation?: unknown; metadata?: unknown };
+    const sizeBytes = typeof size === "string" && /^\d{1,16}$/.test(size) ? Number(size) : Number.NaN;
+    if (!Number.isSafeInteger(sizeBytes) || typeof generation !== "string" || !/^[1-9][0-9]{0,30}$/.test(generation)) throw new StorageError("unavailable");
+    const copied = typeof metadata === "object" && metadata !== null && !Array.isArray(metadata)
+      ? (metadata as { nihoSourceGeneration?: unknown }).nihoSourceGeneration
+      : null;
+    return { sizeBytes, contentType: typeof contentType === "string" ? contentType : null, generation, copiedFromGeneration: typeof copied === "string" ? copied : null };
+  };
+
   return {
     kind: "gcs",
     async startUpload(input: StartUploadInput): Promise<UploadTicket> {
@@ -215,7 +240,7 @@ export function createGcsStorage(options: GcsStorageOptions): ObjectStorage {
     },
     async stat(objectPath: string): Promise<StoredObject | null> {
       if (!isObjectPath(objectPath)) throw new StorageError("rejected");
-      const url = `${GCS_JSON_BASE}${bucket}/o/${encodeURIComponent(objectPath)}?fields=size%2CcontentType`;
+      const url = `${GCS_JSON_BASE}${bucket}/o/${encodeURIComponent(objectPath)}?fields=size%2CcontentType%2Cgeneration`;
       const response = await send(doFetch, url, { method: "GET", headers: { Authorization: await authorization() } }, timeoutMs);
       if (response.status === 404) {
         await discard(response);
@@ -227,10 +252,59 @@ export function createGcsStorage(options: GcsStorageOptions): ObjectStorage {
       }
       const body = await readJson(response);
       if (typeof body !== "object" || body === null) throw new StorageError("unavailable");
-      const { size, contentType } = body as { size?: unknown; contentType?: unknown };
+      const { size, contentType, generation } = body as { size?: unknown; contentType?: unknown; generation?: unknown };
       const sizeBytes = typeof size === "string" && /^\d{1,16}$/.test(size) ? Number(size) : Number.NaN;
-      if (!Number.isSafeInteger(sizeBytes)) throw new StorageError("unavailable");
-      return { sizeBytes, contentType: typeof contentType === "string" ? contentType : null };
+      if (!Number.isSafeInteger(sizeBytes) || typeof generation !== "string" || !/^[1-9][0-9]{0,30}$/.test(generation)) throw new StorageError("unavailable");
+      return { sizeBytes, contentType: typeof contentType === "string" ? contentType : null, generation };
+    },
+    async copyObject(input: CopyObjectInput): Promise<CopiedObject> {
+      if (
+        !isObjectPath(input.sourceObjectPath) || !isObjectPath(input.targetObjectPath)
+        || input.sourceObjectPath === input.targetObjectPath
+        || !/^[1-9][0-9]{0,30}$/.test(input.sourceGeneration)
+      ) throw new StorageError("rejected");
+      const source = await copyMetadata(input.sourceObjectPath);
+      if (!source) throw new StorageError("rejected");
+      const sourceGeneration = input.sourceGeneration;
+      if (source.generation !== sourceGeneration) throw new StorageError("rejected");
+      const base = `${GCS_JSON_BASE}${bucket}/o/${encodeURIComponent(input.sourceObjectPath)}/rewriteTo/b/${bucket}/o/${encodeURIComponent(input.targetObjectPath)}`;
+      let rewriteToken: string | null = null;
+      for (let round = 0; round < 100; round += 1) {
+        const query = new URLSearchParams({ ifSourceGenerationMatch: sourceGeneration, ifGenerationMatch: "0" });
+        if (rewriteToken !== null) query.set("rewriteToken", rewriteToken);
+        const response = await send(doFetch, `${base}?${query.toString()}`, {
+          method: "POST",
+          headers: { Authorization: await authorization(), "Content-Type": "application/json" },
+          body: JSON.stringify({ contentType: source.contentType, metadata: { nihoSourceGeneration: sourceGeneration } }),
+        }, timeoutMs);
+        if (response.status === 412) {
+          await discard(response);
+          const existing = await copyMetadata(input.targetObjectPath);
+          if (!existing || existing.sizeBytes !== source.sizeBytes || existing.contentType !== source.contentType || existing.copiedFromGeneration !== sourceGeneration) throw new StorageError("rejected");
+          return { sourceGeneration, sizeBytes: source.sizeBytes, contentType: source.contentType };
+        }
+        if (!response.ok) {
+          await discard(response);
+          throw failure(response.status);
+        }
+        const body = await readJson(response);
+        if (typeof body !== "object" || body === null) throw new StorageError("unavailable");
+        const result = body as { done?: unknown; rewriteToken?: unknown; resource?: unknown };
+        if (result.done === true) {
+          const resource = result.resource;
+          if (typeof resource !== "object" || resource === null) throw new StorageError("unavailable");
+          const saved = resource as { size?: unknown; contentType?: unknown; metadata?: unknown };
+          const sizeBytes = typeof saved.size === "string" && /^\d{1,16}$/.test(saved.size) ? Number(saved.size) : Number.NaN;
+          const marker = typeof saved.metadata === "object" && saved.metadata !== null
+            ? (saved.metadata as { nihoSourceGeneration?: unknown }).nihoSourceGeneration
+            : null;
+          if (sizeBytes !== source.sizeBytes || (typeof saved.contentType === "string" ? saved.contentType : null) !== source.contentType || marker !== sourceGeneration) throw new StorageError("unavailable");
+          return { sourceGeneration, sizeBytes, contentType: source.contentType };
+        }
+        if (typeof result.rewriteToken !== "string" || result.rewriteToken.length < 1 || result.rewriteToken.length > 2048 || /[\u0000-\u001f\u007f]/.test(result.rewriteToken)) throw new StorageError("unavailable");
+        rewriteToken = result.rewriteToken;
+      }
+      throw new StorageError("unavailable");
     },
     async readObject(objectPath: string, options: ReadObjectOptions = {}): Promise<ReadObject | null> {
       if (!isObjectPath(objectPath)) throw new StorageError("rejected");

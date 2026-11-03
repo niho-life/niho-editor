@@ -24,13 +24,13 @@ describe("fake object storage", () => {
     const token = tokenOf(ticket.url);
     expect(await storage.stat(PATH)).toBeNull();
     expect(storage.putFakeObject(token, new Uint8Array([1, 2, 3, 4]), null)).toBe("ok");
-    expect(await storage.stat(PATH), "the fake does not enforce the declared size").toEqual({ sizeBytes: 4, contentType: "audio/mp4" });
+    expect(await storage.stat(PATH), "the fake does not enforce the declared size").toEqual({ sizeBytes: 4, contentType: "audio/mp4", generation: "1" });
     expect(storage.putFakeObject(token, new Uint8Array([1]), null), "a ticket is used once").toBe("not_found");
 
     // 既にある場所には置かない（上書きしない）
     const again = await storage.startUpload({ objectPath: PATH, contentType: "audio/mp4", sizeBytes: 1, origin: null });
     expect(storage.putFakeObject(tokenOf(again.url), new Uint8Array([9]), "audio/mp4")).toBe("exists");
-    expect(await storage.stat(PATH)).toEqual({ sizeBytes: 4, contentType: "audio/mp4" });
+    expect(await storage.stat(PATH)).toEqual({ sizeBytes: 4, contentType: "audio/mp4", generation: "1" });
 
     // 期限切れ・知らない token・形の違う token は置けない
     const other = "audio/00000000-0000-4000-8000-000000000001";
@@ -79,5 +79,24 @@ describe("fake object storage", () => {
     expect(b.putFakeObject(tokenOf(ticket.url), new Uint8Array([1]), null)).toBe("not_found");
     expect(a.putFakeObject(tokenOf(ticket.url), new Uint8Array([1]), null)).toBe("ok");
     expect(await b.stat(PATH)).toBeNull();
+  });
+
+  it("copies a generation-pinned object once and converges a retry on the same independent path", async () => {
+    const storage = createFakeStorage();
+    const source = "image/6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
+    const target = "image/7f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d22";
+    const ticket = await storage.startUpload({ objectPath: source, contentType: "image/png", sizeBytes: 3, origin: null });
+    expect(storage.putFakeObject(tokenOf(ticket.url), new Uint8Array([4, 5, 6]), "image/png")).toBe("ok");
+    const generation = (await storage.stat(source))!.generation!;
+    expect(await storage.copyObject!({ sourceObjectPath: source, targetObjectPath: target, sourceGeneration: generation })).toEqual({
+      sourceGeneration: generation,
+      sizeBytes: 3,
+      contentType: "image/png",
+    });
+    expect(await storage.copyObject!({ sourceObjectPath: source, targetObjectPath: target, sourceGeneration: generation }), "retry reuses the same destination").toMatchObject({ sourceGeneration: generation });
+    const copied = await storage.readObject(target);
+    expect(new Uint8Array(await new Response(copied!.body).arrayBuffer())).toEqual(new Uint8Array([4, 5, 6]));
+    await expect(storage.copyObject!({ sourceObjectPath: source, targetObjectPath: target, sourceGeneration: "99" })).rejects.toMatchObject({ code: "rejected" });
+    expect(await storage.readObject(source), "the source stays independently readable").not.toBeNull();
   });
 });

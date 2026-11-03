@@ -147,6 +147,20 @@ describe("公開のシート GET", () => {
     expect(sheet.primary).toBeNull();
   });
 
+  it("managed translation の未確認revisionはシートと公開直前の両方で止め、公開版を書かない", async () => {
+    const { deps, store } = world();
+    store.setReviewProblem({ id: "translation-source_updated", message: "日本語の原文が更新されています。英語との対応を確認してください", fix: "body" });
+    const sheet = await sheetOf(await getSheet(deps, PAGE, "?handle=exp"));
+    expect(sheet.problems.map((problem) => problem.id)).toContain("translation-source_updated");
+    expect(sheet.primary).toBeNull();
+
+    const before = store.dump();
+    const response = await post(deps, to("exp"));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "not_ready", problems: [{ id: "translation-source_updated" }] });
+    expect(store.dump()).toBe(before);
+  });
+
   it("最終工程名のままの題名をシートでも再評価でも止め、公開データは書かない", async () => {
     const { deps, store } = world({ finalStepNames: ["Morning walk"] });
     const sheet = await sheetOf(await getSheet(deps, PAGE, "?handle=exp"));

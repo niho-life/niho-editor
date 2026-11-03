@@ -73,6 +73,19 @@ describe("publish", () => {
 });
 
 describe("reasons", () => {
+  it("applies an optional managed-translation review gate atomically before creating a publication", async () => {
+    const world = createWorld();
+    world.store.setReviewProblem({ id: "translation-source_updated", message: "review required", fix: "body" });
+    const before = world.store.dump();
+    expect(await world.service.publish(world.input("exp"))).toEqual({
+      ok: false,
+      reason: "not_ready",
+      problems: [{ id: "translation-source_updated", message: "review required", fix: "body" }],
+      notices: [],
+    });
+    expect(world.store.dump()).toBe(before);
+  });
+
   it.each([
     ["an unknown page", { pageId: OTHER_PAGE }],
     ["a malformed page id", { pageId: "not-a-uuid" }],

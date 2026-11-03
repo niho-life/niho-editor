@@ -82,6 +82,8 @@ export interface RedirectRecord extends Redirect {
 /** One transaction. Every method may throw; the store then rolls the whole transaction back. */
 export interface PublishTx {
   getPage(pageId: string): Promise<DraftPage | null>;
+  /** Optional product-specific review gate, evaluated under the same page lock as publishing. */
+  reviewGate?(actorId: string, pageId: string, handle: string): Promise<Problem | null>;
   /**
    * Whether `actorId` still has a live connection to the site with this handle, read inside the
    * transaction. A store that keeps connections must implement it (and lock the row on a database):
@@ -393,6 +395,8 @@ export class PublishService {
     const { mode, actorId, pageId, handle, dest, declaration } = context;
     const page = await tx.getPage(pageId);
     if (!page || page.ownerId !== actorId) return NOT_FOUND;
+    const reviewProblem = await tx.reviewGate?.(actorId, pageId, handle);
+    if (reviewProblem) return { ok: false, reason: "not_ready", problems: [reviewProblem], notices: [] };
     if (!isFaceDest(dest) && tx.connectionLive !== undefined && !(await tx.connectionLive(actorId, handle))) {
       return forbidden("connection");
     }

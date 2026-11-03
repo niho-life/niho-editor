@@ -32,6 +32,7 @@ import {
   type FactsSource,
   type KeyRecord,
   type Place,
+  type Problem,
   type PublicationRecord,
   type PublishStore,
   type RedirectRecord,
@@ -91,6 +92,7 @@ export class MemoryPublishStore implements PublishStore, ConnectionStore {
   private calls = 0;
   private failAt: number | null = null;
   private queue: Promise<unknown> = Promise.resolve();
+  private reviewProblem: Problem | null | undefined;
 
   constructor(initial?: Partial<MemoryState>) {
     this.state = { ...emptyState(), ...clone(initial ?? {}) };
@@ -111,6 +113,11 @@ export class MemoryPublishStore implements PublishStore, ConnectionStore {
 
   resetCallCount(): void {
     this.calls = 0;
+  }
+
+  /** Enables the optional managed-translation gate for a focused service test. Undefined keeps old call counts unchanged. */
+  setReviewProblem(problem: Problem | null | undefined): void {
+    this.reviewProblem = problem ? clone(problem) : problem;
   }
 
   /** Canonical JSON of everything held: compare two dumps to prove nothing changed. */
@@ -205,6 +212,12 @@ export class MemoryPublishStore implements PublishStore, ConnectionStore {
       return this.state;
     };
     return {
+      ...(this.reviewProblem === undefined ? {} : {
+        reviewGate: async () => {
+          enter();
+          return this.reviewProblem ? frozenClone(this.reviewProblem) : null;
+        },
+      }),
       getPage: async (pageId) => {
         const page = enter().pages[pageId];
         return page ? frozenClone(page) : null;

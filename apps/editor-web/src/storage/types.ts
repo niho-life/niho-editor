@@ -34,7 +34,16 @@ export type StartUploadInput = {
 };
 
 /** 保存先にある object（無ければ null）。 */
-export type StoredObject = { sizeBytes: number; contentType: string | null };
+export type StoredObject = { sizeBytes: number; contentType: string | null; /** immutable object generation, when the backend provides one */ generation?: string };
+
+export type CopyObjectInput = {
+  sourceObjectPath: string;
+  targetObjectPath: string;
+  /** 再送時は初回が固定した source generation。同じ object 名の別世代へ追随しない。 */
+  sourceGeneration: string;
+};
+
+export type CopiedObject = StoredObject & { sourceGeneration: string };
 
 /** 読み出す範囲（バイト。start も end も含む。0 ≤ start ≤ end の整数）。 */
 export type ByteRange = { start: number; end: number };
@@ -69,6 +78,8 @@ export interface ObjectStorage {
   startUpload(input: StartUploadInput): Promise<UploadTicket>;
   /** object の大きさと種類。無ければ null。 */
   stat(objectPath: string): Promise<StoredObject | null>;
+  /** source generation 固定・destination generation=0 で非上書き copy する。 */
+  copyObject?(input: CopyObjectInput): Promise<CopiedObject>;
   /**
    * object の中身を読む（画像の中継・音声の再生。無ければ null）。範囲を渡さなければ全体（今までどおり）。
    * 応答の流れをそのまま返すので、呼び出し側は返した body を読み切るか cancel する。

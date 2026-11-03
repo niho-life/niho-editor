@@ -8,6 +8,7 @@ export { PAGE_MAX_BYTES, PAGE_IMAGE_MAX_COUNT, IMAGE_MAX_BYTES, pageSizeBytes, p
 export * from "./photo-store.ts";
 export * from "./storage-usage.ts";
 export * from "./ai-usage.ts";
+export * from "./translations.ts";
 export {
   CONVERSATION_LIST_LIMIT,
   CONVERSATION_MESSAGE_LIMIT,

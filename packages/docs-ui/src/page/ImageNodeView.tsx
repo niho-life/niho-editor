@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
-import { IMAGE_ALT_MAX_CHARS, IMAGE_CREDIT_MAX_CHARS } from "./image-limits";
+import { IMAGE_ALT_MAX_CHARS, IMAGE_CAPTION_MAX_CHARS, IMAGE_CREDIT_MAX_CHARS } from "./image-limits";
 import type { ImageSrcOf, PageImages } from "./images";
 import { imageAttrsOf } from "./doc";
 
@@ -75,9 +75,10 @@ export function ImageNodeView(props: NodeViewProps) {
   }, [selected, flush]);
 
   const save = useCallback(
-    (patch: { alt?: string | null; credit?: string | null; consent?: boolean }) => {
+    (patch: { alt?: string | null; caption?: string | null; credit?: string | null; consent?: boolean }) => {
       updateAttributes(patch);
-      pending.current = { ...pending.current, ...patch };
+      const { caption: _caption, ...assetPatch } = patch;
+      pending.current = { ...pending.current, ...assetPatch };
       if (timer.current !== null) window.clearTimeout(timer.current);
       timer.current = window.setTimeout(flush, SAVE_DELAY_MS);
     },
@@ -97,9 +98,9 @@ export function ImageNodeView(props: NodeViewProps) {
     <NodeViewWrapper as="figure" data-image="" data-selected={selected ? "" : undefined}>
       {/* 保存先の src をそのまま読む（画像の最適化・外部 loader を通さない） */}
       <img src={options.srcOf?.(attrs.assetId) ?? ""} alt={attrs.alt ?? ""} data-doc-asset="" data-drag-handle="" draggable={false} />
-      {attrs.credit && !(selected && editable) ? (
+      {(attrs.caption || attrs.credit) && !(selected && editable) ? (
         <figcaption style={CAPTION_STYLE} contentEditable={false}>
-          {attrs.credit}
+          {attrs.caption}{attrs.caption && attrs.credit ? " — " : ""}{attrs.credit}
         </figcaption>
       ) : null}
       {selected && editable ? (
@@ -121,6 +122,17 @@ export function ImageNodeView(props: NodeViewProps) {
               placeholder="写真の内容を短く"
               onChange={(event) => save({ alt: event.target.value === "" ? null : event.target.value })}
               onBlur={flush}
+            />
+          </label>
+          <label style={LABEL_STYLE}>
+            キャプション
+            <input
+              type="text"
+              value={attrs.caption ?? ""}
+              maxLength={IMAGE_CAPTION_MAX_CHARS}
+              style={INPUT_STYLE}
+              placeholder="写真と一緒に表示する説明"
+              onChange={(event) => save({ caption: event.target.value === "" ? null : event.target.value })}
             />
           </label>
           <label style={LABEL_STYLE}>

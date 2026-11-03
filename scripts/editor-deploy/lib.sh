@@ -54,6 +54,15 @@ load_article_deploy_settings() {
   fi
 }
 
+# Private job snapshots use a fixed Secret version; the owner supplies the keyring separately.
+load_private_jobs_deploy_settings() {
+  EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF="${EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF:-}"
+  if [[ -n "$EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF" ]]; then
+    [[ "$EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF" =~ ^[A-Za-z0-9_-]+:[1-9][0-9]*$ ]] \
+      || die "EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF must be secret-name:numeric-version"
+  fi
+}
+
 domain_mapping_names() {
   [[ -n "$APP_DOMAIN" ]] && printf '%s\n' "$APP_DOMAIN"
   [[ -n "$PUBLIC_API_DOMAIN" ]] && printf '%s\n' "$PUBLIC_API_DOMAIN"
@@ -180,6 +189,7 @@ load_deploy_env() {
   # The OAuth client secret of the Google sign-in (#47 google). The owner adds the version with set-google-oauth-secret.sh.
   SECRET_GOOGLE_OAUTH=niho-editor-google-oauth-secret
   load_article_deploy_settings
+  load_private_jobs_deploy_settings
 }
 
 # GCLOUD replaces the binary in the dry-run checks (scripts/editor-deploy/steps-infra.test.sh); the default is gcloud.
@@ -243,6 +253,7 @@ service_secrets() {
   if [[ "${3:-0}" == 1 ]]; then secrets+=",GOOGLE_OAUTH_CLIENT_SECRET=$SECRET_GOOGLE_OAUTH:latest"; fi
   if [[ "${4:-0}" == 1 ]]; then secrets+=",GEMINI_API_KEY=$SECRET_GEMINI_KEY:latest"; fi
   if [[ -n "${EDITOR_FACE_CREDENTIALS_SECRET_REF:-}" ]]; then secrets+=",EDITOR_FACE_CREDENTIALS=$EDITOR_FACE_CREDENTIALS_SECRET_REF"; fi
+  if [[ -n "${EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF:-}" ]]; then secrets+=",EDITOR_PRIVATE_JOBS_KEY_RING=$EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF"; fi
   printf '%s' "$secrets"
 }
 

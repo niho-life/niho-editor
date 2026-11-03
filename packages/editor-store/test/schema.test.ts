@@ -131,6 +131,30 @@ describe("migration files", () => {
     assert.doesNotMatch(sql, /\bUPDATE\b|\bDELETE\s+FROM\b|\bDROP\b/i);
   });
 
+  it("adds managed translations with encrypted ephemeral payloads, owner/lang guards and copy tracking", async () => {
+    const migration = (await readMigrations()).find((file) => file.name === "20261103212655_managed_english_translations.sql");
+    assert.ok(migration);
+    const sql = withoutComments(migration.sql);
+    for (const table of ["page_translation_relations", "page_translation_proposals", "page_translation_asset_copies"]) {
+      assert.ok(tableBody(sql, table).length > 0, `missing ${table}`);
+    }
+    const proposals = tableBody(sql, "page_translation_proposals");
+    assert.match(proposals, /payload_nonce bytea/);
+    assert.match(proposals, /payload_ciphertext bytea/);
+    assert.match(proposals, /payload_tag bytea/);
+    assert.match(proposals, /relation_version integer/);
+    assert.doesNotMatch(proposals, /\b(title|lead|blocks|alt|caption|prompt|body)\s+(text|jsonb)\b/i, "private content must not have plaintext columns");
+    assert.match(proposals, /expires_at <= created_at \+ interval '24 hours'/);
+    assert.match(sql, /source_owner IS DISTINCT FROM NEW\.owner OR source_lang IS DISTINCT FROM 'ja'/);
+    assert.match(sql, /target_owner IS DISTINCT FROM NEW\.owner OR target_lang IS DISTINCT FROM 'en'/);
+    assert.match(sql, /CREATE TRIGGER assets_invalidate_translation_review\s+AFTER UPDATE OF alt, credit, consent ON assets/);
+    assert.match(sql, /CREATE TRIGGER page_translation_relations_bump_version\s+BEFORE UPDATE ON page_translation_relations/);
+    const copies = tableBody(sql, "page_translation_asset_copies");
+    assert.match(copies, /source_generation text/);
+    assert.match(copies, /UNIQUE \(proposal_id, target_asset_id\)/);
+    assert.doesNotMatch(copies, /UNIQUE \(target_asset_id\)/, "a later proposal may reuse an already-adopted independent target asset");
+  });
+
   it("does not embed records, secrets, credentials, real addresses, or token columns", async () => {
     for (const file of await readMigrations()) {
       const sql = file.sql;

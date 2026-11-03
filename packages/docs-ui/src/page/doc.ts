@@ -9,8 +9,8 @@ import type { Editor, JSONContent } from "@tiptap/core";
 /** 画像のノードの名前（限定 AST・エディタの schema で同じ）。 */
 export const IMAGE_NODE_NAME = "image";
 
-/** 画像の属性（本文に保存するのはこの 4 つだけ。URL・大きさ・外部の src は保存しない）。 */
-export type ImageAttrs = { assetId: string; alt: string | null; credit: string | null; consent: boolean };
+/** 画像の属性。caption は本文、credit は撮影者・提供元で、別々に保持する。 */
+export type ImageAttrs = { assetId: string; alt: string | null; caption: string | null; credit: string | null; consent: boolean };
 
 /** 保存されている blocks を TipTap の doc にする（空のページは空の段落 1 つ）。 */
 export function docFromBlocks(blocks: unknown[]): JSONContent {
@@ -26,10 +26,10 @@ function text(value: unknown): string | null {
 }
 
 /** 画像のノード（TipTap に入れる形。保存するときも同じ形から限定 AST の検査を通る）。 */
-export function imageNode(attrs: { assetId: string; alt?: string | null; credit?: string | null; consent?: boolean }): JSONContent {
+export function imageNode(attrs: { assetId: string; alt?: string | null; caption?: string | null; credit?: string | null; consent?: boolean }): JSONContent {
   return {
     type: IMAGE_NODE_NAME,
-    attrs: { assetId: attrs.assetId, alt: text(attrs.alt), credit: text(attrs.credit), consent: attrs.consent === true },
+    attrs: { assetId: attrs.assetId, alt: text(attrs.alt), caption: text(attrs.caption), credit: text(attrs.credit), consent: attrs.consent === true },
   };
 }
 
@@ -39,7 +39,7 @@ export function imageAttrsOf(node: unknown): ImageAttrs | null {
   const attrs = isNode(node.attrs) ? node.attrs : {};
   const assetId = typeof attrs.assetId === "string" ? attrs.assetId : null;
   if (assetId === null) return null;
-  return { assetId, alt: text(attrs.alt), credit: text(attrs.credit), consent: attrs.consent === true };
+  return { assetId, alt: text(attrs.alt), caption: text(attrs.caption), credit: text(attrs.credit), consent: attrs.consent === true };
 }
 
 /**

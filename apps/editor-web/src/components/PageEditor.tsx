@@ -36,6 +36,7 @@ import { PageConflictError, PageRequestError, type ConflictPage, type PageBody }
 import { SAVE_STATUS_TEXT, type SaveStatus } from "@/lib/save-status";
 import { isSaveShortcut } from "@/lib/shortcuts";
 import { imageAssetPath } from "@/image/image-paths";
+import { PageTranslation } from "@/components/PageTranslation";
 
 export { docFromBlocks };
 /** 右上の保存状態（`conflict` は競合の帯が出ていて、自動保存を止めている）。 */
@@ -697,8 +698,9 @@ function EditorScreen(props: ScreenProps) {
         keeperRef.current?.touch();
       }}>カバー画像を外す</button>}
       {coverError && <p role="alert">{coverError}</p>}
+      {pageId && <PageTranslation pageId={pageId} lang={lang} saveFirst={flush} />}
     </section>
-  ), [lead, cover, ready, unreadable, coverOptions, coverConsent, coverMetaBusy, coverError, page.blocks, compositionStarted, compositionEnded]);
+  ), [lead, cover, ready, unreadable, coverOptions, coverConsent, coverMetaBusy, coverError, page.blocks, pageId, lang, flush, compositionStarted, compositionEnded]);
 
   const status = statusOf(state);
   useEffect(
