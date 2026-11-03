@@ -9,6 +9,14 @@ import { listSpeakers, mergeSpeakers, renameSpeaker } from "@/recording/speakers
 import { readVtt } from "@/recording/vtt-import";
 import { RecordingTranscript } from "./RecordingTranscript";
 
+const macCompletion = vi.hoisted(() => ({ onSucceeded: null as (() => void) | null }));
+vi.mock("./MacGeminiTranscription", () => ({
+  MacGeminiTranscription: ({ onSucceeded }: { onSucceeded: () => void }) => {
+    macCompletion.onSucceeded = onSucceeded;
+    return null;
+  },
+}));
+
 const PAGE_ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
 const CONFLICT_TEXT = "別の場所で先に直されました。最新に合わせました";
 
@@ -103,6 +111,7 @@ const ORIGINAL_MEDIA_DESCRIPTORS = new Map(MEDIA_DESCRIPTOR_NAMES.map((name) => 
 
 beforeEach(() => {
   window.localStorage.clear();
+  macCompletion.onSucceeded = null;
 });
 afterEach(async () => {
   await act(async () => root?.unmount());
@@ -485,6 +494,33 @@ describe("RecordingTranscript: leaving with unsaved writing", () => {
 });
 
 describe("RecordingTranscript: speakers", () => {
+  it("Macの別案が完成しても、保存に失敗した下書きと競合通知を消さず一覧だけ更新する", async () => {
+    const server = createServer();
+    server.state.getOnly = {
+      audio: { status: "uploaded", bytes: 64, contentType: "audio/mp4", expiresAt: "2030-02-01T00:00:00.000Z" },
+      audios: [],
+      candidates: [],
+    };
+    await mount(server);
+    await until(() => paragraphs().length === 4);
+    server.external((data) => ({ ...data, speakerNames: { ...data.speakerNames, "1": "T" } }));
+    await edit(0, "まだ保存できていない私の文章");
+    expect(status().textContent).toContain("保存されていない段落が 1 つあります");
+    server.state.getOnly.candidates = [{
+      id: "11111111-1111-4111-8111-111111111111", name: "Gemini（このMacのCLI）", engine: "gemini-cli",
+      engineLabel: "Gemini（このMacのCLI）", language: "ja", durationSec: 125,
+      adopted: false, state: "ready", segmentCount: 4, preview: [],
+      createdAt: "2030-01-01T00:00:00.000Z", updatedAt: "2030-01-01T00:00:00.000Z",
+    }];
+    expect(macCompletion.onSucceeded).not.toBeNull();
+    await act(async () => macCompletion.onSucceeded!());
+    await until(() => container!.querySelector('[data-recording-candidates="1"]') !== null);
+    expect(paragraphs()[0]!.textContent).toBe("まだ保存できていない私の文章");
+    expect(status().textContent).toContain("保存されていない段落が 1 つあります");
+    expect(notice()).toContain(CONFLICT_TEXT);
+    expect(server.state.patches).toHaveLength(1);
+  });
+
   it("変更の応答には音声の列と案の一覧が入らないので、直したあとも直前のものを残す（空に戻さない）", async () => {
     const server = createServer();
     server.state.getOnly = {

@@ -217,6 +217,19 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
     });
   }, [pageId, enqueue, applyDrafts, applySnapshot]);
 
+  /** 別案の作成・完了は正本を置き換えない。入力中・保存失敗中の文章とrevisionを保持して一覧だけ読み直す。 */
+  const reloadCandidates = useCallback(() => {
+    void enqueue(async () => {
+      try {
+        const next = await getRecording(pageId);
+        const current = snapshotRef.current;
+        if (current) replaceSnapshot({ ...current, candidates: next.candidates ?? current.candidates });
+      } catch (error) {
+        setNotice(recordingErrorMessage(error, "load"));
+      }
+    });
+  }, [pageId, enqueue, replaceSnapshot]);
+
   const held = Object.values(drafts).filter((draft) => draft.held).length;
   const unsaved = typing || Object.keys(drafts).length > 0;
   // 保存されていない文章があるまま閉じようとしたら、ブラウザの確認を出す
@@ -397,7 +410,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
             applySnapshot(next);
             setNotice(null);
           }}
-          onChanged={reloadAfterTranscription}
+          onChanged={reloadCandidates}
           disabled={saving}
         />
       )}
