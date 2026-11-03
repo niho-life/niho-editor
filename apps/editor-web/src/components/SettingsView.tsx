@@ -55,6 +55,9 @@ function withoutFlags(recipe: EditorSettingsRecipe): SettingsRecipeInput {
 
 export type SettingsViewProps = { initial: SettingsDto; facts: SettingsFacts };
 
+type SampleUiState = { recipeId: string | null; file: File | null; url: string; status: string };
+type ExtractionUiState = { recipeId: string; sampleSetKey: string; extraction: GuideExtractionPreview; selectedTerms: string[] };
+
 export function SettingsView({ initial, facts }: SettingsViewProps) {
   const [settings, setSettings] = useState(initial);
   const [status, setStatus] = useState("");
@@ -62,18 +65,33 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
   const [termsDraft, setTermsDraft] = useState<EditorSettingsTermDraft[] | null>(null);
   const [aboutDraft, setAboutDraft] = useState<EditorSettingsAbout | null>(null);
   const [recipeDraft, setRecipeDraft] = useState<EditorSettingsRecipe | null>(null);
-  const [sampleFile, setSampleFile] = useState<File | null>(null);
-  const [sampleUrl, setSampleUrl] = useState("");
+  const [sampleUi, setSampleUi] = useState<SampleUiState>({ recipeId: null, file: null, url: "", status: "" });
   const [sampleBusy, setSampleBusy] = useState(false);
-  const [sampleStatus, setSampleStatus] = useState("");
-  const [extraction, setExtraction] = useState<GuideExtractionPreview | null>(null);
-  const [selectedExtractionTerms, setSelectedExtractionTerms] = useState<string[]>([]);
+  const [extractionUi, setExtractionUi] = useState<ExtractionUiState | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [usageNote, setUsageNote] = useState<string | null>(null);
   const [storageUsage, setStorageUsage] = useState<MediaStorageUsage | null>(null);
   const [storageUsageNote, setStorageUsageNote] = useState<string | null>(null);
   const recipeValidation = recipeDraft ? validateRecipeDefinition(recipeDraft, settings.recipes) : null;
-  const sampleSetKey = recipeDraft?.samples.map((sample) => sample.id).join("|") ?? "";
+  const recipeId = recipeDraft?.id ?? null;
+  const sampleSetKey = JSON.stringify(recipeDraft?.samples.map((sample) => sample.id) ?? []);
+  const activeSampleUi = sampleUi.recipeId === recipeId ? sampleUi : { recipeId, file: null, url: "", status: "" };
+  const sampleFile = activeSampleUi.file;
+  const sampleUrl = activeSampleUi.url;
+  const sampleStatus = activeSampleUi.status;
+  const extraction = extractionUi?.recipeId === recipeId && extractionUi.sampleSetKey === sampleSetKey ? extractionUi.extraction : null;
+  const selectedExtractionTerms = extractionUi?.recipeId === recipeId && extractionUi.sampleSetKey === sampleSetKey ? extractionUi.selectedTerms : [];
+
+  const resetSampleUi = (nextRecipeId: string | null) => setSampleUi({ recipeId: nextRecipeId, file: null, url: "", status: "" });
+  const updateSampleUi = (targetRecipeId: string | null, patch: Partial<Pick<SampleUiState, "file" | "url" | "status">>) => {
+    setSampleUi((current) => ({
+      recipeId: targetRecipeId,
+      file: current.recipeId === targetRecipeId ? current.file : null,
+      url: current.recipeId === targetRecipeId ? current.url : "",
+      status: current.recipeId === targetRecipeId ? current.status : "",
+      ...patch,
+    }));
+  };
 
   useEffect(() => {
     let alive = true;
@@ -93,26 +111,22 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
   }, []);
 
   useEffect(() => {
-    setExtraction(null);
-    setSelectedExtractionTerms([]);
-    if (!recipeDraft) return;
-    const currentSampleIds = new Set(recipeDraft.samples.map((sample) => sample.id));
+    if (recipeId === null) return undefined;
+    const currentSampleIds = new Set(JSON.parse(sampleSetKey) as string[]);
     let alive = true;
-    void loadGuideExtraction(recipeDraft.id).then((result) => {
+    void loadGuideExtraction(recipeId).then((result) => {
       if (!alive) return;
       if (result.ok && result.extraction && result.extraction.sampleIds.every((id) => currentSampleIds.has(id))) {
-        setExtraction(result.extraction);
-        setSelectedExtractionTerms(result.extraction.candidates.map((candidate, index) => `${candidate.term}:${index}`));
+        setExtractionUi({
+          recipeId,
+          sampleSetKey,
+          extraction: result.extraction,
+          selectedTerms: result.extraction.candidates.map((candidate, index) => `${candidate.term}:${index}`),
+        });
       }
     });
     return () => { alive = false; };
-  }, [recipeDraft?.id, sampleSetKey]);
-
-  useEffect(() => {
-    setSampleFile(null);
-    setSampleUrl("");
-    setSampleStatus("");
-  }, [recipeDraft?.id]);
+  }, [recipeId, sampleSetKey]);
 
   /** 渡した項目だけを送る。成功したら画面の値をサーバーの答えで置き換える。 */
   const apply = async (patch: SettingsPatchInput, after?: (saved: SettingsDto) => void): Promise<void> => {
@@ -165,16 +179,25 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
       recipeValidation={recipeValidation}
       onEditRecipe={(id) => {
         const recipe = recipeOf(id);
-        if (recipe) setRecipeDraft(recipeDraftOf(recipe));
+        if (recipe) {
+          resetSampleUi(id);
+          setRecipeDraft(recipeDraftOf(recipe));
+        }
       }}
       onRecipeDraft={setRecipeDraft}
-      onCancelRecipe={() => setRecipeDraft(null)}
+      onCancelRecipe={() => {
+        resetSampleUi(null);
+        setRecipeDraft(null);
+      }}
       onSaveRecipe={() => {
         if (!recipeDraft) return;
         const saved = withoutFlags(recipeDraft);
         saveRecipes(
           effective(settings).map((entry) => (entry.id === saved.id ? saved : entry)),
-          () => setRecipeDraft(null),
+          () => {
+            resetSampleUi(null);
+            setRecipeDraft(null);
+          },
         );
       }}
       onDuplicateRecipe={(id) => {
@@ -196,20 +219,33 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
         const reset: SettingsRecipeInput = { id, ...recipe.defaults, steps: recipe.defaults.steps.map((step) => ({ ...step })), terms: recipe.defaults.terms.map((term) => ({ ...term, variants: [...term.variants] })), samples: recipe.defaults.samples.map((sample) => ({ ...sample })) };
         saveRecipes(
           effective(settings).map((entry) => (entry.id === id ? reset : entry)),
-          () => setRecipeDraft((draft) => (draft?.id === id ? null : draft)),
+          () => {
+            if (recipeDraft?.id === id) {
+              resetSampleUi(null);
+              setRecipeDraft(null);
+            }
+          },
         );
       }}
       onRemoveRecipe={(id) => {
         saveRecipes(
           effective(settings).filter((entry) => entry.id !== id),
-          () => setRecipeDraft((draft) => (draft?.id === id ? null : draft)),
+          () => {
+            if (recipeDraft?.id === id) {
+              resetSampleUi(null);
+              setRecipeDraft(null);
+            }
+          },
         );
       }}
       onAddRecipe={() => {
         const added: SettingsRecipeInput = { id: newId("r"), name: uniqueFlowName("新しい手順", settings.recipes), guide: "", steps: [{ id: newId("s"), name: "まとめ", instruction: "", profile: "standard" }], terms: [], samples: [] };
         saveRecipes([...effective(settings), added], (saved) => {
           const stored = saved.recipes.find((recipe) => recipe.id === added.id);
-          if (stored) setRecipeDraft(recipeDraftOf(stored));
+          if (stored) {
+            resetSampleUi(stored.id);
+            setRecipeDraft(recipeDraftOf(stored));
+          }
         });
       }}
       newStepId={() => newId("s")}
@@ -220,19 +256,18 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
       sampleStatus={sampleStatus}
       extraction={extraction as EditorSettingsGuideExtraction | null}
       selectedExtractionTerms={selectedExtractionTerms}
-      onSampleFile={setSampleFile}
-      onSampleUrl={setSampleUrl}
+      onSampleFile={(file) => updateSampleUi(recipeId, { file })}
+      onSampleUrl={(url) => updateSampleUi(recipeId, { url })}
       onImportSampleFile={() => {
         if (!recipeDraft || !sampleFile || sampleBusy) return;
         const recipeId = recipeDraft.id;
         setSampleBusy(true);
-        setSampleStatus("お手本文書を取り込んでいます…");
+        updateSampleUi(recipeId, { status: "お手本文書を取り込んでいます…" });
         void importRecipeSample(recipeId, { file: sampleFile }).then(async (result) => {
           setSampleBusy(false);
-          if (!result.ok) { setSampleStatus(result.message); return; }
+          if (!result.ok) { updateSampleUi(recipeId, { status: result.message }); return; }
           setRecipeDraft((current) => current?.id === recipeId ? { ...current, samples: [...current.samples, result.sample] } : current);
-          setSampleFile(null);
-          setSampleStatus("お手本文書を追加しました。保存するとこの手順に反映されます。");
+          updateSampleUi(recipeId, { file: null, status: "お手本文書を追加しました。保存するとこの手順に反映されます。" });
           const refreshed = await loadSettings();
           if (refreshed.ok) setSettings(refreshed.settings);
           else setSettings((current) => ({ ...current, recipes: current.recipes.map((recipe) => recipe.id === recipeId ? { ...recipe, samples: [...recipe.samples, result.sample] } : recipe) }));
@@ -242,13 +277,12 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
         if (!recipeDraft || !sampleUrl.trim() || sampleBusy) return;
         const recipeId = recipeDraft.id;
         setSampleBusy(true);
-        setSampleStatus("URLからお手本文書を取り込んでいます…");
+        updateSampleUi(recipeId, { status: "URLからお手本文書を取り込んでいます…" });
         void importRecipeSample(recipeId, { url: sampleUrl.trim() }).then(async (result) => {
           setSampleBusy(false);
-          if (!result.ok) { setSampleStatus(result.message); return; }
+          if (!result.ok) { updateSampleUi(recipeId, { status: result.message }); return; }
           setRecipeDraft((current) => current?.id === recipeId ? { ...current, samples: [...current.samples, result.sample] } : current);
-          setSampleUrl("");
-          setSampleStatus("お手本文書を追加しました。保存するとこの手順に反映されます。");
+          updateSampleUi(recipeId, { url: "", status: "お手本文書を追加しました。保存するとこの手順に反映されます。" });
           const refreshed = await loadSettings();
           if (refreshed.ok) setSettings(refreshed.settings);
           else setSettings((current) => ({ ...current, recipes: current.recipes.map((recipe) => recipe.id === recipeId ? { ...recipe, samples: [...recipe.samples, result.sample] } : recipe) }));
@@ -258,20 +292,34 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
         if (!recipeDraft || sampleBusy) return;
         const recipeId = recipeDraft.id;
         setSampleBusy(true);
-        setSampleStatus("文書ガイドと固有名詞候補を抽出しています…");
+        const sampleSetAtStart = sampleSetKey;
+        updateSampleUi(recipeId, { status: "文書ガイドと固有名詞候補を抽出しています…" });
         void extractGuide(recipeId).then((result) => {
           setSampleBusy(false);
-          if (!result.ok) { setSampleStatus(result.message); return; }
-          setExtraction(result.extraction);
-          setSelectedExtractionTerms(result.extraction.candidates.map((candidate, index) => `${candidate.term}:${index}`));
-          setSampleStatus("抽出案を保存しました。内容を確認して反映してください。");
+          if (!result.ok) { updateSampleUi(recipeId, { status: result.message }); return; }
+          setExtractionUi({
+            recipeId,
+            sampleSetKey: sampleSetAtStart,
+            extraction: result.extraction,
+            selectedTerms: result.extraction.candidates.map((candidate, index) => `${candidate.term}:${index}`),
+          });
+          updateSampleUi(recipeId, { status: "抽出案を保存しました。内容を確認して反映してください。" });
         });
       }}
-      onToggleExtractionTerm={(key, selected) => setSelectedExtractionTerms((current) => selected ? [...new Set([...current, key])] : current.filter((entry) => entry !== key))}
+      onToggleExtractionTerm={(key, selected) => {
+        if (recipeId === null) return;
+        setExtractionUi((current) => {
+          if (!current || current.recipeId !== recipeId || current.sampleSetKey !== sampleSetKey) return current;
+          const selectedTerms = selected
+            ? [...new Set([...current.selectedTerms, key])]
+            : current.selectedTerms.filter((entry) => entry !== key);
+          return { ...current, selectedTerms };
+        });
+      }}
       onApplyExtractedGuide={() => {
         if (!recipeDraft || !extraction) return;
         setRecipeDraft({ ...recipeDraft, guide: extraction.guide });
-        setSampleStatus("文書ガイド案を下書きに反映しました。手順の保存で確定します。");
+        updateSampleUi(recipeDraft.id, { status: "文書ガイド案を下書きに反映しました。手順の保存で確定します。" });
       }}
       onApplyExtractedTerms={() => {
         if (!recipeDraft || !extraction) return;
@@ -283,7 +331,7 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
         const merged = mergeExtractedTerms(existing, selected);
         const additions = merged.terms.slice(existing.length, existing.length + Math.max(0, settings.limits.glossary - recipeDraft.terms.length));
         setRecipeDraft({ ...recipeDraft, terms: [...recipeDraft.terms, ...additions.map((term) => ({ ...term, variants: formatVariants(term.variants) }))] });
-        setSampleStatus(additions.length ? `固有名詞候補を${additions.length}件、下書きに追加しました。手順の保存で確定します。` : "選んだ候補は既存の固有名詞と重複しています。");
+        updateSampleUi(recipeDraft.id, { status: additions.length ? `固有名詞候補を${additions.length}件、下書きに追加しました。手順の保存で確定します。` : "選んだ候補は既存の固有名詞と重複しています。" });
       }}
       usage={usage}
       usageNote={usageNote}

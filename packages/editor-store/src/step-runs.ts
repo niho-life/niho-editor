@@ -461,9 +461,34 @@ export async function updateRunRecipeSnapshot(
     );
     const row = latest.rows[0];
     if (!row || row.id !== runId) return { status: "not_found" };
-    if (!parseRecipeSnapshot(row.recipe_snapshot)) throw new Error("editor-store: invalid run recipe snapshot");
+    const previousSnapshot = parseRecipeSnapshot(row.recipe_snapshot);
+    if (!previousSnapshot) throw new Error("editor-store: invalid run recipe snapshot");
     if (row.state === "queued" || row.state === "running" || row.recipe_revision !== expectedRevision) return { status: "conflict" };
     const snapshot = snapshotFromRecipe(recipe);
+    const attempts = await client.query<{ step_id: string; step_index: number }>(
+      "SELECT step_id, step_index FROM step_attempts WHERE run_id=$1 ORDER BY step_index FOR UPDATE",
+      [runId],
+    );
+    const currentStepIds = new Set(attempts.rows.map((attempt) => attempt.step_id));
+    if (attempts.rows.length !== snapshot.steps.length || snapshot.steps.some((step) => !currentStepIds.has(step.id))) {
+      // Reordering and editing a step preserve its artifact identity. Adding or removing a step
+      // needs a new run because this completed run has no matching attempt row for that design.
+      return { status: "conflict" };
+    }
+    if (previousSnapshot.steps.length !== snapshot.steps.length) return { status: "conflict" };
+    // Move indices out of the active range first so unique (run_id, step_index) remains valid
+    // while two or more step IDs exchange positions.
+    const offset = attempts.rows.length;
+    if (offset > 0) {
+      await client.query("UPDATE step_attempts SET step_index=step_index+$2 WHERE run_id=$1", [runId, offset]);
+      for (const [index, step] of snapshot.steps.entries()) {
+        const remapped = await client.query(
+          "UPDATE step_attempts SET step_index=$3 WHERE run_id=$1 AND step_id=$2",
+          [runId, step.id, index],
+        );
+        if (remapped.rowCount !== 1) throw new Error("editor-store: recipe snapshot step remap was incomplete");
+      }
+    }
     await client.query("UPDATE step_runs SET recipe_snapshot=$2::jsonb, recipe_revision=$3, updated_at=GREATEST(clock_timestamp(), updated_at) WHERE id=$1", [runId, JSON.stringify(snapshot), current.rows[0].revision]);
     return { status: "updated", run: await requireRunView(client, owner, runId) };
   });

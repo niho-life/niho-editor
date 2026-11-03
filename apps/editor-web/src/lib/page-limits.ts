@@ -3,6 +3,9 @@ export const MAX_TITLE_CHARS = 500;
 /** 公開用リードの上限（ページの内容として保存する）。 */
 export const MAX_LEAD_CHARS = 160;
 
+/** Request envelope limit that leaves room for the canonical 30 MiB page payload. */
+export const PAGE_BODY_MAX_BYTES = 30 * 1024 * 1024 + 16 * 1024;
+
 /** 一覧を 1 回に読む件数（サイドバーの最初の表示と、末尾に近づいたときの続き）。 */
 export const PAGE_CHUNK = 100;
 

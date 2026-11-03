@@ -18,7 +18,7 @@ const PACKAGES = new Map([
 ]);
 const EXPECTED_PEERS = new Map([
   ["@niho/docs-core", []],
-  ["niho-docs-ui", ["@niho/docs-core", "@tiptap/core", "@tiptap/extension-bubble-menu", "@tiptap/extension-floating-menu", "@tiptap/extension-list", "@tiptap/pm", "@tiptap/react", "@tiptap/starter-kit", "@tiptap/suggestion", "lucide-react", "markdown-it", "niho-docs-sdk-ui", "prosemirror-markdown", "prosemirror-search", "react", "react-dom"]],
+  ["niho-docs-ui", ["@niho/docs-core", "@tiptap/core", "@tiptap/extension-bubble-menu", "@tiptap/extension-floating-menu", "@tiptap/extension-list", "@tiptap/extension-table", "@tiptap/pm", "@tiptap/react", "@tiptap/starter-kit", "@tiptap/suggestion", "lucide-react", "markdown-it", "niho-docs-sdk-ui", "prosemirror-markdown", "prosemirror-search", "react", "react-dom"]],
   ["niho-docs-sdk-ui", ["@radix-ui/react-dialog", "@radix-ui/react-popover", "clsx", "lucide-react", "react", "react-dom", "tailwind-merge"]],
 ]);
 const OWNED_PATHS = [

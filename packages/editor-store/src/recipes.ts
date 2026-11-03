@@ -365,7 +365,18 @@ export async function putRecipes(db: Database, owner: OwnerId, recipes: readonly
     // 同じ人の入れ替えを 1 本ずつにする。ロック無しだと、重なった 2 本が互いの追加を見ないまま DELETE を済ませ、
     // どちらの一覧とも違う「2 本の和」が残る（後から来た保存が前の保存を置き換える、にならない）
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`recipes:${owner}`]);
-    await client.query("DELETE FROM recipes WHERE owner = $1 AND NOT (id = ANY($2::text[]))", [owner, recipes.map((recipe) => recipe.id)]);
+    const params = insertParams(owner, recipes);
+    // A preview belongs to the exact recipe sample set that was reviewed. Adding or changing samples
+    // invalidates it too, even when every sample it referenced is still present.
+    await client.query(
+      `DELETE FROM recipe_sample_extractions AS extraction
+        USING recipes AS current
+        JOIN unnest($2::text[], $3::jsonb[]) AS incoming(id, samples) ON incoming.id = current.id
+       WHERE extraction.owner = $1 AND extraction.recipe_id = current.id
+         AND current.owner = $1 AND current.samples IS DISTINCT FROM incoming.samples`,
+      [owner, params[1], params[6]],
+    );
+    await client.query("DELETE FROM recipes WHERE owner = $1 AND NOT (id = ANY($2::text[]))", [owner, params[1]]);
     const result = await client.query<RecipeRow>(
       `${INSERT}
        ON CONFLICT (owner, id) DO UPDATE
@@ -391,7 +402,7 @@ export async function putRecipes(db: Database, owner: OwnerId, recipes: readonly
               ),
               updated_at = clock_timestamp()
        RETURNING ${COLUMNS}`,
-      insertParams(owner, recipes),
+      params,
     );
     // Sample bytes and extraction previews live outside the recipe JSON. Removing a sample from settings
     // removes its body in this same transaction and invalidates previews that referenced it.

@@ -1,5 +1,4 @@
 import { useId } from "react";
-import { duplicateStep, moveStep } from "@niho/docs-core";
 import { Icon } from "./icons";
 import { ShellField, ShellKv, ShellKvs, ShellPills, ShellSection, ShellSettingsPage } from "./settings-parts";
 
@@ -22,6 +21,29 @@ export const EDITOR_SETTINGS_NAV = [
 ];
 
 export type EditorSettingsAiLang = "same" | "ja" | "en";
+
+function uniqueStepName(base: string, steps: readonly Pick<EditorSettingsStep, "name">[]): string {
+  const key = (name: string) => name.normalize("NFKC").trim();
+  const used = new Set(steps.map((step) => key(step.name)));
+  if (!used.has(key(base))) return base;
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${base} ${suffix}`;
+    if (!used.has(key(candidate))) return candidate;
+  }
+}
+
+function duplicateStep(step: EditorSettingsStep, id: string, steps: readonly EditorSettingsStep[]): EditorSettingsStep {
+  return { ...step, id, name: uniqueStepName(`${step.name.trim()}のコピー`, steps) };
+}
+
+function moveStep(steps: readonly EditorSettingsStep[], from: number, to: number): EditorSettingsStep[] {
+  const next = [...steps];
+  if (from < 0 || from >= next.length) return next;
+  const [moved] = next.splice(from, 1);
+  if (!moved) return next;
+  next.splice(Math.max(0, Math.min(to, next.length)), 0, moved);
+  return next;
+}
 
 /** 文字起こしの方式。`fake` は開発・CI の偽物、`off` は使わない設定。 */
 export type EditorSettingsEngine = "deepgram" | "fake" | "gemini" | "off";

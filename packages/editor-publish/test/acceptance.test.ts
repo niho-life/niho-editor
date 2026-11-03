@@ -48,7 +48,13 @@ async function sheet(world: World, dest: DestName): Promise<ReturnType<typeof sh
     selection: { handle: handleOf(dest), ...settings, slug: null },
     publication: null,
     draftFingerprint: await draftFingerprint(page, ASSETS),
-    facts: collectFacts(page, ASSETS, await world.facts.read({ actorId: ACTOR, pageId: PAGE_ID }), { category: settings.category, related: settings.related }),
+    facts: collectFacts(page, ASSETS, await world.facts.read({
+      actorId: ACTOR,
+      pageId: PAGE_ID,
+      dest: TARGETS[dest].dest,
+      handle: handleOf(dest),
+      related: settings.related,
+    }), { category: settings.category, related: settings.related }),
   };
   return sheetPlan(input);
 }

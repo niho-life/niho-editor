@@ -80,6 +80,8 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "ai_message_changes",
       "ai_usage_device",
       "recipes",
+      "recipe_sample_bodies",
+      "recipe_sample_extractions",
       "page_fields",
       "page_opens",
       // P02: 本人所有の写真、容量予約、補正・版・mediaと物理削除の台帳

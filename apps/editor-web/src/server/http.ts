@@ -1,14 +1,14 @@
 /** API の応答と要求の読み取り。エラーの本文は固定の短い code だけにする（内部の情報・SQL・stack を出さない）。 */
 
 import { AuthTemporarilyUnavailable } from "../auth/types";
-import { PAGE_MAX_BYTES } from "@niho/editor-store";
+import { PAGE_BODY_MAX_BYTES } from "../lib/page-limits";
 
 export const ROBOTS_HEADER_VALUE = "noindex, nofollow";
 
 /** 小さな JSON API の既定。ページ保存は用途専用の上限を渡す。 */
 export const MAX_BODY_BYTES = 1024 * 1024;
 /** 30 MiB の blocks と題名・JSON envelope を収める。 */
-export const PAGE_BODY_MAX_BYTES = PAGE_MAX_BYTES + 16 * 1024;
+export { PAGE_BODY_MAX_BYTES };
 
 const BASE_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   "Cache-Control": "private, no-store",
