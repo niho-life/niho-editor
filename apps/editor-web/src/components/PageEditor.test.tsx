@@ -217,6 +217,35 @@ describe("niho-docs-ui on React 19", () => {
 });
 
 describe("PageEditor autosave", () => {
+  it("右サイドバーのリードも日本語変換中は保存せず、確定後の値だけを下書きとサーバーへ保存する", async () => {
+    const { bodies } = acceptingFetch();
+    const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
+    await renderEditor({ revision: 5 }, { drafts, settings: true });
+    const input = container!.querySelector<HTMLTextAreaElement>("[data-page-lead]")!;
+    const type = (value: string) => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    await act(async () => {
+      input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      type("へんかんちゅう");
+    });
+    await advance(1500);
+    await settleIdb();
+    expect(bodies).toEqual([]);
+    expect(await drafts.get(PAGE_ID)).toBeNull();
+
+    await act(async () => {
+      type("確定したリード");
+      input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    });
+    await advance(0);
+    await settleIdb();
+    expect(await drafts.get(PAGE_ID)).toMatchObject({ lead: "確定したリード", baseRevision: 5 });
+    await waitForAutosave();
+    expect(bodies).toEqual([{ lead: "確定したリード", baseRevision: 5 }]);
+  });
+
   it("通常の編集には公開情報の欄を出さず、題名を変えても既存のリードを消さない", async () => {
     const { bodies } = acceptingFetch();
     await renderEditor({ revision: 5, lead: "保存済みの要約" });

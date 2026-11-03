@@ -601,9 +601,18 @@ function EditorScreen(props: ScreenProps) {
     [textListeners],
   );
 
+  // 本文と右のページ設定は別の DOM ツリーなので、それぞれで IME の状態を同じ保存処理へ伝える。
+  const compositionStarted = useCallback(() => {
+    composingRef.current = true;
+  }, []);
+  const compositionEnded = useCallback(() => {
+    composingRef.current = false;
+    keeperRef.current?.compositionEnded();
+  }, []);
+
   // 保存と下書きの持ち主はエディタのまま、入力欄だけを右のページ設定へ渡す。
   const publicationFields = useMemo(() => (
-    <section aria-label="公開情報（任意）" style={{ display: "grid", gap: 10, minWidth: 0 }}>
+    <section aria-label="公開情報（任意）" style={{ display: "grid", gap: 10, minWidth: 0 }} onCompositionStart={compositionStarted} onCompositionEnd={compositionEnded}>
       <h3>公開情報（任意）</h3>
       <p>リードとカバー画像は、未設定でも公開できます。</p>
       <label style={{ display: "grid", gap: 5 }}>
@@ -689,7 +698,7 @@ function EditorScreen(props: ScreenProps) {
       }}>カバー画像を外す</button>}
       {coverError && <p role="alert">{coverError}</p>}
     </section>
-  ), [lead, cover, ready, unreadable, coverOptions, coverConsent, coverMetaBusy, coverError, page.blocks]);
+  ), [lead, cover, ready, unreadable, coverOptions, coverConsent, coverMetaBusy, coverError, page.blocks, compositionStarted, compositionEnded]);
 
   const status = statusOf(state);
   useEffect(
@@ -744,13 +753,8 @@ function EditorScreen(props: ScreenProps) {
       ref={setRoot}
       data-docs-app-root=""
       data-docs-shared-ui=""
-      onCompositionStart={() => {
-        composingRef.current = true;
-      }}
-      onCompositionEnd={() => {
-        composingRef.current = false;
-        keeperRef.current?.compositionEnded();
-      }}
+      onCompositionStart={compositionStarted}
+      onCompositionEnd={compositionEnded}
     >
       {/* 見える文字だけ。読み上げはヘッダーの状態の丸（aria-live）が持つので、ここは live region にしない（二重に読み上げない） */}
       <p data-save-state={status} data-drafts={hasStorage && draftsKept ? "kept" : "none"}>
