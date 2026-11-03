@@ -87,6 +87,11 @@ describe("evaluateReadiness: NIHO Experience", () => {
     expect(ids(evaluate(EXP, {}, { facts: { relatedLive } }))).toEqual(["related-live"]);
   });
 
+  it("rejects a category disabled after a cached declaration was fetched", () => {
+    expect(ids(evaluate(EXP, {}, { facts: { relatedLive: true, categoryCurrent: false } }))).toEqual(["category-current"]);
+    expect(evaluate(EXP, {}, { facts: { relatedLive: true, categoryCurrent: true } }).ready).toBe(true);
+  });
+
   it("refuses blocks and marks outside accepts (quote, divider, strike, code)", () => {
     const result = evaluate(EXP, {
       content: bodyWith(

@@ -13,6 +13,47 @@ is_dns_name() {
   [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]
 }
 
+is_https_origin() {
+  [[ "$1" =~ ^https://[a-z0-9-]+(\.[a-z0-9-]+)+$ ]]
+}
+
+is_https_audience() {
+  [[ "$1" =~ ^https://[a-z0-9-]+(\.[a-z0-9-]+)+(/[A-Za-z0-9._~%:/-]*)?$ ]]
+}
+
+load_article_deploy_settings() {
+  EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED="${EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED:-false}"
+  EDITOR_ARTICLE_AUTHORITY_API_ENABLED="${EDITOR_ARTICLE_AUTHORITY_API_ENABLED:-false}"
+  EDITOR_FACE_CREDENTIALS_SECRET_REF="${EDITOR_FACE_CREDENTIALS_SECRET_REF:-}"
+  local flag
+  for flag in EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED EDITOR_ARTICLE_AUTHORITY_API_ENABLED; do
+    [[ "${!flag}" == true || "${!flag}" == false ]] || die "$flag must be true or false"
+  done
+  if [[ -n "$EDITOR_FACE_CREDENTIALS_SECRET_REF" ]]; then
+    [[ "$EDITOR_FACE_CREDENTIALS_SECRET_REF" =~ ^[A-Za-z0-9_-]+:[1-9][0-9]*$ ]] \
+      || die "EDITOR_FACE_CREDENTIALS_SECRET_REF must be secret-name:numeric-version"
+  fi
+  if [[ "$EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED" == true || "$EDITOR_ARTICLE_AUTHORITY_API_ENABLED" == true ]]; then
+    [[ "$EDITOR_AUTH_MODE" == niho ]] || die "article authority requires EDITOR_AUTH_MODE=niho"
+    # The caller allowlist may contain commas. Every setting below rejects the gcloud delimiter itself.
+    ENV_SEP="|"
+    ENV_PREFIX="^|^"
+  fi
+  if [[ "$EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED" == true ]]; then
+    is_https_origin "${EDITOR_EXPERIENCE_ORIGIN:-}" || die "EDITOR_EXPERIENCE_ORIGIN must be an exact HTTPS origin"
+    is_https_audience "${EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_AUDIENCE:-}" || die "EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_AUDIENCE must be a fixed HTTPS audience"
+    [[ -n "$EDITOR_FACE_CREDENTIALS_SECRET_REF" ]] || die "Experience publishing requires EDITOR_FACE_CREDENTIALS_SECRET_REF"
+    EDITOR_ASSET_ORIGIN="${EDITOR_ASSET_ORIGIN:-$(app_origin)}"
+    is_https_origin "$EDITOR_ASSET_ORIGIN" || die "EDITOR_ASSET_ORIGIN must be an exact HTTPS origin"
+  fi
+  if [[ "$EDITOR_ARTICLE_AUTHORITY_API_ENABLED" == true ]]; then
+    is_https_audience "${EDITOR_ARTICLE_AUTHORITY_AUDIENCE:-}" || die "EDITOR_ARTICLE_AUTHORITY_AUDIENCE must be a fixed HTTPS audience"
+    local account='[a-z0-9][a-z0-9-]*@[a-z0-9][a-z0-9-]*\.iam\.gserviceaccount\.com'
+    [[ "${EDITOR_ARTICLE_AUTHORITY_SERVICE_ACCOUNT_EMAILS:-}" =~ ^${account}(,${account})*$ ]] \
+      || die "EDITOR_ARTICLE_AUTHORITY_SERVICE_ACCOUNT_EMAILS must list service accounts without spaces"
+  fi
+}
+
 domain_mapping_names() {
   [[ -n "$APP_DOMAIN" ]] && printf '%s\n' "$APP_DOMAIN"
   [[ -n "$PUBLIC_API_DOMAIN" ]] && printf '%s\n' "$PUBLIC_API_DOMAIN"
@@ -138,6 +179,7 @@ load_deploy_env() {
   SECRET_GEMINI_KEY=niho-editor-gemini-key
   # The OAuth client secret of the Google sign-in (#47 google). The owner adds the version with set-google-oauth-secret.sh.
   SECRET_GOOGLE_OAUTH=niho-editor-google-oauth-secret
+  load_article_deploy_settings
 }
 
 # GCLOUD replaces the binary in the dry-run checks (scripts/editor-deploy/steps-infra.test.sh); the default is gcloud.
@@ -195,6 +237,7 @@ service_secrets() {
   if [[ "${2:-0}" == 1 ]]; then secrets+=",DEEPGRAM_API_KEY=$SECRET_DEEPGRAM_KEY:latest"; fi
   if [[ "${3:-0}" == 1 ]]; then secrets+=",GOOGLE_OAUTH_CLIENT_SECRET=$SECRET_GOOGLE_OAUTH:latest"; fi
   if [[ "${4:-0}" == 1 ]]; then secrets+=",GEMINI_API_KEY=$SECRET_GEMINI_KEY:latest"; fi
+  if [[ -n "${EDITOR_FACE_CREDENTIALS_SECRET_REF:-}" ]]; then secrets+=",EDITOR_FACE_CREDENTIALS=$EDITOR_FACE_CREDENTIALS_SECRET_REF"; fi
   printf '%s' "$secrets"
 }
 
@@ -225,6 +268,14 @@ service_env_vars() {
   # Gemini (#36 段 3b-4). $3 is the Gemini switch: the key is a secret, so the only env is the model, and only when
   # deploy.env sets GEMINI_MODEL (empty means the app's default). The default engine above does not change.
   if [[ "${3:-0}" == 1 && -n "$GEMINI_MODEL" ]]; then printf '%sEDITOR_GEMINI_MODEL=%s' "$ENV_SEP" "$GEMINI_MODEL"; fi
+  if [[ "${EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED:-false}" == true ]]; then
+    printf '%sEDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED=true%sEDITOR_EXPERIENCE_ORIGIN=%s%sEDITOR_EXPERIENCE_ARTICLE_AUTHORITY_AUDIENCE=%s%sEDITOR_ASSET_ORIGIN=%s%sEDITOR_DESTINATION_DECLARATIONS={"exp":"%s/api/public/guides/publication-requirements"}' \
+      "$ENV_SEP" "$ENV_SEP" "$EDITOR_EXPERIENCE_ORIGIN" "$ENV_SEP" "$EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_AUDIENCE" "$ENV_SEP" "$EDITOR_ASSET_ORIGIN" "$ENV_SEP" "$EDITOR_EXPERIENCE_ORIGIN"
+  fi
+  if [[ "${EDITOR_ARTICLE_AUTHORITY_API_ENABLED:-false}" == true ]]; then
+    printf '%sEDITOR_ARTICLE_AUTHORITY_API_ENABLED=true%sEDITOR_ARTICLE_AUTHORITY_AUDIENCE=%s%sEDITOR_ARTICLE_AUTHORITY_SERVICE_ACCOUNT_EMAILS=%s' \
+      "$ENV_SEP" "$ENV_SEP" "$EDITOR_ARTICLE_AUTHORITY_AUDIENCE" "$ENV_SEP" "$EDITOR_ARTICLE_AUTHORITY_SERVICE_ACCOUNT_EMAILS"
+  fi
 }
 
 # Steps (#37): the worker route is a path of the same service; its run.app URL is also the OIDC audience.

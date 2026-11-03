@@ -13,6 +13,9 @@ import type { AssetRecord, DraftPage, Notice, Problem } from "./types.js";
 /** Facts only the server knows. `null` means unknown, which never satisfies a condition. */
 export interface ServerFacts {
   readonly relatedLive: boolean | null;
+  /** When present, whether the selected category is active at this destination now. */
+  readonly categoryCurrent?: boolean | null;
+  readonly categoryDisplay?: import("@niho/editor-publish-contract").CategoryDisplay;
   /** Names this page was generated with as the final step across its run history. */
   readonly finalStepNames?: readonly string[];
 }
@@ -32,6 +35,7 @@ export interface ReadinessFacts {
   readonly cover: CoverFact;
   readonly category: string | null;
   readonly categoryValid: boolean;
+  readonly categoryCurrent?: boolean | null;
   readonly related: readonly string[];
   readonly relatedValid: boolean;
   readonly relatedLive: boolean | null;
@@ -67,6 +71,7 @@ export const BUILTIN_PROBLEMS = {
   coverUnusable: { id: "cover-unusable", message: "公開できない形式のカバー写真です", fix: "cover" },
   coverConsent: { id: "cover-consent", message: "カバー写真に掲載許諾がありません", fix: "cover" },
   category: { id: "category-format", message: "カテゴリの形が正しくありません", fix: "category" },
+  categoryCurrent: { id: "category-current", message: "現在使えるカテゴリを選んでください", fix: "category" },
   related: { id: "related-format", message: "関連する体験の指定が正しくありません", fix: "related" },
 } as const satisfies Record<string, Problem>;
 
@@ -190,6 +195,7 @@ export function collectFacts(
     cover,
     category,
     categoryValid,
+    ...(serverFacts.categoryCurrent === undefined ? {} : { categoryCurrent: serverFacts.categoryCurrent === true || serverFacts.categoryCurrent === false ? serverFacts.categoryCurrent : null }),
     related,
     relatedValid,
     relatedLive: serverFacts.relatedLive === true || serverFacts.relatedLive === false ? serverFacts.relatedLive : null,
@@ -251,6 +257,7 @@ export function evaluateReadiness(declaration: DestinationDeclaration, facts: Re
     else if (facts.cover === "no-consent") problems.push(BUILTIN_PROBLEMS.coverConsent);
   }
   if (!facts.categoryValid) problems.push(BUILTIN_PROBLEMS.category);
+  if (facts.categoryCurrent !== undefined && facts.categoryCurrent !== true) problems.push(BUILTIN_PROBLEMS.categoryCurrent);
   if (!facts.relatedValid) problems.push(BUILTIN_PROBLEMS.related);
   for (const condition of declaration.requires) {
     if (!conditionMet(condition, facts)) problems.push({ id: condition.id, message: condition.message, fix: condition.fix });

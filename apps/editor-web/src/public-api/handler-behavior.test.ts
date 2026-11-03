@@ -143,6 +143,39 @@ describe("stored snapshots", () => {
     // range は公開の行のいまの値（公開版の中の値ではない）
     expect(body.range).toBe("live");
   });
+
+  it("projects category display metadata through list, document and preview without leaking stored fields", async () => {
+    const categoryDisplay = { labelEn: "Walks", labelJa: "散策", displayOrder: 4, revision: 7 };
+    const world: ReferenceWorld = {
+      ...fixture.world,
+      publications: fixture.world.publications.map((item) => item.pageId !== fixture.ids.expLive ? item : {
+        ...item,
+        snapshot: { ...item.snapshot, category: "walks", categoryDisplay },
+      }),
+    };
+    const source = worldSource(world);
+    const basePreview = source.previewDraft.bind(source);
+    const server = createPublicApi({
+      source: {
+        ...source,
+        previewDraft: async (binding) => {
+          const draft = await basePreview(binding);
+          return draft ? { ...draft, content: { ...draft.content, category: "walks", categoryDisplay } } : null;
+        },
+      },
+      faces: worldFaces(world),
+      clock: { now: () => world.now },
+    });
+
+    const list = await server.handle(get(listPath("exp"), fixture.keys.exp));
+    const document = await server.handle(get(docPath("exp", fixture.ids.expLive), fixture.keys.exp));
+    const preview = await server.handle(get(previewPath(fixture.keys.previewExp), fixture.keys.exp));
+    expect(list.status).toBe(200);
+    expect((JSON.parse(list.body ?? "null") as { items: { id: string; categoryDisplay?: unknown }[] }).items
+      .find((item) => item.id === fixture.ids.expLive)?.categoryDisplay).toEqual(categoryDisplay);
+    expect(JSON.parse(document.body ?? "null")).toMatchObject({ category: "walks", categoryDisplay });
+    expect(JSON.parse(preview.body ?? "null")).toMatchObject({ category: "walks", categoryDisplay });
+  });
 });
 
 describe("cursor", () => {

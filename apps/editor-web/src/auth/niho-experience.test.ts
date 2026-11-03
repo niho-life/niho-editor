@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { NIHO_SESSION_COOKIE } from "./niho";
-import { AuthTemporarilyUnavailable } from "./types";
+import { AuthTemporarilyUnavailable, type Session, type SessionRequest } from "./types";
 import {
   createNihoExperienceAuthProvider,
   EXPERIENCE_EDITOR_FIREBASE_REFRESH_COOKIE,
@@ -131,14 +131,20 @@ describe("NIHO Experience editor auth", () => {
     expect(JSON.stringify(response.headers)).not.toContain(ID_TOKEN);
   });
 
-  it("validates the NIHO session for each request and never exposes its editor token through apiToken", async () => {
+  it("revalidates the same NIHO session before using its server-only token for the fixed account purposes", async () => {
     const auth = provider(async (input) => {
       expect(String(input)).toBe(`${NIHO}/api/auth/experience-editor-connect/session`);
       return json(sessionResponse());
     });
-    const session = await auth.getSession({ headers: new Headers({ cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}` }) });
+    const request = { headers: new Headers({ cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}` }) };
+    const session = await auth.getSession(request);
     expect(session).toEqual({ userId: USER_ID, mode: "niho", sessionId: CONNECTION_ID, expiresAt: CONNECTION_EXPIRY });
     expect(await auth.apiToken?.(session!)).toBeNull();
+    expect(await auth.articleApiToken?.(session!, request, "roles")).toBe(ID_TOKEN);
+    expect(await auth.articleApiToken?.(session!, request, "article-links")).toBe(ID_TOKEN);
+    expect(await auth.articleApiToken?.({ ...session!, sessionId: "other-session" }, request, "roles")).toBeNull();
+    expect(await auth.articleApiToken?.(session!, { headers: new Headers({ cookie: `${NIHO_SESSION_COOKIE}=${"P".repeat(100)}` }) }, "roles")).toBeNull();
+    expect(await (auth.articleApiToken as unknown as (session: Session, request: SessionRequest, purpose: string) => Promise<string | null>)(session!, request, "photo")).toBeNull();
   });
 
   it("does not authorize Editor with the legacy Photo cookie or a browser bearer token", async () => {

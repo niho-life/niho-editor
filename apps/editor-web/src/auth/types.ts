@@ -32,6 +32,8 @@ export interface AuthProvider {
    * editor-scoped tokenを受け付けるAPI契約が個別に確定するまでnullのままにする。
    */
   apiToken?(session: Session): Promise<string | null>;
+  /** NIHOの記事連携API専用token。現在のrequestとsessionを再照合し、固定用途だけに使う。 */
+  articleApiToken?(session: Session, request: SessionRequest, purpose: "roles" | "article-links"): Promise<string | null>;
 }
 
 /** 上流NIHOが一時的に確認不能。未認証(null)へ降格させず、API routeは503として再試行可能にし、SSRではエラー境界へ伝える。 */

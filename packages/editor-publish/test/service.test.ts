@@ -69,7 +69,7 @@ describe("publish", () => {
   it("passes the related experiences to the facts source", async () => {
     const world = createWorld();
     ok(await world.service.publish(world.input("exp")));
-    expect(world.facts.queries).toEqual([{ actorId: ACTOR, pageId: PAGE_ID, dest: "exp", handle: "exp", related: ["coastal-tea-ceremony"] }]);
+    expect(world.facts.queries).toEqual([{ actorId: ACTOR, pageId: PAGE_ID, dest: "exp", handle: "exp", category: "walks", related: ["coastal-tea-ceremony"] }]);
   });
 });
 

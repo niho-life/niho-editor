@@ -10,6 +10,8 @@ describe("safeReturnTo", () => {
       expect(safeReturnTo(path), path).toBe(path);
     }
     expect(safeReturnTo("/p/new?from=recording")).toBe("/p/new?from=recording");
+    expect(safeReturnTo("/p/new?destination=exp&lang=en&experience=morning-walk")).toBe("/p/new?destination=exp&lang=en&experience=morning-walk");
+    expect(safeReturnTo("/p/new?lang=en&destination=exp")).toBe("/p/new?destination=exp&lang=en");
   });
 
   it("drops the query and the hash, except the recording start", () => {
@@ -17,6 +19,9 @@ describe("safeReturnTo", () => {
     expect(safeReturnTo("/settings?tab=ai")).toBe("/settings");
     expect(safeReturnTo("/p/new?from=recording&x=1")).toBe("/p/new");
     expect(safeReturnTo("/p/new?from=file")).toBe("/p/new");
+    expect(safeReturnTo("/p/new?destination=exp&lang=ja&experience=morning-walk")).toBe("/p/new");
+    expect(safeReturnTo("/p/new?destination=exp&lang=en&experience=../private")).toBe("/p/new");
+    expect(safeReturnTo("/p/new?destination=exp&lang=en&nihoUserId=secret")).toBe("/p/new");
     expect(safeReturnTo("/p/new?from=recording#x")).toBe("/p/new?from=recording");
   });
 

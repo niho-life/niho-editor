@@ -242,5 +242,37 @@ for bad in 'client,EDITOR_AUTH_MODE=stub' 'client id' 'client|x' 'client=x'; do
     "$(refused_lines 'EDITOR_AUTH_MODE=google' "GOOGLE_OAUTH_CLIENT_ID=$bad" "GOOGLE_ALLOWED_EMAILS=$google_list")" 1
 done
 
+# Article publishing must survive the deploy script's replacement of all environment variables.
+cp "$tmp/niho.env" "$tmp/article.env"
+cat >> "$tmp/article.env" <<'EOF'
+EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED=true
+EDITOR_EXPERIENCE_ORIGIN=https://experience.example.invalid
+EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_AUDIENCE=https://experience-runtime.example.invalid
+EDITOR_ARTICLE_AUTHORITY_API_ENABLED=true
+EDITOR_ARTICLE_AUTHORITY_AUDIENCE=https://editor-runtime.example.invalid
+EDITOR_ARTICLE_AUTHORITY_SERVICE_ACCOUNT_EMAILS=experience@sample-project.iam.gserviceaccount.com,niho@sample-project.iam.gserviceaccount.com
+EDITOR_FACE_CREDENTIALS_SECRET_REF=sample-editor-face-verifiers:4
+EDITOR_ASSET_ORIGIN=https://editor.example.com
+EOF
+article_env="$(DEPLOY_ENV="$tmp/article.env" load_deploy_env; service_env_vars 0 0 0)"
+case "$article_env" in '^|^'*'|EDITOR_ARTICLE_AUTHORITY_SERVICE_ACCOUNT_EMAILS=experience@sample-project.iam.gserviceaccount.com,niho@sample-project.iam.gserviceaccount.com')
+  check "article allowlist keeps commas within one gcloud value" ok ok ;;
+  *) check "article allowlist keeps commas within one gcloud value" missing ok ;;
+esac
+case "$article_env" in *'|EDITOR_DESTINATION_DECLARATIONS={"exp":"https://experience.example.invalid/api/public/guides/publication-requirements"}'*)
+  check "article declaration points to the configured destination" ok ok ;;
+  *) check "article declaration points to the configured destination" missing ok ;;
+esac
+check "article public API verifier uses the fixed Secret version"   "$(DEPLOY_ENV="$tmp/article.env" load_deploy_env; service_secrets 0 0 0 0)"   "DATABASE_URL=niho-editor-database-url:latest,EDITOR_FACE_CREDENTIALS=sample-editor-face-verifiers:4"
+for invalid in   'EDITOR_EXPERIENCE_ORIGIN=https://experience.example.invalid/path'   'EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_AUDIENCE=https://runtime.example.invalid|EDITOR_AUTH_MODE=stub'   'EDITOR_FACE_CREDENTIALS_SECRET_REF='   'EDITOR_FACE_CREDENTIALS_SECRET_REF=sample-editor-face-verifiers:latest'   'EDITOR_ARTICLE_AUTHORITY_SERVICE_ACCOUNT_EMAILS=person@example.com'   'EDITOR_ARTICLE_AUTHORITY_API_ENABLED=1'; do
+  cp "$tmp/article.env" "$tmp/article-invalid.env"
+  printf '%s\n' "$invalid" | while IFS='=' read -r key value; do printf "%s='%s'\n" "$key" "$value"; done >> "$tmp/article-invalid.env"
+  if (DEPLOY_ENV="$tmp/article-invalid.env" load_deploy_env) 2>/dev/null; then
+    check "article deployment rejects invalid ${invalid%%=*}" accepted rejected
+  else
+    check "article deployment rejects invalid ${invalid%%=*}" rejected rejected
+  fi
+done
+
 [[ $failed -eq 0 ]] || { printf 'lib-test: failed\n' >&2; exit 1; }
 printf 'lib-test: all passed\n'

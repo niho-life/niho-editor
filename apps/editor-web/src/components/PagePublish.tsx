@@ -24,13 +24,13 @@ import { PUBLISH_MESSAGES, slugMessage } from "@/publish/messages";
  * - 選ぶ（発信先・範囲・あわせて・URL）たびにシートのデータを読み直す（URL は打ち終わるのを少し待つ）。
  * - シートを開く前と、公開・更新を送る前に、エディタの保存待ちを送り終える（最後の入力を公開版に入れる）。保存できなければ送らない。
  * - 「直す」: シートを閉じてその欄へフォーカスを移す。リード・カバー写真は右のページ設定を開く。
- *   言語・カテゴリ・関連する体験の欄はこの editor にまだ無いので、シートは開いたまま「まだ直せない」と一言出す。
+ *   言語は右のページ設定、カテゴリ・関連する体験はシート内の欄へ移す。
  * - 「発信先を追加」「接続する」は発信先の設定（`/destinations`。#41）へ移る。
  * - 本人のサイトの行は docs-ui では発信先の種類ごとに 1 つなので、公開しているサイト（無ければ最初に接続したサイト）だけを出す。
  */
 
 /** 「直す」で移る欄（editor の画面にあるもの）。 */
-export type PublishFixField = "title" | "body" | "cover" | "lead";
+export type PublishFixField = "title" | "body" | "cover" | "lead" | "lang";
 
 const WHO: Readonly<Record<ShellDest, string>> = { exp: "旅行者向け · 英語", niho: "鎌倉の人向け", site: "本人のサイト" };
 const ROLE: Readonly<Record<ShellDest, string>> = { exp: "ライター", niho: "NIHO アカウント", site: "接続済み" };
@@ -41,6 +41,14 @@ export const SLUG_CHECK_DELAY_MS = 300;
 export const SAVED_REFRESH_DELAY_MS = 1500;
 
 const bare = (url: string | null | undefined) => (url ?? "").replace(/^https:\/\//, "");
+
+function handoffSelection(): PublishSelection | null {
+  if (typeof window === "undefined") return null;
+  const query = new URLSearchParams(window.location.search);
+  const experience = query.get("experience");
+  if (query.get("destination") !== "exp" || query.get("lang") !== "en" || (experience !== null && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(experience))) return null;
+  return { handle: "exp", range: "live", extras: NO_EXTRAS, slug: null, category: null, related: experience ? [experience] : [] };
+}
 
 function hostOf(url: string): string {
   try {
@@ -109,7 +117,7 @@ export function focusPageField(field: PublishFixField): void {
       ? main?.querySelector<HTMLElement>("textarea.page-title")
       : field === "body"
         ? main?.querySelector<HTMLElement>('.doc[contenteditable="true"]')
-        : document.querySelector<HTMLElement>(field === "cover" ? "[data-page-cover]" : "[data-page-lead]");
+        : document.querySelector<HTMLElement>(field === "cover" ? "[data-page-cover]" : field === "lead" ? "[data-page-lead]" : "[data-page-lang]");
   if (!target) return;
   target.focus();
   target.scrollIntoView?.({ block: "nearest" });
@@ -126,6 +134,20 @@ type State = {
   loading: boolean;
   busy: boolean;
   error: string | null;
+};
+
+type ExperienceOptionsState = {
+  categories: { slug: string; labelEn: string; labelJa: string }[];
+  candidates: { slug: string; title: string; providerName: string }[];
+  unavailable: boolean;
+  loaded: boolean;
+  query: string;
+  nextCursor: string | null;
+  loadingMore: boolean;
+};
+
+const EMPTY_EXPERIENCE_OPTIONS: ExperienceOptionsState = {
+  categories: [], candidates: [], unavailable: false, loaded: false, query: "", nextCursor: null, loadingMore: false,
 };
 
 const initialState = (pageId: string | null): State => ({
@@ -168,6 +190,10 @@ export function usePagePublish(input: {
 }): PagePublishUi {
   const { pageId, isArticle } = input;
   const [state, setState] = useState<State>(() => initialState(pageId));
+  const [experienceOptions, setExperienceOptions] = useState<ExperienceOptionsState>(EMPTY_EXPERIENCE_OPTIONS);
+  const experienceOptionsRequested = useRef(false);
+  const experienceOptionsSequence = useRef(0);
+  const pendingSheetFix = useRef<"category" | "related" | null>(null);
   const current = state.pageId === pageId ? state : initialState(pageId);
   if (state.pageId !== pageId) setState(current);
 
@@ -175,6 +201,48 @@ export function usePagePublish(input: {
   useEffect(() => {
     events.current = input;
   });
+  useEffect(() => {
+    if (current.view.kind !== "publish" || current.selection?.handle !== "exp" || experienceOptionsRequested.current) return;
+    experienceOptionsRequested.current = true;
+    const mine = ++experienceOptionsSequence.current;
+    void fetch("/api/account/experience-options", { cache: "no-store", credentials: "same-origin" }).then(async (response) => {
+      if (!response.ok) throw new Error();
+      const value = await response.json() as Pick<ExperienceOptionsState, "categories" | "candidates" | "nextCursor">;
+      if (mine === experienceOptionsSequence.current) setExperienceOptions({ ...value, unavailable: false, loaded: true, query: "", loadingMore: false });
+    }).catch(() => {
+      if (mine === experienceOptionsSequence.current) setExperienceOptions({ ...EMPTY_EXPERIENCE_OPTIONS, unavailable: true, loaded: true });
+    });
+  }, [current.selection?.handle, current.view.kind]);
+
+  const loadExperienceOptions = useCallback((query: string, cursor: string | null = null) => {
+    const mine = ++experienceOptionsSequence.current;
+    setExperienceOptions((before) => ({ ...before, query, unavailable: false, loadingMore: true }));
+    const search = new URLSearchParams();
+    if (query) search.set("q", query);
+    if (cursor) search.set("cursor", cursor);
+    const suffix = search.size === 0 ? "" : `?${search.toString()}`;
+    void fetch(`/api/account/experience-options${suffix}`, { cache: "no-store", credentials: "same-origin" }).then(async (response) => {
+      if (!response.ok) throw new Error();
+      const value = await response.json() as Pick<ExperienceOptionsState, "categories" | "candidates" | "nextCursor">;
+      if (mine !== experienceOptionsSequence.current) return;
+      setExperienceOptions((before) => ({
+        ...value,
+        candidates: cursor ? [...before.candidates, ...value.candidates.filter((item) => !before.candidates.some((existing) => existing.slug === item.slug))] : value.candidates,
+        unavailable: false, loaded: true, query, loadingMore: false,
+      }));
+    }).catch(() => {
+      if (mine === experienceOptionsSequence.current) setExperienceOptions((before) => ({ ...before, unavailable: true, loaded: true, loadingMore: false }));
+    });
+  }, []);
+  useEffect(() => {
+    const field = pendingSheetFix.current;
+    if (current.view.kind !== "publish" || field === null) return;
+    const target = document.querySelector<HTMLElement>(`[data-publish-field="${field}"]`);
+    if (!target) return;
+    pendingSheetFix.current = null;
+    target.focus();
+    target.scrollIntoView?.({ block: "nearest" });
+  }, [current.view.kind, experienceOptions]);
   const seq = useRef(0);
   // ページを替えるたびに進める。保存を待っているあいだにページを替えたら、前のページの読み込みを始めない
   const pageEpoch = useRef(0);
@@ -239,7 +307,7 @@ export function usePagePublish(input: {
         // 保存を待つあいだに別のページへ移った: 前のページの読み込みを始めない（始めると seq が進み、移った先の応答が捨てられる）
         if (epoch !== pageEpoch.current) return null;
         if (!saved) patch(pageId, { error: PUBLISH_MESSAGES.unsaved });
-        return load(pageId, null);
+        return load(pageId, handoffSelection());
       })
       .then((sheet) => {
         if (sheet) patch(pageId, { selection: sheet.selection });
@@ -251,7 +319,9 @@ export function usePagePublish(input: {
     if (current.view.kind !== "closed" || pendingFix.current === null) return;
     const field = pendingFix.current;
     pendingFix.current = null;
-    focusPageField(field);
+    // The sheet restores focus while it unmounts. Move to the revealed page
+    // field after that cleanup and after the rail has rendered.
+    queueMicrotask(() => focusPageField(field));
   }, [current.view.kind]);
 
   const pageSaved = useCallback(
@@ -276,6 +346,10 @@ export function usePagePublish(input: {
   const change = (next: PublishSelection, delay = 0) => {
     if (selectionTimer.current) clearTimeout(selectionTimer.current);
     patch(pageId, { selection: next, error: null, loading: true });
+    if (delay === 0) {
+      void load(pageId, next);
+      return;
+    }
     selectionTimer.current = setTimeout(() => {
       selectionTimer.current = null;
       void load(pageId, next);
@@ -291,7 +365,7 @@ export function usePagePublish(input: {
     // あわせて載せる先（アプリ・ニュース・体験ページ）は発信先ごと。別の発信先へは持ち越さない（持ち越すと、その発信先に無い
     // 項目が入ったままになり、チェックも外せず公開できない）。同じ発信先を選び直したときだけ、選んでいたものを残す
     const extras = same?.extras ?? (selection?.handle === handle ? selection.extras : NO_EXTRAS);
-    change({ handle, range, extras, slug: null });
+    change({ handle, range, extras, slug: null, category: same && selection?.handle === handle ? selection.category : null, related: same && selection?.handle === handle ? selection.related : [] });
   };
 
   const close = () => {
@@ -312,6 +386,8 @@ export function usePagePublish(input: {
       handle: selection.handle,
       range: selection.range,
       extras: selection.extras,
+      category: selection.category,
+      related: selection.related,
       ...(sheet.slug.editable && sheet.slug.value !== null ? { slug: selection.slug ?? sheet.slug.value } : {}),
     });
     if (!result.ok) {
@@ -338,11 +414,25 @@ export function usePagePublish(input: {
   const fix = (key: string) => {
     const problem = sheet?.problems[Number(key)];
     if (!problem) return;
+    if (problem.fix === "category" || problem.fix === "related") {
+      const target = document.querySelector<HTMLElement>(`[data-publish-field="${problem.fix}"]`);
+      if (target) {
+        target.focus();
+        target.scrollIntoView?.({ block: "nearest" });
+      } else {
+        // Options may still be loading. Focus as soon as the authoritative
+        // category/candidate response makes the field available.
+        pendingSheetFix.current = problem.fix;
+      }
+      return;
+    }
     const field: PublishFixField | null =
       problem.id === "title" || problem.id === "step-title"
         ? "title"
         : problem.fix === "body" || problem.fix === "cover" || problem.fix === "lead"
           ? problem.fix
+          : problem.fix === "lang"
+            ? "lang"
           : null;
     if (field === null) {
       patch(pageId, { error: PUBLISH_MESSAGES.noField });
@@ -409,6 +499,15 @@ export function usePagePublish(input: {
       action: actionOf(sheet),
       submitDisabled: loading || busy || !sheet || sheet.primary === null,
       error: error ?? selectionError ?? loadError,
+      experience: selection?.handle === "exp" ? {
+        ...experienceOptions,
+        category: selection.category,
+        related: selection.related,
+        onCategory: (category) => change({ ...selection, category }),
+        onRelated: (slug) => change({ ...selection, related: selection.related.includes(slug) ? selection.related.filter((item) => item !== slug) : [...selection.related, slug] }),
+        onQuery: (query) => loadExperienceOptions(query),
+        onMore: () => experienceOptions.nextCursor && loadExperienceOptions(experienceOptions.query, experienceOptions.nextCursor),
+      } : undefined,
       slug:
         sheet?.slugPrefix && sheet.selection
           ? {

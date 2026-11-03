@@ -44,6 +44,8 @@ export function sheetQuery(selection: PublishSelection | null): string {
     extras: (["app", "news", "xp"] as const).filter((key) => selection.extras[key]).join(","),
   });
   if (selection.slug !== null) params.set("slug", selection.slug);
+  if (selection.category !== null) params.set("category", selection.category);
+  if (selection.related.length > 0) params.set("related", selection.related.join(","));
   return `?${params.toString()}`;
 }
 
@@ -65,7 +67,7 @@ export async function loadPublishSheet(pageId: string, selection: PublishSelecti
 /** 公開する・更新を公開・保存・発信先を変える（どれにするかはサーバーが今の公開から決める）。slug は変えられるときだけ送る。 */
 export async function publishPageRequest(
   pageId: string,
-  body: { handle: string; range: PublishSelection["range"]; extras: PublishSelection["extras"]; slug?: string },
+  body: { handle: string; range: PublishSelection["range"]; extras: PublishSelection["extras"]; category: string | null; related: readonly string[]; slug?: string },
 ): Promise<{ ok: true; published: PublishedResultDto } | PublishFailure> {
   let response: Response;
   try {

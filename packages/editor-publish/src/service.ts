@@ -145,6 +145,7 @@ export interface FactsQuery {
   readonly dest: Dest;
   readonly handle: string;
   readonly related: readonly string[];
+  readonly category: string | null;
 }
 
 /** Facts only the server knows (whether the related experiences are live, …). */
@@ -368,7 +369,7 @@ export class PublishService {
     if (!declaration.ranges.includes(range as PublicationRange)) return forbidden("range");
     if (EXTRA_KEYS.some((key) => extras[key] && !declaration.extras.includes(key))) return forbidden("extras");
 
-    const serverFacts = await this.ports.facts.read({ actorId, pageId, dest, handle, related: stringsOf(settings.related) });
+    const serverFacts = await this.ports.facts.read({ actorId, pageId, dest, handle, related: stringsOf(settings.related), category: typeof settings.category === "string" ? settings.category : null });
     const author = await this.ports.authors.read(actorId);
     const context: Context = {
       mode,
@@ -441,6 +442,7 @@ export class PublishService {
       range: context.range,
       extras: context.extras,
       category: facts.category,
+      categoryDisplay: context.serverFacts.categoryDisplay,
       related: facts.related,
       author: context.author,
       version,

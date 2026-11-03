@@ -59,6 +59,7 @@ function setup(
       },
     }),
     connections: () => (options.db === false ? null : { has: async (actor, handle) => actor === OWNER && connections.includes(handle) }),
+    categoryActive: async (_session, category) => category === "walks",
     clock: { now: () => NOW },
     env: {},
   };
@@ -115,11 +116,18 @@ describe("POST /api/pages/{id}/preview-token", () => {
 
   it("issues for a face only when the owner's NIHO roles open it", async () => {
     const writer = setup({ roles: ["writer"] });
-    expect((await issuePreviewTokenRoute(post(writer.pageId, { handle: "exp" }), writer.pageId, writer.deps)).status).toBe(201);
+    expect((await issuePreviewTokenRoute(post(writer.pageId, { handle: "exp", category: "walks" }), writer.pageId, writer.deps)).status).toBe(201);
     expect((await issuePreviewTokenRoute(post(writer.pageId, { handle: "niho" }), writer.pageId, writer.deps)).status).toBe(404);
     const nobody = setup({ roles: [] });
-    expect((await issuePreviewTokenRoute(post(nobody.pageId, { handle: "exp" }), nobody.pageId, nobody.deps)).status).toBe(404);
+    expect((await issuePreviewTokenRoute(post(nobody.pageId, { handle: "exp", category: "walks" }), nobody.pageId, nobody.deps)).status).toBe(404);
     expect(nobody.rows).toEqual([]);
+    const disabled = setup({ roles: ["writer"] });
+    expect((await issuePreviewTokenRoute(post(disabled.pageId, { handle: "exp", category: "disabled" }), disabled.pageId, disabled.deps)).status).toBe(404);
+    expect(disabled.rows).toEqual([]);
+    const outage = setup({ roles: ["writer"] });
+    outage.deps.categoryActive = async () => { throw new Error("upstream unavailable"); };
+    expect((await issuePreviewTokenRoute(post(outage.pageId, { handle: "exp", category: "walks" }), outage.pageId, outage.deps)).status).toBe(503);
+    expect(outage.rows).toEqual([]);
   });
 
   it("answers the same 404 for another person's page, a page in the trash, a missing or malformed id and a connection that is not the owner's", async () => {
@@ -152,7 +160,7 @@ describe("POST /api/pages/{id}/preview-token", () => {
     expect((await issuePreviewTokenRoute(post(pageId, { handle: "site-alpha" }, { origin: "https://evil.example" }), pageId, deps)).status).toBe(403);
     const offline = setup({ db: false });
     expect((await issuePreviewTokenRoute(post(offline.pageId, { handle: "site-alpha" }), offline.pageId, offline.deps)).status).toBe(503);
-    for (const body of [{}, { handle: "Site_Alpha" }, { handle: "admin" }, { handle: "site-alpha", extra: 1 }, ["site-alpha"], "nope", { handle: 1 }]) {
+    for (const body of [{}, { handle: "Site_Alpha" }, { handle: "admin" }, { handle: "exp" }, { handle: "exp", category: "Not A Slug" }, { handle: "site-alpha", extra: 1 }, ["site-alpha"], "nope", { handle: 1 }]) {
       const response = await issuePreviewTokenRoute(post(pageId, body), pageId, deps);
       expect(response.status, JSON.stringify(body)).toBe(400);
     }

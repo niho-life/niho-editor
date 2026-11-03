@@ -502,8 +502,28 @@ function relatedAt(value: unknown, path: string, issues: Issues): readonly strin
   return issues.count === before ? (related as readonly string[]) : undefined;
 }
 
+function categoryDisplayAt(value: unknown, path: string, issues: Issues): import("./v1.js").CategoryDisplay | undefined {
+  if (value === undefined) return undefined;
+  const fields = fieldsAt(value, path, issues, ["labelEn", "labelJa", "displayOrder", "revision"]);
+  if (!fields) return undefined;
+  const before = issues.count;
+  const labelEn = textAt(fields.labelEn, child(path, "labelEn"), issues);
+  const labelJa = textAt(fields.labelJa, child(path, "labelJa"), issues);
+  const displayOrder = Number.isSafeInteger(fields.displayOrder) && (fields.displayOrder as number) >= 0
+    ? fields.displayOrder as number
+    : issues.add(child(path, "displayOrder"), "range");
+  const revision = positiveIntegerAt(fields.revision, child(path, "revision"), issues);
+  if (typeof labelEn === "string" && labelEn.length > 120) issues.add(child(path, "labelEn"), "too-large");
+  if (typeof labelJa === "string" && labelJa.length > 120) issues.add(child(path, "labelJa"), "too-large");
+  if (typeof displayOrder === "number" && displayOrder > 1_000_000) issues.add(child(path, "displayOrder"), "too-large");
+  return issues.count === before && labelEn !== undefined && labelJa !== undefined && displayOrder !== undefined && revision !== undefined
+    ? { labelEn, labelJa, displayOrder, revision }
+    : undefined;
+}
+
 function listItemAt(fields: Fields, path: string, issues: Issues): PublishedListItem | undefined {
   const before = issues.count;
+  const categoryDisplay = categoryDisplayAt(fields.categoryDisplay, child(path, "categoryDisplay"), issues);
   const item = {
     id: patternAt(fields.id, UUID_PATTERN, child(path, "id"), issues),
     slug: slugAt(fields.slug, child(path, "slug"), issues),
@@ -515,6 +535,7 @@ function listItemAt(fields: Fields, path: string, issues: Issues): PublishedList
     category: fields.category === undefined
       ? issues.add(child(path, "category"), "required")
       : nullableTextAt(fields.category, child(path, "category"), issues),
+    ...(categoryDisplay === undefined ? {} : { categoryDisplay }),
     author: authorAt(fields.author, child(path, "author"), issues),
     range: enumAt(fields.range, RANGES, child(path, "range"), issues),
     version: positiveIntegerAt(fields.version, child(path, "version"), issues),
@@ -524,6 +545,8 @@ function listItemAt(fields: Fields, path: string, issues: Issues): PublishedList
     extras: extrasAt(fields.extras, child(path, "extras"), issues),
     related: relatedAt(fields.related, child(path, "related"), issues),
   };
+  if (fields.categoryDisplay !== undefined && categoryDisplay === undefined) issues.add(child(path, "categoryDisplay"), "format");
+  if (categoryDisplay !== undefined && item.category === null) issues.add(child(path, "categoryDisplay"), "required");
   // Limited release ("unlisted") exists only on NIHO-operated faces.
   if (item.dest === "site" && item.range === "unlisted") issues.add(child(path, "range"), "unlisted-site");
   if (item.publishedAt && item.updatedAt && Date.parse(item.updatedAt) < Date.parse(item.publishedAt)) {

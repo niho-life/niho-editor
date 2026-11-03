@@ -55,6 +55,9 @@ export type PublishWiringOptions = {
   readonly assetBytes?: AssetBytes;
   /** Historical final-stage titles for a page, used to reject an untouched generated title at publish time. */
   readonly finalStepNames?: (actorId: string, pageId: string) => Promise<readonly string[]>;
+  /** NIHO mode reads the current roles on every operation; never persisted or cached. */
+  readonly roles?: RoleReader;
+  readonly facts?: FactsSource;
 };
 
 export const systemClock: Clock = { now: () => new Date().toISOString() };
@@ -80,12 +83,13 @@ export class AssetOriginMissing extends Error {
   }
 }
 
-export function roleReaderOf(config: PublishConfig, session: Session): RoleReader {
+export function roleReaderOf(config: PublishConfig, session: Session, current?: () => Promise<readonly string[]>): RoleReader {
   return {
     async read(actorId) {
-      // 役割は保存しない。stub は設定の値、niho は契約が出るまで無し
-      if (config.mode !== "stub" || actorId !== session.userId) return [];
-      return [...config.stubRoles];
+      if (actorId !== session.userId) return [];
+      if (config.mode === "stub") return [...config.stubRoles];
+      if (config.mode === "niho" && current) return [...await current()];
+      return [];
     },
   };
 }
@@ -161,16 +165,17 @@ export function faceDeclarations(plan: DeclarationPlan, fetch?: FetchLike): Decl
 export function wirePublishPorts(store: ConnectionStore, session: Session, options: PublishWiringOptions = {}): PublishWiring {
   const config = publishConfig(options.env);
   const clock = options.clock ?? systemClock;
+  const baseFacts = options.facts ?? UNKNOWN_FACTS;
   const facts: FactsSource = options.finalStepNames ? {
     read: async (query) => ({
-      ...await UNKNOWN_FACTS.read(query),
+      ...await baseFacts.read(query),
       finalStepNames: await options.finalStepNames!(query.actorId, query.pageId),
     } satisfies ServerFacts),
-  } : UNKNOWN_FACTS;
+  } : baseFacts;
   return {
     publish: {
       store,
-      roles: roleReaderOf(config, session),
+      roles: options.roles ?? roleReaderOf(config, session),
       storage: storageModeReaderOf(session),
       connections: connectionSource(store),
       declarations: siteDeclarationSource(store, faceDeclarations(config.declarations, options.fetch)),

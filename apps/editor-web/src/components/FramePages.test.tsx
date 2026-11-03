@@ -14,7 +14,11 @@ const frame = { pageCreated: vi.fn(), pageTitleChanged: vi.fn(), pageSaved: vi.f
 /** 手順の帯が「この段階の本文が入れ替わった」と知らせる口（PageSteps のモックが預かる）。 */
 const steps: { onBodyReplaced?: () => void } = {};
 
-vi.mock("next/navigation", () => ({ usePathname: () => "/p/new", useRouter: () => ({ refresh: vi.fn(), replace: vi.fn() }) }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/p/new",
+  useSearchParams: () => new URLSearchParams(window.location.search),
+  useRouter: () => ({ refresh: vi.fn(), replace: vi.fn() }),
+}));
 vi.mock("./EditorFrame", () => ({ useEditorFrame: () => frame, isNarrowNow: () => false }));
 vi.mock("@/lib/last-page", () => ({ rememberLastPage: vi.fn() }));
 vi.mock("./PageEditor", () => ({
@@ -93,6 +97,14 @@ describe("NewPage: the creation redirect belongs to the draft that made the page
     expect(rememberLastPage).not.toHaveBeenCalled();
     // ページは作られているので、一覧には載せる
     expect(frame.pageCreated).toHaveBeenCalledWith("22222222-2222-4222-8222-222222222222", "");
+  });
+
+  it("keeps the safe Experience handoff through creation and starts the private page in English", async () => {
+    window.history.replaceState(null, "", "/p/new?destination=exp&lang=en&experience=morning-walk");
+    await mount();
+    expect(editors.at(-1)?.page).toMatchObject({ lang: "en" });
+    await act(async () => editors.at(-1)!.onCreated!("55555555-5555-4555-8555-555555555555"));
+    expect(`${window.location.pathname}${window.location.search}`).toBe("/p/55555555-5555-4555-8555-555555555555?destination=exp&lang=en&experience=morning-walk");
   });
 });
 

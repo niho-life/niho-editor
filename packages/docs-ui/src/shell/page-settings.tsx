@@ -235,7 +235,7 @@ export function ShellPageSettings({ publicationFields, destination, category, re
           )}
         </section>
       )}
-      <section>
+      <section data-page-lang tabIndex={-1}>
         <h3>言語</h3>
         <div className="es-pills">
           <button type="button" className={lang === "ja" ? "es-on" : undefined} aria-pressed={lang === "ja"} onClick={() => onLang?.("ja")}>

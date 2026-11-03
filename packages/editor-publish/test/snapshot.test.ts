@@ -391,3 +391,14 @@ describe("fingerprint: 「更新あり」 is a content difference, not a save ti
     expect(await contentFingerprint({ unresolved: [], figures: [], blocks: [], cover: null, lead: null, lang: "en", title: "x" })).toBe(value);
   });
 });
+
+describe("category display snapshot", () => {
+  it("freezes server-provided category labels and revision without changing the category slug", async () => {
+    const categoryDisplay = { labelEn: "Walks", labelJa: "散策", displayOrder: 4, revision: 7 };
+    const result = await build(readyPage(), { dest: "exp", category: "walks", categoryDisplay });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.snapshot.category).toBe("walks");
+    expect(result.snapshot.categoryDisplay).toEqual(categoryDisplay);
+    expect(parsePublishedDoc(result.snapshot).ok).toBe(true);
+  });
+});

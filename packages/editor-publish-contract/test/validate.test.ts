@@ -36,6 +36,14 @@ describe("positive fixtures", () => {
     expect(index.ok && Object.keys(index.value.items[0] ?? {})).not.toContain("futureField");
   });
 
+  it("keeps optional category display metadata and rejects client-shaped or orphaned values", () => {
+    const display = { labelEn: "Walks", labelJa: "散策", displayOrder: 4, revision: 7 };
+    const valid = parsePublishedDoc({ ...fixtures.doc, categoryDisplay: display });
+    expect(valid.ok && valid.value.categoryDisplay).toEqual(display);
+    expect(parsePublishedDoc({ ...fixtures.doc, categoryDisplay: { ...display, providerName: "private" } }).ok).toBe(false);
+    expect(parsePublishedDoc({ ...fixtures.doc, category: null, categoryDisplay: display }).ok).toBe(false);
+  });
+
   it("returns a fresh value that shares no prototype tricks", () => {
     const hostile = JSON.parse(JSON.stringify(fixtures.doc).replace('"contractVersion"', '"__proto__":{"polluted":true},"contractVersion"')) as unknown;
     const result = parsePublishedDoc(hostile);

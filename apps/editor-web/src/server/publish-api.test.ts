@@ -124,7 +124,7 @@ describe("公開のシート GET", () => {
   it("発信先を選ぶと、その宣言で評価し、URL（提案の slug）と主ボタンを返す", async () => {
     const { deps } = world();
     const sheet = await sheetOf(await getSheet(deps, PAGE, "?handle=exp&range=unlisted&extras=app,xp"));
-    expect(sheet.selection).toEqual({ handle: "exp", range: "unlisted", extras: { app: true, news: false, xp: true }, slug: null });
+    expect(sheet.selection).toEqual({ handle: "exp", range: "unlisted", extras: { app: true, news: false, xp: true }, slug: null, category: null, related: [] });
     expect(sheet.problems).toEqual([]);
     expect(sheet.url).toBe("https://experience.niho.life/guides/morning-walk");
     expect(sheet.slug).toEqual({ value: "morning-walk", editable: true, error: null });
@@ -197,7 +197,7 @@ describe("公開する・更新を公開・保存・発信先を変える・公�
     const sheet = await sheetOf(await getSheet(deps));
     expect(sheet.status).toBe("published");
     expect(sheet.publication).toMatchObject({ handle: "niho", dest: "niho", label: "NIHO", slug: "morning-walk", url: "https://niho.life/article/morning-walk", stopped: false });
-    expect(sheet.selection).toEqual({ handle: "niho", range: "live", extras: { app: true, news: false, xp: false }, slug: null });
+    expect(sheet.selection).toEqual({ handle: "niho", range: "live", extras: { app: true, news: false, xp: false }, slug: null, category: null, related: [] });
     // 公開中で何も変えていなければ、することが無い
     expect(sheet.primary).toBeNull();
     expect(sheet.slug.editable).toBe(false);
@@ -443,7 +443,7 @@ describe("本人だけ・同じ origin・DB", () => {
 
   it("本文の形が違えば 400（知らない key・型・長すぎる slug）", async () => {
     const { deps } = world();
-    for (const body of [null, [], { handle: "niho" }, { ...to("niho"), category: "x" }, to("niho", { extras: { app: "yes", news: false, xp: false } }), to("niho", { slug: "a".repeat(201) }), to("Not A Handle")]) {
+    for (const body of [null, [], { handle: "niho" }, { ...to("niho"), category: "Not-A-Slug" }, to("niho", { extras: { app: "yes", news: false, xp: false } }), to("niho", { slug: "a".repeat(201) }), to("Not A Handle")]) {
       expect((await post(deps, body)).status, JSON.stringify(body)).toBe(400);
     }
   });
@@ -456,6 +456,6 @@ describe("入力の読み取り", () => {
   });
 
   it("placeBodyOf: 接続した本人のサイトの handle も受ける。slug は省ける", () => {
-    expect(placeBodyOf({ handle: "field-notes", range: "live", extras: NONE })).toEqual({ ok: true, value: { handle: "field-notes", range: "live", extras: NONE, slug: null } });
+    expect(placeBodyOf({ handle: "field-notes", range: "live", extras: NONE })).toEqual({ ok: true, value: { handle: "field-notes", range: "live", extras: NONE, slug: null, category: null, related: [] } });
   });
 });

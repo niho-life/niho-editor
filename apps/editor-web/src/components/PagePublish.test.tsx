@@ -78,7 +78,7 @@ function sheet(patch: Partial<PublishSheetDto> = {}): PublishSheetDto {
 /** NIHO を選んだときのデータ。 */
 function nihoPlan(patch: Partial<PublishSheetDto> = {}): PublishSheetDto {
   return sheet({
-    selection: { handle: "niho", range: "live", extras: NONE, slug: null },
+    selection: { handle: "niho", range: "live", extras: NONE, slug: null, category: null, related: [] },
     ranges: ["live", "unlisted"],
     extras: [
       { key: "app", checked: false },
@@ -113,6 +113,13 @@ function server(options: { sheets: PublishSheetDto[]; post?: Response | (() => R
   const calls: Call[] = [];
   const queue = [...options.sheets];
   const fetchMock = vi.fn(async (url: string, init: RequestInit = {}) => {
+    if (url.startsWith("/api/account/experience-options")) {
+      return Response.json({
+        categories: [{ slug: "walks", labelEn: "Walks", labelJa: "散策" }],
+        candidates: [{ slug: "morning-walk", title: "Morning walk", providerName: "Synthetic Provider" }],
+        nextCursor: null,
+      });
+    }
     const method = init.method ?? "GET";
     calls.push({ method, url, body: typeof init.body === "string" ? JSON.parse(init.body) : undefined });
     order.push(method);
@@ -226,7 +233,7 @@ describe("公開のシート", () => {
     expect($<HTMLInputElement>(".es-slug input")!.value).toBe("morning-walk");
     expect(primary().disabled).toBe(false);
     await click(primary());
-    expect(calls.find((call) => call.method === "POST")!.body).toEqual({ handle: "niho", range: "live", extras: NONE, slug: "morning-walk" });
+    expect(calls.find((call) => call.method === "POST")!.body).toEqual({ handle: "niho", range: "live", extras: NONE, category: null, related: [], slug: "morning-walk" });
     expect(dialog()!.getAttribute("aria-label")).toBe("公開しました");
     expect(dialog()!.textContent).toContain("niho.life に公開しました");
     await click(byText("button", "見る"));
@@ -299,7 +306,7 @@ describe("公開のシート", () => {
       { id: "headings", message: "本文に見出しを 1 つ以上入れてください", fix: "body" as const },
       { id: "step-title", message: "工程の段階名が題名のままです", fix: "body" as const },
     ];
-    const plan = nihoPlan({ problems, primary: null, selection: { handle: "niho", range: "live", extras: NONE, slug: null } });
+    const plan = nihoPlan({ problems, primary: null, selection: { handle: "niho", range: "live", extras: NONE, slug: null, category: null, related: [] } });
     server({ sheets: [sheet(), plan] });
     await mount();
     await click($(".es-pubbtn"));
@@ -338,23 +345,41 @@ describe("公開のシート", () => {
     expect(document.activeElement).toBe($("[data-page-cover]"));
   });
 
-  it("「直す」: editor に欄の無い条件はシートを開いたまま、まだ直せないと一言", async () => {
-    const plan = nihoPlan({ problems: [{ id: "category", message: "カテゴリを選んでください", fix: "category" }], primary: null });
+  it("「直す」: カテゴリはシート内の選択欄へ移る", async () => {
+    const plan = nihoPlan({
+      selection: { handle: "exp", range: "live", extras: NONE, slug: null, category: null, related: [] },
+      problems: [{ id: "category", message: "カテゴリを選んでください", fix: "category" }], primary: null,
+    });
     server({ sheets: [sheet(), plan] });
     await mount();
     await click($(".es-pubbtn"));
+    await click(dest("NIHO Experience"));
     await click(byText("button", "直す"));
     expect(dialog()).not.toBeNull();
-    expect($('[role="alert"]')!.textContent).toBe("この項目を直す欄は、まだ editor にありません");
+    expect(document.activeElement).toBe($("[data-publish-field=category]"));
+  });
+
+  it("引き継いだ体験が最初の候補外でも現在確認の説明と取り外しを残す", async () => {
+    const plan = nihoPlan({
+      selection: { handle: "exp", range: "live", extras: NONE, slug: null, category: "walks", related: ["handoff-experience"] },
+    });
+    server({ sheets: [sheet(), plan] });
+    await mount();
+    await click($(".es-pubbtn"));
+    await act(async () => undefined);
+    const selected = byText("button", "選択中の体験");
+    expect(selected?.textContent).toContain("現在の掲載・権限は公開時に再確認");
+    await click(selected);
+    expect(container!.textContent).not.toContain("handoff-experience");
   });
 
   it("公開中に別の発信先を選ぶと「発信先を変える」", async () => {
-    const live = sheet({ status: "published", publication: LIVE, canStop: true, selection: { handle: "niho", range: "live", extras: NONE, slug: null } });
+    const live = sheet({ status: "published", publication: LIVE, canStop: true, selection: { handle: "niho", range: "live", extras: NONE, slug: null, category: null, related: [] } });
     const move = nihoPlan({
       status: "published",
       publication: LIVE,
       canStop: true,
-      selection: { handle: "exp", range: "live", extras: NONE, slug: null },
+      selection: { handle: "exp", range: "live", extras: NONE, slug: null, category: null, related: [] },
       url: "https://experience.niho.life/guides/morning-walk",
       slugPrefix: "https://experience.niho.life/guides/",
       changesDestination: true,
@@ -370,7 +395,7 @@ describe("公開のシート", () => {
 
   it("別の発信先を選ぶと、前の発信先だけにある「あわせて」は持ち越さない（体験ページに載せる → NIHO で公開できなくならない）", async () => {
     const expPlan = sheet({
-      selection: { handle: "exp", range: "live", extras: { app: false, news: false, xp: true }, slug: null },
+      selection: { handle: "exp", range: "live", extras: { app: false, news: false, xp: true }, slug: null, category: null, related: [] },
       extras: [
         { key: "app", checked: false },
         { key: "xp", checked: true },
@@ -429,7 +454,7 @@ describe("公開のシート", () => {
   });
 
   it("保存先がクラウドでないときは、理由を一言出して公開は押せない（storageBlock）", async () => {
-    server({ sheets: [sheet(), sheet({ storageBlock: "LOCAL", selection: { handle: "niho", range: "live", extras: NONE, slug: null } }), nihoPlan({ storageBlock: "LOCAL", primary: null })] });
+    server({ sheets: [sheet(), sheet({ storageBlock: "LOCAL", selection: { handle: "niho", range: "live", extras: NONE, slug: null, category: null, related: [] } }), nihoPlan({ storageBlock: "LOCAL", primary: null })] });
     await mount();
     await click($(".es-pubbtn"));
     await click(dest("NIHO"));

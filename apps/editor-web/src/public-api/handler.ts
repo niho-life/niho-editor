@@ -168,6 +168,7 @@ function listItem(row: PublishedListRow): PublishedListItem {
     lead: snapshot.lead,
     cover: snapshot.cover,
     category: snapshot.category,
+    ...(snapshot.categoryDisplay === undefined ? {} : { categoryDisplay: snapshot.categoryDisplay }),
     author: snapshot.author,
     range: row.range,
     version: snapshot.version,
@@ -314,6 +315,7 @@ export function createPublicApi(options: PublicApiOptions): PublicApi {
       lead: content.lead,
       cover: content.cover,
       category: content.category,
+      ...(content.categoryDisplay === undefined ? {} : { categoryDisplay: content.categoryDisplay }),
       author: content.author,
       range: content.range,
       // 公開前の下書きには公開日時が無いので、保存時刻と下書きの版
