@@ -81,9 +81,9 @@ BEGIN
     (NEW.id, NEW.revision, NEW.name, NEW.engine, NEW.language, NEW.segments, NEW.speaker_names,
      NEW.duration_sec, version_reason);
 
-  DELETE FROM page_recording_candidate_versions AS old
-   WHERE old.candidate_id = NEW.id
-     AND old.version NOT IN (
+  DELETE FROM page_recording_candidate_versions AS obsolete_version
+   WHERE obsolete_version.candidate_id = NEW.id
+     AND obsolete_version.version NOT IN (
        SELECT keep.version
          FROM page_recording_candidate_versions AS keep
         WHERE keep.candidate_id = NEW.id

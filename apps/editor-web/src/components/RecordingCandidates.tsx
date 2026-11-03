@@ -270,6 +270,7 @@ export function RecordingCandidates({
   }, [drafts, pageId]);
 
   const choose = (slot: "a" | "b", candidateId: string) => {
+    if (locked) return;
     if (slot === "a") { setSlotA(candidateId || null); if (candidateId && candidateId === slotB) setSlotB(null); }
     else { setSlotB(candidateId || null); if (candidateId && candidateId === slotA) setSlotA(null); }
     if (candidateId) void guard("candidate", async () => { await load(candidateId); return null; });
@@ -322,10 +323,51 @@ export function RecordingCandidates({
     if (draft?.held) return { kind: "error", text: "候補の最新内容を読み直してから採用してください。" };
     onAdoptingChange?.(true);
     try {
+      const previousAdopted = candidates.find((candidate) => candidate.id !== candidateId && candidate.adopted);
+      const previousDraft = previousAdopted ? drafts[previousAdopted.id] : undefined;
       const next = await adoptCandidate(pageId, candidateId, draft?.base.revision ?? summary!.revision, recordingRevision);
+      const adoptedSummary = next.candidates.find((candidate) => candidate.id === candidateId);
+      const previousSummary = previousAdopted && next.candidates.find((candidate) => candidate.id === previousAdopted.id);
+      let refreshedPrevious: RecordingCandidateFull | null = null;
+      let previousRefreshFailed = false;
+      if (previousDraft && previousSummary && previousSummary.revision !== previousDraft.base.revision) {
+        try { refreshedPrevious = await getCandidate(pageId, previousAdopted!.id); }
+        catch { previousRefreshFailed = true; }
+      }
       onSnapshot(next);
-      setDrafts((current) => { const copy = { ...current }; delete copy[candidateId]; return copy; });
-      return { kind: "info", text: `${draft?.name ?? summary!.name} を採用しました` };
+      setDrafts((current) => {
+        const copy = { ...current };
+        const currentAdoptedDraft = current[candidateId];
+        if (currentAdoptedDraft && adoptedSummary) {
+          copy[candidateId] = { ...currentAdoptedDraft, base: { ...currentAdoptedDraft.base, ...adoptedSummary } };
+        }
+        const currentPreviousDraft = previousAdopted ? current[previousAdopted.id] : undefined;
+        if (currentPreviousDraft && previousSummary) {
+          if (refreshedPrevious) {
+            const refreshed = draftOf(refreshedPrevious);
+            copy[previousAdopted!.id] = currentPreviousDraft.dirty || currentPreviousDraft.held
+              ? { ...refreshed, name: currentPreviousDraft.name, dirty: currentPreviousDraft.dirty, held: true, conflict: refreshedPrevious }
+              : refreshed;
+          } else if (previousRefreshFailed) {
+            copy[previousAdopted!.id] = {
+              ...currentPreviousDraft,
+              base: { ...currentPreviousDraft.base, adopted: false },
+              held: true,
+              conflict: undefined,
+            };
+          } else {
+            copy[previousAdopted!.id] = {
+              ...currentPreviousDraft,
+              base: { ...currentPreviousDraft.base, ...previousSummary },
+              segments: adoptedContent?.segments ?? currentPreviousDraft.segments,
+              speakerNames: adoptedContent?.speakerNames ?? currentPreviousDraft.speakerNames,
+              conflict: currentPreviousDraft.conflict ? { ...currentPreviousDraft.conflict, adopted: false } : undefined,
+            };
+          }
+        }
+        return copy;
+      });
+      return { kind: "info", text: `${draft?.name ?? summary!.name} を採用しました${previousRefreshFailed ? "。以前の採用案は最新を読み直してください" : ""}` };
     } catch (error) {
       if (error instanceof RecordingConflictError) {
         onConflictSnapshot?.(error.snapshot);
@@ -417,8 +459,8 @@ export function RecordingCandidates({
         </li>)}
       </ul>}
       {ready.length > 0 && <div className={styles.compareControls}>
-        <label>比較する案 1<select aria-label="比較する案1" value={slotA ?? ""} onChange={(event) => choose("a", event.currentTarget.value)}><option value="">選択</option>{ready.filter((item) => item.id !== slotB).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-        <label>比較する案 2<select aria-label="比較する案2" value={slotB ?? ""} onChange={(event) => choose("b", event.currentTarget.value)}><option value="">選択</option>{ready.filter((item) => item.id !== slotA).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>比較する案 1<select aria-label="比較する案1" value={slotA ?? ""} disabled={locked} onChange={(event) => choose("a", event.currentTarget.value)}><option value="">選択</option>{ready.filter((item) => item.id !== slotB).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>比較する案 2<select aria-label="比較する案2" value={slotB ?? ""} disabled={locked} onChange={(event) => choose("b", event.currentTarget.value)}><option value="">選択</option>{ready.filter((item) => item.id !== slotA).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         {slotA && slotB && <span className={styles.mobileSwitch}><button type="button" aria-pressed={mobileSlot === "a"} onClick={() => setMobileSlot("a")}>案 1</button><button type="button" aria-pressed={mobileSlot === "b"} onClick={() => setMobileSlot("b")}>案 2</button></span>}
       </div>}
       <div className={styles.comparison} data-comparison-count={slots.filter((slot) => slot.id).length}>

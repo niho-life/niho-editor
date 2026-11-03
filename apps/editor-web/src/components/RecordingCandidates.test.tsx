@@ -36,16 +36,17 @@ afterEach(async () => {
 });
 
 function json(status: number, body: unknown) { return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }); }
-async function mount(candidates: RecordingCandidateSummary[], extra: {
+type MountOptions = {
   onSnapshot?: (snapshot: RecordingSnapshot) => void; onConflictSnapshot?: (snapshot: RecordingSnapshot) => void;
   onChanged?: () => void; onSeek?: (seconds: number) => void;
   onAdoptingChange?: (adopting: boolean) => void;
   engines?: string[]; defaultEngine?: string | null; adoptDisabled?: boolean;
   adoptedContent?: Pick<RecordingCandidateFull, "segments" | "speakerNames">;
-} = {}) {
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  recordingRevision?: number;
+};
+async function renderMounted(candidates: RecordingCandidateSummary[], extra: MountOptions = {}) {
   await act(async () => root!.render(<RecordingCandidates
-    pageId={PAGE_ID} recordingRevision={7} candidates={candidates} engines={extra.engines ?? []}
+    pageId={PAGE_ID} recordingRevision={extra.recordingRevision ?? 7} candidates={candidates} engines={extra.engines ?? []}
     adoptedContent={extra.adoptedContent}
     defaultEngine={extra.defaultEngine === undefined ? "fake" : extra.defaultEngine}
     onSnapshot={extra.onSnapshot ?? (() => undefined)} onChanged={extra.onChanged ?? (() => undefined)} onSeek={extra.onSeek}
@@ -53,6 +54,10 @@ async function mount(candidates: RecordingCandidateSummary[], extra: {
     onAdoptingChange={extra.onAdoptingChange}
     adoptDisabled={extra.adoptDisabled}
   />));
+}
+async function mount(candidates: RecordingCandidateSummary[], extra: MountOptions = {}) {
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  await renderMounted(candidates, extra);
 }
 const button = (text: string) => [...container!.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim() === text);
 const click = (text: string) => act(async () => button(text)!.click());
@@ -111,6 +116,25 @@ describe("RecordingCandidates", () => {
     expect(onSeek).toHaveBeenCalledWith(65);
     expect(button("案 1")).toBeTruthy();
     expect(button("案 2")).toBeTruthy();
+  });
+
+  it("読み込み中は比較案の選択を止め、選んだ案の読み込みを取りこぼさない", async () => {
+    const a = candidate({ adopted: false });
+    const b = candidate({ id: SECOND, name: "比較案", adopted: false });
+    let resolveFirst!: (response: Response) => void;
+    const fetchMock = vi.fn(async (path: string) => path.includes(FIRST)
+      ? new Promise<Response>((resolve) => { resolveFirst = resolve; })
+      : json(200, { candidate: full(b) }));
+    vi.stubGlobal("fetch", fetchMock);
+    await mount([a, b]);
+    await select("比較する案1", FIRST);
+    const secondSelect = container!.querySelector<HTMLSelectElement>('select[aria-label="比較する案2"]')!;
+    expect(secondSelect.disabled).toBe(true);
+    await select("比較する案2", SECOND);
+    await act(async () => resolveFirst(json(200, { candidate: full(a) })));
+    expect(secondSelect.disabled).toBe(false);
+    expect(secondSelect.value).toBe("");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("採用中案の比較本文は候補snapshotではなく録音editorの最新正本を表示する", async () => {
@@ -245,6 +269,45 @@ describe("RecordingCandidates", () => {
     expect(onSnapshot).not.toHaveBeenCalled();
     await click("この案を採用");
     expect(onSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("別案を採用した後も以前の採用案を旧本文の編集可能な状態で表示する", async () => {
+    const adopted = candidate();
+    const nextCandidate = candidate({ id: SECOND, revision: 4, name: "Gemini", adopted: false });
+    const oldFull = full(adopted, "以前の採用本文");
+    const latestOld = full({ ...adopted, revision: 4, name: "別端末の名前", adopted: false }, "最新の以前案本文");
+    const nextFull = full(nextCandidate, "次の候補本文");
+    const nextRecording = { ...recording, revision: 9, segments: nextFull.segments, speakerNames: nextFull.speakerNames };
+    let nextSnapshot: RecordingSnapshot | null = null;
+    let oldCandidateReads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.endsWith("/adopt") && init?.method === "POST") {
+        return json(200, { recording: nextRecording, speakers: [], candidates: [{ ...adopted, revision: 4, adopted: false }, { ...nextCandidate, adopted: true }] });
+      }
+      if (path.includes(FIRST)) {
+        oldCandidateReads += 1;
+        return json(200, { candidate: oldCandidateReads === 1 ? oldFull : latestOld });
+      }
+      return json(200, { candidate: nextFull });
+    }));
+    const onSnapshot = (snapshot: RecordingSnapshot) => { nextSnapshot = snapshot; };
+    await mount([adopted, nextCandidate], { onSnapshot, adoptedContent: oldFull });
+    await select("比較する案1", adopted.id);
+    await write(container!.querySelector<HTMLInputElement>(`[data-candidate-editor="${adopted.id}"] input`)!, "自分の未保存名");
+    await click("採用する");
+    expect(nextSnapshot).not.toBeNull();
+    await renderMounted(nextSnapshot!.candidates ?? [], {
+      recordingRevision: nextSnapshot!.recording.revision,
+      adoptedContent: { segments: nextSnapshot!.recording.segments, speakerNames: nextSnapshot!.recording.speakerNames },
+      onSnapshot,
+    });
+    const oldPane = container!.querySelector<HTMLElement>(`[data-candidate-editor="${adopted.id}"]`)!;
+    const oldText = oldPane.querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(oldPane.textContent).not.toContain("採用中");
+    expect(oldPane.querySelector<HTMLInputElement>("input")?.value).toBe("自分の未保存名");
+    expect(oldPane.textContent).toContain("最新を確認したので、この入力を使う");
+    expect(oldText.value).toBe("最新の以前案本文");
+    expect(oldText.readOnly).toBe(false);
   });
 
   it("採用の応答を待つ間は親の録音編集を止め、応答後に解除する", async () => {
