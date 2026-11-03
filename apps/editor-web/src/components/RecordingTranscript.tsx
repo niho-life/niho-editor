@@ -312,7 +312,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
       }}
     >
       {audio && (
-        <RecordingTranscription pageId={pageId} audio={audio} engine={snapshot.defaultEngine ?? null} hasTranscript={hasSegments} onSucceeded={reloadAfterTranscription} onHasTranscript={reloadAfterTranscription} />
+        <RecordingTranscription pageId={pageId} audio={audio} engine={snapshot.defaultEngine ?? null} hasTranscript={hasSegments} onSucceeded={reloadAfterTranscription} onHasTranscript={reloadAfterTranscription} showMacCli={!hasSegments} />
       )}
       {/* 現在Partの src は playback.ref が付け外しする（同じ認証境界の音声routeを使う）。 */}
       {player && <audio key={pageId} ref={playback.ref} preload="metadata" data-recording-audio="" />}

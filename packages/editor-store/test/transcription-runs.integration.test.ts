@@ -8,16 +8,22 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Pool as PgPool } from "pg";
 import { applyMigrations, defaultMigrationsDir, readMigrations } from "../src/migrate.ts";
 import { completeAudioUpload, startAudioRecording, type StartAudioRecordingInput } from "../src/recording-audio.ts";
+import { addRecordingCandidate, getRecordingCandidate } from "../src/recording-candidates.ts";
 import { InvalidRecordingError, createRecordingPage, getRecording, updateRecording, type Connectable, type RecordingSegment } from "../src/recordings.ts";
 import { EditorStore } from "../src/store.ts";
 import {
   claimRun,
   enqueueTranscription,
   failRun,
+  failMacTranscription,
+  finishMacTranscription,
   finishRun,
   latestRun,
   listQueuedRuns,
+  macTranscriptionStatus,
   requeueRun,
+  resumeMacTranscription,
+  startMacTranscription,
   sweepStaleRuns,
   transcriptionStatus,
   type EnqueueTranscriptionInput,
@@ -598,6 +604,147 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.equal(await failRun(pool, runId, 3, "internal"), true);
     assert.equal(await requeueRun(pool, runId, 3), null);
     assert.equal(await requeueRun(pool, randomUUID(), 0), null, "a run that is not there");
+  });
+
+  it("deduplicates concurrent Mac starts and rejects the same operation on another page", async () => {
+    const pageId = await uploadedRecording(pool);
+    const operationId = randomUUID();
+    const requests = await Promise.all([0, 1].map(() => startMacTranscription(pool, OWNER, pageId, { operationId, terms: [] })));
+    assert.deepEqual(requests.map((result) => result?.status).sort(), ["created", "existing"]);
+    assert.equal(await countRuns(pool, pageId), 1);
+
+    const pages = await Promise.all([uploadedRecording(pool), uploadedRecording(pool)]);
+    const sharedOperation = randomUUID();
+    const conflicts = await Promise.all(pages.map((id) => startMacTranscription(pool, OWNER, id, { operationId: sharedOperation, terms: [] })));
+    assert.deepEqual(conflicts.map((result) => result?.status).sort(), ["created", "operation_conflict"]);
+  });
+
+  it("keeps Mac CLI runs out of server workers and makes operation completion idempotent", async () => {
+    const pageId = await uploadedRecording(pool);
+    const blockedBy = await enqueueTranscription(pool, OWNER, pageId, run());
+    assert.equal(blockedBy?.status, "created");
+    const operationId = randomUUID();
+    assert.deepEqual(await startMacTranscription(pool, OWNER, pageId, { operationId, terms: [] }), { status: "other_run_active" });
+    assert.ok(blockedBy?.status === "created");
+    assert.equal(await failRun(pool, blockedBy.run.id, 0, "internal"), true);
+
+    const started = await startMacTranscription(pool, OWNER, pageId, { operationId, terms: ["合成語"] });
+    assert.ok(started?.status === "created");
+    assert.equal(started.run.engine, "gemini-cli");
+    assert.equal(started.run.executor, "mac-cli");
+    assert.equal(started.settings.targetSec, 600);
+    await assert.rejects(pool.query("UPDATE transcription_runs SET engine = 'fake' WHERE id = $1", [started.run.id]), { code: "23514" });
+    assert.equal(await failRun(pool, started.run.id, started.generation, "internal"), false, "the public server failure path cannot fail a Mac run");
+    const operationRetry = await startMacTranscription(pool, OWNER, pageId, { operationId, terms: [] });
+    assert.ok(operationRetry?.status === "existing");
+    assert.equal(operationRetry.run.id, started.run.id, "operation retry returns the same run");
+    assert.equal(await claimRun(pool, started.run.id), null, "server worker cannot claim a Mac run");
+    assert.equal((await listQueuedRuns(pool, { olderThan: new Date(Date.now() + 1_000), limit: 1000 })).some((item) => item.id === started.run.id), false);
+    await pool.query(
+      "UPDATE transcription_runs SET created_at = clock_timestamp() - interval '3 hours 1 second', started_at = clock_timestamp() - interval '3 hours' WHERE id = $1",
+      [started.run.id],
+    );
+    await sweepStaleRuns(pool, new Date(), 60);
+    assert.equal((await runRow(pool, started.run.id))?.status, "running", "server sweep ignores Mac runs");
+    assert.equal(await finishRun(pool, started.run.id, started.generation, { segments: RESULT, durationSec: 5 }), "stale", "server completion cannot write a Mac run");
+
+    assert.equal(await finishMacTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "succeeded");
+    const after = await getRecording(pool, OWNER, pageId);
+    assert.deepEqual(after?.segments, RESULT);
+    const revision = after?.revision;
+    assert.equal(await finishMacTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "succeeded");
+    assert.equal((await getRecording(pool, OWNER, pageId))?.revision, revision, "a completion retry does not apply the transcript twice");
+    assert.equal(await finishMacTranscription(pool, OTHER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "stale");
+    assert.equal(await finishMacTranscription(pool, OWNER, randomUUID(), started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "stale");
+  });
+
+  it("resumes only the same Mac generation, settings and audio manifest, and rejects late results", async () => {
+    const pageId = await uploadedRecording(pool);
+    const operationId = randomUUID();
+    const started = await startMacTranscription(pool, OWNER, pageId, { operationId, terms: [] });
+    assert.ok(started?.status === "created");
+    assert.equal(await failMacTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation, "stopped"), true);
+    assert.equal(await finishMacTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "stale");
+    assert.equal(await resumeMacTranscription(pool, OTHER, pageId, started.run.id, operationId, started.generation), null);
+    const resumed = await resumeMacTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation);
+    assert.ok(resumed);
+    assert.equal(resumed.generation, started.generation + 1);
+    const resumedAgain = await resumeMacTranscription(pool, OWNER, pageId, started.run.id, operationId, resumed.generation);
+    assert.equal(resumedAgain?.run.id, resumed.run.id);
+    assert.equal(resumedAgain?.generation, resumed.generation);
+
+    assert.equal(await failMacTranscription(pool, OWNER, pageId, started.run.id, operationId, resumed.generation, "internal"), true);
+    await pool.query("UPDATE assets SET bytes = bytes + 1 WHERE page_id = $1", [pageId]);
+    assert.equal(await resumeMacTranscription(pool, OWNER, pageId, started.run.id, operationId, resumed.generation), null, "changed audio cannot resume");
+    assert.equal((await macTranscriptionStatus(pool, OWNER, pageId))?.run.status, "failed");
+    assert.equal(await macTranscriptionStatus(pool, OTHER, pageId), null);
+  });
+
+  it("writes a Mac result to its candidate without replacing the edited canonical transcript", async () => {
+    const pageId = await uploadedRecording(pool);
+    const first = await startMacTranscription(pool, OWNER, pageId, { operationId: randomUUID(), terms: [] });
+    assert.ok(first?.status === "created");
+    assert.equal(await finishMacTranscription(pool, OWNER, pageId, first.run.id, first.operationId, first.generation, { segments: RESULT, durationSec: 5 }), "succeeded");
+    const edited = await updateRecording(pool, OWNER, pageId, 2, (recording) => ({
+      ...recording,
+      segments: [{ ...recording.segments[0]!, text: "利用者が直した正本" }, recording.segments[1]!],
+    }));
+    assert.equal(edited?.status, "ok");
+    const before = await getRecording(pool, OWNER, pageId);
+    const added = await addRecordingCandidate(pool, OWNER, pageId, {
+      name: "Gemini CLI 案",
+      engine: "gemini-cli",
+      primaryName: "現在の正本",
+    });
+    assert.ok(added?.status === "created");
+    const operationId = randomUUID();
+    const candidateRun = await startMacTranscription(pool, OWNER, pageId, { operationId, terms: [], candidate: added.candidate.id });
+    assert.ok(candidateRun?.status === "created");
+    const alternative = [{ start: 0, end: 3, text: "別案の合成段落", speaker: 1 }];
+    assert.equal(
+      await finishMacTranscription(pool, OWNER, pageId, candidateRun.run.id, operationId, candidateRun.generation, { segments: alternative, durationSec: 3 }),
+      "succeeded",
+    );
+    assert.deepEqual((await getRecording(pool, OWNER, pageId))?.segments, before?.segments, "canonical transcript remains untouched");
+    assert.deepEqual((await getRecordingCandidate(pool, OWNER, pageId, added.candidate.id))?.segments, alternative);
+  });
+
+  it("rejects a Mac result when an audio mutation holding the recording lock wins", async () => {
+    const pageId = await uploadedRecording(pool);
+    const operationId = randomUUID();
+    const started = await startMacTranscription(pool, OWNER, pageId, { operationId, terms: [] });
+    assert.ok(started?.status === "created");
+    const mutation = await pool.connect();
+    try {
+      await mutation.query("BEGIN");
+      await mutation.query("SELECT 1 FROM page_recordings WHERE owner = $1 AND page_id = $2 FOR UPDATE", [OWNER, pageId]);
+      await mutation.query("UPDATE assets SET bytes = bytes + 1 WHERE owner = $1 AND page_id = $2", [OWNER, pageId]);
+      const finishing = finishMacTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await mutation.query("COMMIT");
+      assert.equal(await finishing, "superseded");
+    } finally {
+      await mutation.query("ROLLBACK").catch(() => undefined);
+      mutation.release();
+    }
+    assert.deepEqual((await getRecording(pool, OWNER, pageId))?.segments, []);
+    assert.equal((await runRow(pool, started.run.id))?.status, "failed");
+  });
+
+  it("does not save a Mac candidate result after its page was deleted", async () => {
+    const pageId = await uploadedRecording(pool);
+    const added = await addRecordingCandidate(pool, OWNER, pageId, { name: "削除競合案", engine: "gemini-cli", primaryName: "現在の正本" });
+    assert.ok(added?.status === "created");
+    const operationId = randomUUID();
+    const started = await startMacTranscription(pool, OWNER, pageId, { operationId, terms: [], candidate: added.candidate.id });
+    assert.ok(started?.status === "created");
+    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE owner = $1 AND id = $2", [OWNER, pageId]);
+    assert.equal(
+      await finishMacTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }),
+      "superseded",
+    );
+    const row = (await pool.query<{ segments: unknown }>("SELECT segments FROM page_recording_candidates WHERE id = $1", [added.candidate.id])).rows[0];
+    assert.deepEqual(row?.segments, []);
   });
 
   it("keeps the invariants when the code is bypassed", async () => {

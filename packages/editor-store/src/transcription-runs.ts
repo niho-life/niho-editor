@@ -36,9 +36,10 @@ import type { OwnerId, PageLang, Queryable } from "./types.ts";
  * 本文・音声・エンジンの応答・鍵はこの表に持たない。
  */
 
-/** 使えるエンジン（0012 の CHECK と、gemini を足した migration と同じ並び）。 */
+/** server runner で使えるエンジン。Mac CLI は専用開始口だけで作り、ここへは混ぜない。 */
 export const TRANSCRIPTION_ENGINES = ["deepgram", "fake", "gemini"] as const;
 export type TranscriptionEngineName = (typeof TRANSCRIPTION_ENGINES)[number];
+export type TranscriptionLedgerEngineName = TranscriptionEngineName | "gemini-cli";
 
 export const TRANSCRIPTION_RUN_STATUSES = ["queued", "running", "succeeded", "failed"] as const;
 export type TranscriptionRunStatus = (typeof TRANSCRIPTION_RUN_STATUSES)[number];
@@ -53,6 +54,7 @@ export const TRANSCRIPTION_ERROR_CODES = [
   "engine_bad_response",
   "too_large",
   "internal",
+  "stopped",
 ] as const;
 export type TranscriptionErrorCode = (typeof TRANSCRIPTION_ERROR_CODES)[number];
 
@@ -64,7 +66,9 @@ export const TRANSCRIPTION_TERM_MAX_CHARS = 64;
 export type TranscriptionRunView = {
   id: string;
   status: TranscriptionRunStatus;
-  engine: TranscriptionEngineName;
+  engine: TranscriptionLedgerEngineName;
+  /** 古い呼び出し側では未指定＝server。API応答では常に明示する。 */
+  executor?: "server" | "mac-cli";
   language: PageLang;
   errorCode: TranscriptionErrorCode | null;
   createdAt: string;
@@ -107,9 +111,43 @@ export type EnqueueTranscriptionResult =
   /** 指定した案がこのページに無い（#36 段 3b-4）。 */
   | { status: "candidate_missing" };
 
+/** Mac の Antigravity CLI 実行で固定する設定。画面や native から任意のモデル・分割秒を渡さない。 */
+export const MAC_CLI_TRANSCRIPTION_SETTINGS = Object.freeze({ model: "gemini-3.8-flash", effort: "low", targetSec: 600 } as const);
+
+export type MacAudioManifestPart = {
+  partIndex: number;
+  bytes: number;
+  contentType: string;
+  sha256: string;
+  durationSec: number | null;
+  offsetSec: number;
+};
+
+export type MacTranscriptionStartInput = {
+  operationId: string;
+  language?: PageLang;
+  terms: readonly string[];
+  candidate?: string | null;
+};
+
+export type MacTranscriptionRun = {
+  run: TranscriptionRunView;
+  generation: number;
+  operationId: string;
+  settings: typeof MAC_CLI_TRANSCRIPTION_SETTINGS;
+  audioManifest: MacAudioManifestPart[];
+  candidateId: string | null;
+};
+
+export type StartMacTranscriptionResult =
+  | ({ status: "created" | "existing" } & MacTranscriptionRun)
+  | { status: "audio_not_ready" | "audio_expired" | "has_transcript" | "candidate_missing" | "other_run_active" | "operation_conflict" };
+
 /** 実行する側が claim した run。audio は本人の・ゴミ箱でないページの音声（無ければ null）。 */
 export type ClaimedTranscription = {
-  run: TranscriptionRunView & {
+  run: Omit<TranscriptionRunView, "engine" | "executor"> & {
+    engine: TranscriptionEngineName;
+    executor?: "server";
     owner: OwnerId;
     pageId: string;
     diarize: boolean;
@@ -140,7 +178,8 @@ type RunRow = {
   candidate: string | null;
   id: string;
   status: TranscriptionRunStatus;
-  engine: TranscriptionEngineName;
+  engine: TranscriptionLedgerEngineName;
+  executor: "server" | "mac-cli";
   language: PageLang;
   error_code: TranscriptionErrorCode | null;
   created_at: Date;
@@ -148,13 +187,14 @@ type RunRow = {
   finished_at: Date | null;
 };
 
-const RUN_COLUMNS = "t.id, t.status, t.engine, t.language, t.error_code, t.created_at, t.started_at, t.finished_at, t.candidate";
+const RUN_COLUMNS = "t.id, t.status, t.engine, t.executor, t.language, t.error_code, t.created_at, t.started_at, t.finished_at, t.candidate";
 
 function toView(row: RunRow): TranscriptionRunView {
   return {
     id: row.id,
     status: row.status,
     engine: row.engine,
+    executor: row.executor,
     language: row.language,
     errorCode: row.error_code,
     createdAt: row.created_at.toISOString(),
@@ -189,6 +229,45 @@ function assertEnqueueInput(input: EnqueueTranscriptionInput): void {
   if (input.candidate !== undefined && input.candidate !== null && !isPageId(input.candidate)) {
     throw new TypeError("editor-store: candidate must be a UUID");
   }
+}
+
+function audioManifest(parts: readonly AudioPart[]): MacAudioManifestPart[] {
+  return parts.map(({ partIndex, bytes, contentType, sha256, durationSec, offsetSec }) => ({
+    partIndex,
+    bytes,
+    contentType,
+    sha256,
+    durationSec,
+    offsetSec,
+  }));
+}
+
+function sameManifest(left: unknown, right: readonly MacAudioManifestPart[]): boolean {
+  if (!Array.isArray(left) || left.length !== right.length) return false;
+  return left.every((value, index) => {
+    if (typeof value !== "object" || value === null) return false;
+    const part = value as Record<string, unknown>;
+    const expected = right[index];
+    return (
+      expected !== undefined &&
+      part.partIndex === expected.partIndex &&
+      part.bytes === expected.bytes &&
+      part.contentType === expected.contentType &&
+      part.sha256 === expected.sha256 &&
+      part.durationSec === expected.durationSec &&
+      part.offsetSec === expected.offsetSec
+    );
+  });
+}
+
+function sameMacSettings(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const settings = value as Record<string, unknown>;
+  return (
+    settings.model === MAC_CLI_TRANSCRIPTION_SETTINGS.model &&
+    settings.effort === MAC_CLI_TRANSCRIPTION_SETTINGS.effort &&
+    settings.targetSec === MAC_CLI_TRANSCRIPTION_SETTINGS.targetSec
+  );
 }
 
 type LockRow = {
@@ -339,6 +418,211 @@ export async function enqueueTranscription(
   }
 }
 
+type MacRunRow = RunRow & {
+  owner: string;
+  base_revision: number;
+  generation: number;
+  operation_id: string;
+  settings: unknown;
+  audio_manifest: unknown;
+  page_id: string;
+};
+
+const MAC_RUN_COLUMNS = `${RUN_COLUMNS}, t.base_revision, t.generation, t.operation_id, t.settings, t.audio_manifest, t.page_id, t.owner`;
+const FIND_MAC_OPERATION_SQL = `SELECT ${MAC_RUN_COLUMNS} FROM transcription_runs AS t WHERE t.owner = $1 AND t.operation_id = $2 AND t.executor = 'mac-cli'`;
+const INSERT_MAC_RUN_SQL = `
+INSERT INTO transcription_runs AS t
+  (owner, page_id, engine, executor, status, language, diarize, replace, terms, candidate, base_revision,
+   generation, operation_id, settings, audio_manifest, started_at)
+VALUES ($1, $2, 'gemini-cli', 'mac-cli', 'running', $3, true, false, $4::jsonb, $5::uuid, $6,
+        1, $7::uuid, $8::jsonb, $9::jsonb, clock_timestamp())
+RETURNING ${MAC_RUN_COLUMNS}`;
+
+function macRun(row: MacRunRow): MacTranscriptionRun {
+  return {
+    run: toView(row),
+    generation: row.generation,
+    operationId: row.operation_id,
+    settings: MAC_CLI_TRANSCRIPTION_SETTINGS,
+    audioManifest: row.audio_manifest as MacAudioManifestPart[],
+    candidateId: row.candidate,
+  };
+}
+
+/**
+ * Mac CLI の run を running で作る。既存 server run と同じ録音 lock / active unique indexを使うが、taskへは積まない。
+ * operationId の再送は同じ page の同じ run を返し、別 page への使い回しは拒否する。
+ */
+export async function startMacTranscription(
+  pool: Connectable,
+  owner: OwnerId,
+  pageId: string,
+  input: MacTranscriptionStartInput,
+): Promise<StartMacTranscriptionResult | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId)) return null;
+  if (!isPageId(input.operationId)) throw new TypeError("editor-store: operation id must be a UUID");
+  if (input.language !== undefined && input.language !== "ja" && input.language !== "en") throw new TypeError("editor-store: language must be ja or en");
+  if (!Array.isArray(input.terms) || input.terms.length > TRANSCRIPTION_TERMS_MAX || !input.terms.every(isTranscriptionTerm)) {
+    throw new TypeError("editor-store: terms are not valid");
+  }
+  const candidate = input.candidate ?? null;
+  if (candidate !== null && !isPageId(candidate)) throw new TypeError("editor-store: candidate must be a UUID");
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    try {
+      const prior = (await client.query<MacRunRow>(FIND_MAC_OPERATION_SQL, [owner, input.operationId])).rows[0];
+      if (prior) {
+        if (prior.page_id === pageId && !(await client.query<LockRow>(LOCK_RECORDING_SQL, [owner, pageId])).rows[0]) {
+          await rollback(client);
+          return null;
+        }
+        await rollback(client);
+        return prior.page_id === pageId ? { status: "existing", ...macRun(prior) } : { status: "operation_conflict" };
+      }
+      const recording = (await client.query<LockRow>(LOCK_RECORDING_SQL, [owner, pageId])).rows[0];
+      if (!recording) {
+        await rollback(client);
+        return null;
+      }
+      // 同じoperationが録音lockを待つ間に作られた場合も、競合ではなく同じrunを返す。
+      const concurrent = (await client.query<MacRunRow>(FIND_MAC_OPERATION_SQL, [owner, input.operationId])).rows[0];
+      if (concurrent) {
+        await rollback(client);
+        return concurrent.page_id === pageId ? { status: "existing", ...macRun(concurrent) } : { status: "operation_conflict" };
+      }
+      if (recording.audio_status !== "uploaded" || recording.parts_uploading) {
+        await rollback(client);
+        return { status: "audio_not_ready" };
+      }
+      if (recording.expired || recording.parts_expired) {
+        await rollback(client);
+        return { status: "audio_expired" };
+      }
+      if (candidate !== null && (await client.query(CANDIDATE_EXISTS_SQL, [owner, pageId, candidate])).rowCount !== 1) {
+        await rollback(client);
+        return { status: "candidate_missing" };
+      }
+      if (await activeRun(client, owner, pageId)) {
+        await rollback(client);
+        return { status: "other_run_active" };
+      }
+      if (candidate === null && recording.has_segments) {
+        await rollback(client);
+        return { status: "has_transcript" };
+      }
+      const parts = await listAudioParts(client, owner, pageId);
+      if (parts.length === 0 || parts.some((part) => part.status !== "uploaded")) {
+        await rollback(client);
+        return { status: "audio_not_ready" };
+      }
+      const manifest = audioManifest(parts);
+      const inserted = await client.query<MacRunRow>(INSERT_MAC_RUN_SQL, [
+        owner,
+        pageId,
+        input.language ?? recording.language,
+        JSON.stringify([...input.terms]),
+        candidate,
+        recording.base_revision,
+        input.operationId,
+        JSON.stringify(MAC_CLI_TRANSCRIPTION_SETTINGS),
+        JSON.stringify(manifest),
+      ]);
+      const row = inserted.rows[0];
+      if (!row) throw new Error("editor-store: insert returned no Mac transcription run");
+      await client.query("COMMIT");
+      return { status: "created", ...macRun(row) };
+    } catch (error) {
+      await rollback(client);
+      if (typeof error === "object" && error !== null &&
+        (error as { code?: unknown }).code === "23505" &&
+        (error as { constraint?: unknown }).constraint === "transcription_runs_mac_operation_idx") {
+        const prior = (await client.query<MacRunRow>(FIND_MAC_OPERATION_SQL, [owner, input.operationId])).rows[0];
+        if (prior) return prior.page_id === pageId ? { status: "existing", ...macRun(prior) } : { status: "operation_conflict" };
+      }
+      if (isInvalidTextRepresentation(error)) return null;
+      throw error;
+    }
+  } finally {
+    client.release();
+  }
+}
+
+const RESUME_MAC_SQL = `
+UPDATE transcription_runs AS t
+   SET status = 'running', error_code = NULL, generation = t.generation + 1,
+       started_at = clock_timestamp(), finished_at = NULL
+ WHERE t.id = $1 AND t.owner = $2 AND t.operation_id = $3 AND t.generation = $4
+   AND t.executor = 'mac-cli' AND t.status = 'failed'
+RETURNING ${MAC_RUN_COLUMNS}`;
+
+/** 停止・CLI失敗後の同じrunを、同じ音声集合・設定のまま次の世代で再開する。 */
+export async function resumeMacTranscription(
+  pool: Connectable,
+  owner: OwnerId,
+  pageId: string,
+  runId: string,
+  operationId: string,
+  generation: number,
+): Promise<MacTranscriptionRun | null> {
+  assertOwner(owner);
+  if (![pageId, runId, operationId].every(isPageId) || !Number.isSafeInteger(generation) || generation < 1) return null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    try {
+      const row = (await client.query<MacRunRow>(`SELECT ${MAC_RUN_COLUMNS} FROM transcription_runs AS t WHERE t.id = $1 FOR UPDATE`, [runId])).rows[0];
+      if (!row || row.owner !== owner || row.page_id !== pageId || row.operation_id !== operationId || row.generation !== generation) {
+        await rollback(client);
+        return null;
+      }
+      if (row.status === "running") {
+        await rollback(client);
+        return macRun(row);
+      }
+      if (row.status !== "failed" || row.executor !== "mac-cli" || !sameMacSettings(row.settings)) {
+        await rollback(client);
+        return null;
+      }
+      const recording = (await client.query<LockRow>(LOCK_RECORDING_SQL, [owner, pageId])).rows[0];
+      if (!recording || recording.audio_status !== "uploaded" || recording.parts_uploading || recording.expired || recording.parts_expired) {
+        await rollback(client);
+        return null;
+      }
+      if (row.candidate === null && recording.base_revision !== row.base_revision) {
+        await rollback(client);
+        return null;
+      }
+      if (row.candidate !== null && (await client.query(CANDIDATE_EXISTS_SQL, [owner, pageId, row.candidate])).rowCount !== 1) {
+        await rollback(client);
+        return null;
+      }
+      if (!sameManifest(row.audio_manifest, audioManifest(await listAudioParts(client, owner, pageId)))) {
+        await rollback(client);
+        return null;
+      }
+      if (await activeRun(client, owner, pageId)) {
+        await rollback(client);
+        return null;
+      }
+      const resumed = (await client.query<MacRunRow>(RESUME_MAC_SQL, [runId, owner, operationId, generation])).rows[0];
+      if (!resumed) {
+        await rollback(client);
+        return null;
+      }
+      await client.query("COMMIT");
+      return macRun(resumed);
+    } catch (error) {
+      await rollback(client);
+      throw error;
+    }
+  } finally {
+    client.release();
+  }
+}
+
 type ClaimRow = RunRow & { owner: string; page_id: string; diarize: boolean; replace: boolean; terms: unknown; generation: number; candidate: string | null };
 
 // queued の run だけを running にして世代を 1 つ進める（同時に何本来ても 1 本だけが通る）。$1 run id。
@@ -347,7 +631,7 @@ UPDATE transcription_runs AS t
    SET status = 'running',
        generation = t.generation + 1,
        started_at = GREATEST(clock_timestamp(), t.created_at)
- WHERE t.id = $1 AND t.status = 'queued'
+ WHERE t.id = $1 AND t.status = 'queued' AND t.executor = 'server'
 RETURNING ${RUN_COLUMNS}, t.owner, t.page_id, t.diarize, t.replace, t.terms, t.generation, t.candidate`;
 
 /**
@@ -369,11 +653,11 @@ export async function claimRun(db: Queryable, runId: string): Promise<ClaimedTra
   } catch (error) {
     // claim の UPDATE は済んでいる（running・世代 1 以上）。呼び出し側の「claim できたか分からない」の失敗（世代 0）は当たらないので、
     // claim した世代でここで失敗にする（running のまま残さない）。この更新も届かなければ、掃除（sweepStaleRuns）が拾う
-    await db.query(FAIL_SQL, [runId, row.generation, "internal"]).catch(() => undefined);
+    await db.query(FAIL_SERVER_SQL, [runId, row.generation, "internal"]).catch(() => undefined);
     throw error;
   }
   return {
-    run: { ...toView(row), owner: row.owner, pageId: row.page_id, diarize: row.diarize, replace: row.replace, terms, candidateId: row.candidate },
+    run: { ...toView(row), engine: row.engine as TranscriptionEngineName, executor: "server", owner: row.owner, pageId: row.page_id, diarize: row.diarize, replace: row.replace, terms, candidateId: row.candidate },
     generation: row.generation,
     audio,
     parts,
@@ -387,17 +671,26 @@ type FinishLockRow = {
   status: TranscriptionRunStatus;
   generation: number;
   replace: boolean;
-  engine: TranscriptionEngineName;
+  engine: TranscriptionLedgerEngineName;
   candidate: string | null;
+  executor: "server" | "mac-cli";
+  operation_id: string | null;
+  audio_manifest: unknown;
 };
 
-const LOCK_RUN_SQL = "SELECT owner, page_id, status, generation, replace, engine, candidate, base_revision FROM transcription_runs WHERE id = $1 FOR UPDATE";
+const LOCK_RUN_SQL = "SELECT owner, page_id, status, generation, replace, engine, candidate, base_revision, executor, operation_id, audio_manifest FROM transcription_runs WHERE id = $1 FOR UPDATE";
 
 // 録音の行を押さえる（run → 録音 の順に lock を取る。開始は録音の行だけを押さえて run の行を lock しないので、順が逆転しない）
 const LOCK_SEGMENTS_SQL = `
 SELECT jsonb_array_length(segments) > 0 AS has_segments, revision AS current_revision
   FROM page_recordings
  WHERE owner = $1 AND page_id = $2
+   FOR UPDATE`;
+
+const LOCK_ACTIVE_PAGE_SQL = `
+SELECT 1
+  FROM pages
+ WHERE owner = $1 AND id = $2 AND deleted_at IS NULL
    FOR UPDATE`;
 
 // 段落を書く。話者名の表は空にする（番号の付け方が変わるので、前の名前は当てはまらない）。revision を進めるので、
@@ -423,12 +716,20 @@ UPDATE transcription_runs
 // $1 run id / $2 generation / $3 error code。作ったばかりの queued の run は世代 0 なので、世代 0 を渡すと「一度も claim も積み直しも
 // されていない」run だけを失敗にできる（積めなかったとき）。claim のあと・掃除が積み直したあとは世代が 1 以上なので、
 // 世代 0 の呼び出しは何もしない（その run は掃除が拾う）。
-const FAIL_SQL = `
+const FAIL_SERVER_SQL = `
 UPDATE transcription_runs
    SET status = 'failed',
        error_code = $3,
        finished_at = GREATEST(clock_timestamp(), COALESCE(started_at, created_at))
- WHERE id = $1 AND generation = $2 AND status IN ('queued', 'running')`;
+ WHERE id = $1 AND generation = $2 AND executor = 'server' AND status IN ('queued', 'running')`;
+
+// Mac の確定 transaction 内部で、照合に失敗した同じ世代だけを終える。server worker の失敗口とは混ぜない。
+const FAIL_MAC_INTERNAL_SQL = `
+UPDATE transcription_runs
+   SET status = 'failed',
+       error_code = $3,
+       finished_at = GREATEST(clock_timestamp(), COALESCE(started_at, created_at))
+ WHERE id = $1 AND generation = $2 AND executor = 'mac-cli' AND status = 'running'`;
 
 function cleanOutput(output: TranscriptionOutput): { segments: RecordingSegment[]; durationSec: number | null } {
   if (!output || !Array.isArray(output.segments)) throw new InvalidRecordingError("segments");
@@ -452,7 +753,15 @@ function cleanOutput(output: TranscriptionOutput): { segments: RecordingSegment[
  * - それ以外: page_recordings の段落・話者名（空）・エンジン・長さを書いて revision を 1 進め、ページの更新時刻も進め、run を succeeded にする
  * 世代が違う・running でない・不正な id は何もしない（stale）。結果の形が規則に合わなければ InvalidRecordingError（何も書かない）。
  */
-export async function finishRun(pool: Connectable, runId: string, generation: number, output: TranscriptionOutput): Promise<FinishTranscriptionResult> {
+type MacFinishGuard = { owner: OwnerId; pageId: string; operationId: string };
+
+async function finishRunChecked(
+  pool: Connectable,
+  runId: string,
+  generation: number,
+  output: TranscriptionOutput,
+  mac: MacFinishGuard | null,
+): Promise<FinishTranscriptionResult> {
   if (!Number.isSafeInteger(generation) || generation < 1) throw new TypeError("editor-store: generation must be a positive integer");
   const clean = cleanOutput(output);
   if (typeof runId !== "string" || !isPageId(runId)) return "stale";
@@ -462,16 +771,53 @@ export async function finishRun(pool: Connectable, runId: string, generation: nu
     await client.query("BEGIN");
     try {
       const run = (await client.query<FinishLockRow>(LOCK_RUN_SQL, [runId])).rows[0];
+      if (
+        mac && run?.status === "succeeded" && run.generation === generation && run.executor === "mac-cli" &&
+        run.owner === mac.owner && run.page_id === mac.pageId && run.operation_id === mac.operationId
+      ) {
+        // 保存応答だけ失われた再送。本文は再反映せず、同じ成功を返す。
+        await rollback(client);
+        return "succeeded";
+      }
       if (!run || run.status !== "running" || run.generation !== generation) {
         await rollback(client);
         return "stale";
       }
+      let macRecording: LockRow | null = null;
+      if (mac) {
+        if (run.executor !== "mac-cli" || run.owner !== mac.owner || run.page_id !== mac.pageId || run.operation_id !== mac.operationId) {
+          await rollback(client);
+          return "stale";
+        }
+        macRecording = (await client.query<LockRow>(LOCK_RECORDING_SQL, [run.owner, run.page_id])).rows[0] ?? null;
+        const pageExists = macRecording && (await client.query(LOCK_ACTIVE_PAGE_SQL, [run.owner, run.page_id])).rowCount === 1;
+        if (!macRecording || !pageExists) {
+          await client.query(FAIL_MAC_INTERNAL_SQL, [runId, generation, "internal"]);
+          await client.query("COMMIT");
+          return "superseded";
+        }
+        const current = audioManifest(await listAudioParts(client, run.owner, run.page_id));
+        if (!sameManifest(run.audio_manifest, current)) {
+          await client.query(FAIL_MAC_INTERNAL_SQL, [runId, generation, "internal"]);
+          await client.query("COMMIT");
+          return "superseded";
+        }
+      } else if (run.executor !== "server") {
+        // worker 側の確定口から Mac run を触らない。
+        await rollback(client);
+        return "stale";
+      }
       if (run.candidate !== null) {
+        if (mac && (await client.query(CANDIDATE_EXISTS_SQL, [run.owner, run.page_id, run.candidate])).rowCount !== 1) {
+          await client.query(FAIL_MAC_INTERNAL_SQL, [runId, generation, "internal"]);
+          await client.query("COMMIT");
+          return "superseded";
+        }
         // 案に書く run: 正本（page_recordings）には触らない（採用のときに写す）
         const written = await writeCandidateSegments(client, run.candidate, { segments: clean.segments, durationSec: clean.durationSec, engine: run.engine });
         if (written === "missing") {
           // 案が消えた: 書かずに失敗にする
-          await client.query(FAIL_SQL, [runId, generation, "internal"]);
+          await client.query(mac ? FAIL_MAC_INTERNAL_SQL : FAIL_SERVER_SQL, [runId, generation, "internal"]);
           await client.query("COMMIT");
           return "superseded";
         }
@@ -481,10 +827,12 @@ export async function finishRun(pool: Connectable, runId: string, generation: nu
         await client.query("COMMIT");
         return "succeeded";
       }
-      const recording = (await client.query<{ has_segments: boolean; current_revision: number }>(LOCK_SEGMENTS_SQL, [run.owner, run.page_id])).rows[0];
+      const recording = mac
+        ? macRecording && { has_segments: macRecording.has_segments, current_revision: macRecording.base_revision }
+        : (await client.query<{ has_segments: boolean; current_revision: number }>(LOCK_SEGMENTS_SQL, [run.owner, run.page_id])).rows[0];
       if (!recording || recording.current_revision !== run.base_revision || (recording.has_segments && !run.replace)) {
         // 開始後に録音・段落が変わった（または録音が無くなった）: replace指定でも利用者の編集を上書きしない
-        await client.query(FAIL_SQL, [runId, generation, "internal"]);
+        await client.query(mac ? FAIL_MAC_INTERNAL_SQL : FAIL_SERVER_SQL, [runId, generation, "internal"]);
         await client.query("COMMIT");
         return "superseded";
       }
@@ -503,6 +851,25 @@ export async function finishRun(pool: Connectable, runId: string, generation: nu
   }
 }
 
+export function finishRun(pool: Connectable, runId: string, generation: number, output: TranscriptionOutput): Promise<FinishTranscriptionResult> {
+  return finishRunChecked(pool, runId, generation, output, null);
+}
+
+/** 本人の同一 operation だけが Mac run を確定できる。 */
+export function finishMacTranscription(
+  pool: Connectable,
+  owner: OwnerId,
+  pageId: string,
+  runId: string,
+  operationId: string,
+  generation: number,
+  output: TranscriptionOutput,
+): Promise<FinishTranscriptionResult> {
+  assertOwner(owner);
+  if (!isPageId(pageId) || !isPageId(operationId)) return Promise.resolve("stale");
+  return finishRunChecked(pool, runId, generation, output, { owner, pageId, operationId });
+}
+
 /**
  * 実行の失敗。世代が一致して running のとき（または世代 0 で、まだ claim されていない queued のとき）だけ failed にする。
  * 失敗にしたら true、何もしなかったら false（掃除・別の実行のあと・不正な id）。
@@ -511,7 +878,30 @@ export async function failRun(db: Queryable, runId: string, generation: number, 
   if (!isTranscriptionErrorCode(errorCode)) throw new TypeError("editor-store: unknown transcription error code");
   if (!Number.isSafeInteger(generation) || generation < 0) throw new TypeError("editor-store: generation must be a non-negative integer");
   if (typeof runId !== "string" || !isPageId(runId)) return false;
-  const result = await db.query(FAIL_SQL, [runId, generation, errorCode]);
+  const result = await db.query(FAIL_SERVER_SQL, [runId, generation, errorCode]);
+  return result.rowCount === 1;
+}
+
+const FAIL_MAC_SQL = `
+UPDATE transcription_runs
+   SET status = 'failed', error_code = $6,
+       finished_at = GREATEST(clock_timestamp(), COALESCE(started_at, created_at))
+ WHERE id = $1 AND owner = $2 AND page_id = $3 AND operation_id = $4 AND generation = $5
+   AND executor = 'mac-cli' AND status = 'running'`;
+
+/** Mac からの停止・失敗。owner / page / operation / generation が一致する実行中の行だけを終える。 */
+export async function failMacTranscription(
+  db: Queryable,
+  owner: OwnerId,
+  pageId: string,
+  runId: string,
+  operationId: string,
+  generation: number,
+  errorCode: TranscriptionErrorCode,
+): Promise<boolean> {
+  assertOwner(owner);
+  if (!isPageId(pageId) || !isPageId(runId) || !isPageId(operationId) || !Number.isSafeInteger(generation) || generation < 1 || !isTranscriptionErrorCode(errorCode)) return false;
+  const result = await db.query(FAIL_MAC_SQL, [runId, owner, pageId, operationId, generation, errorCode]);
   return result.rowCount === 1;
 }
 
@@ -524,7 +914,7 @@ SELECT ${RUN_COLUMNS}
   JOIN pages AS p ON p.owner = r.owner AND p.id = r.page_id
   LEFT JOIN LATERAL (
     SELECT * FROM transcription_runs AS x
-     WHERE x.owner = r.owner AND x.page_id = r.page_id
+     WHERE x.owner = r.owner AND x.page_id = r.page_id AND x.executor = 'server'
      ORDER BY x.created_at DESC, x.id DESC
      LIMIT 1
   ) AS t ON true
@@ -547,6 +937,30 @@ export async function transcriptionStatus(db: Queryable, owner: OwnerId, pageId:
   }
 }
 
+const MAC_STATUS_SQL = `
+SELECT ${MAC_RUN_COLUMNS}
+  FROM page_recordings AS r
+  JOIN pages AS p ON p.owner = r.owner AND p.id = r.page_id
+  JOIN LATERAL (
+    SELECT * FROM transcription_runs AS x
+     WHERE x.owner = r.owner AND x.page_id = r.page_id AND x.executor = 'mac-cli'
+     ORDER BY x.created_at DESC, x.id DESC LIMIT 1
+  ) AS t ON true
+ WHERE r.owner = $1 AND r.page_id = $2 AND p.deleted_at IS NULL`;
+
+/** 本人の最新 Mac run。operation は本人にだけ返り、別 owner / 削除済みページでは見えない。 */
+export async function macTranscriptionStatus(db: Queryable, owner: OwnerId, pageId: string): Promise<MacTranscriptionRun | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId)) return null;
+  try {
+    const row = (await db.query<MacRunRow>(MAC_STATUS_SQL, [owner, pageId])).rows[0];
+    return row ? macRun(row) : null;
+  } catch (error) {
+    if (isInvalidTextRepresentation(error)) return null;
+    throw error;
+  }
+}
+
 /** 本人の・ゴミ箱でないページの最新の run。無ければ null（run が無い・別の人・存在しない・不正な id・削除済み・録音の無いページ）。 */
 export async function latestRun(db: Queryable, owner: OwnerId, pageId: string): Promise<TranscriptionRunView | null> {
   return (await transcriptionStatus(db, owner, pageId))?.run ?? null;
@@ -558,8 +972,9 @@ UPDATE transcription_runs
    SET status = 'failed',
        error_code = CASE WHEN status = 'running' THEN 'engine_timeout' ELSE 'internal' END,
        finished_at = GREATEST($1::timestamptz, COALESCE(started_at, created_at))
- WHERE (status = 'running' AND started_at < $1::timestamptz - make_interval(secs => $2::double precision))
-    OR (status = 'queued' AND created_at < $1::timestamptz - make_interval(secs => $2::double precision))
+ WHERE executor = 'server'
+   AND ((status = 'running' AND started_at < $1::timestamptz - make_interval(secs => $2::double precision))
+    OR (status = 'queued' AND created_at < $1::timestamptz - make_interval(secs => $2::double precision)))
 RETURNING id`;
 
 /** 積み直しの対象（queued の run。世代は task の名前に入れる）。 */
@@ -569,7 +984,7 @@ export type QueuedTranscriptionRun = { id: string; generation: number };
 const LIST_QUEUED_SQL = `
 SELECT id, generation
   FROM transcription_runs
- WHERE status = 'queued' AND created_at < $1::timestamptz
+ WHERE status = 'queued' AND executor = 'server' AND created_at < $1::timestamptz
  ORDER BY created_at, id
  LIMIT $2`;
 
@@ -594,7 +1009,7 @@ export async function listQueuedRuns(db: Queryable, options: { olderThan: Date; 
 const REQUEUE_SQL = `
 UPDATE transcription_runs
    SET generation = generation + 1
- WHERE id = $1 AND generation = $2 AND status = 'queued'
+ WHERE id = $1 AND generation = $2 AND status = 'queued' AND executor = 'server'
 RETURNING generation`;
 
 /**

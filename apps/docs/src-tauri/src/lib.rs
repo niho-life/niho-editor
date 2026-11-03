@@ -43,6 +43,7 @@ mod samples;
 mod secrets;
 mod shell;
 mod shell_ai;
+mod shell_gemini_transcription;
 #[cfg(target_os = "macos")]
 mod single_instance;
 mod speech;
@@ -60,6 +61,7 @@ use serde_json::{json, Value};
 use speech::{SpeechError, SpeechJob};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use store::{
@@ -1215,7 +1217,7 @@ async fn run_turn_with(
   if let Some(op) = &personal {
     personal_run::send_guard(cloud, op, personal_run::SendKind::Turn).await?;
   }
-  let final_event = drive_turn_with(state, turn_id, turn, on_event, personal).await;
+  let final_event = drive_turn_with(state, turn_id, turn, on_event, personal, None).await;
   Ok(TurnResult { final_event })
 }
 
@@ -1229,6 +1231,7 @@ async fn drive_turn_with(
   turn: TurnRequest,
   on_event: Channel<Value>,
   personal: Option<Arc<personal_run::PersonalOperation>>,
+  external_stop: Option<Arc<AtomicBool>>,
 ) -> Value {
   let (done_sender, done_receiver) = std::sync::mpsc::channel::<Value>();
   let envelope_turn_id = turn_id.clone();
@@ -1248,7 +1251,9 @@ async fn drive_turn_with(
   if let Ok(mut turns) = state.turns.lock() {
     turns.insert(turn_id.clone(), handle.clone());
   }
-  if personal.as_ref().is_some_and(|op| op.stop_requested()) {
+  if personal.as_ref().is_some_and(|op| op.stop_requested())
+    || external_stop.as_ref().is_some_and(|stop| stop.load(Ordering::SeqCst))
+  {
     handle.stop();
   }
   let final_event = tauri::async_runtime::spawn_blocking(move || done_receiver.recv())
@@ -2012,7 +2017,7 @@ async fn transcribe_audio_part_with(
       return Err(error);
     }
   }
-  let final_event = drive_turn_with(state, turn_id, turn, on_event, personal).await;
+  let final_event = drive_turn_with(state, turn_id, turn, on_event, personal, None).await;
   let _ = std::fs::remove_file(&slice);
   Ok(TurnResult { final_event })
 }
@@ -2772,6 +2777,15 @@ pub fn run() {
       shell_ai::shell_ai_engines,
       shell_ai::shell_ai_turn,
       shell_ai::shell_ai_stop,
+      shell_gemini_transcription::shell_gemini_audio_begin,
+      shell_gemini_transcription::shell_gemini_audio_chunk,
+      shell_gemini_transcription::shell_gemini_audio_finish,
+      shell_gemini_transcription::shell_gemini_prepare,
+      shell_gemini_transcription::shell_gemini_transcribe_part,
+      shell_gemini_transcription::shell_gemini_checkpoint_read,
+      shell_gemini_transcription::shell_gemini_checkpoint_write,
+      shell_gemini_transcription::shell_gemini_stop,
+      shell_gemini_transcription::shell_gemini_discard,
       app_paths,
       load_settings,
       save_settings,

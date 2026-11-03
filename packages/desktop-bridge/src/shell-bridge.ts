@@ -18,6 +18,10 @@ import {
   type ShellTranscribeEvent,
   type ShellTranscribeOptions,
   type ShellTranscript,
+  type ShellGeminiAudioSource,
+  type ShellGeminiAudioStage,
+  type ShellGeminiPreparedFile,
+  type ShellGeminiTurn,
 } from "./shell-contract";
 
 export type ShellTransport = {
@@ -53,6 +57,24 @@ export type ShellBridge = {
   /** CLI の AI を 1 回動かす。進みは `onEvent`、最後のイベントと本文の差分は結果に。止めるのは `aiStop(turnId)`。 */
   aiTurn: (turnId: string, request: ShellAiTurnRequest, onEvent: (envelope: ShellAiEnvelope) => void) => Promise<ShellAiTurn>;
   aiStop: (turnId: string) => Promise<boolean>;
+  geminiAudioBegin: (jobId: string, partIndex: number, bytes: number, contentType: string, sha256: string) => Promise<ShellGeminiAudioStage>;
+  /** 4 MiB 以下のchunkをoffset順に渡す。 */
+  geminiAudioChunk: (jobId: string, partIndex: number, offset: number, chunk: Uint8Array) => Promise<number>;
+  geminiAudioFinish: (jobId: string, partIndex: number) => Promise<void>;
+  geminiPrepare: (jobId: string, source: ShellGeminiAudioSource, onEvent: (event: ShellTranscribeEvent) => void) => Promise<ShellGeminiPreparedFile[]>;
+  geminiTranscribePart: (
+    jobId: string,
+    turnId: string,
+    file: number,
+    part: number,
+    systemPrompt: string,
+    userPrompt: string,
+    onEvent: (envelope: ShellAiEnvelope) => void,
+  ) => Promise<ShellGeminiTurn>;
+  geminiCheckpointRead: (jobId: string) => Promise<unknown | null>;
+  geminiCheckpointWrite: (jobId: string, checkpoint: unknown) => Promise<void>;
+  geminiStop: (jobId: string) => Promise<boolean>;
+  geminiDiscard: (jobId: string) => Promise<void>;
 };
 
 /** Tauri の webview の中か（editor.niho.life をブラウザ・PWA で開いたときは false。SSR で window が無いときも false）。 */
@@ -95,5 +117,26 @@ export function createShellBridge(transport: ShellTransport): ShellBridge {
     aiTurn: (turnId, request, onEvent) =>
       invoke<ShellAiTurn>(SHELL_COMMANDS.aiTurn, { turnId, request, onEvent: channel(onEvent) }),
     aiStop: (turnId) => invoke<boolean>(SHELL_COMMANDS.aiStop, { turnId }),
+    geminiAudioBegin: (jobId, partIndex, size, contentType, sha256) =>
+      invoke<ShellGeminiAudioStage>(SHELL_COMMANDS.geminiAudioBegin, { jobId, partIndex, bytes: size, contentType, sha256 }),
+    geminiAudioChunk: (jobId, partIndex, offset, chunk) =>
+      invoke<number>(SHELL_COMMANDS.geminiAudioChunk, { jobId, partIndex, offset, chunk }),
+    geminiAudioFinish: (jobId, partIndex) => invoke<void>(SHELL_COMMANDS.geminiAudioFinish, { jobId, partIndex }),
+    geminiPrepare: (jobId, source, onEvent) =>
+      invoke<ShellGeminiPreparedFile[]>(SHELL_COMMANDS.geminiPrepare, { jobId, source, onEvent: channel(onEvent) }),
+    geminiTranscribePart: (jobId, turnId, file, part, systemPrompt, userPrompt, onEvent) =>
+      invoke<ShellGeminiTurn>(SHELL_COMMANDS.geminiTranscribePart, {
+        jobId,
+        turnId,
+        file,
+        part,
+        systemPrompt,
+        userPrompt,
+        onEvent: channel(onEvent),
+      }),
+    geminiCheckpointRead: (jobId) => invoke<unknown | null>(SHELL_COMMANDS.geminiCheckpointRead, { jobId }),
+    geminiCheckpointWrite: (jobId, checkpoint) => invoke<void>(SHELL_COMMANDS.geminiCheckpointWrite, { jobId, checkpoint }),
+    geminiStop: (jobId) => invoke<boolean>(SHELL_COMMANDS.geminiStop, { jobId }),
+    geminiDiscard: (jobId) => invoke<void>(SHELL_COMMANDS.geminiDiscard, { jobId }),
   };
 }

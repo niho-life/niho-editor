@@ -85,6 +85,8 @@ pub struct ShellFeatures {
   pub local_transcription: bool,
   /// CLI の AI（Claude Code・Codex CLI・Antigravity CLI）。
   pub cli_ai: bool,
+  /// Antigravity CLI で録音を10分ずつ文字起こしする固定経路。
+  pub gemini_cli_transcription: bool,
 }
 
 /// 殻の自己紹介。画面はこれが返ることで「Mac の殻の中にいる」と分かる（capability が無ければ呼べず、ブラウザでは無い）。
@@ -110,6 +112,7 @@ pub fn capabilities(dev: bool) -> ShellCapabilities {
       recording: true,
       local_transcription: true,
       cli_ai: true,
+      gemini_cli_transcription: true,
     },
   }
 }
@@ -386,7 +389,7 @@ pub struct ShellTranscript {
   pub duration_sec: f64,
 }
 
-fn audio_paths(state: &AppState, source: &ShellAudioSource) -> CommandResult<Vec<PathBuf>> {
+pub(crate) fn audio_paths(state: &AppState, source: &ShellAudioSource) -> CommandResult<Vec<PathBuf>> {
   match source {
     ShellAudioSource::Recording { recording_id } => {
       crate::safe_id(recording_id)?;
@@ -607,7 +610,7 @@ mod tests {
     assert_eq!(json["dev"], serde_json::json!(false));
     assert_eq!(
       json["features"],
-      serde_json::json!({ "recording": true, "localTranscription": true, "cliAi": true })
+      serde_json::json!({ "recording": true, "localTranscription": true, "cliAi": true, "geminiCliTranscription": true })
     );
     assert_eq!(json["version"], serde_json::json!(env!("CARGO_PKG_VERSION")));
     assert_eq!(json.as_object().unwrap().len(), 3);
