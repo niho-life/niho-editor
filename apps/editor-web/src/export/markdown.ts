@@ -1,3 +1,6 @@
+import { blocksToMarkdown } from "niho-docs-ui/page/markdown";
+import type { Block as PageBlock } from "niho-docs-ui/page/blocks";
+
 /**
  * ページの本文（TipTap の doc の content＝ブロックの配列）を .md に書き出す（#34）。
  *
@@ -17,6 +20,17 @@
  */
 
 type JsonNode = { readonly [key: string]: unknown };
+
+export class MarkdownExportError extends Error {
+  override name = "MarkdownExportError";
+}
+
+function containsRichFormat(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsRichFormat);
+  if (!isNode(value)) return false;
+  if (["table", "taskList", "codeBlock"].includes(String(value.type))) return true;
+  return containsRichFormat(value.marks) || containsRichFormat(value.content) || value.type === "code" || value.type === "strike";
+}
 
 /** 再帰の深さの上限（壊れた・極端に深い本文で止まらないように）。 */
 const MAX_DEPTH = 64;
@@ -504,6 +518,25 @@ export type ExportMarkdownOptions = {
  * 本文（TipTap の doc の content）を Markdown にする。空の本文は空文字列、それ以外は末尾に改行 1 つ。
  * 未知のノードは投げずに、文字のブロックなら段落、入れ物なら中身を書き出す。
  */
+export function exportFullMarkdown(blocks: readonly unknown[], options: ExportMarkdownOptions = {}): string {
+  if (containsRichFormat(blocks)) {
+    const parts: string[] = [];
+    for (const block of blocks) {
+      if (!isNode(block) || block.type === "recording") continue;
+      if (block.type === "image") {
+        const photo = exportMarkdown([block], options).trim();
+        if (photo) parts.push(photo);
+        continue;
+      }
+      const result = blocksToMarkdown([block as PageBlock]);
+      if (!result.ok) throw new MarkdownExportError(result.reason);
+      if (result.markdown.trim()) parts.push(result.markdown.trimEnd());
+    }
+    return parts.length ? `${parts.join("\n\n")}\n` : "";
+  }
+  return exportMarkdown(blocks, options);
+}
+
 export function exportMarkdown(blocks: readonly unknown[], options: ExportMarkdownOptions = {}): string {
   const boxes = options.boxes ?? "note";
   const converted: Block[] = [];

@@ -3,6 +3,7 @@ FROM ${NODE_IMAGE} AS build
 WORKDIR /repo
 COPY apps/editor-web/src/auth apps/editor-web/src/auth
 COPY apps/editor-web/src/server/http.ts apps/editor-web/src/server/auth-routes.ts apps/editor-web/src/server/
+COPY apps/editor-web/src/lib/page-limits.ts apps/editor-web/src/lib/page-limits.ts
 COPY apps/editor-web/src/server/photo-auth/index.ts apps/editor-web/src/server/photo-auth/index.ts
 COPY apps/editor-web/test/niho-auth-candidate apps/editor-web/test/niho-auth-candidate
 WORKDIR /repo/apps/editor-web/test/niho-auth-candidate

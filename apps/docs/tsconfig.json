@@ -34,6 +34,7 @@
       "@tiptap/extension-floating-menu": ["./node_modules/@tiptap/extension-floating-menu/dist/index.d.ts"],
       "@tiptap/core": ["./node_modules/@tiptap/core/dist/index.d.ts"],
       "@tiptap/extension-list": ["./node_modules/@tiptap/extension-list/dist/index.d.ts"],
+      "@tiptap/extension-table": ["./node_modules/@tiptap/extension-table/dist/index.d.ts"],
       "@tiptap/pm/*": ["./node_modules/@tiptap/pm/dist/*/index.d.ts"],
       "@tiptap/starter-kit": ["./node_modules/@tiptap/starter-kit/dist/index.d.ts"],
       "markdown-it": ["./node_modules/@types/markdown-it/index.d.mts"],

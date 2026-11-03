@@ -37,7 +37,7 @@ import {
 } from "../ai/chat";
 import type { AiUsageReport } from "../ai/model";
 import type { AuthProvider } from "../auth/types";
-import { errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
+import { PAGE_BODY_MAX_BYTES, conflictResponse, errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
 import { parseBlocks } from "./page-input";
 
 /**
@@ -160,6 +160,8 @@ function createToolRunner(deps: {
   owner: OwnerId;
   workspace: WorkspaceEntry[];
   changes: Map<string, ChatChangeInput & { title: string }>;
+  /** Device turns must save against the revision the CLI actually read. */
+  deviceRevisions?: ReadonlyMap<string, number>;
 }) {
   const { store, owner } = deps;
   const find = (id: unknown) => (typeof id === "string" ? deps.workspace.find((page) => page.id === id) : undefined);
@@ -194,14 +196,19 @@ function createToolRunner(deps: {
       if (!blocks.ok) return { ok: false, result: "本文が大きすぎるか、保存できない形です。", page: target.title };
       const current = await store.getPage(owner, target.id);
       if (!current) return { ok: false, result: "そのページはもうありません。", page: target.title };
+      const deviceRevision = deps.deviceRevisions?.get(target.id);
+      if (deviceRevision !== undefined && current.revision !== deviceRevision) {
+        return { ok: false, result: "別の画面で保存されたので書けませんでした。", page: current.title, conflict: true };
+      }
       const before = blocksToMarkdown(current.blocks);
       if (!before.ok) return { ok: false, result: PAGE_HAS_PARTS, page: current.title };
       // 書く前の本文を版に残す（人が元に戻せる）
       const version = await store.createVersion(owner, target.id, "ai");
       if (!version) return { ok: false, result: "そのページはもうありません。", page: current.title };
-      const saved = await store.savePage(owner, target.id, { blocks: blocks.value }, { baseRevision: current.revision });
+      const saved = await store.savePage(owner, target.id, { blocks: blocks.value }, { baseRevision: deviceRevision ?? current.revision });
       if (!saved) return { ok: false, result: "そのページはもうありません。", page: current.title };
-      if (saved.status !== "saved") return { ok: false, result: "別の画面で保存されたので書けませんでした。read_page で読み直してください。", page: current.title };
+      if (saved.status === "page_full") return { ok: false, result: "ページ全体の30 MiB上限を超えるため保存できませんでした。本文や画像を減らしてください。", page: current.title };
+      if (saved.status !== "saved") return { ok: false, result: "別の画面で保存されたので書けませんでした。read_page で読み直してください。", page: current.title, conflict: true };
       const chars = Array.from(input.markdown).length;
       const delta = chars - Array.from(before.markdown).length;
       const existing = deps.changes.get(target.id);
@@ -305,7 +312,7 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
     const changes = new Map<string, ChatChangeInput & { title: string }>();
     const run = await runChatTurn({
       client: backend.client,
-      system: buildChatSystem({ glossary: settings.glossary, about: settings.about, ...(settings.aiLang === "same" ? {} : { lang: settings.aiLang }) }),
+      system: buildChatSystem({ glossary: settings.glossary, about: { name: settings.aboutName, text: settings.about }, ...(settings.aiLang === "same" ? {} : { lang: settings.aiLang }) }),
       messages: buildChatMessages(historyOf(past?.messages ?? []), input.value.text, { id: open.id, title: open.title, kind: open.kind }),
       run: createToolRunner({ store, owner, workspace, changes }),
       // 往復のたびに上限を見る（会話が長くても 1 人 1 か月の上限は同じ意味で働く）
@@ -363,7 +370,7 @@ type DeviceTurnInput = {
   input: string;
   reply: string;
   engine: string;
-  writes: { pageId: string; markdown: string }[];
+  writes: { pageId: string; markdown: string; baseRevision: number }[];
 };
 
 /** エンジンの短い id（鍵・端末の情報を入れない）。 */
@@ -380,9 +387,10 @@ function parseDeviceTurnBody(body: unknown): { ok: true; value: DeviceTurnInput 
   if (!Array.isArray(body.writes) || body.writes.length > MAX_CHAT_TOOL_CALLS) return { ok: false };
   const writes: DeviceTurnInput["writes"] = [];
   for (const raw of body.writes) {
-    if (!isPlainObject(raw) || !hasOnlyKeys(raw, ["pageId", "markdown"])) return { ok: false };
-    if (typeof raw.pageId !== "string" || typeof raw.markdown !== "string") return { ok: false };
-    writes.push({ pageId: raw.pageId, markdown: raw.markdown });
+    if (!isPlainObject(raw) || !hasOnlyKeys(raw, ["pageId", "markdown", "baseRevision"])) return { ok: false };
+    if (typeof raw.pageId !== "string" || typeof raw.markdown !== "string" || typeof raw.baseRevision !== "number" || !Number.isSafeInteger(raw.baseRevision) || raw.baseRevision < 1) return { ok: false };
+    if (writes.some((write) => write.pageId === raw.pageId)) return { ok: false };
+    writes.push({ pageId: raw.pageId, markdown: raw.markdown, baseRevision: raw.baseRevision });
   }
   return { ok: true, value: { conversationId: text.value.conversationId, input: text.value.text, reply, engine: body.engine, writes } };
 }
@@ -405,7 +413,7 @@ export function recordDeviceChatTurn(request: Request, id: string, deps: ChatApi
     const chats = deps.conversations();
     const usage = deps.usage();
     if (!store || !chats || !usage) return errorResponse("unavailable");
-    const body = await readJsonBody(request);
+    const body = await readJsonBody(request, PAGE_BODY_MAX_BYTES);
     if (!body.ok) return body.response;
     const input = parseDeviceTurnBody(body.value);
     if (!input.ok) return errorResponse("bad_request");
@@ -415,17 +423,25 @@ export function recordDeviceChatTurn(request: Request, id: string, deps: ChatApi
     if (!writable) return notFoundResponse();
     const conversationId = input.value.conversationId;
     if (conversationId !== null && !(await chats.history(owner, id, conversationId))) return notFoundResponse();
+    const currentWrite = input.value.writes.find((write) => write.pageId === id);
+    if (currentWrite) {
+      const currentPage = await store.getPage(owner, id);
+      if (!currentPage) return notFoundResponse();
+      if (currentPage.revision !== currentWrite.baseRevision) return conflictResponse(currentPage);
+    }
 
     // 書き込みはチャットと同じ道具を通す（作業場の外・画像のあるページ・大きすぎる本文はここで断られる）
     const changes = new Map<string, ChatChangeInput & { title: string }>();
     const workspace: WorkspaceEntry[] = writable.map((page) => ({ ...page, writable: true }));
-    const run = createToolRunner({ store, owner, workspace, changes });
+    const run = createToolRunner({ store, owner, workspace, changes, deviceRevisions: new Map(input.value.writes.map((write) => [write.pageId, write.baseRevision])) });
     const items: ChatItem[] = [];
     let failed = false;
+    let revisionConflict = false;
     for (const write of input.value.writes) {
       const outcome = await run({ name: "write_page", input: { page_id: write.pageId, markdown: write.markdown } });
       items.push({ kind: "tool", tool: "write_page", page: outcome.page ?? null, ok: outcome.ok });
       if (!outcome.ok) failed = true;
+      if ("conflict" in outcome && outcome.conflict === true) revisionConflict = true;
     }
 
     const written = [...changes.values()];
@@ -437,7 +453,7 @@ export function recordDeviceChatTurn(request: Request, id: string, deps: ChatApi
         reply: input.value.reply,
         items,
         result: failed ? "stopped" : "done",
-        resultCode: failed ? "write_refused" : null,
+        resultCode: revisionConflict ? "revision_conflict" : failed ? "write_refused" : null,
         author: { route: "device", engine: input.value.engine },
         changes: written.map((change) => ({
           pageId: change.pageId,

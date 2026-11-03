@@ -1,19 +1,22 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { EditorSettingsPatch } from "@niho/editor-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MediaStorageUsage, SettingsFailure, SettingsDto, UsageSummary } from "@/lib/settings-client";
+import type { MediaStorageUsage, SettingsFailure, SettingsDto, SettingsPatchInput, UsageSummary } from "@/lib/settings-client";
 import type { SettingsFacts } from "@/settings/facts";
 import { EDITOR_SETTINGS_TEXT } from "niho-docs-ui/shell";
 import { SETTINGS_MESSAGES } from "@/settings/messages";
+import { DEFAULT_RECIPES, DEFAULT_RECIPE_IDS } from "@/steps/recipes";
 
-const save = vi.fn<(patch: EditorSettingsPatch) => Promise<{ ok: true; settings: SettingsDto } | SettingsFailure>>();
+const save = vi.fn<(patch: SettingsPatchInput) => Promise<{ ok: true; settings: SettingsDto } | SettingsFailure>>();
+const duplicate = vi.fn<(recipeId: string) => Promise<{ ok: true; settings: SettingsDto } | SettingsFailure>>();
 const usage = vi.fn<() => Promise<{ ok: true; usage: UsageSummary } | SettingsFailure>>();
 const storageUsage = vi.fn<() => Promise<{ ok: true; usage: MediaStorageUsage } | SettingsFailure>>();
 
 vi.mock("@/lib/settings-client", () => ({
-  saveSettings: (patch: EditorSettingsPatch) => save(patch),
+  saveSettings: (patch: SettingsPatchInput) => save(patch),
+  duplicateSettingsRecipe: (recipeId: string) => duplicate(recipeId),
+  loadGuideExtraction: async () => ({ ok: true, extraction: null }),
   loadAiUsage: () => usage(),
   loadStorageUsage: () => storageUsage(),
 }));
@@ -29,16 +32,16 @@ const FACTS: SettingsFacts = {
   },
 };
 
-const STEP = { id: "k7m2q9xa", name: "文字起こし修正", instruction: "整える。" };
-
 type RecipeDefaults = NonNullable<SettingsDto["recipes"][number]["defaults"]>;
 
-/** 既定の手順 3 つの元の定義（応答の `defaults`。「既定に戻す」はこの値で置き換えた一覧を送る）。 */
-const DEFAULTS: Record<"tpl-1" | "tpl-2" | "tpl-3", RecipeDefaults> = {
-  "tpl-1": { name: "記事制作", guide: "お手本", steps: [STEP] },
-  "tpl-2": { name: "議事録", guide: "", steps: [{ id: "d9c3x7mf", name: "議事録", instruction: "" }] },
-  "tpl-3": { name: "インサイト整理", guide: "", steps: [{ id: "u3e7z6rh", name: "インサイト", instruction: "" }] },
-};
+/** 既定の工程定義をそのまま使う（既定変更がテスト用の写しに隠れないようにする）。 */
+const DEFAULTS = Object.fromEntries(DEFAULT_RECIPES.map((recipe) => [recipe.id, {
+  name: recipe.name,
+  guide: recipe.guide,
+  steps: recipe.steps.map((step) => ({ ...step })),
+  terms: recipe.terms.map((term) => ({ ...term, variants: [...term.variants] })),
+  samples: recipe.samples.map((sample) => ({ ...sample })),
+}])) as Record<string, RecipeDefaults>;
 
 // 上限の値そのものは editor-store が決める（`settings-api.test.ts` が応答と突き合わせる）。ここは形だけを合わせる
 const LIMITS: SettingsDto["limits"] = {
@@ -53,19 +56,22 @@ const LIMITS: SettingsDto["limits"] = {
   stepNameChars: 80,
   instructionChars: 8_000,
   aboutChars: 2_000,
+  aboutNameChars: 80,
 };
 
 function dto(patch: Partial<SettingsDto> = {}): SettingsDto {
   return {
     aiLang: "same",
     glossary: [],
+    aboutName: "",
     about: "",
-    recipes: (["tpl-1", "tpl-2", "tpl-3"] as const).map((id) => ({
+    recipes: DEFAULT_RECIPE_IDS.map((id) => ({
       id,
-      ...structuredClone(DEFAULTS[id]),
+      ...structuredClone(DEFAULTS[id]!),
       isDefault: true,
       modified: false,
-      defaults: structuredClone(DEFAULTS[id]),
+      unusableReason: null,
+      defaults: structuredClone(DEFAULTS[id]!),
     })),
     limits: LIMITS,
     ...patch,
@@ -81,6 +87,7 @@ let container: HTMLElement | null = null;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   save.mockReset();
+  duplicate.mockReset();
   usage.mockReset();
   usage.mockResolvedValue({ ok: true, usage: USAGE });
   storageUsage.mockReset();
@@ -271,8 +278,32 @@ describe("SettingsView", () => {
     save.mockResolvedValue({ ok: true, settings: dto() });
     await click("記事制作（短め）を保存");
     const sent = save.mock.calls[0]?.[0]?.recipes;
-    expect(sent?.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3"]);
-    expect(sent?.[0]).toEqual({ id: "tpl-1", name: "記事制作（短め）", guide: "お手本", steps: [{ ...STEP, instruction: "短く整える。" }] });
+    expect(sent?.map((recipe) => recipe.id)).toEqual([...DEFAULT_RECIPE_IDS]);
+    expect(sent?.[0]).toEqual({
+      id: "tpl-1",
+      ...DEFAULTS["tpl-1"],
+      name: "記事制作（短め）",
+      steps: DEFAULTS["tpl-1"]!.steps.map((step, index) => index === 0 ? { ...step, instruction: "短く整える。" } : step),
+    });
+  });
+
+  it("reorders stages with accessible controls while preserving each stage id and profile", async () => {
+    await mount();
+    const original = DEFAULTS["tpl-1"]!.steps;
+    const first = original[0]!;
+    const second = original[1]!;
+    await click("記事制作を編集");
+    await click(`「${second.name}」を上へ移動`);
+    save.mockResolvedValue({ ok: true, settings: dto() });
+    await click("記事制作を保存");
+
+    const sent = save.mock.calls[0]?.[0]?.recipes?.find((recipe) => recipe.id === "tpl-1");
+    expect(sent?.steps.map((step) => step.id)).toEqual([second.id, first.id, ...original.slice(2).map((step) => step.id)]);
+    expect(sent?.steps.map((step) => [step.id, step.profile])).toEqual([
+      [second.id, second.profile],
+      [first.id, first.profile],
+      ...original.slice(2).map((step) => [step.id, step.profile]),
+    ]);
   });
 
   it("does not offer to add or remove a 段階 of a default 手順, and says why", async () => {
@@ -283,47 +314,44 @@ describe("SettingsView", () => {
     expect(container?.textContent).toContain("段階の数を変えられません");
   });
 
-  it("duplicates a default 手順 with fresh 段階の id, and the copy can gain a 段階", async () => {
+  it("duplicates a 手順 through the owner-scoped API and opens the returned copy for editing", async () => {
     await mount();
-    save.mockImplementation(async (patch) => {
-      const recipes = (patch.recipes ?? []).map((recipe) => {
-        const base = recipe.id in DEFAULTS ? structuredClone(DEFAULTS[recipe.id as keyof typeof DEFAULTS]) : null;
-        return { ...recipe, isDefault: base !== null, modified: false, defaults: base };
-      });
-      return { ok: true, settings: dto({ recipes }) };
-    });
+    const initial = dto();
+    const source = DEFAULTS["tpl-1"]!;
+    const copy: SettingsDto["recipes"][number] = {
+      id: "r-server-copy", name: "記事制作のコピー", guide: source.guide,
+      steps: source.steps.map((step) => ({ ...step, id: `s-${step.id}` })),
+      terms: [], samples: [], isDefault: false, modified: false, unusableReason: null, defaults: null,
+    };
+    duplicate.mockResolvedValue({ ok: true, settings: dto({ recipes: [...initial.recipes, copy] }) });
     await click("記事制作を複製");
-    const sent = save.mock.calls[0]?.[0]?.recipes ?? [];
-    expect(sent).toHaveLength(4);
-    const copy = sent[3]!;
-    expect(copy.name).toBe("記事制作のコピー");
-    expect(copy.id).toMatch(/^r-[0-9a-f]{1,16}$/);
-    expect(copy.steps[0]?.id).not.toBe(STEP.id);
-    expect(copy.steps[0]?.id).toMatch(/^s-[0-9a-f]{1,16}$/);
+    expect(duplicate).toHaveBeenCalledWith("tpl-1");
+    expect(save).not.toHaveBeenCalled();
+    expect(container?.textContent).toContain("記事制作のコピー");
 
     // 足した手順は消せる。編集を開くと、その行のボタンは編集の中のものに替わる
     expect(button("記事制作のコピーを削除")).toBeTruthy();
     await click("記事制作のコピーを編集");
     expect(button("段階を追加")).toBeTruthy();
-    expect(button("この段階を削除（段階 1）")).toBeUndefined();
+    expect(button("この段階を削除（段階 1）")).toBeTruthy();
   });
 
   it("adds a 手順 and opens it for editing, and removes one by leaving it out", async () => {
     await mount();
     save.mockImplementation(async (patch) => {
       const recipes = (patch.recipes ?? []).map((recipe) => {
-        const base = recipe.id in DEFAULTS ? structuredClone(DEFAULTS[recipe.id as keyof typeof DEFAULTS]) : null;
-        return { ...recipe, isDefault: base !== null, modified: false, defaults: base };
+        const base = Object.hasOwn(DEFAULTS, recipe.id) ? structuredClone(DEFAULTS[recipe.id]!) : null;
+        return { ...recipe, steps: recipe.steps.map((step) => ({ ...step, profile: step.profile ?? "standard" })), terms: recipe.terms ?? [], samples: recipe.samples ?? [], isDefault: base !== null, modified: false, unusableReason: null, defaults: base };
       });
       return { ok: true, settings: dto({ recipes }) };
     });
     await click("手順を追加");
-    expect(save.mock.calls[0]?.[0]?.recipes).toHaveLength(4);
+    expect(save.mock.calls[0]?.[0]?.recipes).toHaveLength(5);
     expect(field("手順の名前").value).toBe("新しい手順");
 
     await click("新しい手順の編集をやめる");
     await click("新しい手順を削除");
-    expect(save.mock.calls[1]?.[0]?.recipes?.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3"]);
+    expect(save.mock.calls[1]?.[0]?.recipes?.map((recipe) => recipe.id)).toEqual([...DEFAULT_RECIPE_IDS]);
   });
 
   it("offers 既定に戻す only for a default 手順 that was changed, and sends the default definition back (never a list missing a default)", async () => {
@@ -332,7 +360,7 @@ describe("SettingsView", () => {
       ...modified.recipes[1]!,
       name: "議事録（短め）",
       guide: "短く",
-      steps: [{ id: "d9c3x7mf", name: "要点", instruction: "要点だけ。" }],
+      steps: [{ ...DEFAULTS["tpl-2"]!.steps[0]!, name: "要点", instruction: "要点だけ。" }],
       modified: true,
     };
     await mount(modified);
@@ -340,8 +368,8 @@ describe("SettingsView", () => {
     save.mockResolvedValue({ ok: true, settings: dto() });
     await click("議事録（短め）を既定に戻す");
     const sent = save.mock.calls[0]?.[0]?.recipes;
-    // PATCH は既定の 3 つが揃っていることを求める（外すと 400 になる）
-    expect(sent?.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3"]);
+    // PATCH は既定の 4 つが揃っていることを求める（外すと 400 になる）
+    expect(sent?.map((recipe) => recipe.id)).toEqual([...DEFAULT_RECIPE_IDS]);
     // 戻した手順は、応答の `defaults` と同じ中身で送る（サーバーは既定と同じ写しを保存しないので、既定に戻る）
     expect(sent?.[1]).toEqual({ id: "tpl-2", ...DEFAULTS["tpl-2"] });
     expect(status()).toBe(SETTINGS_MESSAGES.saved);
@@ -374,24 +402,25 @@ describe("SettingsView", () => {
 
 describe("「あなたについて」（AI に毎回渡す本人の説明）", () => {
   it("shows a summary, opens the editor, and saves it", async () => {
-    save.mockResolvedValue({ ok: true, settings: dto({ about: "直した自己紹介です。" }) });
-    const text = (await mount(dto({ about: "合成の自己紹介です。文章は短く書きます。" }))).textContent ?? "";
+    save.mockResolvedValue({ ok: true, settings: dto({ aboutName: "直した呼び名", about: "直した自己紹介です。" }) });
+    const text = (await mount(dto({ aboutName: "合成の呼び名", about: "合成の自己紹介です。文章は短く書きます。" }))).textContent ?? "";
     expect(text).toContain("合成の自己紹介です。文章は短く書きます。");
     // 公開の著者情報とは別物だと分かる一言
     await click("あなたについてを編集");
     expect(container?.textContent).toContain("公開のときに出る著者の情報とは別のもの");
-    await type("あなたについて", "直した自己紹介です。");
+    await type("呼び名（AI向け）", "直した呼び名");
+    await type("パーソナライズ", "直した自己紹介です。");
     await click("あなたについてを保存");
-    expect(save).toHaveBeenCalledWith({ about: "直した自己紹介です。" });
+    expect(save).toHaveBeenCalledWith({ aboutName: "直した呼び名", about: "直した自己紹介です。" });
   });
 
   it("says when it is empty, and does not save a text over the limit", async () => {
     await mount(dto({ about: "" }));
     expect(container?.textContent).toContain(EDITOR_SETTINGS_TEXT.empty);
     await click("あなたについてを編集");
-    await type("あなたについて", "あ".repeat(LIMITS.aboutChars + 1));
+    await type("パーソナライズ", "あ".repeat(LIMITS.aboutChars + 1));
     await click("あなたについてを保存");
     expect(save).not.toHaveBeenCalled();
-    expect(container?.textContent).toContain("長すぎるので保存できません");
+    expect(container?.textContent).toContain("パーソナライズが長すぎるので保存できません");
   });
 });

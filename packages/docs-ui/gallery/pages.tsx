@@ -15,6 +15,7 @@ import {
   type AccountLink,
   type EditorAddSiteDraft,
   type EditorDestinationMode,
+  type EditorSettingsAbout,
   type EditorSettingsAiLang,
   type EditorSettingsRecipe,
   type EditorSettingsTermDraft,
@@ -156,16 +157,16 @@ export function AccountDemo({ forced }: { forced: PagesForced }) {
 /** 既定の 3 つの手順（editor-web の DEFAULT_RECIPES と同じ並び。中身は短い合成の値）。 */
 const WEB_RECIPES: EditorSettingsRecipe[] = [
   { id: "tpl-1", name: "記事制作", guide: "## 構成\n見出しを 4〜6 本。", steps: [
-    { id: "k7m2q9xa", name: "文字起こし修正", instruction: "読みやすい文字起こし修正版に整える。" },
-    { id: "r4t8wz3c", name: "記事方針", instruction: "論点ごとの見出しを立てる。" },
-    { id: "h2n6v5pe", name: "記事本文", instruction: "方針のとおりに本文を書く。" },
-  ], isDefault: true, modified: false },
+    { id: "k7m2q9xa", name: "文字起こし修正", instruction: "読みやすい文字起こし修正版に整える。", profile: "light" },
+    { id: "r4t8wz3c", name: "記事方針", instruction: "論点ごとの見出しを立てる。", profile: "standard" },
+    { id: "h2n6v5pe", name: "記事本文", instruction: "方針のとおりに本文を書く。", profile: "advanced" },
+  ], terms: [], samples: [], isDefault: true, modified: false },
   { id: "tpl-2", name: "議事録", guide: "", steps: [
-    { id: "d9c3x7mf", name: "議事録", instruction: "決まったことと宿題を並べる。" },
-    { id: "w5q1j8ks", name: "共有用の要約", instruction: "3 行にまとめる。" },
-  ], isDefault: true, modified: true },
-  { id: "tpl-3", name: "インサイト整理", guide: "", steps: [{ id: "u3e7z6rh", name: "インサイト", instruction: "気づきを並べる。" }], isDefault: true, modified: false },
-  { id: "r-talk", name: "対談", guide: "二人の声を残す。", steps: [{ id: "s-1", name: "まとめ", instruction: "まとめる。" }], isDefault: false, modified: false },
+    { id: "d9c3x7mf", name: "議事録", instruction: "決まったことと宿題を並べる。", profile: "standard" },
+    { id: "w5q1j8ks", name: "共有用の要約", instruction: "3 行にまとめる。", profile: "light" },
+  ], terms: [], samples: [], isDefault: true, modified: true },
+  { id: "tpl-3", name: "インサイト整理", guide: "", steps: [{ id: "u3e7z6rh", name: "インサイト", instruction: "気づきを並べる。", profile: "advanced" }], terms: [], samples: [], isDefault: true, modified: false },
+  { id: "r-talk", name: "対談", guide: "二人の声を残す。", steps: [{ id: "s-1", name: "まとめ", instruction: "まとめる。", profile: "standard" }], terms: [], samples: [], isDefault: false, modified: false },
 ];
 
 const WEB_TERMS = [
@@ -182,8 +183,8 @@ export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: bo
   const [glossary, setGlossary] = useState(WEB_TERMS);
   const [recipes, setRecipes] = useState(WEB_RECIPES);
   const [termsDraft, setTermsDraft] = useState<EditorSettingsTermDraft[] | null>(forced.terms ? webTermDrafts() : null);
-  const [about, setAbout] = useState("鎌倉で小さな宿を営んでいます。読んだ人が歩きたくなるように、短い文で書きます。");
-  const [aboutDraft, setAboutDraft] = useState<string | null>(forced.about ? about : null);
+  const [about, setAbout] = useState<EditorSettingsAbout>({ name: "みか", text: "鎌倉で小さな宿を営んでいます。読んだ人が歩きたくなるように、短い文で書きます。" });
+  const [aboutDraft, setAboutDraft] = useState<EditorSettingsAbout | null>(forced.about ? about : null);
   const opened = forced.recipe ? (WEB_RECIPES.find((recipe) => recipe.id === forced.recipe) ?? null) : null;
   const [recipeDraft, setRecipeDraft] = useState<EditorSettingsRecipe | null>(opened);
   let serial = 0;
@@ -205,7 +206,8 @@ export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: bo
           }
           setTermsDraft(null);
         }}
-        about={about}
+        aboutName={about.name}
+        about={about.text}
         aboutDraft={aboutDraft}
         onEditAbout={() => setAboutDraft(about)}
         onAboutDraft={setAboutDraft}
@@ -216,6 +218,7 @@ export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: bo
         }}
         recipes={recipes}
         recipeDraft={recipeDraft}
+        recipeValidation={null}
         onEditRecipe={(id) => setRecipeDraft(recipes.find((recipe) => recipe.id === id) ?? null)}
         onRecipeDraft={setRecipeDraft}
         onCancelRecipe={() => setRecipeDraft(null)}
@@ -229,14 +232,14 @@ export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: bo
         }}
         onResetRecipe={(id) => setRecipes(recipes.map((recipe) => (recipe.id === id ? { ...recipe, modified: false } : recipe)))}
         onRemoveRecipe={(id) => setRecipes(recipes.filter((recipe) => recipe.id !== id))}
-        onAddRecipe={() => setRecipes([...recipes, { id: `r-new-${recipes.length}`, name: "新しい手順", guide: "", steps: [{ id: "s-new", name: "まとめ", instruction: "" }], isDefault: false, modified: false }])}
+        onAddRecipe={() => setRecipes([...recipes, { id: `r-new-${recipes.length}`, name: "新しい手順", guide: "", steps: [{ id: "s-new", name: "まとめ", instruction: "", profile: "standard" }], terms: [], samples: [], isDefault: false, modified: false }])}
         newStepId={() => `s-${(serial += 1)}`}
         usage={{ month: "2026-10", inputTokens: 128_400, outputTokens: 12_900, costUsd: 4.21, limitUsd: 5, nearLimit: true }}
         usageNote={null}
         transcription={{ engine: "deepgram", timeoutSec: 1200, maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30, extensions: ["m4a", "mp3", "wav", "aac", "ogg", "flac"] }}
         storageUsage={{ totalBytes: "0", imageBytes: "0", audioBytes: "0" }}
         storageUsageNote={null}
-        limits={{ glossary: 200, recipes: 20, steps: 12, aboutChars: 2_000 }}
+        limits={{ glossary: 200, recipes: 20, steps: 12, aboutChars: 2_000, aboutNameChars: 80 }}
       />
     </SettingsFrame>
   );

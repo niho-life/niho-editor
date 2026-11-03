@@ -8,6 +8,7 @@ import {
   jsonResponse,
   noContentResponse,
   notFoundResponse,
+  PAGE_BODY_MAX_BYTES,
   readJsonBody,
 } from "./http";
 import { parseCreatePage, parseListQuery, parseMoveParent, parsePageSave } from "./page-input";
@@ -69,11 +70,16 @@ export function createPage(request: Request, deps: PagesApiDeps): Promise<Respon
     if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
     const store = deps.store();
     if (!store) return errorResponse("unavailable");
-    const body = await readJsonBody(request);
+    const body = await readJsonBody(request, PAGE_BODY_MAX_BYTES);
     if (!body.ok) return body.response;
     const input = parseCreatePage(body.value);
     if (!input.ok) return errorResponse("bad_request");
-    return jsonResponse(201, { page: await store.createPage(session.userId, input.value) });
+    try {
+      return jsonResponse(201, { page: await store.createPage(session.userId, input.value) });
+    } catch (error) {
+      if (error instanceof RangeError && error.message === "editor-store: page is too large") return errorResponse("page_full");
+      throw error;
+    }
   });
 }
 
@@ -101,7 +107,7 @@ export function patchPage(request: Request, id: string, deps: PagesApiDeps): Pro
     const store = deps.store();
     if (!store) return errorResponse("unavailable");
     // 本文の検査は id の有無より先（どの id でも同じ順に判定し、存在を漏らさない）
-    const body = await readJsonBody(request);
+    const body = await readJsonBody(request, PAGE_BODY_MAX_BYTES);
     if (!body.ok) return body.response;
     const input = parsePageSave(body.value);
     if (!input.ok) return errorResponse("bad_request");
@@ -109,6 +115,7 @@ export function patchPage(request: Request, id: string, deps: PagesApiDeps): Pro
     // 404 の判定（自分のページか）は store が revision の比較より先に行う
     const result = await store.savePage(session.userId, id, patch, { baseRevision, overwrite });
     if (!result) return notFoundResponse();
+    if (result.status === "page_full") return errorResponse("page_full");
     return result.status === "saved" ? jsonResponse(200, { page: result.page }) : conflictResponse(result.page);
   });
 }

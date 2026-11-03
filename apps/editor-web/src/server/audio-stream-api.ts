@@ -1,4 +1,4 @@
-import type { AudioInfo, OwnerId } from "@niho/editor-store";
+import type { AudioPart, OwnerId } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
 import { AUDIO_CONTENT_TYPES } from "../recording/audio-limits";
 import { contentRange, resolveAudioRange, unsatisfiedContentRange } from "../recording/audio-range";
@@ -6,11 +6,11 @@ import { StorageError, type ObjectStorage, type ReadObject } from "../storage/ty
 import { ROBOTS_HEADER_VALUE, errorResponse, jsonResponse, notFoundResponse } from "./http";
 
 /**
- * 録音の音声の再生（#36 段 3b-2）: `GET /api/pages/{id}/recording/audio`。
+ * 録音の音声Partの再生（#36 段 3b-2・#231）: `GET /api/pages/{id}/recording/audio?part={index}`。partを省略したときは0。
  *
  * 実行 ID（Cloud Run のサービスアカウント）には署名付き URL の権限が無いので、同じ origin のこの route が保存先から読み出して流す
  * （`<audio src>` がここを指す。同じ origin なので cookie が付き、CSP の `media-src 'self'` のままでよい）。
- * - 本人の・ゴミ箱でないページの録音で、音声がアップロード済み（uploaded）かつ保持の期限の内側のときだけ流す。別の人・存在しない・
+ * - 本人の・ゴミ箱でないページの録音で、指定した音声Partがアップロード済み（uploaded）かつ保持の期限の内側のときだけ流す。別の人・存在しない・
  *   不正な id・削除済み・録音の無い・音声の無い・アップロード途中・期限切れ・保存先に object が無いは、どれも同じ 404（本文・header とも）。
  * - `Range`: 範囲 1 つだけ（src/recording/audio-range.ts）。範囲なしは 200 で全体、範囲ありは 206 と `Content-Range`、満たせない・
  *   複数・不正は 416 と `Content-Range: bytes *` ＋全体の大きさ。全体の大きさは DB の値（完了のときに保存先の大きさと照らした値）。
@@ -21,9 +21,9 @@ import { ROBOTS_HEADER_VALUE, errorResponse, jsonResponse, notFoundResponse } fr
  * - 保存先を使わない設定は 503 `storage_unavailable`、保存先の失敗・大きさの食い違いは 502 `storage_failed`。
  */
 
-/** 再生の API が使う store の操作（packages/editor-store の audioInfo に Pool を渡したもの）。null はページ（音声）が無い。 */
+/** 再生の API が使う store の操作。返る列は認証済み owner と page に必ず絞られる。 */
 export type AudioStreamStore = {
-  audioInfo: (owner: OwnerId, pageId: string) => Promise<AudioInfo | null>;
+  listAudioParts: (owner: OwnerId, pageId: string) => Promise<Pick<AudioPart, "partIndex" | "objectPath" | "status" | "bytes" | "contentType" | "expiresAt">[]>;
 };
 
 export type AudioStreamApiDeps = {
@@ -68,10 +68,10 @@ function servedContentType(contentType: string): string {
 }
 
 /** 再生できる音声か（アップロード済みで、期限が無いか期限の前）。 */
-function playable(info: AudioInfo, now: number): boolean {
-  if (info.status !== "uploaded") return false;
-  if (info.expiresAt === null) return true;
-  const at = Date.parse(info.expiresAt);
+function playable(part: Pick<AudioPart, "status" | "expiresAt">, now: number): boolean {
+  if (part.status !== "uploaded") return false;
+  if (part.expiresAt === null) return true;
+  const at = Date.parse(part.expiresAt);
   return Number.isFinite(at) && now < at;
 }
 
@@ -142,7 +142,7 @@ async function guarded(handler: () => Promise<Response>): Promise<Response> {
   }
 }
 
-/** GET /api/pages/{id}/recording/audio — 録音の音声（本人だけ。`Range` は範囲 1 つ）。 */
+/** GET /api/pages/{id}/recording/audio?part={index} — 本人だけ。`Range` は範囲 1 つ。 */
 export function streamAudioRoute(request: Request, id: string, deps: AudioStreamApiDeps): Promise<Response> {
   return guarded(async () => {
     const session = await deps.auth().getSession(request);
@@ -153,8 +153,13 @@ export function streamAudioRoute(request: Request, id: string, deps: AudioStream
     if (!storage) return streamError("storage_unavailable");
 
     // owner は認証の層の本人だけ（要求の値からは決めない）
-    const info = await store.audioInfo(session.userId, id);
-    if (!info || !playable(info, (deps.now ?? Date.now)())) return notFoundResponse();
+    const url = new URL(request.url);
+    const rawPart = url.searchParams.get("part");
+    const partIndex = rawPart === null ? 0 : /^(0|[1-9]\d*)$/.test(rawPart) ? Number(rawPart) : Number.NaN;
+    if (!Number.isSafeInteger(partIndex) || partIndex < 0) return notFoundResponse();
+    const part = (await store.listAudioParts(session.userId, id)).find((candidate) => candidate.partIndex === partIndex);
+    if (!part || !playable(part, (deps.now ?? Date.now)())) return notFoundResponse();
+    const info = { objectPath: part.objectPath, bytes: part.bytes, contentType: part.contentType };
     const totalBytes = info.bytes;
     if (!Number.isSafeInteger(totalBytes) || totalBytes < 0) throw new TypeError("editor-web: the audio size is not an integer");
 

@@ -1,13 +1,13 @@
 import { Icon } from "./icons";
 import type { ShellButtonTone, ShellStepState } from "./types";
 
-export type ShellStep = { id: string; label: string; state: ShellStepState };
+export type ShellStep = { id: string; label: string; state: ShellStepState; notice?: string };
 
 /** 帯のボタン（「ここから作り直す」「やめる」など）。何が出るかは呼ぶ側が決める。 */
 export type ShellStepsAction = { id: string; label: string; tone?: ShellButtonTone; busy?: boolean };
 
 /** 録音から始められる手順（記事にする・議事録にする…）。 */
-export type ShellStepsChoice = { id: string; label: string };
+export type ShellStepsChoice = { id: string; label: string; unusableReason?: string | null };
 
 /** 状態の言葉。色だけで状態を表さないので、丸の形と合わせていつも文字でも出す（設計 §11）。 */
 const SAY: Record<ShellStepState, string> = { done: "済み", run: "作成中", wait: "待機", failed: "失敗", stale: "前提変更" };
@@ -29,7 +29,7 @@ function StepList({ steps, currentId, band, onSelect }: { steps: ShellStep[]; cu
           >
             <i aria-hidden="true" />
             {step.label}
-            <small>{SAY[step.state]}</small>
+            <small>{step.notice ?? SAY[step.state]}</small>
           </button>
         </li>
       ))}
@@ -139,13 +139,13 @@ export function ShellStepsStart({
           key={choice.id}
           type="button"
           className={`es-btn es-btn--${index === 0 ? "primary" : "outline"} es-btn--sm${busy ? " es-btn--busy" : ""}`}
-          aria-disabled={busy || undefined}
+          aria-disabled={busy || Boolean(choice.unusableReason) || undefined}
           onClick={() => {
-            if (!busy) onPick?.(choice.id);
+            if (!busy && !choice.unusableReason) onPick?.(choice.id);
           }}
         >
           {busy && <i className="es-busy" aria-hidden="true" />}
-          {choice.label}
+          {choice.unusableReason ? `${choice.label}（利用できません: ${choice.unusableReason}）` : choice.label}
         </button>
       ))}
       {onChangeSteps && (

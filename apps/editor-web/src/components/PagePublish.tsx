@@ -23,14 +23,14 @@ import { PUBLISH_MESSAGES, slugMessage } from "@/publish/messages";
  *
  * - 選ぶ（発信先・範囲・あわせて・URL）たびにシートのデータを読み直す（URL は打ち終わるのを少し待つ）。
  * - シートを開く前と、公開・更新を送る前に、エディタの保存待ちを送り終える（最後の入力を公開版に入れる）。保存できなければ送らない。
- * - 「直す」: 題名・本文の問題はシートを閉じてその欄へフォーカスを移す。言語・リード・カバー写真・カテゴリ・関連する体験の欄は
- *   editor にまだ無いので、シートは開いたまま「まだ直せない」と一言出す（条件は発信先の宣言の側で決まる）。
+ * - 「直す」: 題名・本文・リード・カバー写真の問題はシートを閉じてその欄へフォーカスを移す。
+ *   言語・カテゴリ・関連する体験の欄はこの editor にまだ無いので、シートは開いたまま「まだ直せない」と一言出す。
  * - 「発信先を追加」「接続する」は発信先の設定（`/destinations`。#41）へ移る。
  * - 本人のサイトの行は docs-ui では発信先の種類ごとに 1 つなので、公開しているサイト（無ければ最初に接続したサイト）だけを出す。
  */
 
 /** 「直す」で移る欄（editor の画面にあるもの）。 */
-export type PublishFixField = "title" | "body";
+export type PublishFixField = "title" | "body" | "cover" | "lead";
 
 const WHO: Readonly<Record<ShellDest, string>> = { exp: "旅行者向け · 英語", niho: "鎌倉の人向け", site: "本人のサイト" };
 const ROLE: Readonly<Record<ShellDest, string>> = { exp: "ライター", niho: "NIHO アカウント", site: "接続済み" };
@@ -104,7 +104,12 @@ function stopDetailOf(sheet: PublishSheetDto | null): string {
 /** 「直す」: 開いているページの題名か本文へフォーカスを移す。 */
 export function focusPageField(field: PublishFixField): void {
   const main = document.getElementById("es-main");
-  const target = field === "title" ? main?.querySelector<HTMLElement>("textarea.page-title") : main?.querySelector<HTMLElement>('.doc[contenteditable="true"]');
+  const target =
+    field === "title"
+      ? main?.querySelector<HTMLElement>("textarea.page-title")
+      : field === "body"
+        ? main?.querySelector<HTMLElement>('.doc[contenteditable="true"]')
+        : main?.querySelector<HTMLElement>(field === "cover" ? "[data-page-cover]" : "[data-page-lead]");
   if (!target) return;
   target.focus();
   target.scrollIntoView?.({ block: "nearest" });
@@ -331,7 +336,12 @@ export function usePagePublish(input: {
   const fix = (key: string) => {
     const problem = sheet?.problems[Number(key)];
     if (!problem) return;
-    const field: PublishFixField | null = problem.id === "title" ? "title" : problem.fix === "body" ? "body" : null;
+    const field: PublishFixField | null =
+      problem.id === "title" || problem.id === "step-title"
+        ? "title"
+        : problem.fix === "body" || problem.fix === "cover" || problem.fix === "lead"
+          ? problem.fix
+          : null;
     if (field === null) {
       patch(pageId, { error: PUBLISH_MESSAGES.noField });
       return;

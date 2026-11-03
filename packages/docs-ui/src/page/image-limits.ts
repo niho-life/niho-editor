@@ -7,6 +7,8 @@
 
 /** 1 枚の容量の上限（20 MB）。ブラウザで sha256 を計算し、1 回の PUT で送れる大きさ。 */
 export const IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+/** 題名・本文 JSON・参照する画像・アップロード予約の合計。 */
+export const PAGE_MAX_BYTES = 30 * 1024 * 1024;
 /** 1 ページに入れられる枚数。超えたら開始で断る（保存の前）。 */
 export const IMAGE_PAGE_MAX_COUNT = 100;
 /** alt・クレジットの上限（DB の assets の CHECK・限定 AST と同じ値。ここが 1 か所）。 */

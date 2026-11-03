@@ -374,6 +374,37 @@ describe("PostgreSQL editor store: revisions, versions and trash", { skip: datab
       const versions = await versionsOf(page.id);
       assert.deepEqual(versions.at(-1), { version: 2, reason: "restore", blocks: [paragraph("二版")] }, "the body before the restore is kept");
     });
+
+    it("keeps cover and lead in metadata history and restores them together", async () => {
+      const store = new EditorStore(pool);
+      const page = await store.createPage(OWNER, { title: "記事", blocks: [paragraph("本文")] });
+      const firstCover = randomUUID();
+      const secondCover = randomUUID();
+      for (const assetId of [firstCover, secondCover]) {
+        await pool.query(
+          `INSERT INTO assets (id, owner, page_id, kind, bucket_path, bytes, sha256, content_type, upload_status)
+           VALUES ($1, $2, $3, 'image', $4, 1024, $5, 'image/png', 'ready')`,
+          [assetId, OWNER, page.id, `image/${assetId}`, "a".repeat(64)],
+        );
+      }
+      const first = expectSaved(await store.savePage(OWNER, page.id, { cover: firstCover, lead: "初版のリード" }, { baseRevision: page.revision }));
+      const second = expectSaved(await store.savePage(OWNER, page.id, { cover: secondCover, lead: "次のリード" }, { baseRevision: first.revision }));
+      const savedVersion = (await pool.query<{ cover: string | null; lead: string | null; metadata_tracked: boolean }>(
+        "SELECT cover, lead, metadata_tracked FROM page_versions WHERE page_id = $1 AND version = 2",
+        [page.id],
+      )).rows[0]!;
+      assert.deepEqual(savedVersion, { cover: firstCover, lead: "初版のリード", metadata_tracked: true });
+
+      const restored = expectSaved(await store.restoreVersion(OWNER, page.id, 2, { baseRevision: second.revision, accept: acceptAll }));
+      assert.equal(restored.cover, firstCover);
+      assert.equal(restored.lead, "初版のリード");
+      assert.equal(restored.revision, second.revision + 1);
+      const restoreSnapshot = (await pool.query<{ cover: string | null; lead: string | null; metadata_tracked: boolean }>(
+        "SELECT cover, lead, metadata_tracked FROM page_versions WHERE page_id = $1 ORDER BY version DESC LIMIT 1",
+        [page.id],
+      )).rows[0]!;
+      assert.deepEqual(restoreSnapshot, { cover: secondCover, lead: "次のリード", metadata_tracked: true });
+    });
   });
 
   describe("trash", () => {

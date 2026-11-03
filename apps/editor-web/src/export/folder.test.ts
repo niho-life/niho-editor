@@ -74,6 +74,10 @@ describe("contextMarkdown（背景情報）", () => {
 });
 
 describe("pageMarkdown", () => {
+  it("keeps a checklist in a folder export beside a photo", () => {
+    const body = [{ type: "taskList", content: [{ type: "taskItem", attrs: { checked: true }, content: [paragraph("確認")]}] }, image(ASSET, "合成写真")];
+    expect(pageMarkdown(page("確認表", body), () => "photos/a.jpg")).toBe("# 確認表\n\n- [x] 確認\n\n![合成写真](photos/a.jpg)\n");
+  });
   it("puts the title in an h1 and the body under it", () => {
     expect(pageMarkdown(page("取材メモ"), () => null)).toBe("# 取材メモ\n\n合成の本文\n");
     expect(pageMarkdown(page("", []), () => null)).toBe("# 無題\n");

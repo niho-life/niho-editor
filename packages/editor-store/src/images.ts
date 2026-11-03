@@ -1,6 +1,7 @@
 import { CONTROL_CHARACTERS, SHA256, TOUCH_PAGE_SQL, assertOwner, charCount, isInvalidTextRepresentation, isStorableText, rollback, type Connectable } from "./recordings.ts";
 import { isShareToken } from "./shares.ts";
 import { isPageId } from "./store.ts";
+import { IMAGE_MAX_BYTES, PAGE_IMAGE_MAX_COUNT, PAGE_MAX_BYTES, pageImageCharges, pageSizeBytes } from "./page-size.ts";
 import type { OwnerId, Queryable } from "./types.ts";
 
 /**
@@ -8,14 +9,14 @@ import type { OwnerId, Queryable } from "./types.ts";
  *
  * 流れ（音声（#36 段 2a）と同じ二段）: 開始（startImageUpload）で assets の行（kind = 'image'・upload_status = 'uploading'・
  * consent = false）を作る → ブラウザが保存先へ直接アップロードする → 完了（completeImageUpload）で、保存先にある object の
- * 大きさが申告どおりなら 'ready' にする。bytes・sha256・content_type はクライアントの申告の値（サーバーは中身を読まず、
- * sha256 を検証しない）。
+ * 大きさを保存先で確かめて 'ready' にする。ready の bytes は実寸、sha256・content_type はクライアントの申告
+ * （サーバーは中身を読まず、sha256 を検証しない）。
  *
  * 読み取りは呼び出し側（editor-web）がサーバーで中継する。ここが返すのは bucket の中の場所（bucket 名・URL・署名は持たない）。
  * 読み書きは全て本人の・ゴミ箱でないページの画像だけ（別の人・存在しない・UUID として不正な id・削除済み・画像でない資産は null）。
  * 共有リンクの読み取り（sharedImageAsset）は token で絞り、shares.ts の readSharedPage と同じ条件（ゴミ箱のページは返さない）に、
  * 「そのページの画像」と「アップロードの済んだ（ready）画像」を足す。
- * 画像の object はここでは消さない（ゴミ箱の purge は資産の行だけを消し、object は bucket の規則に任せる）。
+ * 画像の object はここでは消さない（取消・期限切れ・ゴミ箱 purge は資産の行だけを消す）。
  */
 
 /** 画像の object を置く場所の接頭辞。 */
@@ -77,9 +78,9 @@ export type StartedImageUpload = {
  * conflict: 同じキーで内容が違う要求か、そのキーで作った資産のページがゴミ箱にある（キーは使えない）。
  * null: 本人の・ゴミ箱でないページが無い（別の人・存在しない・不正な id・削除済み）。
  */
-export type StartImageUploadResult = StartedImageUpload | { status: "conflict" } | null;
+export type StartImageUploadResult = StartedImageUpload | { status: "conflict" } | { status: "page_full" } | { status: "too_many" } | null;
 
-export type CompleteImageUploadResult = { status: "ok"; asset: ImageAsset } | { status: "size_mismatch" } | null;
+export type CompleteImageUploadResult = { status: "ok"; asset: ImageAsset } | { status: "size_mismatch" } | { status: "page_full" } | null;
 
 /** 画像の欄（指定したものだけを変える）。alt・クレジットは空文字を null として入れる。 */
 export type ImageMetaPatch = { alt?: string | null; credit?: string | null; consent?: boolean };
@@ -118,7 +119,7 @@ function startProblem(input: StartImageUploadInput): string | null {
   if (typeof input.contentType !== "string" || input.contentType.length > CONTENT_TYPE_MAX_CHARS || !CONTENT_TYPE.test(input.contentType)) {
     return "content_type";
   }
-  if (typeof input.bytes !== "number" || !Number.isSafeInteger(input.bytes) || input.bytes < 1) return "bytes";
+  if (typeof input.bytes !== "number" || !Number.isSafeInteger(input.bytes) || input.bytes < 1 || input.bytes > IMAGE_MAX_BYTES) return "bytes";
   if (typeof input.sha256 !== "string" || !SHA256.test(input.sha256)) return "sha256";
   if (input.uploadKey !== null && !isUuid(input.uploadKey)) return "upload_key";
   if (typeof input.requestHash !== "string" || !SHA256.test(input.requestHash)) return "request_hash";
@@ -176,8 +177,8 @@ function toAsset(row: ImageRow): ImageAsset {
 // $1 page id / $2 owner / $3 asset id / $4 bucket path / $5 bytes（申告）/ $6 sha256（申告）/ $7 content type（申告）/
 // $8 upload key / $9 request hash
 const INSERT_IMAGE_SQL = `
-INSERT INTO assets (id, owner, page_id, kind, bucket_path, bytes, sha256, content_type, consent, upload_status, upload_key, request_hash)
-SELECT $3::uuid, p.owner, p.id, 'image', $4::text, $5::bigint, $6::text, $7::text, false, 'uploading', $8::uuid, $9::text
+INSERT INTO assets (id, owner, page_id, kind, bucket_path, bytes, sha256, content_type, consent, upload_status, upload_key, request_hash, reservation_expires_at)
+SELECT $3::uuid, p.owner, p.id, 'image', $4::text, $5::bigint, $6::text, $7::text, false, 'uploading', $8::uuid, $9::text, clock_timestamp() + interval '8 days'
   FROM pages AS p
  WHERE p.id = $1 AND p.owner = $2 AND p.deleted_at IS NULL
 RETURNING id, bucket_path, upload_status`;
@@ -230,13 +231,12 @@ export async function findImageUploadByKey(
 }
 
 /**
- * 画像のアップロードを始める: 本人の・ゴミ箱でないページに assets の 1 行（kind = 'image'・upload_status = 'uploading'・
- * consent = false）を入れ、資産の id と object の場所を返す。1 文の INSERT … SELECT なので transaction は要らない。
+ * 画像のアップロードを始める: ページ行を押さえ、予約を含む容量と枚数を検査してから assets の行を入れる。
  * 冪等: 同じ owner・同じ uploadKey の資産が既にあれば、ページと要求の内容（requestHash）が同じなら何も書かずにそれを返し
  * （existing）、違えば conflict。同じキーの要求が並んでも、入るのは 1 つだけ（UNIQUE で止まった側は先に入った方を引いて返す）。
  * 形が規則に合わなければ InvalidImageError（何も書かない）。
  */
-export async function startImageUpload(db: Queryable, owner: OwnerId, input: StartImageUploadInput): Promise<StartImageUploadResult> {
+export async function startImageUpload(db: Connectable, owner: OwnerId, input: StartImageUploadInput): Promise<StartImageUploadResult> {
   assertOwner(owner);
   const problem = startProblem(input);
   if (problem) throw new InvalidImageError(problem);
@@ -244,12 +244,43 @@ export async function startImageUpload(db: Queryable, owner: OwnerId, input: Sta
   const pageId = input.pageId.toLowerCase();
   const objectPath = imageObjectPath(assetId);
 
-  if (input.uploadKey !== null) {
-    const existing = await findByKey(db, owner, input.uploadKey, pageId, input.requestHash);
-    if (existing) return existing;
-  }
+  const client = await db.connect();
   try {
-    const inserted = await db.query<{ id: string; bucket_path: string; upload_status: ImageUploadStatus }>(INSERT_IMAGE_SQL, [
+    await client.query("BEGIN");
+    // Every page writer takes this lock before inspecting its images. Count and insert are one decision.
+    const page = (await client.query<{ title: string; blocks: { readonly [key: string]: unknown }[]; cover: string | null; lead: string | null }>(
+      "SELECT title, blocks, cover, lead FROM pages WHERE id = $1 AND owner = $2 AND deleted_at IS NULL FOR UPDATE",
+      [pageId, owner],
+    )).rows[0];
+    if (!page) {
+      await rollback(client);
+      return input.uploadKey === null ? null : (await findByKey(client, owner, input.uploadKey, pageId, input.requestHash)) ?? null;
+    }
+    const charges = await pageImageCharges(client, owner, pageId);
+    if (input.uploadKey !== null) {
+      const existing = await findByKey(client, owner, input.uploadKey, pageId, input.requestHash);
+      if (existing) {
+        if (existing.status === "existing" && existing.uploadStatus === "uploading") {
+          await client.query(
+            "UPDATE assets SET reservation_expires_at = clock_timestamp() + interval '8 days' WHERE owner = $1 AND id = $2 AND upload_status = 'uploading'",
+            [owner, existing.assetId],
+          );
+          await client.query("COMMIT");
+          return existing;
+        }
+        await client.query("COMMIT");
+        return existing;
+      }
+    }
+    if (charges.length >= PAGE_IMAGE_MAX_COUNT) {
+      await client.query("COMMIT");
+      return { status: "too_many" };
+    }
+    if (pageSizeBytes(page.title, page.blocks, charges, page.cover, page.lead) + input.bytes > PAGE_MAX_BYTES) {
+      await client.query("COMMIT");
+      return { status: "page_full" };
+    }
+    const inserted = await client.query<{ id: string; bucket_path: string; upload_status: ImageUploadStatus }>(INSERT_IMAGE_SQL, [
       pageId,
       owner,
       assetId,
@@ -262,15 +293,19 @@ export async function startImageUpload(db: Queryable, owner: OwnerId, input: Sta
     ]);
     const row = inserted.rows[0];
     // ページが無い（別の人・存在しない・ゴミ箱）
-    if (!row) return null;
+    if (!row) throw new Error("editor-store: locked page vanished during image start");
+    await client.query("COMMIT");
     return { status: "created", assetId: row.id, objectPath: row.bucket_path, uploadStatus: row.upload_status };
   } catch (error) {
+    await rollback(client);
     // 同じキーの要求が並んで、先に入った方がある: その資産を返す（ページ・内容が違えば conflict）
     if (input.uploadKey !== null && isUploadKeyConflict(error)) {
-      const existing = await findByKey(db, owner, input.uploadKey, pageId, input.requestHash);
+      const existing = await findByKey(client, owner, input.uploadKey, pageId, input.requestHash);
       if (existing) return existing;
     }
     throw error;
+  } finally {
+    client.release();
   }
 }
 
@@ -284,7 +319,7 @@ SELECT a.id, a.page_id, a.bytes::text AS bytes, a.upload_status
 
 const MARK_READY_SQL = `
 UPDATE assets AS a
-   SET upload_status = 'ready'
+   SET upload_status = 'ready', bytes = $3, reservation_expires_at = NULL
  WHERE a.owner = $1 AND a.id = $2 AND a.kind = 'image' AND a.upload_status = 'uploading'
 RETURNING ${IMAGE_COLUMNS}`;
 
@@ -299,8 +334,9 @@ SELECT ${IMAGE_COLUMNS}
  * アップロードの完了。行を FOR UPDATE で押さえてから状態を見るので、並んで呼ばれても更新は 1 回だけ。
  * - 本人の・ゴミ箱でないページの画像が無い: null
  * - ready: 何も書かずにそのまま成功（冪等）
- * - uploading で stored.sizeBytes が申告の bytes と同じ: ready にして、ページの更新時刻も進める
- * - uploading で大きさが違う: `{ status: "size_mismatch" }`（何も書かない）
+ * - uploading で保存先の実寸が 1〜20 MiB、ページ容量にも収まる: bytes を実寸に確定して ready にする
+ * - 実寸が 0 または 20 MiB 超: `{ status: "size_mismatch" }`（何も書かない）
+ * - ページ容量超過: `{ status: "page_full" }`（何も書かない）
  * stored は保存先で確かめた object の大きさ（呼び出し側が保存先に問い合わせる）。
  */
 export async function completeImageUpload(
@@ -319,6 +355,23 @@ export async function completeImageUpload(
   try {
     await client.query("BEGIN");
     try {
+      const location = await client.query<{ page_id: string }>(
+        "SELECT page_id FROM assets WHERE owner = $1 AND id = $2 AND kind = 'image'",
+        [owner, assetId],
+      );
+      if (!location.rows[0]) {
+        await rollback(client);
+        return null;
+      }
+      const page = (await client.query<{ title: string; blocks: { readonly [key: string]: unknown }[]; cover: string | null; lead: string | null }>(
+        "SELECT title, blocks, cover, lead FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL FOR UPDATE",
+        [owner, location.rows[0].page_id],
+      )).rows[0];
+      if (!page) {
+        await rollback(client);
+        return null;
+      }
+      const charges = await pageImageCharges(client, owner, location.rows[0].page_id);
       const locked = await client.query<{ id: string; page_id: string; bytes: string; upload_status: ImageUploadStatus }>(LOCK_IMAGE_SQL, [owner, assetId]);
       const row = locked.rows[0];
       if (!row) {
@@ -331,11 +384,16 @@ export async function completeImageUpload(
         const asset = current.rows[0];
         return asset ? { status: "ok", asset: toAsset(asset) } : null;
       }
-      if (Number(row.bytes) !== stored.sizeBytes) {
+      if (stored.sizeBytes < 1 || stored.sizeBytes > IMAGE_MAX_BYTES) {
         await rollback(client);
         return { status: "size_mismatch" };
       }
-      const updated = await client.query<ImageRow>(MARK_READY_SQL, [owner, assetId]);
+      const adjusted = charges.map((charge) => charge.id === row.id ? { ...charge, bytes: stored.sizeBytes, status: "ready" as const } : charge);
+      if (pageSizeBytes(page.title, page.blocks, adjusted, page.cover, page.lead) > PAGE_MAX_BYTES) {
+        await rollback(client);
+        return { status: "page_full" };
+      }
+      const updated = await client.query<ImageRow>(MARK_READY_SQL, [owner, assetId, stored.sizeBytes]);
       const saved = updated.rows[0];
       if (!saved) throw new Error("editor-store: update returned no asset");
       await client.query(TOUCH_PAGE_SQL, [owner, row.page_id]);
@@ -345,6 +403,35 @@ export async function completeImageUpload(
       await rollback(client);
       throw error;
     }
+  } finally {
+    client.release();
+  }
+}
+
+/** Cancel only an uploading asset. The page lock makes cancellation exclusive with start, complete and save. */
+export async function cancelImageUpload(pool: Connectable, owner: OwnerId, pageId: string, assetId: string): Promise<boolean> {
+  assertOwner(owner);
+  if (!isPageId(pageId) || !isPageId(assetId)) return false;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const page = await client.query("SELECT id FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL FOR UPDATE", [owner, pageId]);
+    if (page.rows.length === 0) {
+      await rollback(client);
+      return false;
+    }
+    const removed = await client.query(
+      `DELETE FROM assets AS a WHERE a.owner = $1 AND a.page_id = $2 AND a.id = $3 AND a.kind = 'image'
+         AND a.upload_status = 'uploading'
+         AND NOT EXISTS (SELECT 1 FROM pages AS p WHERE p.owner = a.owner AND p.cover = a.id)
+       RETURNING a.id`,
+      [owner, pageId, assetId],
+    );
+    await client.query("COMMIT");
+    return removed.rows.length > 0;
+  } catch (error) {
+    await rollback(client);
+    throw error;
   } finally {
     client.release();
   }
@@ -407,7 +494,8 @@ export async function updateImageMeta(db: Queryable, owner: OwnerId, assetId: st
 
 // $1 owner / $2 page id。ページが無ければ 0 行（null）。
 const COUNT_IMAGES_SQL = `
-SELECT (SELECT count(*) FROM assets AS a WHERE a.owner = p.owner AND a.page_id = p.id AND a.kind = 'image')::int AS images
+SELECT (SELECT count(*) FROM assets AS a WHERE a.owner = p.owner AND a.page_id = p.id AND a.kind = 'image'
+       AND (a.upload_status = 'ready' OR a.reservation_expires_at IS NULL OR a.reservation_expires_at > clock_timestamp()))::int AS images
   FROM pages AS p
  WHERE p.owner = $1 AND p.id = $2 AND p.deleted_at IS NULL`;
 

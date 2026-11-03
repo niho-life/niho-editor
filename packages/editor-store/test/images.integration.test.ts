@@ -7,6 +7,7 @@ import { after, before, describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Pool as PgPool } from "pg";
 import {
+  cancelImageUpload,
   completeImageUpload,
   countPageImages,
   findImageUploadByKey,
@@ -17,6 +18,7 @@ import {
   updateImageMeta,
   type StartImageUploadInput,
 } from "../src/images.ts";
+import { PAGE_MAX_BYTES, pageImageCharges, pageSizeBytes } from "../src/page-size.ts";
 import { applyMigrations, defaultMigrationsDir, readMigrations } from "../src/migrate.ts";
 import { enableShare, stopShare } from "../src/shares.ts";
 import { EditorStore } from "../src/store.ts";
@@ -155,13 +157,11 @@ describe("page images on PostgreSQL", { skip: databaseUrl === undefined }, () =>
       createdAt: pending!.createdAt,
     });
 
-    // 大きさが申告と違えば何も書かない
-    assert.deepEqual(await completeImageUpload(pool, OWNER, input.assetId, { sizeBytes: 1023 }), { status: "size_mismatch" });
-    assert.equal((await imageAsset(pool, OWNER, input.assetId))!.status, "uploading");
-
-    const done = await completeImageUpload(pool, OWNER, input.assetId, { sizeBytes: 1024 });
+    // 保存先で検証した実寸へ確定する（申告より小さい場合も二重計上しない）
+    const done = await completeImageUpload(pool, OWNER, input.assetId, { sizeBytes: 1023 });
     assert.equal(done?.status, "ok");
     assert.equal(done?.status === "ok" && done.asset.status, "ready");
+    assert.equal(done?.status === "ok" && done.asset.bytes, 1023);
     // 何度呼んでもよい（冪等）
     const again = await completeImageUpload(pool, OWNER, input.assetId, { sizeBytes: 999 });
     assert.equal(again?.status === "ok" && again.asset.status, "ready");
@@ -296,6 +296,80 @@ describe("page images on PostgreSQL", { skip: databaseUrl === undefined }, () =>
     assert.equal(made.length, 1);
     assert.equal(existing.length, 2);
     assert.equal(await countPageImages(pool, OWNER, page), 1);
+  });
+
+  it("serializes reservation, save, completion and cancellation at the exact 30 MiB boundary", async () => {
+    const page = await newPage();
+    const first = startInput(page, { bytes: 20 * 1024 * 1024 });
+    assert.equal((await startImageUpload(pool, OWNER, first))?.status, "created");
+    assert.equal((await completeImageUpload(pool, OWNER, first.assetId, { sizeBytes: first.bytes }))?.status, "ok");
+    const image = { type: "image", attrs: { assetId: first.assetId } };
+    const before = (await store.getPage(OWNER, page))!;
+    assert.equal((await store.savePage(OWNER, page, { blocks: [image] }, { baseRevision: before.revision }))?.status, "saved");
+    const saved = (await store.getPage(OWNER, page))!;
+    const baseline = new TextEncoder().encode(saved.title).byteLength + new TextEncoder().encode(JSON.stringify(saved.blocks)).byteLength;
+    const rest = PAGE_MAX_BYTES - baseline - first.bytes;
+    const second = startInput(page, { bytes: rest });
+    const extra = startInput(page, { bytes: 1 });
+    const raced = await Promise.all([startImageUpload(pool, OWNER, second), startImageUpload(pool, OWNER, extra)]);
+    assert.equal(raced.filter((item) => item?.status === "created").length, 1);
+    if (raced[0]?.status !== "created") {
+      // The one-byte reservation won; cancel it and reserve the exact remainder.
+      assert.equal(await cancelImageUpload(pool, OWNER, page, extra.assetId), true);
+      assert.equal((await startImageUpload(pool, OWNER, second))?.status, "created");
+    }
+    assert.deepEqual(await startImageUpload(pool, OWNER, startInput(page, { bytes: 1 })), { status: "page_full" });
+    assert.equal((await completeImageUpload(pool, OWNER, second.assetId, { sizeBytes: rest }))?.status, "ok");
+    assert.equal((await store.savePage(OWNER, page, { blocks: [image, { type: "image", attrs: { assetId: second.assetId } }] }, { baseRevision: saved.revision }))?.status, "page_full");
+    assert.deepEqual((await store.getPage(OWNER, page))!.blocks, saved.blocks);
+    assert.equal(await cancelImageUpload(pool, OWNER, page, second.assetId), false);
+    assert.equal((await store.savePage(OWNER, page, { blocks: [] }, { baseRevision: saved.revision }))?.status, "saved");
+    assert.equal((await startImageUpload(pool, OWNER, startInput(page, { bytes: 1 })))?.status, "created");
+  });
+
+  it("releases an abandoned reservation and keeps completion from reviving it", async () => {
+    const page = await newPage();
+    const input = startInput(page, { bytes: 20 * 1024 * 1024 });
+    await startImageUpload(pool, OWNER, input);
+    assert.equal(await cancelImageUpload(pool, OTHER, page, input.assetId), false);
+    assert.equal(await cancelImageUpload(pool, OWNER, page, input.assetId), true);
+    assert.equal(await cancelImageUpload(pool, OWNER, page, input.assetId), false);
+    assert.equal(await completeImageUpload(pool, OWNER, input.assetId, { sizeBytes: input.bytes }), null);
+    assert.equal((await startImageUpload(pool, OWNER, startInput(page, { bytes: input.bytes })))?.status, "created");
+  });
+
+  it("reclaims a synthetic expired orphan before reserving new bytes", async () => {
+    const page = await newPage();
+    const abandoned = startInput(page, { bytes: 20 * 1024 * 1024, uploadKey: randomUUID() });
+    await startImageUpload(pool, OWNER, abandoned);
+    await pool.query("UPDATE assets SET reservation_expires_at = clock_timestamp() - interval '1 second' WHERE id = $1", [abandoned.assetId]);
+    const fresh = startInput(page, { bytes: 20 * 1024 * 1024 });
+    assert.equal((await startImageUpload(pool, OWNER, fresh))?.status, "created");
+    assert.equal(await imageAsset(pool, OWNER, abandoned.assetId), null);
+    assert.equal(await completeImageUpload(pool, OWNER, abandoned.assetId, { sizeBytes: abandoned.bytes }), null);
+    assert.equal(await countPageImages(pool, OWNER, page), 1);
+    const resent = await startImageUpload(pool, OWNER, startInput(page, { bytes: 20 * 1024 * 1024, uploadKey: abandoned.uploadKey }));
+    assert.deepEqual(resent, { status: "page_full" });
+  });
+
+  it("makes a simultaneous save and upload compete for the same remaining bytes", async () => {
+    const page = await newPage();
+    const first = startInput(page, { bytes: 20 * 1024 * 1024 });
+    await startImageUpload(pool, OWNER, first);
+    await completeImageUpload(pool, OWNER, first.assetId, { sizeBytes: first.bytes });
+    const image = { type: "image", attrs: { assetId: first.assetId } };
+    const initial = (await store.getPage(OWNER, page))!;
+    await store.savePage(OWNER, page, { blocks: [image] }, { baseRevision: initial.revision });
+    const before = (await store.getPage(OWNER, page))!;
+    const remaining = PAGE_MAX_BYTES - pageSizeBytes(before.title, before.blocks, await pageImageCharges(pool, OWNER, page));
+    const upload = startInput(page, { bytes: remaining });
+    const [started, saved] = await Promise.all([
+      startImageUpload(pool, OWNER, upload),
+      store.savePage(OWNER, page, { blocks: [image, { type: "paragraph", content: [{ type: "text", text: "x" }] }] }, { baseRevision: before.revision }),
+    ]);
+    assert.deepEqual([started?.status, saved?.status].sort(), ["created", "page_full"]);
+    const after = (await store.getPage(OWNER, page))!;
+    assert.ok(pageSizeBytes(after.title, after.blocks, await pageImageCharges(pool, OWNER, page)) <= PAGE_MAX_BYTES);
   });
 
   it("saves alt, credit and consent, one field at a time, with an empty value meaning none", async () => {

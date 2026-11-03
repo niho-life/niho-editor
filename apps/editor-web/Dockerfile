@@ -11,6 +11,7 @@ COPY packages/docs-core packages/docs-core
 COPY packages/docs-ui packages/docs-ui
 COPY packages/ui packages/ui
 COPY packages/editor-store packages/editor-store
+COPY packages/desktop-bridge packages/desktop-bridge
 # Workerの相対importからもpgと型宣言を解決する（app側のinstall-linksとは別のsource root）。
 RUN npm -C packages/editor-store ci --ignore-scripts --no-audit --no-fund
 # 写真の本人型を直接参照する。runtime importは無いがbuildの型検査には必要。

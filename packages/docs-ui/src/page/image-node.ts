@@ -1,7 +1,7 @@
 import { Node, mergeAttributes, type Editor } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { ReactNodeViewRenderer } from "@tiptap/react";
-import { IMAGE_ACCEPT, IMAGE_MAX_BYTES, IMAGE_PAGE_MAX_COUNT } from "./image-limits";
+import { IMAGE_ACCEPT, IMAGE_MAX_BYTES, IMAGE_PAGE_MAX_COUNT, PAGE_MAX_BYTES } from "./image-limits";
 import type { ImageProblem, ImageSrcOf, PageImages } from "./images";
 import { ImageNodeView } from "./ImageNodeView";
 import { IMAGE_NODE_NAME, imageNode } from "./doc";
@@ -36,6 +36,7 @@ export const IMAGE_PROBLEM_TEXT: Record<ImageProblem, string> = {
   content_type: "入れられるのは JPEG・PNG・WebP・AVIF・GIF の画像です。",
   too_large: `画像は 1 枚 ${Math.round(IMAGE_MAX_BYTES / (1024 * 1024))}MB までです。`,
   too_many: `1 ページに入れられる画像は ${IMAGE_PAGE_MAX_COUNT} 枚までです。`,
+  page_full: `ページの${PAGE_MAX_BYTES / (1024 * 1024)} MiB上限を超えます。不要な画像を本文から外すか、アップロード中の画像を中止してください。録音音声は別枠です。`,
   failed: "画像を入れられませんでした。もう一度試してください。",
 };
 
@@ -75,8 +76,29 @@ export function showImageProblem(editor: Editor, message: string): void {
 /** アップロードして、済んだものだけを順に入れる。1 つでも断られたら、その理由を出してやめる。 */
 async function uploadAndInsert(editor: Editor, images: PageImages, pageId: string, files: readonly File[]): Promise<void> {
   for (const file of files) {
-    const result = await images.upload(file, pageId);
+    const controller = new AbortController();
+    const host = editor.view.dom.parentElement;
+    const progress = host?.ownerDocument.createElement("p");
+    if (progress && host) {
+      progress.setAttribute("data-image-uploading", "");
+      progress.style.cssText = "margin:8px 0 0;font-size:13px;line-height:1.5;overflow-wrap:anywhere";
+      progress.append("画像をアップロード中（ページ容量に予約中） ");
+      const cancel = progress.ownerDocument.createElement("button");
+      cancel.type = "button";
+      cancel.textContent = "アップロードを中止";
+      cancel.style.cssText = "font-size:13px;color:var(--niho-accent-ink);text-decoration:underline";
+      cancel.addEventListener("click", () => controller.abort());
+      progress.append(cancel);
+      host.append(progress);
+    }
+    let result;
+    try {
+      result = await images.upload(file, pageId, controller.signal);
+    } finally {
+      progress?.remove();
+    }
     if (editor.isDestroyed) return;
+    if (controller.signal.aborted) return;
     if (!result.ok) {
       showImageProblem(editor, IMAGE_PROBLEM_TEXT[result.problem]);
       return;

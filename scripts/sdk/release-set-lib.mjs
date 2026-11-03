@@ -34,7 +34,7 @@ const EXPECTED_PACKAGES = [
 ];
 const EXPECTED_PEERS = {
   core: [],
-  "docs-ui": ["@niho/docs-core", "@tiptap/core", "@tiptap/extension-bubble-menu", "@tiptap/extension-floating-menu", "@tiptap/extension-list", "@tiptap/pm", "@tiptap/react", "@tiptap/starter-kit", "@tiptap/suggestion", "lucide-react", "markdown-it", "niho-docs-sdk-ui", "prosemirror-markdown", "prosemirror-search", "react", "react-dom"],
+  "docs-ui": ["@niho/docs-core", "@tiptap/core", "@tiptap/extension-bubble-menu", "@tiptap/extension-floating-menu", "@tiptap/extension-list", "@tiptap/extension-table", "@tiptap/pm", "@tiptap/react", "@tiptap/starter-kit", "@tiptap/suggestion", "lucide-react", "markdown-it", "niho-docs-sdk-ui", "prosemirror-markdown", "prosemirror-search", "react", "react-dom"],
   "sdk-ui": ["@radix-ui/react-dialog", "@radix-ui/react-popover", "clsx", "lucide-react", "react", "react-dom", "tailwind-merge"],
 };
 const FORBIDDEN_DEPENDENCIES = ["next", "@tauri-apps", "firebase", "niho-desktop-account"];

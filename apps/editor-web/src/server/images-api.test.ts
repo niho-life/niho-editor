@@ -9,7 +9,9 @@ import {
   IMAGE_CACHE_CONTROL,
   IMAGE_START_BODY_MAX_BYTES,
   SHARED_IMAGE_CACHE_CONTROL,
+  cancelImageRoute,
   completeImageRoute,
+  imageMetadataRoute,
   readImageRoute,
   sharedImageRoute,
   startImageRoute,
@@ -81,6 +83,12 @@ function memoryStore(options: { pages?: Record<string, string>; trashed?: readon
       row.asset = { ...row.asset, status: "ready" };
       return { status: "ok", asset: row.asset };
     },
+    cancelImageUpload: async (owner, pageId, assetId) => {
+      const index = rows.findIndex((row) => row.owner === owner && row.asset.pageId === pageId && row.asset.assetId === assetId && row.asset.status === "uploading" && own(owner, pageId));
+      if (index < 0) return false;
+      rows.splice(index, 1);
+      return true;
+    },
     imageAsset: async (owner, assetId) => find(owner, assetId)?.asset ?? null,
     updateImageMeta: async (owner, assetId, patch) => {
       metas.push({ owner, assetId, patch });
@@ -136,9 +144,12 @@ const start = (body: unknown, d: ImageApiDeps, headers: Record<string, string> =
   startImageRoute(request("POST", `/api/pages/${pageId}/images/start`, body, headers), pageId, d);
 const complete = (assetId: string, d: ImageApiDeps, headers: Record<string, string> = {}, pageId = PAGE) =>
   completeImageRoute(request("POST", `/api/pages/${pageId}/images/${assetId}/complete`, undefined, headers), pageId, assetId, d);
+const cancel = (assetId: string, d: ImageApiDeps, headers: Record<string, string> = {}, pageId = PAGE) =>
+  cancelImageRoute(request("DELETE", `/api/pages/${pageId}/images/${assetId}`, undefined, headers), pageId, assetId, d);
 const patch = (assetId: string, body: unknown, d: ImageApiDeps, headers: Record<string, string> = {}) =>
   updateImageRoute(request("PATCH", `/api/assets/${assetId}`, body, headers), assetId, d);
 const read = (assetId: string, d: ImageApiDeps) => readImageRoute(request("GET", `/api/assets/${assetId}`), assetId, d);
+const readMetadata = (assetId: string, d: ImageApiDeps) => imageMetadataRoute(request("GET", `/api/assets/${assetId}/meta`), assetId, d);
 const shared = (token: string, assetId: string, d: ImageApiDeps) => sharedImageRoute(request("GET", `/s/${token}/a/${assetId}`), token, assetId, d);
 
 async function snapshot(response: Response) {
@@ -449,6 +460,22 @@ describe("POST /api/pages/{id}/images/{assetId}/complete", () => {
   });
 });
 
+describe("DELETE /api/pages/{id}/images/{assetId}", () => {
+  it("releases only the authenticated owner's unfinished image", async () => {
+    const storage = createFakeStorage();
+    const memory = memoryStore();
+    const owner = deps("user-a", memory.store, storage);
+    const created = await (await start(START, owner)).json();
+    const assetId = created.assetId as string;
+    expect((await cancel(assetId, deps(null, memory.store, storage))).status).toBe(401);
+    expect((await cancel(assetId, deps("user-b", memory.store, storage))).status).toBe(404);
+    expect((await cancel(assetId, owner, { origin: "https://elsewhere.example" })).status).toBe(403);
+    expect((await cancel(assetId, owner)).status).toBe(204);
+    expect((await cancel(assetId, owner)).status).toBe(404);
+    expect((await complete(assetId, owner)).status).toBe(404);
+  });
+});
+
 describe("PATCH /api/assets/{assetId}", () => {
   it("saves alt, credit and consent, and empties a field with null", async () => {
     const { store, metas } = memoryStore();
@@ -563,6 +590,23 @@ describe("GET /api/assets/{assetId}", () => {
     const response = await read(assetId, d);
     expect(response.headers.get("content-type")).toBe("application/octet-stream");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+});
+
+describe("GET /api/assets/{assetId}/meta", () => {
+  it("returns only the authenticated owner's image metadata", async () => {
+    const { store } = memoryStore();
+    const storage = createFakeStorage();
+    const d = deps("user-a", store, storage);
+    const assetId = await upload(storage, d);
+    await patch(assetId, { consent: true }, d);
+    const response = await readMetadata(assetId, d);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      image: { assetId, pageId: PAGE, status: "ready", bytes: 5, contentType: "image/png", alt: null, credit: null, consent: true },
+    });
+    expect((await readMetadata(assetId, deps(null, store, storage))).status).toBe(401);
+    expect((await readMetadata(assetId, deps("user-b", store, storage))).status).toBe(404);
   });
 });
 

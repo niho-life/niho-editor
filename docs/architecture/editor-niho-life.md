@@ -2,7 +2,7 @@
 
 2026-10-30 のオーナー判断。NIHO docs（このリポジトリ）が担ってきた機能を、`editor.niho.life` という一つの Web の書斎に統合する方針。このリポジトリは `niho-editor` に改名し、`editor.niho.life` を担当範囲とする。`docs.niho.life` は作らない。
 
-モックは [`docs/mockups/editor-niho-life-v5.html`](../mockups/editor-niho-life-v5.html)（HTML 1 枚、写真とフォントを内蔵）。開いたら上の黒い帯の「地図」から全画面へ飛べる。
+現行モックは [`docs/mockups/editor-niho-life-v7.html`](../mockups/editor-niho-life-v7.html)（HTML 1 枚、画像とフォントを内蔵）。v6 は履歴として保持し、v7 は書式・AI 設定・30 MiB 上限・Web/Mac の AI 経路を反映した canonical source。開いたら上の黒い帯の「地図」から全画面へ飛べる。
 
 ## 位置づけ
 

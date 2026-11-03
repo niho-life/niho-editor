@@ -1,6 +1,6 @@
 # editor 公開の実処理：公開のシートと発信先の設定
 
-Issue #39（公開のシート）と #41（発信先の設定）の「実処理」の方針です。画面の見た目はモック v6／`packages/docs-ui` の shell（#48）が持ち、ここでは **画面の裏で動く判定と状態遷移** を `packages/editor-publish` に置きます。読み取り API の契約は [editor 公開 API contract v1](../security/editor-publish-api-v1.md)（#40）です。設計は [editor-niho-life-design.md](editor-niho-life-design.md) §8・§9・§10・§12。
+Issue #39（公開のシート）と #41（発信先の設定）の「実処理」の方針です。画面の見た目は現行モック v7／`packages/docs-ui` の shell（#48）が持ち、ここでは **画面の裏で動く判定と状態遷移** を `packages/editor-publish` に置きます。読み取り API の契約は [editor 公開 API contract v1](../security/editor-publish-api-v1.md)（#40）です。設計は [editor-niho-life-design.md](editor-niho-life-design.md) §8・§9・§10・§12。
 
 ## 置き場所と境界
 

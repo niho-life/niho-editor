@@ -12,9 +12,8 @@ import { SETTINGS_ID_PATTERN, type RecipeInput, type RecipeSample, type Settings
  *
  * 実行のときに使う手順は、表 `recipes`（migration 20261101001500_recipes）から読む（`src/server/recipe-source.ts`）。この定数はその表の
  * 既定の中身で、手順が 1 つも無い人の最初の読み出しで表へ写される。設定（#108）で段階の名前・指示・お手本を変えたもの・
- * 足したものも同じ表の行になる。手順を変えると、次に手順を始めたときから効く。
- * **進行中の run も、段階を claim するたびに今の定義を読む**ので、途中で手順を直すとその先の段階は新しい定義で走る
- * （run に手順の写しを固定するのは設計 §2.7。まだ入っていない）。
+ * 足したものも同じ表の行になる。run の開始時に写しを固定し、同じ親ページと手順の再実行でもその写しを引き継ぐ。
+ * 手順の編集は、既存 run の写しを明示的に更新するまで実行へ反映しない（設計 §2.7）。
  */
 export const DEFAULT_RECIPE_IDS = ["tpl-1", "tpl-2", "tpl-3", "tpl-4"] as const;
 export type DefaultRecipeId = (typeof DEFAULT_RECIPE_IDS)[number];
@@ -24,6 +23,7 @@ export type RecipeStep = { id: string; name: string; instruction: string; profil
 
 export type RecipeDef = {
   id: string;
+  revision?: number;
   name: string;
   /** お手本（文書ガイド。全段階の入力に入る）。 */
   guide: string;
@@ -39,6 +39,7 @@ function fromTemplate(id: DefaultRecipeId): RecipeDef {
   if (!template || template.steps.length === 0) throw new Error(`editor-web: the step template ${id} is missing in docs-core`);
   return {
     id,
+    revision: 1,
     name: template.name,
     guide: template.guide,
     steps: template.steps.map((step) => ({
@@ -71,6 +72,7 @@ function copyStep(step: RecipeStep): RecipeStep {
 function copyRecipe(recipe: RecipeDef): RecipeDef {
   return {
     id: recipe.id,
+    revision: recipe.revision,
     name: recipe.name,
     guide: recipe.guide,
     steps: recipe.steps.map(copyStep),
@@ -88,6 +90,7 @@ export function recipeFromSettings(saved: SettingsRecipe, base: RecipeDef | unde
   const byId = new Map((base?.steps ?? []).map((step) => [step.id, step] as const));
   return {
     id: saved.id,
+    revision: base?.revision ?? 1,
     name: saved.name,
     guide: saved.guide,
     steps: saved.steps.map((step) => {
@@ -125,6 +128,7 @@ export function recipesFromStored(rows: readonly StoredRecipe[]): RecipeDef[] {
     .filter((row) => row.steps.length > 0)
     .map((row) => ({
       id: row.id,
+      revision: row.revision,
       name: row.name,
       guide: row.guide,
       steps: row.steps.map((step) => ({ ...step })),

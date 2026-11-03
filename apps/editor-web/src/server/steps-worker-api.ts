@@ -20,8 +20,6 @@ export type StepsWorkerDeps = {
   verify: (token: string, expected: { audience: string; allowedEmail: string }) => Promise<OidcVerifyResult>;
   /** DB が使えないときは null（503。Cloud Tasks が再試行する）。 */
   steps: () => (RunnerDeps["store"] & StepSweepStore) | null;
-  /** run を持っている人の手順（設定で変えたもの。#108）。DB が使えないときは null（503。Cloud Tasks が再試行する）。 */
-  recipes: () => RunnerDeps["recipes"] | null;
   /** 次の段階・再試行・掃除の積み込み先。 */
   queue: (config: CloudTasksConfig) => TaskQueue;
   /** 段階の実行器（今は偽物。本物への差し替えは steps-deps.ts の 1 か所）。 */
@@ -82,13 +80,12 @@ export function runStepTask(request: Request, deps: StepsWorkerDeps): Promise<Re
     const checked = await gate(request, deps, RUN_ROUTE);
     if (!checked.ok) return checked.response;
     const steps = deps.steps();
-    const recipes = deps.recipes();
-    if (!steps || !recipes) return errorResponse("unavailable");
+    if (!steps) return errorResponse("unavailable");
     const body = await readJsonBody(request, RUN_BODY_LIMIT);
     if (!body.ok) return body.response;
     const task = parseTask(body.value);
     if (!task) return errorResponse("bad_request");
-    const outcome = await runAttempt({ store: steps, recipes, executor: deps.executor(), queue: deps.queue(checked.config) }, task);
+    const outcome = await runAttempt({ store: steps, executor: deps.executor(), queue: deps.queue(checked.config) }, task);
     return jsonResponse(200, { status: outcome.status });
   });
 }

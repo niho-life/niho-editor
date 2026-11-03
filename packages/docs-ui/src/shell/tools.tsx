@@ -2,7 +2,7 @@ import { Icon } from "./icons";
 import { useRovingFocus } from "./roving-focus";
 
 /** 道具の帯の操作。呼ぶ側が TipTap（または別の保存先）につなぐ。 */
-export type ShellToolAction = "add-block" | "text-type" | "bold" | "italic" | "link" | "heading" | "list" | "image" | "record";
+export type ShellToolAction = "add-block" | "text-type" | "bold" | "italic" | "strike" | "code" | "link" | "heading" | "list" | "image" | "record";
 
 export type ShellToolsProps = {
   onAction?: (action: ShellToolAction) => void;
@@ -36,6 +36,8 @@ export function ShellTools({ onAction, blockMenuOpen, textType = "テキスト" 
       <button type="button" className="es-tb" aria-label="斜体" onClick={fire("italic")}>
         <i>I</i>
       </button>
+      <button type="button" className="es-tb" aria-label="取り消し線" onClick={fire("strike")}><s>S</s></button>
+      <button type="button" className="es-tb" aria-label="インラインコード" onClick={fire("code")}><code>&lt;/&gt;</code></button>
       <button type="button" className="es-tb" aria-label="リンク" onClick={fire("link")}>
         <Icon name="link" />
       </button>

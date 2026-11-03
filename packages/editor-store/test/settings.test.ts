@@ -32,6 +32,7 @@ describe("settingsProblem", () => {
     assert.equal(settingsProblem({ aiLang: "ja" }), null);
     assert.equal(settingsProblem({ glossary: [term()] }), null);
     assert.equal(settingsProblem({ recipes: [recipe()] }), null);
+    assert.equal(settingsProblem({ aboutName: "呼び名" }), null);
     assert.equal(settingsProblem({ aiLang: "same", glossary: [], recipes: [] }), null);
   });
 
@@ -89,6 +90,12 @@ describe("cleanSettingsPatch", () => {
     assert.deepEqual(cleaned.recipes, [{ id: "tpl-1", name: "記事制作", guide: "## 構成", steps: [{ id: "s-1", name: "方針", instruction: "書く" }] }]);
     assert.equal("aiLang" in cleaned, false);
     assert.deepEqual(Object.keys(cleanSettingsPatch({ aiLang: "en" })), ["aiLang"]);
+    assert.equal(settingsProblem({ aboutName: "あ".repeat(SETTINGS_LIMITS.aboutNameChars) }), null);
+    assert.equal(settingsProblem({ aboutName: "あ".repeat(SETTINGS_LIMITS.aboutNameChars + 1) }), "about_name");
+    // The save normalizer collapses whitespace in the single-line name field.
+    assert.equal(settingsProblem({ aboutName: "a\nb" }), null);
+    assert.equal(settingsProblem({ aboutName: 7 }), "about_name");
+    assert.deepEqual(cleanSettingsPatch({ aboutName: "  合成\n  呼び名  " }), { aboutName: "合成 呼び名" });
   });
 });
 
@@ -114,11 +121,12 @@ describe("editor settings without a database", () => {
 describe("editor settings read", () => {
   it("answers the defaults for a missing row, and drops stored values that no longer fit the shape", async () => {
     const rows = (value: unknown) => ({ query: async () => ({ rows: value === undefined ? [] : [value] }) }) as unknown as Queryable;
-    assert.deepEqual(await getEditorSettings(rows(undefined), OWNER), { aiLang: "same", glossary: [], recipes: [], about: "" });
+    assert.deepEqual(await getEditorSettings(rows(undefined), OWNER), { aiLang: "same", glossary: [], recipes: [], aboutName: "", about: "" });
     const mixed = await getEditorSettings(rows({ ai_lang: "nope", glossary: [term(), { term: "" }], recipes: [recipe(), { id: "bad" }] }), OWNER);
-    assert.deepEqual(mixed, { aiLang: "same", glossary: [term()], recipes: [recipe()], about: "" });
-    assert.deepEqual(await getEditorSettings(rows({ ai_lang: "en", glossary: "nope", recipes: null, about: 7 }), OWNER), { aiLang: "en", glossary: [], recipes: [], about: "" });
+    assert.deepEqual(mixed, { aiLang: "same", glossary: [term()], recipes: [recipe()], aboutName: "", about: "" });
+    assert.deepEqual(await getEditorSettings(rows({ ai_lang: "en", glossary: "nope", recipes: null, about_name: 7, about: 7 }), OWNER), { aiLang: "en", glossary: [], recipes: [], aboutName: "", about: "" });
     assert.equal((await getEditorSettings(rows({ ai_lang: "ja", about: "合成の自己紹介" }), OWNER)).about, "合成の自己紹介");
+    assert.equal((await getEditorSettings(rows({ ai_lang: "ja", about_name: "合成の呼び名", about: "保存済み" }), OWNER)).aboutName, "合成の呼び名");
   });
 
   it("keeps 「あなたについて」 within its limit and trims it", async () => {

@@ -12,22 +12,30 @@ import {
   computeBasis,
   createRun,
   failAttempt,
+  finalStepPageNames,
   heartbeatAttempt,
   isIdempotencyKey,
   isStepErrorCode,
   listQueuedAttempts,
   requeueAttempt,
   listRun,
+  readPartialOutput,
   readStepInput,
+  readStepStaleReasons,
   refreshStale,
   stepPageId,
+  stepPageIdForStep,
   sweepExpiredLeases,
+  updateRunRecipeSnapshot,
   type StepClaim,
   type StepRecipe,
   type StepRunsDb,
 } from "../src/step-runs.ts";
 import { EditorStore } from "../src/store.ts";
+import { parseRecipeSnapshot, snapshotOf } from "../src/recipe-snapshot.ts";
+import { RECIPE_LIMITS } from "../src/recipes.ts";
 import type { Block } from "../src/types.ts";
+import { computeStepBasis } from "../src/step-basis.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 
@@ -67,6 +75,54 @@ describe("step runs without a database", () => {
     assert.equal(stepPageId(parent.toUpperCase(), "tpl-1", 0), stepPageId(parent, "tpl-1", 0));
     assert.notEqual(stepPageId(parent, "tpl-2", 0), stepPageId(parent, "tpl-1", 0));
     assert.match(stepPageId(randomUUID(), "tpl-3", 2), /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.equal(stepPageIdForStep(parent, "tpl-1", "stable-step"), stepPageIdForStep(parent, "tpl-1", "stable-step"));
+    assert.notEqual(stepPageIdForStep(parent, "tpl-1", "stable-step"), stepPageIdForStep(parent, "tpl-1", "another-step"));
+  });
+
+  it("reads historical final-step names for only the requested owner and page", async () => {
+    const id = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
+    const queried: { text: string; values: unknown[] }[] = [];
+    const db = {
+      query: async (text: string, values: unknown[]) => {
+        queried.push({ text, values });
+        return { rows: [{ name: "記事本文" }, { name: null }, { name: "旧・記事本文" }] };
+      },
+    } as unknown as StepRunsDb;
+
+    assert.deepEqual(await finalStepPageNames(db, OWNER, id), ["記事本文", "旧・記事本文"]);
+    assert.deepEqual(queried[0]?.values, [OWNER, id]);
+    assert.match(queried[0]?.text ?? "", /jsonb_array_length/);
+    assert.deepEqual(await finalStepPageNames(db, "", id), []);
+    assert.deepEqual(await finalStepPageNames(db, OWNER, "not-a-page-id"), []);
+  });
+
+  it("keeps executable profile and sample metadata, and rejects malformed snapshots", () => {
+    const snapshot = snapshotOf({
+      id: "tpl-synthetic", name: "合成", guide: "文書ガイド",
+      steps: [{ id: "aaaa1111", name: "段階", instruction: "指示", profile: "light" }],
+      terms: [], samples: [{ id: "sample-1", name: "お手本", chars: 12 }],
+    });
+    assert.equal(parseRecipeSnapshot(snapshot)?.steps[0]?.profile, "light");
+    assert.deepEqual(snapshot.samples, [{ id: "sample-1", name: "お手本", chars: 12 }]);
+    assert.equal(parseRecipeSnapshot({ ...snapshot, steps: [{ id: "aaaa1111", name: "段階", instruction: "指示" }] }), null);
+    assert.equal(parseRecipeSnapshot({ ...snapshot, samples: [{ ...snapshot.samples[0], body: "複製してはいけない" }] }), null);
+    assert.equal(parseRecipeSnapshot(null), null);
+  });
+
+  it("counts recipe snapshot text in Unicode code points like recipe settings do", () => {
+    const name = `${"😀".repeat(40)}${"a".repeat(40)}`;
+    assert.equal(Array.from(name).length, RECIPE_LIMITS.nameChars);
+    assert.ok(name.length > RECIPE_LIMITS.nameChars);
+    const guide = `${"😀".repeat(RECIPE_LIMITS.guideChars / 2)}${"a".repeat(RECIPE_LIMITS.guideChars / 2)}`;
+    assert.equal(Array.from(guide).length, RECIPE_LIMITS.guideChars);
+    assert.ok(guide.length > RECIPE_LIMITS.guideChars);
+    const snapshot = snapshotOf({
+      id: "tpl-synthetic", name, guide,
+      steps: [{ id: "aaaa1111", name: "段階", instruction: "指示", profile: "standard" }],
+      terms: [], samples: [],
+    });
+    assert.equal(parseRecipeSnapshot(snapshot)?.name, name);
+    assert.equal(parseRecipeSnapshot(snapshot)?.guide, guide);
   });
 
   it("computes the input basis from the canonical JSON of the previous blocks and the instruction (fixed value)", () => {
@@ -97,7 +153,7 @@ describe("step runs without a database", () => {
     assert.equal(await refreshStale(untouchable, OWNER, "not-a-uuid", RECIPE), 0);
     await assert.rejects(() => createRun(untouchable, "", randomUUID(), { recipe: RECIPE }), TypeError);
     await assert.rejects(() => listRun(untouchable, "", randomUUID()), TypeError);
-    await assert.rejects(() => createRun(untouchable, OWNER, randomUUID(), { recipe: RECIPE, fromStep: 3 }), RangeError);
+    await assert.rejects(() => createRun(untouchable, OWNER, randomUUID(), { recipe: RECIPE, fromStep: -1 }), RangeError);
     await assert.rejects(() => createRun(untouchable, OWNER, randomUUID(), { recipe: RECIPE, idempotencyKey: "has space" }), TypeError);
   });
 });
@@ -115,6 +171,7 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     const client = await pool.connect();
     try {
       await applyMigrations(client);
+      await client.query("INSERT INTO recipes (owner,id,name,steps) VALUES ($1,$2,$3,$4::jsonb)", [OWNER, RECIPE.id, RECIPE.id, JSON.stringify(RECIPE.steps.map((step) => ({ ...step, profile: "standard" })))]);
     } finally {
       client.release();
     }
@@ -147,8 +204,8 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
   }
 
   async function attemptRow(runId: string, stepIndex: number) {
-    const result = await pool.query<{ state: string; generation: number; tries: number; error_code: string | null; input_basis: string | null; lease_until: Date | null; partial_blocks: unknown }>(
-      "SELECT state, generation, tries, error_code, input_basis, lease_until, partial_blocks FROM step_attempts WHERE run_id = $1 AND step_index = $2",
+    const result = await pool.query<{ state: string; generation: number; tries: number; error_code: string | null; input_basis: string | null; input_basis_v2: unknown; lease_until: Date | null; partial_blocks: unknown }>(
+      "SELECT state, generation, tries, error_code, input_basis, input_basis_v2, lease_until, partial_blocks FROM step_attempts WHERE run_id = $1 AND step_index = $2",
       [runId, stepIndex],
     );
     return result.rows[0];
@@ -178,9 +235,7 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     const claim = await claimed(runId, stepIndex);
     const input = await readStepInput(pool, claim);
     assert.ok(input);
-    const previous = stepIndex === 0 ? input.parentBlocks : input.previousBlocks;
-    assert.ok(previous);
-    const result = await commitAttempt(pool, { ...refOf(claim), blocks: paragraph(text), inputBasis: computeBasis(previous, RECIPE.steps[stepIndex]!.instruction) });
+    const result = await commitAttempt(pool, { ...refOf(claim), blocks: paragraph(text), inputBasis: computeStepBasis(RECIPE, stepIndex, input) });
     assert.ok(result.ok, `commit ${stepIndex}`);
     return { claim, next: result.next };
   }
@@ -204,7 +259,7 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.deepEqual(run.steps.map((step) => step.state), ["queued", "pending", "pending"]);
     assert.deepEqual(run.steps.map((step) => step.stepId), RECIPE.steps.map((step) => step.id));
     for (const [index, step] of run.steps.entries()) {
-      assert.equal(step.pageId, stepPageId(parent, RECIPE.id, index));
+      assert.equal(step.pageId, stepPageIdForStep(parent, RECIPE.id, RECIPE.steps[index]!.id));
       assert.equal(step.stepStatus, "wait");
       assert.equal(step.tries, 0);
       const page = await pageRow(step.pageId);
@@ -214,6 +269,63 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
       );
     }
     assert.deepEqual(await listRun(pool, OWNER, parent), { run });
+  });
+
+  it("pins the parent/recipe design across runs and changes it only on explicit update", async () => {
+    const owner = "synthetic-snapshot-owner";
+    const old = { ...RECIPE, revision: 1, name: "Old design", guide: "Old guide", steps: RECIPE.steps.map((step) => ({ ...step, profile: "standard" })) };
+    await pool.query("INSERT INTO recipes(owner,id,name,guide,steps) VALUES($1,$2,$3,$4,$5::jsonb)", [owner, old.id, old.name, old.guide, JSON.stringify(old.steps)]);
+    const parent = (await store.createPage(owner, { kind: "rec", title: "Synthetic", blocks: TRANSCRIPT })).id;
+    const first = await createRun(pool, owner, parent, { recipe: old });
+    assert.equal(first.status, "created");
+    if (first.status !== "created") return;
+    assert.equal(first.run.recipeSnapshot.steps[0]?.profile, "standard");
+    await cancelRun(pool, owner, parent, first.run.id);
+    const fresh = { ...old, revision: 2, name: "New design", steps: old.steps.map((step, index) => index === 0 ? { ...step, name: "New step", instruction: "New instruction", profile: "light" } : step) };
+    await pool.query("UPDATE recipes SET name=$3,steps=$4::jsonb,revision=2 WHERE owner=$1 AND id=$2", [owner, old.id, fresh.name, JSON.stringify(fresh.steps)]);
+    assert.deepEqual(await createRun(pool, owner, parent, { recipe: old }), { status: "recipe_changed" });
+    const rerun = await createRun(pool, owner, parent, { recipe: fresh });
+    assert.equal(rerun.status, "created");
+    if (rerun.status !== "created") return;
+    assert.equal(rerun.run.recipeRevision, 1);
+    assert.equal(rerun.run.recipeSnapshot.steps[0]?.name, old.steps[0]?.name);
+    await cancelRun(pool, owner, parent, rerun.run.id);
+    const updated = await updateRunRecipeSnapshot(pool, owner, parent, rerun.run.id, fresh, 1);
+    assert.equal(updated.status, "updated");
+    if (updated.status !== "updated") return;
+    assert.equal(updated.run.recipeRevision, 2);
+    assert.equal(updated.run.recipeSnapshot.steps[0]?.profile, "light");
+    const next = await createRun(pool, owner, parent, { recipe: fresh });
+    assert.equal(next.status, "created");
+    if (next.status === "created") assert.equal(next.run.recipeSnapshot.steps[0]?.name, "New step");
+  });
+
+  it("invalidates every prior result when the accepted recipe changes step order", async () => {
+    const owner = "synthetic-reordered-recipe-owner";
+    const original = { ...RECIPE, revision: 1, name: RECIPE.id, guide: "", steps: RECIPE.steps.map((step) => ({ ...step, profile: "standard" })) };
+    await pool.query("INSERT INTO recipes(owner,id,name,steps) VALUES($1,$2,$3,$4::jsonb)", [owner, original.id, original.name ?? original.id, JSON.stringify(original.steps)]);
+    const parent = await recording(owner);
+    const started = await createRun(pool, owner, parent, { recipe: original });
+    assert.equal(started.status, "created");
+    if (started.status !== "created") return;
+    await completeAll(started.run.id);
+
+    const reordered = { ...original, revision: 2, steps: [original.steps[1]!, original.steps[0]!, original.steps[2]!] };
+    await pool.query("UPDATE recipes SET steps=$3::jsonb,revision=2 WHERE owner=$1 AND id=$2", [owner, original.id, JSON.stringify(reordered.steps)]);
+    const updated = await updateRunRecipeSnapshot(pool, owner, parent, started.run.id, reordered, 1);
+    assert.equal(updated.status, "updated");
+    if (updated.status !== "updated") return;
+    assert.deepEqual(
+      updated.run.steps.map((step) => step.pageId),
+      [started.run.steps[1]!.pageId, started.run.steps[0]!.pageId, started.run.steps[2]!.pageId],
+      "artifact page IDs follow stable step IDs across reordering",
+    );
+    assert.equal(await refreshStale(pool, owner, parent, {
+      id: reordered.id, name: reordered.name, guide: reordered.guide,
+      steps: reordered.steps, terms: [], samples: [],
+    }), RECIPE.steps.length);
+    const listed = await listRun(pool, owner, parent);
+    assert.deepEqual(listed?.run?.steps.map((step) => step.stepStatus), ["stale", "stale", "stale"]);
   });
 
   it("refuses a second run on the same recording while one is in progress, even when many arrive at once", async () => {
@@ -330,6 +442,7 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     const attempt = await attemptRow(run.id, 0);
     assert.equal(attempt?.state, "succeeded");
     assert.equal(attempt?.input_basis, basis);
+    assert.equal(attempt?.input_basis_v2, null);
     assert.equal(attempt?.lease_until, null);
     assert.equal((await attemptRow(run.id, 1))?.state, "queued");
     assert.deepEqual(await commitAttempt(pool, { ...refOf(claim), blocks: paragraph("二度目"), inputBasis: basis }), { ok: false, reason: "stale_generation" });
@@ -402,6 +515,26 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.deepEqual(attempt?.partial_blocks, partial);
     // 失敗した段階のページを半分の本文で埋めない
     assert.deepEqual((await pageRow(claim.pageId))?.blocks, []);
+  });
+
+  it("途中出力は本人の最新の失敗 run だけで読み、polling には有無だけを返す", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    const claim = await claimed(run.id, 0);
+    const partial = paragraph("合成の途中出力");
+    await failAttempt(pool, { ...refOf(claim), code: "output_too_long", retryable: false, partial });
+
+    const view = (await listRun(pool, OWNER, parent))?.run;
+    assert.equal(view?.steps[0]?.hasPartialOutput, true);
+    assert.equal(JSON.stringify(view).includes("合成の途中出力"), false);
+    assert.deepEqual(await readPartialOutput(pool, OWNER, parent, run.id, 0), partial);
+    assert.equal(await readPartialOutput(pool, OTHER, parent, run.id, 0), null);
+    assert.equal(await readPartialOutput(pool, OWNER, randomUUID(), run.id, 0), null);
+    assert.equal(await readPartialOutput(pool, OWNER, parent, randomUUID(), 0), null);
+
+    const next = await createRun(pool, OWNER, parent, { recipe: RECIPE });
+    assert.equal(next.status, "created");
+    assert.equal(await readPartialOutput(pool, OWNER, parent, run.id, 0), null, "a new run hides older partial output");
   });
 
   it("積み直すときは書きかけを残さず、次の claim でも消えている", async () => {
@@ -545,6 +678,73 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.deepEqual(await statuses(), ["done", "done", "done"]);
   });
 
+  it("uses empty background blocks when the recording has no parent folder", async () => {
+    const parent = await recording();
+    const input = await readStepInput(pool, { owner: OWNER, parentId: parent, previousPageId: null });
+    assert.deepEqual(input?.parentBlocks, TRANSCRIPT);
+    assert.deepEqual(input?.backgroundBlocks, []);
+  });
+
+  it("reads all upstream, folder fields, settings and ordered references; explains each changed input", async () => {
+    const folder = (await store.createPage(OWNER, { title: "合成フォルダ", blocks: paragraph("合成の背景情報") })).id;
+    const parent = await recording();
+    await pool.query("UPDATE pages SET parent = $2 WHERE id = $1", [parent, folder]);
+    const reference = (await store.createPage(OWNER, { title: "初期の題名", blocks: paragraph("参考本文") })).id;
+    await pool.query("UPDATE pages SET parent = $2 WHERE id = $1", [reference, folder]);
+    await pool.query("INSERT INTO page_fields(owner,page_id,entities) VALUES ($1,$2,$3::jsonb)", [OWNER, folder, JSON.stringify([{ name: "合成人物", reading: "", role: "取材相手", note: "" }])]);
+    await pool.query("INSERT INTO editor_settings(owner,ai_lang,about) VALUES ($1,'en','合成の説明') ON CONFLICT(owner) DO UPDATE SET ai_lang = 'en', about = '合成の説明'", [OWNER]);
+    const run = await created(parent);
+    await completeAll(run.id);
+    const input = await readStepInput(pool, { owner: OWNER, parentId: parent, recipe: RECIPE.id, stepIndex: 2, previousPageId: run.steps[1]!.pageId, stepIds: RECIPE.steps.map((step) => step.id) });
+    assert.deepEqual(input?.upstream.map((item) => item.id), ["aaaa1111", "bbbb2222"]);
+    assert.deepEqual(input?.parentBlocks, TRANSCRIPT);
+    assert.deepEqual(input?.backgroundBlocks, paragraph("合成の背景情報"));
+    assert.deepEqual(input?.refs.map((item) => item.id), [reference]);
+    assert.equal(input?.fields.entities[0]?.name, "合成人物");
+    assert.equal(input?.settings.aiLang, "en");
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], []);
+
+    await userEdit(OWNER, folder, paragraph("変更した合成の背景情報"));
+    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 3);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], ["info"]);
+    await userEdit(OWNER, folder, paragraph("合成の背景情報"));
+    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 3);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], []);
+
+    await pool.query("UPDATE pages SET title = '新しい題名' WHERE id = $1", [reference]);
+    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 0);
+    await userEdit(OWNER, reference, paragraph("変更した参考本文"));
+    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 3);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], ["refs"]);
+    await userEdit(OWNER, reference, paragraph("参考本文"));
+    await refreshStale(pool, OWNER, parent, RECIPE);
+    await pool.query("UPDATE page_fields SET terms = $3::jsonb WHERE owner = $1 AND page_id = $2", [OWNER, folder, JSON.stringify([{ term: "合成語", reading: "", variants: [], note: "" }])]);
+    await refreshStale(pool, OWNER, parent, RECIPE);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], ["info"]);
+    await pool.query("UPDATE page_fields SET terms = '[]'::jsonb WHERE owner = $1 AND page_id = $2", [OWNER, folder]);
+    await pool.query("UPDATE editor_settings SET about = '変更' WHERE owner = $1", [OWNER]);
+    await refreshStale(pool, OWNER, parent, RECIPE);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], ["info"]);
+    await pool.query("UPDATE editor_settings SET about = '合成の説明' WHERE owner = $1", [OWNER]);
+    const guide = { ...RECIPE, guide: "変更したガイド" };
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, guide))[2], ["guide"]);
+    const instruction = { ...RECIPE, steps: RECIPE.steps.map((step, index) => index === 1 ? { ...step, instruction: "変更した指示" } : step) };
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, instruction))[2], ["step"]);
+    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [run.steps[0]!.pageId]);
+    const afterDelete = await readStepInput(pool, { owner: OWNER, parentId: parent, recipe: RECIPE.id, stepIndex: 2, previousPageId: run.steps[1]!.pageId, stepIds: RECIPE.steps.map((step) => step.id) });
+    assert.deepEqual(afterDelete?.upstream[0]?.blocks, []);
+  });
+
+  it("treats a legacy digest as unrecorded after the jsonb migration", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    const claim = await claimed(run.id, 0);
+    assert.deepEqual(await commitAttempt(pool, { ...refOf(claim), blocks: paragraph("旧版の結果"), inputBasis: "a".repeat(64) }), { ok: true, next: 1 });
+    await userEdit(OWNER, parent, paragraph("変更した原文"));
+    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 0);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[0], []);
+  });
+
   it("guards the refresh's write with the row version (xmin), so a row changed after the read is not overwritten", async () => {
     const parent = await recording();
     const run = await created(parent);
@@ -632,11 +832,20 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     const parent = await recording();
     const run = await created(parent);
     const theirs = await recording(OTHER);
-    await assert.rejects(() => pool.query("INSERT INTO step_runs (owner, parent, recipe) VALUES ($1, $2, 'tpl-1')", [OWNER, theirs]), { code: "23503" });
+    await assert.rejects(() => pool.query("INSERT INTO step_runs (owner, parent, recipe, recipe_snapshot, recipe_revision) VALUES ($1, $2, 'tpl-1', '{}'::jsonb, 1)", [OWNER, theirs]), { code: "23503" });
     await assert.rejects(() => pool.query("UPDATE step_runs SET state = 'paused' WHERE id = $1", [run.id]), { code: "23514" });
     await assert.rejects(() => pool.query("UPDATE step_runs SET idempotency_key = $2 WHERE id = $1", [run.id, "k".repeat(129)]), { code: "23514" });
     await assert.rejects(() => pool.query("UPDATE step_attempts SET error_code = 'Message: secret' WHERE run_id = $1", [run.id]), { code: "23514" });
-    await assert.rejects(() => pool.query("UPDATE step_attempts SET input_basis = 'abc' WHERE run_id = $1", [run.id]), { code: "23514" });
+    const legacyBasis = "a".repeat(64);
+    await pool.query("UPDATE step_attempts SET input_basis = $2 WHERE run_id = $1 AND step_index = 0", [run.id, legacyBasis]);
+    const structuredBasis = JSON.stringify({ source: legacyBasis, artifacts: {}, refs: legacyBasis, info: legacyBasis, guide: legacyBasis, step: legacyBasis });
+    await pool.query("UPDATE step_attempts SET input_basis_v2 = $2::jsonb WHERE run_id = $1 AND step_index = 0", [run.id, structuredBasis]);
+    await pool.query("UPDATE step_attempts SET state = 'running', lease_until = clock_timestamp() WHERE run_id = $1 AND step_index = 0", [run.id]);
+    assert.equal((await attemptRow(run.id, 0))?.input_basis_v2, null, "an old worker's retry clears only the new structured basis");
+    await pool.query("UPDATE step_attempts SET state = 'succeeded', input_basis = $2, lease_until = NULL, finished_at = clock_timestamp() WHERE run_id = $1 AND step_index = 0", [run.id, legacyBasis]);
+    await assert.rejects(() => pool.query("UPDATE step_attempts SET input_basis_v2 = '\"abc\"'::jsonb WHERE run_id = $1", [run.id]), { code: "23514" });
+    await assert.rejects(() => pool.query("UPDATE step_attempts SET input_basis_v2 = '{\"source\":\"abc\"}'::jsonb WHERE run_id = $1", [run.id]), { code: "23514" });
+    await assert.rejects(() => pool.query("UPDATE step_attempts SET input_basis = 'not-a-digest' WHERE run_id = $1", [run.id]), { code: "23514" });
     await assert.rejects(() => pool.query("UPDATE step_attempts SET state = 'running', lease_until = NULL WHERE run_id = $1 AND step_index = 0", [run.id]), { code: "23514" });
     // 実行中の attempt は run あたり 1 つまで
     await assert.rejects(
@@ -659,6 +868,7 @@ describe("PostgreSQL queued attempts for the sweep", { skip: databaseUrl === und
     const client = await pool.connect();
     try {
       await applyMigrations(client);
+      await client.query("INSERT INTO recipes (owner,id,name,steps) VALUES ($1,$2,$3,$4::jsonb)", [OWNER, RECIPE.id, RECIPE.id, JSON.stringify(RECIPE.steps.map((step) => ({ ...step, profile: "standard" })))]);
     } finally {
       client.release();
     }

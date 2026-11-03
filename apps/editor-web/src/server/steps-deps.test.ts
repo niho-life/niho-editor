@@ -12,7 +12,7 @@ import { stepsWorkerDeps } from "./steps-deps";
  */
 
 const tpl1 = DEFAULT_RECIPES[0]!;
-const input = { recipe: tpl1, stepIndex: 0, owner: "synthetic-owner-a", parentBlocks: [], previousBlocks: null };
+const input = { recipe: tpl1, stepIndex: 0, owner: "synthetic-owner-a", parentBlocks: [], backgroundBlocks: [], previousBlocks: null };
 
 afterEach(() => {
   vi.unstubAllEnvs();

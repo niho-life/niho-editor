@@ -121,7 +121,7 @@ describe("page actions client", () => {
   });
 
   it("restores a version with the base revision (JSON, same origin, with a time limit) and returns the restored page", async () => {
-    const restored = { id: ID, title: "合成の題名", blocks: [{ type: "paragraph" }], revision: 8, updatedAt: "2026-01-04T00:00:00.000Z" };
+    const restored = { id: ID, title: "合成の題名", blocks: [{ type: "paragraph" }], revision: 8, updatedAt: "2026-01-04T00:00:00.000Z", cover: null, lead: null };
     const fetchMock = mockFetch(200, { page: { ...restored, kind: "note", lang: "ja", parent: null } });
     expect(await restorePageVersion(ID, 2, 7)).toEqual(restored);
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];

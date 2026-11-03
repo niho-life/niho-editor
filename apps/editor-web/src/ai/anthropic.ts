@@ -10,8 +10,8 @@ import { buildPrompt } from "./prompt";
  *   エラー・例外・ログに出さない（ログは kind と、HTTP ステータスか invalid_output の理由の code だけ）。
  * - 自動の再試行はしない。失敗はすべて `AnthropicError`（呼び出し元の中断だけは、呼び出し元の理由をそのまま投げる）。
  * - `temperature` は送らない: claude-sonnet-5-5 を含む Claude 4.7 以降のモデルは既定以外の値を 400 で断る。
- * - `thinking`・`output_config.effort` も送らない（モデルの既定。effort は古いモデルで 400 になる）。思考のトークンも
- *   `max_tokens` に数えられるので、出力の上限は既定 12,000 と大きめにしている。
+ * - 工程生成では工程 snapshot の profile を `thinking: adaptive` と `output_config.effort` に訳す（対応する Claude 4.6+ / 5+ のみ）。
+ *   `max_tokens` はサーバーの `EDITOR_AI_MAX_TOKENS` と profile の両方で制限する。
  */
 
 export const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
@@ -100,6 +100,10 @@ export type ConverseInput = {
   messages: unknown[];
   tools?: unknown[];
   maxTokens?: number;
+  /** Claude 4.6+ / 5+ の工程生成で使う適応型思考。 */
+  thinking?: { type: "adaptive" };
+  /** Claude 4.6+ / 5+ の工程 profile に対応する思考量。 */
+  outputConfig?: { effort: "low" | "medium" | "high" };
   signal?: AbortSignal;
 };
 
@@ -191,6 +195,8 @@ type MessagesBody = {
   system: string;
   messages: unknown[];
   tools?: unknown[];
+  thinking?: { type: "adaptive" };
+  output_config?: { effort: "low" | "medium" | "high" };
 };
 
 /**
@@ -287,7 +293,13 @@ export function createAnthropicClient(options: AnthropicOptions): AnthropicClien
       return readMessage(message, options.model);
     },
     async converse(input) {
-      const body: MessagesBody = { system: input.system, messages: input.messages, ...(input.tools && input.tools.length > 0 ? { tools: input.tools } : {}) };
+      const body: MessagesBody = {
+        system: input.system,
+        messages: input.messages,
+        ...(input.tools && input.tools.length > 0 ? { tools: input.tools } : {}),
+        ...(input.thinking ? { thinking: input.thinking } : {}),
+        ...(input.outputConfig ? { output_config: input.outputConfig } : {}),
+      };
       const message = await send(options, body, boundedMaxTokens(options, input.maxTokens), input.signal);
       return readTurn(message, options.model);
     },

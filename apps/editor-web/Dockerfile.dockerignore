@@ -6,6 +6,7 @@
 !packages/docs-ui
 !packages/ui
 !packages/editor-store
+!packages/desktop-bridge
 !packages/photo-library-contract
 !packages/photo-cloud-library
 !packages/editor-publish-contract

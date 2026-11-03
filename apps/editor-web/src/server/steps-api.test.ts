@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import type { Block } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
 import { fakeExecutor } from "../steps/executor";
 import { MemoryStepRunStore } from "../steps/memory-store";
@@ -7,7 +8,7 @@ import { MemoryTaskQueue, taskName, type TaskQueue } from "../steps/queue";
 import { DEFAULT_RECIPES, recipesOf, type RecipeDef } from "../steps/recipes";
 import { runAttempt } from "../steps/runner";
 import { MAX_BODY_BYTES } from "./http";
-import { cancelStepRun, createStepRun, getSteps, type RunView, type StepsApiDeps } from "./steps-api";
+import { cancelStepRun, createStepRun, getStepPartialOutput, getSteps, updateStepRunRecipe, type RunView, type StepsApiDeps } from "./steps-api";
 
 const ORIGIN = "http://editor.test";
 const INLINE = { EDITOR_STEPS_MODE: "inline" };
@@ -62,11 +63,84 @@ const read = (id: string, d: StepsApiDeps) => getSteps(request("GET", `/api/page
 const cancel = (id: string, runId: string, d: StepsApiDeps, headers?: Record<string, string>) =>
   cancelStepRun(request("POST", `/api/pages/${id}/steps/runs/${runId}/cancel`, undefined, headers), id, runId, d);
 
+const readPartial = (id: string, runId: string, index: string, d: StepsApiDeps) => {
+  const path = "/api/pages/" + id + "/steps/runs/" + runId + "/steps/" + index + "/partial";
+  return getStepPartialOutput(request("GET", path), id, runId, index, d);
+};
+
 async function runOf(response: Response): Promise<RunView> {
   return ((await response.json()) as { run: RunView }).run;
 }
 
 describe("/api/pages/{id}/steps", () => {
+  it("reveals partial output only on explicit owner request and only for the latest failed run", async () => {
+    const { store, recording } = setup();
+    const d = deps("user-a", store);
+    const run = await runOf(await start(recording, { recipe: "tpl-1" }, d));
+    const claimed = await store.claimAttempt(run.id, 0);
+    expect(claimed.ok).toBe(true);
+    if (!claimed.ok) return;
+    const partial: Block[] = [{ type: "paragraph", content: [{ type: "text", text: "合成の途中出力" }] }];
+    await store.failAttempt({ runId: run.id, stepIndex: 0, generation: claimed.claim.generation, code: "output_too_long", retryable: false, partial });
+
+    const polled = await read(recording, d);
+    const pollText = await polled.text();
+    expect(pollText).toContain('"hasPartialOutput":true');
+    expect(pollText).not.toContain("合成の途中出力");
+    expect(await (await readPartial(recording, run.id, "0", d)).json()).toEqual({ blocks: partial });
+    expect((await readPartial(recording, run.id, "0", deps("user-b", store))).status).toBe(404);
+    expect((await readPartial(recording, run.id, "0", deps(null, store))).status).toBe(401);
+    expect((await readPartial(recording, run.id, "1", d)).status).toBe(404);
+    expect((await readPartial(recording, run.id, "00", d)).status).toBe(404);
+
+    const newer = await start(recording, { recipe: "tpl-1" }, d);
+    expect(newer.status).toBe(202);
+    expect((await readPartial(recording, run.id, "0", d)).status).toBe(404);
+  });
+
+  it("inherits the snapshot on rerun and updates only after an explicit diff review", async () => {
+    const { store, recording } = setup();
+    let recipes: readonly RecipeDef[] = DEFAULT_RECIPES;
+    const d = deps("user-a", store);
+    d.recipes = () => async () => recipes;
+    const first = await runOf(await start(recording, { recipe: "tpl-1" }, d));
+    await cancelStepRun(request("POST", `/api/pages/${recording}/steps/runs/${first.id}/cancel`), recording, first.id, d);
+    recipes = DEFAULT_RECIPES.map((recipe) => recipe.id === "tpl-1" ? { ...recipe, revision: 2, steps: recipe.steps.map((step, index) => index === 0 ? { ...step, name: "新しい段階" } : step) } : recipe);
+    const rerun = await runOf(await start(recording, { recipe: "tpl-1" }, d));
+    expect(rerun).toMatchObject({ recipeRevision: 1, currentRevision: 2 });
+    expect(rerun.steps[0]?.name).toBe("文字起こし修正");
+    expect(rerun.designChanges).toContain("名前: 文字起こし修正 → 新しい段階");
+    expect((await updateStepRunRecipe(request("POST", `/api/pages/${recording}/steps/runs/${rerun.id}/update-recipe`, { expectedRevision: 1 }), recording, rerun.id, d)).status).toBe(409);
+    await cancelStepRun(request("POST", `/api/pages/${recording}/steps/runs/${rerun.id}/cancel`), recording, rerun.id, d);
+    const updated = await updateStepRunRecipe(request("POST", `/api/pages/${recording}/steps/runs/${rerun.id}/update-recipe`, { expectedRevision: 1 }), recording, rerun.id, d);
+    expect(updated.status).toBe(200);
+    expect(await runOf(updated)).toMatchObject({ recipeRevision: 2, currentRevision: 2 });
+    const next = await runOf(await start(recording, { recipe: "tpl-1" }, d));
+    expect(next.steps[0]?.name).toBe("新しい段階");
+  });
+
+  it("marks prior outputs stale after an accepted step reorder", async () => {
+    const { store, recording } = setup();
+    const queue = new MemoryTaskQueue();
+    let recipes: readonly RecipeDef[] = DEFAULT_RECIPES;
+    const d = deps("user-a", store, { queue });
+    d.recipes = () => async () => recipes;
+    const run = await runOf(await start(recording, { recipe: "tpl-1" }, d));
+    const runner = { store, executor: fakeExecutor, queue };
+    let tasks = queue.drain();
+    while (tasks.length > 0) {
+      for (const task of tasks) await runAttempt(runner, task);
+      tasks = queue.drain();
+    }
+    expect((await runOf(await read(recording, d))).steps.map((step) => step.stepStatus)).toEqual(["done", "done", "done"]);
+
+    recipes = DEFAULT_RECIPES.map((recipe) => recipe.id === "tpl-1"
+      ? { ...recipe, revision: 2, steps: [recipe.steps[1]!, recipe.steps[0]!, ...recipe.steps.slice(2)] }
+      : recipe);
+    const updated = await updateStepRunRecipe(request("POST", `/api/pages/${recording}/steps/runs/${run.id}/update-recipe`, { expectedRevision: 1 }), recording, run.id, d);
+    expect(updated.status).toBe(200);
+    expect((await runOf(updated)).steps.map((step) => step.stepStatus)).toEqual(["stale", "stale", "stale"]);
+  });
   it("starts a run on a recording page, queues the first step, and answers 202", async () => {
     const { store, recording } = setup();
     const queue = new MemoryTaskQueue();
@@ -79,7 +153,7 @@ describe("/api/pages/{id}/steps", () => {
       [1, "r4t8wz3c", "記事方針", "pending", "wait", 0, null],
       [2, "h2n6v5pe", "記事本文", "pending", "wait", 0, null],
     ]);
-    expect(Object.keys(run).sort()).toEqual(["fromStep", "id", "recipe", "state", "steps"]);
+    expect(run).toMatchObject({ recipeName: "記事制作", recipeRevision: 1, currentRevision: 1, designChanges: [] });
     expect(queue.drain()).toEqual([{ name: taskName(run.id, 0, 0), runId: run.id, stepIndex: 0 }]);
   });
 
@@ -112,6 +186,28 @@ describe("/api/pages/{id}/steps", () => {
     const broken: StepsApiDeps = { ...only, recipes: () => null };
     expect((await start(recording, { recipe: "tpl-1" }, broken)).status).toBe(503);
     expect((await read(recording, broken)).status).toBe(503);
+  });
+
+  it("marks ambiguous or incomplete designs unusable and refuses to start them", async () => {
+    const { store, recording } = setup();
+    const queue = new MemoryTaskQueue();
+    const invalid = DEFAULT_RECIPES.map((recipe) => {
+      if (recipe.id === "tpl-1" || recipe.id === "tpl-2") return { ...recipe, name: "重複した手順名" };
+      if (recipe.id === "tpl-3") return { ...recipe, steps: recipe.steps.map((step, index) => index === 0 ? { ...step, instruction: "   " } : step) };
+      return recipe;
+    });
+    const d = deps("user-a", store, { recipes: invalid, queue });
+    const choices = await read(recording, d);
+    const choiceJson = await choices.json() as { recipes: { id: string; unusableReason: string | null }[] };
+    expect(choiceJson.recipes.find((recipe) => recipe.id === "tpl-1")?.unusableReason).toContain("重複");
+    expect(choiceJson.recipes.find((recipe) => recipe.id === "tpl-3")?.unusableReason).toContain("指示が空");
+
+    for (const recipe of ["tpl-1", "tpl-2", "tpl-3"]) {
+      const response = await start(recording, { recipe }, d);
+      expect(response.status, recipe).toBe(409);
+      expect(await response.text()).toBe('{"error":"recipe_unusable"}');
+    }
+    expect(queue.size).toBe(0);
   });
 
   it("returns the same run for the same Idempotency-Key and queues it once", async () => {
@@ -155,10 +251,10 @@ describe("/api/pages/{id}/steps", () => {
     expect(await empty.json()).toEqual({
       run: null,
       recipes: [
-        { id: "tpl-1", name: "記事制作", defaultName: "記事制作" },
-        { id: "tpl-2", name: "議事録", defaultName: "議事録" },
-        { id: "tpl-3", name: "インサイト整理", defaultName: "インサイト整理" },
-      { id: "tpl-4", name: "コーチング", defaultName: "コーチング" },
+        { id: "tpl-1", name: "記事制作", defaultName: "記事制作", unusableReason: null },
+        { id: "tpl-2", name: "議事録", defaultName: "議事録", unusableReason: null },
+        { id: "tpl-3", name: "インサイト整理", defaultName: "インサイト整理", unusableReason: null },
+        { id: "tpl-4", name: "コーチング", defaultName: "コーチング", unusableReason: null },
       ],
     });
 
@@ -179,6 +275,7 @@ describe("/api/pages/{id}/steps", () => {
     store.pages.get(done.steps[0]!.pageId)!.blocks = [{ type: "paragraph", content: [{ type: "text", text: "直した結果" }] }];
     const stale = await runOf(await read(recording, d));
     expect(stale.steps.map((step) => step.stepStatus)).toEqual(["done", "stale", "stale"]);
+    expect(stale.steps.map((step) => step.staleReasons)).toEqual([[], ["artifact"], ["artifact"]]);
     expect(refresh).toHaveBeenCalledTimes(2);
   });
 
@@ -264,11 +361,9 @@ describe("/api/pages/{id}/steps", () => {
       [[], undefined],
       [{ recipe: "tpl-9" }, undefined],
       [{ recipe: "TPL-1" }, undefined],
-      [{ recipe: "tpl-1", fromStep: 3 }, undefined],
       [{ recipe: "tpl-1", fromStep: -1 }, undefined],
       [{ recipe: "tpl-1", fromStep: 1.5 }, undefined],
       [{ recipe: "tpl-1", fromStep: "0" }, undefined],
-      [{ recipe: "tpl-3", fromStep: 1 }, undefined],
       [{ recipe: "tpl-1", owner: "user-b" }, undefined],
     ];
     for (const id of [recording, "not-a-uuid"]) {

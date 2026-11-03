@@ -105,6 +105,12 @@ describe("createIndexedDbDraftStorage", () => {
     expect(await storage.get(PAGE_ID)).toEqual(draftOf("題", "本文"));
   });
 
+  it("keeps cover and lead with the draft and compares them to the server content", () => {
+    const draft = { ...draftOf("題", "本文"), cover: PAGE_ID, lead: "説明" };
+    expect(decideRestore(draft, { title: "題", blocks: paragraph("本文"), revision: 3, cover: PAGE_ID, lead: "説明" })).toEqual({ action: "discard" });
+    expect(decideRestore(draft, { title: "題", blocks: paragraph("本文"), revision: 3, cover: null, lead: "説明" })).toMatchObject({ action: "load" });
+  });
+
   it("is null without IndexedDB, and rejects (does not throw) when IndexedDB cannot open", async () => {
     expect(createIndexedDbDraftStorage(undefined)).toBeNull();
     const broken = createIndexedDbDraftStorage({

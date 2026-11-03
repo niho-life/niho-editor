@@ -38,12 +38,16 @@ export function OpenPage({
   summary,
   blocks,
   revision,
+  cover = null,
+  lead = null,
   shared = null,
   recordingSec = null,
 }: {
   summary: PageSummary;
   blocks: unknown[];
   revision: number;
+  cover?: string | null;
+  lead?: string | null;
   shared?: boolean | null;
   recordingSec?: number | null;
 }) {
@@ -70,6 +74,8 @@ export function OpenPage({
 
   const fresh = replaced?.id === id ? replaced : null;
   const current = fresh?.page;
+  const pageCover = current ? current.cover ?? null : cover;
+  const pageLead = current ? current.lead ?? null : lead;
   const editor = (
     <PageEditor
       key={fresh?.count ?? 0}
@@ -77,6 +83,8 @@ export function OpenPage({
         id,
         title: current?.title ?? summary.title,
         blocks: current?.blocks ?? blocks,
+        cover: pageCover,
+        lead: pageLead,
         revision: current?.revision ?? revision,
         updatedAt: current?.updatedAt ?? summary.updatedAt,
         kind: summary.kind,
