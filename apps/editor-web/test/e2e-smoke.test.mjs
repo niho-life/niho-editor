@@ -1672,22 +1672,22 @@ describe("editor-web e2e (stub, next dev): 公開のシート (#39)", () => {
   it("publishes, shows updated after an edit, publishes the update, stops, and publishes again at the same URL", async () => {
     const title = `Morning walk e2e ${suffix}`;
     const slug = `morning-walk-e2e-${suffix}`;
-    const url = `https://niho.life/article/${slug}`;
+    const url = `https://experience.niho.life/guides/${slug}`;
     const page = await createPage(title, READY);
 
     const first = await sheetOf(page.id);
     assert.equal(first.status, "private");
-    assert.deepEqual(first.destinations.map((entry) => [entry.handle, entry.available]), [["exp", true], ["niho", true]]);
-    const plan = await sheetOf(page.id, "?handle=niho&range=live&extras=");
+    assert.deepEqual(first.destinations.map((entry) => [entry.handle, entry.available]), [["exp", true]]);
+    const plan = await sheetOf(page.id, "?handle=exp&range=live&extras=");
     assert.equal(plan.primary, "publish");
     assert.equal(plan.url, url);
     assert.deepEqual(plan.slug, { value: slug, editable: true, error: null });
 
-    const published = await write("POST", `/api/pages/${page.id}/publish`, { handle: "niho", range: "live", extras: NONE });
+    const published = await write("POST", `/api/pages/${page.id}/publish`, { handle: "exp", range: "live", extras: NONE });
     assert.equal(published.status, 200);
     assert.deepEqual(await published.json(), { published: { status: "published", operation: "publish", url, version: 1, notices: [] } });
     assert.equal((await sheetOf(page.id)).status, "published");
-    assert.deepEqual((await listRow(page.id)).publication, { dest: "niho", handle: "niho", range: "live", stopped: false });
+    assert.deepEqual((await listRow(page.id)).publication, { dest: "exp", handle: "exp", range: "live", stopped: false });
 
     // 本文を直すと「更新あり」→ 更新を公開（同じ URL、版が進む）
     const edited = await write("PATCH", `/api/pages/${page.id}`, {
@@ -1698,12 +1698,12 @@ describe("editor-web e2e (stub, next dev): 公開のシート (#39)", () => {
     const updated = await sheetOf(page.id);
     assert.equal(updated.status, "updated");
     assert.equal(updated.primary, "update");
-    const update = await write("POST", `/api/pages/${page.id}/publish`, { handle: "niho", range: "live", extras: NONE });
+    const update = await write("POST", `/api/pages/${page.id}/publish`, { handle: "exp", range: "live", extras: NONE });
     assert.equal(update.status, 200);
     assert.deepEqual((await update.json()).published, { status: "published", operation: "update", url, version: 2, notices: [] });
     assert.equal((await sheetOf(page.id)).status, "published");
 
-    // 公開をやめる（NIHO の面は URL を一覧へ転送）。もう一度呼んでも同じ
+    // 公開をやめる（Experience の面は URL を一覧へ転送）。もう一度呼んでも同じ
     for (let round = 0; round < 2; round += 1) {
       const stopped = await write("POST", `/api/pages/${page.id}/publish/stop`);
       assert.equal(stopped.status, 200);
@@ -1713,15 +1713,15 @@ describe("editor-web e2e (stub, next dev): 公開のシート (#39)", () => {
     assert.equal(afterStop.status, "stopped");
     assert.equal(afterStop.canStop, false);
     assert.equal(afterStop.primary, "publish");
-    assert.deepEqual((await listRow(page.id)).publication, { dest: "niho", handle: "niho", range: "live", stopped: true });
+    assert.deepEqual((await listRow(page.id)).publication, { dest: "exp", handle: "exp", range: "live", stopped: true });
     const redirects = () => pool.query("SELECT from_handle, from_slug, to_handle, to_slug FROM publication_redirects WHERE page_id = $1", [page.id]);
-    assert.deepEqual((await redirects()).rows, [{ from_handle: "niho", from_slug: slug, to_handle: null, to_slug: null }], "the old URL goes to the list");
+    assert.deepEqual((await redirects()).rows, [{ from_handle: "exp", from_slug: slug, to_handle: null, to_slug: null }], "the old URL goes to the list");
 
     // 再公開は同じ URL
-    const again = await write("POST", `/api/pages/${page.id}/publish`, { handle: "niho", range: "live", extras: NONE });
+    const again = await write("POST", `/api/pages/${page.id}/publish`, { handle: "exp", range: "live", extras: NONE });
     assert.equal(again.status, 200);
     assert.deepEqual((await again.json()).published, { status: "published", operation: "publish", url, version: 3, notices: [] });
-    assert.deepEqual((await listRow(page.id)).publication, { dest: "niho", handle: "niho", range: "live", stopped: false });
+    assert.deepEqual((await listRow(page.id)).publication, { dest: "exp", handle: "exp", range: "live", stopped: false });
     assert.deepEqual((await redirects()).rows, [], "the URL is live again");
   });
 
@@ -1748,7 +1748,7 @@ describe("editor-web e2e (stub, next dev): 公開のシート (#39)", () => {
     const snapshot = async (response) => ({ status: response.status, body: await response.text() });
     for (const [label, call] of [
       ["GET", (id) => fetch(`${base}/api/pages/${id}/publish`)],
-      ["POST publish", (id) => write("POST", `/api/pages/${id}/publish`, { handle: "niho", range: "live", extras: NONE })],
+      ["POST publish", (id) => write("POST", `/api/pages/${id}/publish`, { handle: "exp", range: "live", extras: NONE })],
       ["POST stop", (id) => write("POST", `/api/pages/${id}/publish/stop`)],
     ]) {
       const theirs = await snapshot(await call(otherId));
@@ -1759,7 +1759,7 @@ describe("editor-web e2e (stub, next dev): 公開のシート (#39)", () => {
 
     const mine = await createPage(`Cross origin e2e ${suffix}`, READY);
     for (const [path, body] of [
-      [`/api/pages/${mine.id}/publish`, { handle: "niho", range: "live", extras: NONE }],
+      [`/api/pages/${mine.id}/publish`, { handle: "exp", range: "live", extras: NONE }],
       [`/api/pages/${mine.id}/publish/stop`, undefined],
     ]) {
       const response = await write("POST", path, body, { origin: "https://evil.example" });
