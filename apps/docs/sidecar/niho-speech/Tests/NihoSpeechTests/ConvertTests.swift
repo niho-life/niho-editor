@@ -25,6 +25,33 @@ final class ConvertTests: XCTestCase {
         file.close()
     }
 
+    /// AVFoundation が実際に読む AIFC fixture。拡張子だけで対応扱いにしないため、container magic も固定する。
+    private func writeAIFCToneFile(to url: URL) throws {
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 22_050.0,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsBigEndianKey: true,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 22_050, channels: 1))
+        let file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let frames: AVAudioFrameCount = 22_050
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+        buffer.frameLength = frames
+        let samples = try XCTUnwrap(buffer.floatChannelData?[0])
+        for index in 0 ..< Int(frames) {
+            samples[index] = Float(0.25 * sin(2 * .pi * 440 * Double(index) / 22_050))
+        }
+        try file.write(from: buffer)
+        file.close()
+        let header = try Data(contentsOf: url, options: .mappedIfSafe).prefix(12)
+        XCTAssertEqual(String(decoding: header.prefix(4), as: UTF8.self), "FORM")
+        XCTAssertEqual(String(decoding: header.suffix(4), as: UTF8.self), "AIFC")
+    }
+
     private func assertConvertFails(
         input: String, output: String, code: String, exitCode: Int32,
         file: StaticString = #filePath, line: UInt = #line
@@ -60,6 +87,21 @@ final class ConvertTests: XCTestCase {
         // (L + R) / 2 like ffmpeg -ac 1: the tone keeps its 0.5 amplitude.
         XCTAssertEqual(Double(try peak(of: reader, frames: 0 ..< 15000)), 16384, accuracy: 100)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted(), ["tone.caf", "tone.wav"])
+    }
+
+    func testDecodesAndConvertsAIFCInsteadOfTrustingItsExtension() async throws {
+        let directory = try makeTemporaryDirectory(for: self)
+        let input = directory.appendingPathComponent("tone.aifc")
+        let output = directory.appendingPathComponent("tone.wav")
+        try writeAIFCToneFile(to: input)
+        let frames = try await AudioConverter.convert(input: input.path, output: output.path)
+        XCTAssertEqual(Double(frames), 16_000, accuracy: 2)
+        XCTAssertEqual(try WAVReader(path: output.path).durationSec, 1, accuracy: 0.001)
+
+        let corrupt = directory.appendingPathComponent("corrupt.aifc")
+        try Data("not an AIFC container".utf8).write(to: corrupt)
+        await assertConvertFails(input: corrupt.path, output: output.path, code: "input_unreadable", exitCode: 3)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: input.path), "変換失敗で元音声を消さない")
     }
 
     /// One-sided stereo is averaged too: half the left channel's level.

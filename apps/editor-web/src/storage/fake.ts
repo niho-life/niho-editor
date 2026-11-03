@@ -31,19 +31,26 @@ export const FAKE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 type Session = { objectPath: string; contentType: string; sizeBytes: number; expiresAtMs: number };
 type FakeObject = { bytes: Uint8Array; contentType: string | null };
 
-export type FakeStorageState = { sessions: Map<string, Session>; objects: Map<string, FakeObject> };
+export type FakeStorageState = {
+  sessions: Map<string, Session>;
+  completedSessions: Map<string, Session>;
+  objects: Map<string, FakeObject>;
+  partials: Map<string, Uint8Array>;
+};
 
 /** ok: 置いた / not_found: token が無い・期限切れ / exists: 同じ場所に既にある / too_large: 上限を超える */
-export type FakePutResult = "ok" | "not_found" | "exists" | "too_large";
+export type FakePutResult = "ok" | "partial" | "not_found" | "exists" | "too_large" | "range_mismatch";
+export type FakeUploadStatus = { status: "partial"; receivedBytes: number } | { status: "complete" | "not_found" | "exists" | "range_mismatch" };
 
 export interface FakeStorage extends ObjectStorage {
   readonly kind: "fake";
   /** dev の受け口から: token のセッションの場所に object を置く。 */
-  putFakeObject(token: string, bytes: Uint8Array, contentType: string | null): FakePutResult;
+  putFakeObject(token: string, bytes: Uint8Array, contentType: string | null, range?: { start: number; end: number; total: number }): FakePutResult;
+  fakeUploadStatus(token: string, total: number): FakeUploadStatus;
 }
 
 export function createFakeStorageState(): FakeStorageState {
-  return { sessions: new Map(), objects: new Map() };
+  return { sessions: new Map(), completedSessions: new Map(), objects: new Map(), partials: new Map() };
 }
 
 /** バイト列を 1 つの chunk で流す。 */
@@ -58,6 +65,8 @@ function streamOf(bytes: Uint8Array): ReadableStream<Uint8Array> {
 
 export function createFakeStorage(options: { state?: FakeStorageState; now?: () => number } = {}): FakeStorage {
   const state = options.state ?? createFakeStorageState();
+  // dev の HMR 前に作られた global state も、新しい status query で落とさない。
+  state.completedSessions ??= new Map();
   const now = options.now ?? Date.now;
   return {
     kind: "fake",
@@ -97,15 +106,47 @@ export function createFakeStorage(options: { state?: FakeStorageState; now?: () 
       const bytes = object.bytes.slice(range.start, end + 1);
       return { body: streamOf(bytes), contentType: object.contentType, sizeBytes: bytes.byteLength, range: { start: range.start, end }, totalBytes };
     },
-    putFakeObject(token: string, bytes: Uint8Array, contentType: string | null): FakePutResult {
+    putFakeObject(token: string, bytes: Uint8Array, contentType: string | null, range?: { start: number; end: number; total: number }): FakePutResult {
       if (!FAKE_TOKEN_PATTERN.test(token)) return "not_found";
       const session = state.sessions.get(token);
       if (!session || session.expiresAtMs <= now()) return "not_found";
       if (bytes.byteLength > FAKE_STORAGE_MAX_BYTES) return "too_large";
       if (state.objects.has(session.objectPath)) return "exists";
-      state.objects.set(session.objectPath, { bytes: bytes.slice(), contentType: contentType ?? session.contentType });
+      if (range) {
+        const prior = state.partials.get(token) ?? new Uint8Array(0);
+        if (range.start > prior.byteLength || range.end !== range.start + bytes.byteLength - 1 || range.total !== session.sizeBytes || range.end >= range.total) return "range_mismatch";
+        const overlap = prior.byteLength - range.start;
+        if (overlap > bytes.byteLength) return "range_mismatch";
+        for (let index = 0; index < overlap; index += 1) {
+          if (prior[range.start + index] !== bytes[index]) return "range_mismatch";
+        }
+        const append = bytes.subarray(overlap);
+        if (prior.byteLength + append.byteLength > FAKE_STORAGE_MAX_BYTES) return "too_large";
+        const joined = new Uint8Array(prior.byteLength + append.byteLength);
+        joined.set(prior);
+        joined.set(append, prior.byteLength);
+        if (joined.byteLength < range.total) {
+          state.partials.set(token, joined);
+          return "partial";
+        }
+        state.partials.delete(token);
+        state.objects.set(session.objectPath, { bytes: joined, contentType: contentType ?? session.contentType });
+      } else {
+        state.objects.set(session.objectPath, { bytes: bytes.slice(), contentType: contentType ?? session.contentType });
+      }
+      state.completedSessions.set(token, session);
       state.sessions.delete(token);
       return "ok";
+    },
+    fakeUploadStatus(token: string, total: number): FakeUploadStatus {
+      if (!FAKE_TOKEN_PATTERN.test(token) || !Number.isSafeInteger(total) || total < 1) return { status: "not_found" };
+      const completed = state.completedSessions.get(token);
+      if (completed) return completed.sizeBytes === total ? { status: "complete" } : { status: "range_mismatch" };
+      const session = state.sessions.get(token);
+      if (!session || session.expiresAtMs <= now()) return { status: "not_found" };
+      if (session.sizeBytes !== total) return { status: "range_mismatch" };
+      if (state.objects.has(session.objectPath)) return { status: "exists" };
+      return { status: "partial", receivedBytes: state.partials.get(token)?.byteLength ?? 0 };
     },
   };
 }

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   audioObjectPath,
   type AudioInfo,
@@ -33,6 +33,7 @@ import { withSpeakers } from "./recordings-api";
 
 /** 音声の API が使う store の操作（packages/editor-store の関数に Pool を渡したもの）。null はページ（音声）が無い。 */
 export type AudioStore = {
+  getOrCreateNativeAudioCacheNamespace: (owner: OwnerId, authMode: "niho" | "google" | "stub") => Promise<string>;
   startAudioRecording: (owner: OwnerId, input: StartAudioRecordingInput) => Promise<StartAudioRecordingResult>;
   completeAudioUpload: (owner: OwnerId, pageId: string, stored: { sizeBytes: number }) => Promise<CompleteAudioUploadResult | null>;
   audioInfo: (owner: OwnerId, pageId: string) => Promise<AudioInfo | null>;
@@ -58,6 +59,28 @@ export type AudioApiDeps = {
 
 /** 開始の要求の本文の上限（名前・種類・大きさ・ハッシュ・言語・長さだけなので小さい）。超えたら 413。 */
 export const AUDIO_START_BODY_MAX_BYTES = 16 * 1024;
+
+/** Mac の一時音声をログイン所有者へだけ再提示するための不可逆 scope。user id・DB namespace 自体は画面・nativeへ渡さない。 */
+export function nativeAudioContextRoute(request: Request, deps: Pick<AudioApiDeps, "auth" | "store">): Promise<Response> {
+  return guarded("GET /api/recordings/audio/native-context", async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    // namespace は DB 乱数で、公開され得る owner id や認証credentialからは導けない。purpose文字列で別用途への流用も分ける。
+    let namespace: string;
+    try {
+      namespace = await store.getOrCreateNativeAudioCacheNamespace(session.userId, session.mode);
+    } catch (error) {
+      const rawCode = typeof error === "object" && error !== null && "code" in error ? (error as { code: unknown }).code : null;
+      const code = typeof rawCode === "string" && /^[0-9A-Z]{5}$/.test(rawCode) ? rawCode : undefined;
+      console.error("editor-web: native audio namespace unavailable", { code });
+      return errorResponse("unavailable");
+    }
+    const ownerScope = createHash("sha256").update("niho-editor-native-audio-recovery-v1\0").update(namespace).digest("hex");
+    return jsonResponse(200, { ownerScope });
+  });
+}
 
 const START_KEYS = ["name", "contentType", "sizeBytes", "sha256", "lang", "durationSec"] as const;
 /** 2 本目以降は言語を持たない（ページの言語を使う）。 */

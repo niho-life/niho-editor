@@ -24,6 +24,7 @@ import {
 import { canDiscloseTranscriptionEngine, candidateEngineLabel, transcriptionServiceNote } from "@/recording/candidate-names";
 import { formatClock, speakerLabel } from "@/lib/recording-view";
 import { MacGeminiTranscription } from "./MacGeminiTranscription";
+import { MacLocalTranscription } from "./MacLocalTranscription";
 import styles from "./RecordingCandidates.module.css";
 
 const ROW_STYLE: CSSProperties = { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 8 };
@@ -447,6 +448,7 @@ export function RecordingCandidates({
         <span className="es-note">閲覧や比較では採用されません。「採用」で選んだ本文だけが後続工程に入ります。</span>
       </div>
       <MacGeminiTranscription pageId={pageId} hasTranscript disabled={locked} onSucceeded={onChanged} />
+      <MacLocalTranscription pageId={pageId} hasTranscript disabled={locked} onSucceeded={onChanged} />
       {candidates.length > 0 && <ul style={LIST_STYLE} aria-label="案の一覧">
         {candidates.map((candidate) => <li key={candidate.id} style={ROW_STYLE} data-candidate={candidate.id} data-candidate-state={candidate.state}>
           <span className="es-note">{candidate.name}{candidate.engineLabel && candidate.engineLabel !== candidate.name ? `（${candidate.engineLabel}）` : ""} · {detailOf(candidate)}</span>

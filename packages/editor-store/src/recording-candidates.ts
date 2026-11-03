@@ -108,6 +108,14 @@ export type AddRecordingCandidateResult =
   /** 案の数が上限（RECORDING_CANDIDATES_MAX）。 */
   | { status: "too_many" };
 
+export type LockedRecordingCandidateSource = {
+  language: PageLang;
+  engine: string | null;
+  duration_sec: number | null;
+  segments: RecordingSegment[];
+  speaker_names: Record<string, string>;
+};
+
 export type AdoptRecordingCandidateResult =
   | { status: "ok"; recording: Recording; candidates: RecordingCandidateView[] }
   | { status: "conflict"; recording: Recording; candidate: RecordingCandidate }
@@ -355,6 +363,47 @@ INSERT INTO page_recording_candidates
 VALUES ($1, $2, $3::text, $4::text, $5::text, $6::jsonb, $7::jsonb, $8::numeric, $9::boolean)
 RETURNING id`;
 
+/** recording row を既に FOR UPDATE した transaction 内で使う候補作成の共通部。commit/rollback は呼び出し側が行う。 */
+export async function addRecordingCandidateLocked(
+  client: Pick<PoolClient, "query">,
+  owner: OwnerId,
+  pageId: string,
+  recording: LockedRecordingCandidateSource,
+  input: AddRecordingCandidateInput,
+): Promise<{ status: "created"; candidateId: string } | { status: "too_many" }> {
+  assertAddInput(input);
+  const existing = await listRecordingCandidates(client, owner, pageId);
+  if (existing.length + (existing.length === 0 ? 2 : 1) > RECORDING_CANDIDATES_MAX) return { status: "too_many" };
+  if (existing.length === 0) {
+    await client.query(INSERT_CANDIDATE_SQL, [
+      pageId,
+      owner,
+      input.primaryName,
+      recording.engine,
+      recording.language,
+      JSON.stringify(recording.segments),
+      JSON.stringify(recording.speaker_names),
+      recording.duration_sec,
+      true,
+    ]);
+  }
+  const inserted = await client.query<{ id: string }>(INSERT_CANDIDATE_SQL, [
+    pageId,
+    owner,
+    input.name,
+    input.engine,
+    input.language ?? recording.language,
+    "[]",
+    "{}",
+    null,
+    false,
+  ]);
+  const candidateId = inserted.rows[0]?.id;
+  if (!candidateId) throw new Error("editor-store: insert returned no candidate");
+  await client.query(TOUCH_PAGE_SQL, [owner, pageId]);
+  return { status: "created", candidateId };
+}
+
 /**
  * 別のエンジンの案を足す（旧版の addCandidate）。1 つの transaction で、台帳がまだ無ければ**いまの文字起こしを 1 つ目の案**
  * （採用中）として載せ、続けて新しい空の案を作る。本文は書かない（実行が入れる）。
@@ -385,42 +434,14 @@ export async function addRecordingCandidate(
         await rollback(client);
         return null;
       }
-      const existing = await listRecordingCandidates(client, owner, pageId);
-      if (existing.length + (existing.length === 0 ? 2 : 1) > RECORDING_CANDIDATES_MAX) {
+      const added = await addRecordingCandidateLocked(client, owner, pageId, recording, input);
+      if (added.status === "too_many") {
         await rollback(client);
         return { status: "too_many" };
       }
-      if (existing.length === 0) {
-        // 台帳がまだ無い: いまの文字起こしを 1 つ目の案（採用中）として載せる
-        await client.query(INSERT_CANDIDATE_SQL, [
-          pageId,
-          owner,
-          input.primaryName,
-          recording.engine,
-          recording.language,
-          JSON.stringify(recording.segments),
-          JSON.stringify(recording.speaker_names),
-          recording.duration_sec,
-          true,
-        ]);
-      }
-      const inserted = await client.query<{ id: string }>(INSERT_CANDIDATE_SQL, [
-        pageId,
-        owner,
-        input.name,
-        input.engine,
-        input.language ?? recording.language,
-        "[]",
-        "{}",
-        null,
-        false,
-      ]);
-      const id = inserted.rows[0]?.id;
-      if (!id) throw new Error("editor-store: insert returned no candidate");
-      await client.query(TOUCH_PAGE_SQL, [owner, pageId]);
       await client.query("COMMIT");
       const candidates = await listRecordingCandidates(client, owner, pageId);
-      const candidate = candidates.find((item) => item.id === id);
+      const candidate = candidates.find((item) => item.id === added.candidateId);
       if (!candidate) throw new Error("editor-store: inserted candidate disappeared");
       return { status: "created", candidate, candidates };
     } catch (error) {

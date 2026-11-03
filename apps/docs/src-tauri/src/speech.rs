@@ -564,6 +564,59 @@ pub struct PreparedFile {
   pub sound_sec: Vec<f64>,
 }
 
+/// Web へ小さい chunk で渡す固定形式。元音声は呼び出し側が保持し、この WAV は server 保存成功後だけ消す。
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanonicalAudio {
+  pub wav: PathBuf,
+  pub duration_sec: f64,
+}
+
+/// 任意の許可済み音声を 16 kHz mono WAV に固定変換する。入力・出力とも 2 GiB、合計 6 時間を厳密に検査する。
+pub fn convert_audio(
+  job: &SpeechJob,
+  binary: &Path,
+  files: &[PathBuf],
+  dir: &Path,
+  on_event: &mut dyn FnMut(Value),
+) -> Result<Vec<CanonicalAudio>, SpeechError> {
+  if files.is_empty() || files.len() > 256 {
+    return Err(SpeechError::BadInput);
+  }
+  let mut converted_files = Vec::with_capacity(files.len());
+  let mut total = AudioTotal::default();
+  for (index, input_path) in files.iter().enumerate() {
+    let input_size = std::fs::metadata(input_path).map_err(|_| SpeechError::BadInput)?.len();
+    if input_size == 0 || input_size > crate::store::AUDIO_FILE_MAX_BYTES {
+      return Err(if input_size == 0 {
+        SpeechError::BadInput
+      } else {
+        SpeechError::TooLarge
+      });
+    }
+    on_event(json!({ "type": "Stage", "stage": "convert", "file": index, "files": files.len() }));
+    let wav = dir.join(format!("f{index}.wav"));
+    let input = input_path.to_string_lossy().into_owned();
+    let output = wav.to_string_lossy().into_owned();
+    let converted = job.run_json(binary, &strings(&["convert", "--input", &input, "--output", &output]))?;
+    let duration_sec = converted.get("durationSec").and_then(Value::as_f64).unwrap_or(0.0);
+    if !duration_sec.is_finite() || duration_sec <= 0.0 {
+      return Err(SpeechError::BadInput);
+    }
+    total.add(duration_sec)?;
+    let output_size = std::fs::metadata(&wav).map_err(|_| SpeechError::Failed)?.len();
+    if output_size == 0 || output_size > crate::store::AUDIO_FILE_MAX_BYTES {
+      return Err(if output_size == 0 {
+        SpeechError::Failed
+      } else {
+        SpeechError::TooLarge
+      });
+    }
+    crate::process::set_mode(&wav, 0o600).map_err(|_| SpeechError::Failed)?;
+    converted_files.push(CanonicalAudio { wav, duration_sec });
+  }
+  Ok(converted_files)
+}
+
 /// 音声を順に `convert` → `silence` して区切りの境目を決める（WAV は `dir` に `f<n>.wav` で置く。消すのは呼び出し側）。
 /// `on_event` には段階（convert・silence）を流す。
 pub fn prepare_audio(

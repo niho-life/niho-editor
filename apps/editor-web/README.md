@@ -164,7 +164,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 ### bucket に要求する設定（infra の側で）
 
 - **ライフサイクル規則**: 条件 `age: 30`（日）かつ `matchesPrefix: ["audio/"]`、動作 `Delete`。アプリはこれを前提に期限（`audio_expires_at`）を出すだけ。
-- **CORS**: `origin` は editor の origin（`EDITOR_ORIGIN` と同じ）だけ、`method` は `PUT`、`responseHeader` は `Content-Type`、`maxAgeSeconds` は 3600 など。resumable のセッション URI は開始の要求の `Origin` に応じる仕様だが、あわせて設定しておく。
+- **CORS**: `origin` は editor の origin（`EDITOR_ORIGIN` と同じ）だけ、`method` は `PUT`、`responseHeader` は `Content-Type`・`Range`・`Content-Range`、`maxAgeSeconds` は 3600。resumable の308応答から保存済みoffsetを読むため `Range` を公開する。`scripts/editor-deploy/gcp-bootstrap.sh resources` がこの設定を冪等に反映する。
 - **権限**: 実行 ID（`niho-editor-runner`）に作成と閲覧（`storage.objects.create`・`storage.objects.get`）だけ。削除・上書き・署名は要らない。
 - 配備で `EDITOR_STORAGE=gcs` を渡すまで、本番の音声の API は 503 `storage_unavailable`。
 - 画面の CSP の `connect-src` に `https://storage.googleapis.com` を足した（段 3b-1）。bucket の CORS が無いと、ブラウザの PUT は断られる（画面では「音声を送れませんでした」）。

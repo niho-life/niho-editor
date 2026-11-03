@@ -24,12 +24,13 @@ function fakeTransport(results: Record<string, unknown> = {}) {
 
 describe("createShellBridge", () => {
   it("呼ぶ command は Rust の名前、引数は camelCase の id だけ（パスは渡さない）", async () => {
-    const { transport, calls } = fakeTransport();
+    const { transport, calls } = fakeTransport({ shell_audio_prepared_chunk: [7, 8] });
     const shell = createShellBridge(transport);
     const noop = () => undefined;
     await shell.capabilities();
     await shell.micStatus(true);
     await shell.recordingStart("rec-1", noop);
+    await shell.recordingStartV2("rec-2", "c".repeat(64), noop);
     await shell.recordingStop("rec-1");
     await shell.recordingDiscard("rec-1");
     await shell.audioPick();
@@ -41,6 +42,16 @@ describe("createShellBridge", () => {
       noop,
     );
     await shell.transcribeStop("job-1");
+    await shell.localAudioBegin("00000000-0000-4000-8000-000000000010", 0, 3, "audio/mp4", "b".repeat(64));
+    await shell.localAudioChunk("00000000-0000-4000-8000-000000000010", 0, 0, new Uint8Array([1, 2, 3]));
+    await shell.localAudioFinish("00000000-0000-4000-8000-000000000010", 0);
+    await shell.localDiscard("00000000-0000-4000-8000-000000000010");
+    await shell.audioPrepare("job-prepare", { kind: "staged", stagingId: "0123456789abcdef" }, "c".repeat(64));
+    await shell.audioPrepareResume("job-resume", "0123456789abcdef", "c".repeat(64));
+    expect(Array.from(await shell.audioPreparedChunk("0123456789abcdef", "c".repeat(64), 0, 4))).toEqual([7, 8]);
+    await shell.audioRecovery("c".repeat(64));
+    await shell.audioPreparedCommit("0123456789abcdef", "c".repeat(64));
+    await shell.audioRecoveryDiscard("0123456789abcdef", "c".repeat(64));
     await shell.aiEngines();
     await shell.aiTurn(
       "turn-1",
@@ -66,6 +77,7 @@ describe("createShellBridge", () => {
       { command: "shell_capabilities", args: undefined },
       { command: "shell_mic_status", args: { request: true } },
       { command: "shell_recording_start", args: { recordingId: "rec-1", onEvent: { channel: 1 } } },
+      { command: "shell_recording_start_recoverable", args: { recordingId: "rec-2", ownerScope: "c".repeat(64), onEvent: { channel: 2 } } },
       { command: "shell_recording_stop", args: { recordingId: "rec-1" } },
       { command: "shell_recording_discard", args: { recordingId: "rec-1" } },
       { command: "shell_audio_pick", args: undefined },
@@ -78,10 +90,20 @@ describe("createShellBridge", () => {
           language: "ja",
           speakerMode: "auto",
           hints: [{ term: "NIHO" }],
-          onEvent: { channel: 2 },
+          onEvent: { channel: 3 },
         },
       },
       { command: "shell_transcribe_stop", args: { jobId: "job-1" } },
+      { command: "shell_local_audio_begin", args: { jobId: "00000000-0000-4000-8000-000000000010", partIndex: 0, bytes: 3, contentType: "audio/mp4", sha256: "b".repeat(64) } },
+      { command: "shell_local_audio_chunk", args: { jobId: "00000000-0000-4000-8000-000000000010", partIndex: 0, offset: 0, chunk: new Uint8Array([1, 2, 3]) } },
+      { command: "shell_local_audio_finish", args: { jobId: "00000000-0000-4000-8000-000000000010", partIndex: 0 } },
+      { command: "shell_local_discard", args: { jobId: "00000000-0000-4000-8000-000000000010" } },
+      { command: "shell_audio_prepare", args: { jobId: "job-prepare", source: { kind: "staged", stagingId: "0123456789abcdef" }, ownerScope: "c".repeat(64) } },
+      { command: "shell_audio_prepare_resume", args: { jobId: "job-resume", stagingId: "0123456789abcdef", ownerScope: "c".repeat(64) } },
+      { command: "shell_audio_prepared_chunk", args: { stagingId: "0123456789abcdef", ownerScope: "c".repeat(64), index: 0, offset: 4 } },
+      { command: "shell_audio_recovery", args: { ownerScope: "c".repeat(64) } },
+      { command: "shell_audio_prepared_commit", args: { stagingId: "0123456789abcdef", ownerScope: "c".repeat(64) } },
+      { command: "shell_audio_recovery_discard", args: { stagingId: "0123456789abcdef", ownerScope: "c".repeat(64) } },
       { command: "shell_ai_engines", args: undefined },
       {
         command: "shell_ai_turn",
@@ -93,15 +115,15 @@ describe("createShellBridge", () => {
             instruction: "短くして",
             page: { pageId: "p1", title: "t", markdown: "# t\n" },
           },
-          onEvent: { channel: 3 },
+          onEvent: { channel: 4 },
         },
       },
       { command: "shell_ai_stop", args: { turnId: "turn-1" } },
       { command: "shell_gemini_audio_begin", args: { jobId: "00000000-0000-4000-8000-000000000001", partIndex: 0, bytes: 3, contentType: "audio/mp4", sha256: "a".repeat(64) } },
       { command: "shell_gemini_audio_chunk", args: { jobId: "00000000-0000-4000-8000-000000000001", partIndex: 0, offset: 0, chunk: new Uint8Array([1, 2, 3]) } },
       { command: "shell_gemini_audio_finish", args: { jobId: "00000000-0000-4000-8000-000000000001", partIndex: 0 } },
-      { command: "shell_gemini_prepare", args: { jobId: "00000000-0000-4000-8000-000000000001", source: { kind: "server", files: 1 }, onEvent: { channel: 4 } } },
-      { command: "shell_gemini_transcribe_part", args: { jobId: "00000000-0000-4000-8000-000000000001", turnId: "00000000-0000-4000-8000-000000000002", file: 0, part: 0, systemPrompt: "system", userPrompt: "user", onEvent: { channel: 5 } } },
+      { command: "shell_gemini_prepare", args: { jobId: "00000000-0000-4000-8000-000000000001", source: { kind: "server", files: 1 }, onEvent: { channel: 5 } } },
+      { command: "shell_gemini_transcribe_part", args: { jobId: "00000000-0000-4000-8000-000000000001", turnId: "00000000-0000-4000-8000-000000000002", file: 0, part: 0, systemPrompt: "system", userPrompt: "user", onEvent: { channel: 6 } } },
       { command: "shell_gemini_checkpoint_read", args: { jobId: "00000000-0000-4000-8000-000000000001" } },
       { command: "shell_gemini_checkpoint_write", args: { jobId: "00000000-0000-4000-8000-000000000001", checkpoint: { state: "running" } } },
       { command: "shell_gemini_stop", args: { jobId: "00000000-0000-4000-8000-000000000001" } },

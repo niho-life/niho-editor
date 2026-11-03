@@ -18,15 +18,19 @@ import {
   finalStepPageNames,
   failRun,
   failMacTranscription,
+  failMacLocalTranscription,
   findImageUploadByKey,
   getRecording,
   getRecordingCandidate,
   getRecordingCandidateVersion,
+  getOrCreateNativeAudioCacheNamespace,
   getShare,
   imageAsset,
   latestRun,
   macTranscriptionStatus,
+  macLocalTranscriptionStatus,
   resumeMacTranscription,
+  resumeMacLocalTranscription,
   listAudioParts,
   listRecordingCandidates,
   listRecordingCandidateVersions,
@@ -40,7 +44,9 @@ import {
   stopShare,
   transcriptionStatus,
   startMacTranscription,
+  startMacLocalTranscription,
   finishMacTranscription,
+  finishMacLocalTranscription,
   updateImageMeta,
   updateRecording,
   updateRecordingCandidate,
@@ -74,6 +80,7 @@ import type { SearchApiDeps } from "./search-api";
 import type { ShareApiDeps } from "./share-api";
 import type { TranscriptionApiDeps } from "./transcription-api";
 import type { MacTranscriptionApiDeps } from "./mac-transcription-api";
+import type { MacLocalTranscriptionApiDeps } from "./mac-local-transcription-api";
 
 /** 実行時の依存（方式の選択・DB の接続は要求のたびに遅延して決める）。`/auth/*` の route も同じものを使う。 */
 export const runtimeDeps: PagesApiDeps & Pick<AuthRoutesDeps, "photoAuth"> = {
@@ -229,6 +236,7 @@ export const audioDeps: AudioApiDeps = {
     const pool = getPool();
     if (!pool) return null;
     return {
+      getOrCreateNativeAudioCacheNamespace: (owner, authMode) => getOrCreateNativeAudioCacheNamespace(pool, owner, authMode),
       startAudioRecording: (owner, input) => startAudioRecording(pool, owner, input),
       completeAudioUpload: (owner, pageId, stored) => completeAudioUpload(pool, owner, pageId, stored),
       audioInfo: (owner, pageId) => audioInfo(pool, owner, pageId),
@@ -289,6 +297,23 @@ export const macTranscriptionDeps: MacTranscriptionApiDeps = {
       finish: (owner, pageId, runId, operationId, generation, output) => finishMacTranscription(pool, owner, pageId, runId, operationId, generation, output),
       resume: (owner, pageId, runId, operationId, generation) => resumeMacTranscription(pool, owner, pageId, runId, operationId, generation),
       fail: (owner, pageId, runId, operationId, generation, errorCode) => failMacTranscription(pool, owner, pageId, runId, operationId, generation, errorCode),
+    };
+  },
+};
+
+/** Apple 端末内認識受付。Mac 専用 route だけが触り、server worker には渡さない。 */
+export const macLocalTranscriptionDeps: MacLocalTranscriptionApiDeps = {
+  auth: () => getAuthProvider(),
+  store: () => {
+    const pool = getPool();
+    if (!pool) return null;
+    return {
+      getRecording: (owner, pageId) => getRecording(pool, owner, pageId),
+      start: (owner, pageId, input) => startMacLocalTranscription(pool, owner, pageId, input),
+      status: (owner, pageId) => macLocalTranscriptionStatus(pool, owner, pageId),
+      finish: (owner, pageId, runId, operationId, generation, output) => finishMacLocalTranscription(pool, owner, pageId, runId, operationId, generation, output),
+      resume: (owner, pageId, runId, operationId, generation) => resumeMacLocalTranscription(pool, owner, pageId, runId, operationId, generation),
+      fail: (owner, pageId, runId, operationId, generation, errorCode) => failMacLocalTranscription(pool, owner, pageId, runId, operationId, generation, errorCode),
     };
   },
 };

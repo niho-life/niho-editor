@@ -61,7 +61,7 @@ final class WAVWriter {
             let descriptor = try FileDescriptor.open(
                 FilePath(temporaryPath), .writeOnly,
                 options: [.create, .truncate, .closeOnExec],
-                permissions: [.ownerReadWrite, .groupRead, .otherRead]
+                permissions: [.ownerReadWrite]
             )
             self.descriptor = descriptor
             try descriptor.writeAll(WAVFormat.header(dataBytes: 0))

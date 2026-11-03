@@ -12,6 +12,7 @@ import {
 import { canDiscloseTranscriptionEngine, transcriptionServiceNote } from "@/recording/candidate-names";
 import { useTranscription } from "@/lib/use-transcription";
 import { MacGeminiTranscription } from "./MacGeminiTranscription";
+import { MacLocalTranscription } from "./MacLocalTranscription";
 
 const ROW_STYLE: CSSProperties = { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 8 };
 
@@ -150,6 +151,7 @@ export function RecordingTranscription({
       )}
       {expiry && <p className="es-note">{expiry}</p>}
       {showMacCli && uploaded && !expired && <MacGeminiTranscription pageId={pageId} hasTranscript={hasTranscript} onSucceeded={onSucceeded} />}
+      {uploaded && !expired && <MacLocalTranscription pageId={pageId} hasTranscript={hasTranscript} onSucceeded={onSucceeded} />}
     </div>
   );
 }

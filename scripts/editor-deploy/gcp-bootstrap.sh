@@ -135,6 +135,15 @@ resources() {
       --uniform-bucket-level-access --public-access-prevention
   fi
   gcp storage buckets update "gs://$ASSETS_BUCKET" --update-labels "$COST_LABEL" > /dev/null
+  # Browser の resumable upload は308の Rangeから保存済みoffsetを確認する。originはeditorだけに固定する。
+  local cors_file
+  cors_file="$(mktemp)"
+  assets_bucket_cors > "$cors_file"
+  if ! gcp storage buckets update "gs://$ASSETS_BUCKET" --cors-file "$cors_file" > /dev/null; then
+    rm -f "$cors_file"
+    return 1
+  fi
+  rm -f "$cors_file"
   # Create and read only: the runtime cannot delete or overwrite objects. Deleting (the 30-day trash) is a later,
   # separate grant to a separate identity.
   local role

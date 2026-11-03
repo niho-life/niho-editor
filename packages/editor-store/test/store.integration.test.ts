@@ -77,6 +77,7 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "page_recording_candidates",
       "page_recording_candidate_versions",
       "page_recording_candidate_operations",
+      "native_audio_cache_namespaces",
       "ai_conversations",
       "ai_messages",
       "ai_message_changes",

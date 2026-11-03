@@ -57,7 +57,7 @@ fn uuid(value: &str) -> bool {
     })
 }
 
-fn job_dir(state: &AppState, job_id: &str) -> CommandResult<PathBuf> {
+pub(crate) fn job_dir(state: &AppState, job_id: &str) -> CommandResult<PathBuf> {
   if !uuid(job_id) {
     return Err(bad_request());
   }
@@ -97,6 +97,8 @@ struct AudioMeta {
   content_type: String,
   sha256: String,
   extension: String,
+  #[serde(default)]
+  created_at_ms: u64,
 }
 
 fn meta_path(audio: &Path, part: usize) -> PathBuf {
@@ -111,9 +113,43 @@ fn final_path(audio: &Path, meta: &AudioMeta) -> PathBuf {
   audio.join(format!("{}.{}", meta.part_index, meta.extension))
 }
 
-fn read_meta(audio: &Path, part: usize) -> CommandResult<AudioMeta> {
+fn now_ms() -> u64 {
+  std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap_or_default()
+    .as_millis()
+    .min(u64::MAX as u128) as u64
+}
+
+fn read_meta_raw(audio: &Path, part: usize) -> CommandResult<AudioMeta> {
   let bytes = fs::read(meta_path(audio, part)).map_err(|_| missing())?;
   serde_json::from_slice(&bytes).map_err(|_| missing())
+}
+
+fn read_meta(audio: &Path, part: usize) -> CommandResult<AudioMeta> {
+  let meta = read_meta_raw(audio, part)?;
+  if crate::staging::audio_recovery_timestamp_is_current(meta.created_at_ms, now_ms()) {
+    return Ok(meta);
+  }
+  if let Some(root) = audio.parent() {
+    let _ = fs::remove_dir_all(root);
+  }
+  Err(missing())
+}
+
+fn first_audio_created_at(audio: &Path) -> CommandResult<Option<u64>> {
+  let mut first: Option<u64> = None;
+  for entry in fs::read_dir(audio).into_iter().flatten().flatten() {
+    let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+      continue;
+    };
+    let Some(part) = name.strip_suffix(".json").and_then(|value| value.parse::<usize>().ok()) else {
+      continue;
+    };
+    let meta = read_meta(audio, part)?;
+    first = Some(first.map_or(meta.created_at_ms, |created| created.min(meta.created_at_ms)));
+  }
+  Ok(first)
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> CommandResult<()> {
@@ -173,6 +209,7 @@ pub async fn shell_gemini_audio_begin(
     content_type,
     sha256,
     extension: extension.to_string(),
+    created_at_ms: first_audio_created_at(&audio)?.unwrap_or_else(now_ms),
   };
   let meta_file = meta_path(&audio, part_index);
   if meta_file.is_file() {
@@ -373,7 +410,7 @@ fn prepared_part(prepared: &[PreparedFile], file: usize, part: usize) -> Command
     .ok_or_else(missing)
 }
 
-fn server_audio_paths(root: &Path, files: usize) -> CommandResult<Vec<PathBuf>> {
+pub(crate) fn server_audio_paths(root: &Path, files: usize) -> CommandResult<Vec<PathBuf>> {
   if files == 0 || files > 256 {
     return Err(bad_request());
   }
@@ -385,6 +422,61 @@ fn server_audio_paths(root: &Path, files: usize) -> CommandResult<Vec<PathBuf>> 
       path.is_file().then_some(path).ok_or_else(missing)
     })
     .collect()
+}
+
+pub(crate) fn server_audio_created_at_ms(root: &Path, files: usize) -> CommandResult<u64> {
+  if files == 0 || files > 256 {
+    return Err(bad_request());
+  }
+  let audio = root.join("audio");
+  let created = (0..files)
+    .map(|part| read_meta(&audio, part).map(|meta| meta.created_at_ms))
+    .collect::<CommandResult<Vec<_>>>()?;
+  created.into_iter().min().ok_or_else(missing)
+}
+
+fn raw_job_created_at_ms(root: &Path) -> Result<Option<u64>, ()> {
+  let local_result = root.join("local-result.json");
+  if local_result.is_file() {
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(local_result).map_err(|_| ())?).map_err(|_| ())?;
+    return value
+      .get("createdAtMs")
+      .and_then(serde_json::Value::as_u64)
+      .map(Some)
+      .ok_or(());
+  }
+  let audio = root.join("audio");
+  let mut first: Option<u64> = None;
+  for entry in fs::read_dir(audio).into_iter().flatten().flatten() {
+    let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+      continue;
+    };
+    let Some(part) = name.strip_suffix(".json").and_then(|value| value.parse::<usize>().ok()) else {
+      continue;
+    };
+    let meta = read_meta_raw(&root.join("audio"), part).map_err(|_| ())?;
+    first = Some(first.map_or(meta.created_at_ms, |created| created.min(meta.created_at_ms)));
+  }
+  Ok(first)
+}
+
+/// 起動時の30日cleanup。metadataのmtimeにはfallbackせず、壊れたmetadataはfail closedで残す。
+pub(crate) fn sweep_expired_local_audio(data_dir: &Path, now: u64) -> usize {
+  let root = data_dir.join(ROOT_DIR);
+  let mut removed = 0;
+  for entry in fs::read_dir(root).into_iter().flatten().flatten() {
+    let path = entry.path();
+    if !path.is_dir() {
+      continue;
+    }
+    let Ok(Some(created_at_ms)) = raw_job_created_at_ms(&path) else {
+      continue;
+    };
+    if !crate::staging::audio_recovery_timestamp_is_current(created_at_ms, now) && fs::remove_dir_all(path).is_ok() {
+      removed += 1;
+    }
+  }
+  removed
 }
 
 /// server stagingまたは既存ShellAudioSourceをprepare_audioへ渡す。Geminiのtargetはspeech.rsの固定600秒。
@@ -667,6 +759,66 @@ pub async fn shell_gemini_discard(state: State<'_, AppState>, job_id: String) ->
 mod tests {
   use super::*;
   use serde_json::json;
+
+  fn temp_local_audio_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+      "niho-docs-local-audio-expiry-test-{}",
+      hex(&crate::process::random_bytes::<6>().unwrap())
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    dir
+  }
+
+  #[test]
+  fn local_audio_sweep_uses_original_timestamp_without_mtime_fallback() {
+    let data = temp_local_audio_dir();
+    let now = 40 * 24 * 60 * 60 * 1_000;
+    let retention = crate::staging::AUDIO_RECOVERY_SWEEP_AFTER.as_millis() as u64;
+    let expired = data.join(ROOT_DIR).join("expired");
+    let current = data.join(ROOT_DIR).join("current");
+    let broken = data.join(ROOT_DIR).join("broken");
+    for root in [&expired, &current, &broken] {
+      fs::create_dir_all(root.join("audio")).unwrap();
+    }
+    fs::write(
+      expired.join("local-result.json"),
+      serde_json::to_vec(&json!({ "createdAtMs": now - retention })).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+      current.join("local-result.json"),
+      serde_json::to_vec(&json!({ "createdAtMs": now - retention + 1 })).unwrap(),
+    )
+    .unwrap();
+    fs::write(broken.join("local-result.json"), b"{").unwrap();
+
+    assert_eq!(sweep_expired_local_audio(&data, now), 1);
+    assert!(!expired.exists());
+    assert!(current.exists());
+    assert!(broken.exists());
+    let _ = fs::remove_dir_all(data);
+  }
+
+  #[test]
+  fn first_audio_timestamp_is_not_extended_by_another_part() {
+    let data = temp_local_audio_dir();
+    let audio = data.join("audio");
+    fs::create_dir_all(&audio).unwrap();
+    let first = now_ms() - 2;
+    for (part_index, created_at_ms) in [(0, first), (1, first + 1)] {
+      let meta = AudioMeta {
+        part_index,
+        bytes: 1,
+        content_type: "audio/wav".to_string(),
+        sha256: "0".repeat(64),
+        extension: "wav".to_string(),
+        created_at_ms,
+      };
+      fs::write(meta_path(&audio, part_index), serde_json::to_vec(&meta).unwrap()).unwrap();
+    }
+    assert_eq!(first_audio_created_at(&audio).unwrap(), Some(first));
+    let _ = fs::remove_dir_all(data);
+  }
 
   #[test]
   fn accepts_only_uuid_ids_and_fixed_audio_types() {

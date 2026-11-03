@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Pool as PgPool } from "pg";
 import { applyMigrations, defaultMigrationsDir, readMigrations } from "../src/migrate.ts";
 import { completeAudioUpload, startAudioRecording, type StartAudioRecordingInput } from "../src/recording-audio.ts";
-import { addRecordingCandidate, getRecordingCandidate } from "../src/recording-candidates.ts";
+import { addRecordingCandidate, getRecordingCandidate, listRecordingCandidates } from "../src/recording-candidates.ts";
 import { InvalidRecordingError, createRecordingPage, getRecording, updateRecording, type Connectable, type RecordingSegment } from "../src/recordings.ts";
 import { EditorStore } from "../src/store.ts";
 import {
@@ -16,14 +16,19 @@ import {
   enqueueTranscription,
   failRun,
   failMacTranscription,
+  failMacLocalTranscription,
   finishMacTranscription,
+  finishMacLocalTranscription,
   finishRun,
   latestRun,
   listQueuedRuns,
   macTranscriptionStatus,
+  macLocalTranscriptionStatus,
   requeueRun,
   resumeMacTranscription,
+  resumeMacLocalTranscription,
   startMacTranscription,
+  startMacLocalTranscription,
   sweepStaleRuns,
   transcriptionStatus,
   type EnqueueTranscriptionInput,
@@ -656,6 +661,66 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.equal((await getRecording(pool, OWNER, pageId))?.revision, revision, "a completion retry does not apply the transcript twice");
     assert.equal(await finishMacTranscription(pool, OTHER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "stale");
     assert.equal(await finishMacTranscription(pool, OWNER, randomUUID(), started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "stale");
+  });
+
+  it("keeps Apple local runs separate from Gemini/server workers and guards replay, owner, generation and audio revision", async () => {
+    const pageId = await uploadedRecording(pool);
+    const operationId = randomUUID();
+    const started = await startMacLocalTranscription(pool, OWNER, pageId, { operationId });
+    assert.ok(started?.status === "created");
+    assert.equal(started.run.engine, "apple-local");
+    assert.equal(started.run.executor, "mac-local");
+    assert.deepEqual(started.settings, { engine: "apple-speech", speakerMode: "auto" });
+    assert.equal(await claimRun(pool, started.run.id), null);
+    assert.equal(await finishRun(pool, started.run.id, started.generation, { segments: RESULT, durationSec: 5 }), "stale");
+    assert.equal(await finishMacTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "stale");
+    assert.equal(await failMacTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation, "internal"), false);
+    assert.equal(await finishMacLocalTranscription(pool, OTHER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "stale");
+    assert.equal(await failMacLocalTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation, "stopped"), true);
+    assert.equal(await finishMacLocalTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "stale");
+    const resumed = await resumeMacLocalTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation);
+    assert.ok(resumed);
+    assert.equal(resumed.generation, started.generation + 1);
+    await pool.query("UPDATE assets SET bytes = bytes + 1 WHERE page_id = $1", [pageId]);
+    assert.equal(await finishMacLocalTranscription(pool, OWNER, pageId, started.run.id, operationId, resumed.generation, { segments: RESULT, durationSec: 5 }), "superseded");
+    assert.equal((await macLocalTranscriptionStatus(pool, OWNER, pageId))?.run.status, "failed");
+    assert.equal(await macLocalTranscriptionStatus(pool, OTHER, pageId), null);
+  });
+
+  it("atomically creates one Apple candidate/run for concurrent starts and response-loss retry", async () => {
+    const pageId = await uploadedRecording(pool);
+    const edited = await updateRecording(pool, OWNER, pageId, 1, (recording) => ({ ...recording, segments: RESULT }));
+    assert.equal(edited?.status, "ok");
+    const operationId = randomUUID();
+    const starts = await Promise.all([
+      startMacLocalTranscription(pool, OWNER, pageId, { operationId }),
+      startMacLocalTranscription(pool, OWNER, pageId, { operationId }),
+    ]);
+    assert.deepEqual(starts.map((item) => item?.status).sort(), ["created", "existing"]);
+    assert.ok(starts[0] && "run" in starts[0] && starts[1] && "run" in starts[1]);
+    assert.equal(starts[0].run.id, starts[1].run.id);
+    assert.equal(starts[0].candidateId, starts[1].candidateId);
+    assert.equal((await listRecordingCandidates(pool, OWNER, pageId)).length, 2, "primary and one Apple candidate only");
+    assert.deepEqual((await getRecording(pool, OWNER, pageId))?.segments, RESULT, "the adopted transcript is untouched");
+    assert.equal(await countRuns(pool, pageId), 1);
+
+    const retry = await startMacLocalTranscription(pool, OWNER, pageId, { operationId });
+    assert.ok(retry?.status === "existing");
+    assert.equal(retry.run.id, starts[0].run.id);
+    assert.equal(retry.candidateId, starts[0].candidateId);
+  });
+
+  it("rolls candidate additions back when the Apple run insert fails", async () => {
+    const pageId = await uploadedRecording(pool);
+    const edited = await updateRecording(pool, OWNER, pageId, 1, (recording) => ({ ...recording, segments: RESULT }));
+    assert.equal(edited?.status, "ok");
+    await assert.rejects(
+      () => startMacLocalTranscription(failingOn(pool, /INSERT INTO transcription_runs AS t/), OWNER, pageId, { operationId: randomUUID() }),
+      /synthetic failure/,
+    );
+    assert.deepEqual(await listRecordingCandidates(pool, OWNER, pageId), []);
+    assert.equal(await countRuns(pool, pageId), 0);
+    assert.deepEqual((await getRecording(pool, OWNER, pageId))?.segments, RESULT);
   });
 
   it("resumes only the same Mac generation, settings and audio manifest, and rejects late results", async () => {

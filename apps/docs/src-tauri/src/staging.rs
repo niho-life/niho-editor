@@ -15,6 +15,13 @@ use crate::process::{hex, random_bytes, set_mode};
 pub const STAGING_DIR: &str = "staging";
 /// 起動時に掃く古さ（これより古い操作の残骸は、もう「もう一度」に使えないとみなす）。
 pub const SWEEP_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
+/// 失敗・保存待ち音声の救出口。クラウドの保持期間を超えてローカルだけ延命しない。
+pub const AUDIO_RECOVERY_SWEEP_AFTER: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// 端末内音声の初回作成時刻がまだ30日未満か。30日ちょうど・未来・0は利用不可（fail closed）。
+pub fn audio_recovery_timestamp_is_current(created_at_ms: u64, now_ms: u64) -> bool {
+  created_at_ms > 0 && created_at_ms <= now_ms && now_ms - created_at_ms < AUDIO_RECOVERY_SWEEP_AFTER.as_millis() as u64
+}
 
 /// 操作の id（16 桁の hex）。画面から受け取る id はこの形だけを通す。
 pub fn is_staging_id(value: &str) -> bool {
@@ -98,6 +105,10 @@ impl Staging {
     let mut removed = 0;
     for entry in entries.flatten() {
       let path = entry.path();
+      // owner scope 付き音声と保存応答待ちの端末内認識結果は、最大30日の専用 sweep に任せる。
+      if path.join("audio-recovery.json").is_file() || path.join("local-result.json").is_file() {
+        continue;
+      }
       let stale = entry
         .metadata()
         .and_then(|meta| meta.modified())
@@ -215,6 +226,17 @@ mod tests {
   }
 
   #[test]
+  fn audio_recovery_expires_at_exactly_thirty_days_and_rejects_bad_clocks() {
+    let retention = AUDIO_RECOVERY_SWEEP_AFTER.as_millis() as u64;
+    let created = 1_000_000;
+    assert!(audio_recovery_timestamp_is_current(created, created + retention - 1));
+    assert!(!audio_recovery_timestamp_is_current(created, created + retention));
+    assert!(!audio_recovery_timestamp_is_current(created, created + retention + 1));
+    assert!(!audio_recovery_timestamp_is_current(0, created));
+    assert!(!audio_recovery_timestamp_is_current(created + 1, created));
+  }
+
+  #[test]
   fn sweeps_only_old_dirs() {
     let data = temp_data_dir();
     let staging = Staging::new(&data);
@@ -224,6 +246,32 @@ mod tests {
     // 0 秒より古いものは全部（作った直後でも経過は 0 以上）
     assert_eq!(staging.sweep(Duration::ZERO), 1);
     assert!(staging.open(fresh.id()).is_none());
+    let _ = fs::remove_dir_all(&data);
+  }
+
+  #[test]
+  fn generic_sweep_keeps_owner_scoped_audio_recovery() {
+    let data = temp_data_dir();
+    let staging = Staging::new(&data);
+    let staged = staging.create().unwrap();
+    staged.write_private(None, "audio-recovery.json", b"{}").unwrap();
+    let id = staged.id().to_string();
+    assert_eq!(staging.sweep(Duration::ZERO), 0);
+    assert!(staging.open(&id).is_some());
+    staged.remove().unwrap();
+    let _ = fs::remove_dir_all(&data);
+  }
+
+  #[test]
+  fn generic_sweep_keeps_a_local_result_for_result_only_retry() {
+    let data = temp_data_dir();
+    let staging = Staging::new(&data);
+    let staged = staging.create().unwrap();
+    staged.write_private(None, "local-result.json", b"{}").unwrap();
+    let id = staged.id().to_string();
+    assert_eq!(staging.sweep(Duration::ZERO), 0);
+    assert!(staging.open(&id).is_some());
+    staged.remove().unwrap();
     let _ = fs::remove_dir_all(&data);
   }
 }

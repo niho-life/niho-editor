@@ -63,7 +63,7 @@ migrate ジョブには `DATABASE_URL`（migrate ロール）と `EDITOR_APP_DAT
 3. Cloud SQL にデータベース `niho_editor` と migrate ロール（アプリ用ロールは migrate ジョブが作る）
 4. Secret 6 つと、読める人の限定（AI の鍵・文字起こしの鍵・Gemini の鍵・Google の client secret は版なしで作る。値はオーナーが §10・§12・§13 の手順で入れる）
 5. Artifact Registry（直近 5 個だけ残す）
-6. 資産バケット（private）
+6. 資産バケット（private。CORSはeditorのexact originからの`PUT`だけで、resumable uploadの`Range`/`Content-Range`を公開）
 7. 手順の実行基盤（`scripts/editor-deploy/steps-infra.sh`。§11）と文字起こしの実行基盤（`scripts/editor-deploy/transcribe-infra.sh`。§12）
 
 続けて `scripts/editor-deploy/deploy.sh`、そのあと `gcp-bootstrap.sh domain`（§6）。
