@@ -6,8 +6,8 @@
 
 **editor は Google を直接呼びません。将来、NIHO が Editor 専用の credential 契約を用意した場合に限り、`https://niho.life/api/me/docs-drive/*` をサーバー側から本人として呼びます。**
 
-Google の側（OAuth クライアント・同意画面・本人ごとの接続と refresh token の保管・Markdown から Google ドキュメントへの変換）は **niho-app に既にあり、本番で動いています**。
-editor はそれの 2 番目の客になるだけです。**Google Cloud のコンソールでの作業も、client secret も、refresh token を預かる表も要りません。**
+Google OAuth クライアント・本人ごとの接続と refresh token の保管・Markdown から Google ドキュメントへの変換は **niho-app 側の既存機能**です。ただし、それをEditorから利用できるAPI・認証契約が提供済みという意味ではありません。
+EditorはNIHO側の同意・token保管を再実装せず、正式な接続契約が整った後に利用可否を確認します。**Google Cloudのコンソール作業、client secret、refresh tokenの保管先をEditorに追加しません。**
 
 > **依存：NIHO側にDocs API専用の最小権限credential契約はまだありません。** NIHO editorのopaque browser sessionは写真本人確認に限定し、
 > native AppConnect・Experience token・一般NIHO API token・NIHO ID tokenを流用しません。現在のruntimeは`apiToken`が無い場合に閉じ、routeは503を返します。
@@ -18,9 +18,9 @@ editor はそれの 2 番目の客になるだけです。**Google Cloud のコ�
 
 | 旧版の部品 | どこ | editor から |
 | --- | --- | --- |
-| Google の OAuth クライアント・同意画面・scope | **niho-app（本番）** | **そのまま使う。** 作り直さない |
-| 本人ごとの接続と refresh token の保管 | **niho-app（本番）** | **そのまま使う。** editor は持たない |
-| Markdown → Google ドキュメントの変換 | **niho-app（本番）** | **そのまま使う。** editor は Markdown を渡すだけ |
+| Google の OAuth クライアント・同意画面・scope | niho-app 側の既存機能 | Editor接続への利用可否と契約をNIHO側で確認する。Editorで作り直さない |
+| 本人ごとの接続と refresh token の保管 | NIHO側が所有する既存機能 | Editorは保持しない。専用credential契約なしにアクセスしない |
+| Markdown → Google ドキュメントの変換 | niho-app 側の既存機能 | Editorからの利用前にAPI・入力・response契約を確認する |
 | HTTP の旧版参考形状（`me/docs-drive/*`） | `apps/docs/src-tauri/src/google_docs.rs`（この repo） | Editor向けcredential/API契約ではない。NIHO側の確認後に実装する |
 | 画面の状態機械（受付・再試行・再接続） | `packages/docs-ui/src/lib/use-google-docs.ts`（この repo） | 意味を引き継ぐ。コードは使わない（§4） |
 | Mac だけの部品（Tauri の bridge・ローカルのファイル） | `apps/docs`・`local-google-docs-folder-export.ts` | 使わない |
@@ -37,7 +37,7 @@ POST https://niho.life/api/me/docs-drive/exports    → 401
 
 ## 2. 旧版の参考形状（Editorの接続契約ではない）
 
-**Authorization headerとcredentialは未確定です。** 旧版のMac clientが使ったtoken形状をEditorへ引き継ぎません。現行EditorはDocs API専用credentialを取得できないため、`runtime.ts`で閉じます。
+**Authorization headerとcredentialは未確定です。** 旧版のMac clientが使ったtoken形状をEditorへ引き継ぎません。現行EditorはDocs API専用credentialを取得できないため、`apps/editor-web/src/google-docs/runtime.ts`で閉じます。
 
 以下のroute、body、response、error mappingは旧版の調査記録です。Editor実装の前にniho-app側の正式なAPI契約・認証境界と照合し、契約に合わない項目は更新してください。推測でendpointやtokenを実装しません。
 
