@@ -60,6 +60,7 @@ describe.skipIf(databaseUrl === undefined)("public asset PostgreSQL authority", 
       const publishedAsset = { id: assetId, url: `https://editor.example/assets/${sha256}.jpg`, contentType: "image/jpeg" as const, bytes: bytes.byteLength, sha256, alt: "Figure context alt", credit: null };
       const doc = (version: number, includeAsset: boolean) => ({
         ...snapshot({ id: pageId, dest: "exp", slug: `asset-${label}`, title: `Synthetic ${label}`, updatedAt: NOW, version }),
+        range: "live" as const,
         ...(includeAsset ? { cover: publishedAsset } : {}),
         fingerprint: "f".repeat(64),
       });

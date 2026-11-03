@@ -47,34 +47,37 @@ export function AccountConnections({ initial }: { initial: { roles: NihoEditorRo
 
   const writer = data?.roles.version === 1 && data.roles.roles.includes("writer") && data.roles.destinations.includes("exp");
   return (
-    <div className={styles.root}>
-      <section className={styles.card} aria-labelledby="account-role-title">
-        <h2 id="account-role-title">記事ライター</h2>
-        <p>{writer ? "NIHO Experience へ記事を公開できます。公開のたびに現在の役割を確認します。" : "現在、NIHO Experience へ公開できる記事ライターの役割はありません。私的なページの作成と編集は続けられます。"}</p>
-      </section>
-      <section className={styles.card} aria-labelledby="account-links-title">
-        <div className={styles.heading}>
-          <h2 id="account-links-title">提供者とのつながり</h2>
-          <button type="button" className={styles.secondary} onClick={() => void reload()} disabled={busy !== null}>最新の状態を確認</button>
-        </div>
-        {error ? <p role="alert" className={styles.error}>{error}</p> : null}
-        {!data ? null : data.links.length === 0 ? <p>招待や承諾済みのつながりはありません。</p> : (
-          <ul className={styles.list}>
-            {data.links.map((link) => (
-              <li key={link.id} className={styles.link}>
-                <div><strong>{link.providerName}</strong><span>{STATE_LABEL[link.state]}</span></div>
-                <p>{link.inviterName} さんから {link.writerLabel} への招待</p>
-                {link.state === "PENDING" ? (
-                  <div className={styles.actions}>
-                    <button type="button" onClick={() => void decide(link.id, "accept")} disabled={busy !== null}>{busy === link.id ? "確認中…" : "承諾する"}</button>
-                    <button type="button" className={styles.secondary} onClick={() => void decide(link.id, "decline")} disabled={busy !== null}>辞退する</button>
-                  </div>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+    <div className="es-page">
+      <h1>役割とつながり</h1>
+      <div className={styles.root}>
+        <section className={styles.card} aria-labelledby="account-role-title">
+          <h2 id="account-role-title">記事ライター</h2>
+          <p>{writer ? "NIHO Experience へ記事を公開できます。公開のたびに現在の役割を確認します。" : "現在、NIHO Experience へ公開できる記事ライターの役割はありません。私的なページの作成と編集は続けられます。"}</p>
+        </section>
+        <section className={styles.card} aria-labelledby="account-links-title">
+          <div className={styles.heading}>
+            <h2 id="account-links-title">提供者とのつながり</h2>
+            <button type="button" className={styles.secondary} onClick={() => void reload()} disabled={busy !== null}>最新の状態を確認</button>
+          </div>
+          {error ? <p role="alert" className={styles.error}>{error}</p> : null}
+          {!data ? null : data.links.length === 0 ? <p>招待や承諾済みのつながりはありません。</p> : (
+            <ul className={styles.list}>
+              {data.links.map((link) => (
+                <li key={link.id} className={styles.link}>
+                  <div><strong>{link.providerName}</strong><span>{STATE_LABEL[link.state]}</span></div>
+                  <p>{link.inviterName} さんから {link.writerLabel} への招待</p>
+                  {link.state === "PENDING" ? (
+                    <div className={styles.actions}>
+                      <button type="button" onClick={() => void decide(link.id, "accept")} disabled={busy !== null}>{busy === link.id ? "確認中…" : "承諾する"}</button>
+                      <button type="button" className={styles.secondary} onClick={() => void decide(link.id, "decline")} disabled={busy !== null}>辞退する</button>
+                    </div>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
     </div>
   );
 }

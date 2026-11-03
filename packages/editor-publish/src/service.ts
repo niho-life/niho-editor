@@ -442,7 +442,7 @@ export class PublishService {
       range: context.range,
       extras: context.extras,
       category: facts.category,
-      categoryDisplay: context.serverFacts.categoryDisplay,
+      ...(context.serverFacts.categoryDisplay === undefined ? {} : { categoryDisplay: context.serverFacts.categoryDisplay }),
       related: facts.related,
       author: context.author,
       version,

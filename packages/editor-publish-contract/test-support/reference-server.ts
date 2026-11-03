@@ -195,6 +195,7 @@ function toListItem(doc: PublishedDoc): PublishedListItem {
     lead: doc.lead,
     cover: doc.cover,
     category: doc.category,
+    ...(doc.categoryDisplay === undefined ? {} : { categoryDisplay: doc.categoryDisplay }),
     author: doc.author,
     range: doc.range,
     version: doc.version,

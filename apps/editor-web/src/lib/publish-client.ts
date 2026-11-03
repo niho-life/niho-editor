@@ -45,7 +45,8 @@ export function sheetQuery(selection: PublishSelection | null): string {
   });
   if (selection.slug !== null) params.set("slug", selection.slug);
   if (selection.category !== null) params.set("category", selection.category);
-  if (selection.related.length > 0) params.set("related", selection.related.join(","));
+  // 空配列も明示する。省略するとサーバーが公開済みの関連付けを既定値として復元する。
+  params.set("related", selection.related.join(","));
   return `?${params.toString()}`;
 }
 

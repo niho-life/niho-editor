@@ -30,6 +30,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   nav.pathname = `/p/${PAGE}`;
+  window.history.replaceState(null, "", "/");
   order.length = 0;
   editor.saved = true;
   editor.saveGate = null;
@@ -216,7 +217,7 @@ describe("公開のシート", () => {
     await mount();
     await click($(".es-pubbtn"));
     await click(dest("NIHO"));
-    expect(calls.at(-1)!.url).toBe(`/api/pages/${PAGE}/publish?handle=niho&range=live&extras=`);
+    expect(calls.at(-1)!.url).toBe(`/api/pages/${PAGE}/publish?handle=niho&range=live&extras=&related=`);
     expect(dialog()!.textContent).toContain("本文に見出しを 1 つ以上入れてください");
     expect(primary().disabled).toBe(true);
     await click(primary());
@@ -371,6 +372,38 @@ describe("公開のシート", () => {
     expect(selected?.textContent).toContain("現在の掲載・権限は公開時に再確認");
     await click(selected);
     expect(container!.textContent).not.toContain("handoff-experience");
+  });
+
+  it("Experience の手渡しは未公開ページの初期選択に使う", async () => {
+    window.history.replaceState(null, "", `/p/${PAGE}?destination=exp&lang=en&experience=coastal-tea`);
+    const plan = sheet({
+      selection: { handle: "exp", range: "live", extras: NONE, slug: null, category: null, related: ["coastal-tea"] },
+    });
+    const { calls } = server({ sheets: [sheet(), sheet(), plan] });
+    await mount();
+    await click($(".es-pubbtn"));
+    const gets = calls.filter((call) => call.method === "GET");
+    expect(gets).toHaveLength(3);
+    expect(gets[0]!.url).toBe(`/api/pages/${PAGE}/publish`);
+    expect(gets[1]!.url).toBe(`/api/pages/${PAGE}/publish`);
+    expect(gets[2]!.url).toBe(`/api/pages/${PAGE}/publish?handle=exp&range=live&extras=&related=coastal-tea`);
+  });
+
+  it("公開履歴があるページはURLの手渡し情報で保存済み設定を上書きしない", async () => {
+    window.history.replaceState(null, "", `/p/${PAGE}?destination=exp&lang=en&experience=coastal-tea`);
+    const saved = sheet({
+      status: "published",
+      publication: { ...LIVE, handle: "exp", dest: "exp", range: "unlisted" },
+      canStop: true,
+      selection: { handle: "exp", range: "unlisted", extras: { app: true, news: false, xp: true }, slug: null, category: "walks", related: ["saved-experience"] },
+    });
+    const { calls } = server({ sheets: [saved, saved] });
+    await mount();
+    await click($(".es-pubbtn"));
+    const gets = calls.filter((call) => call.method === "GET");
+    expect(gets).toHaveLength(2);
+    expect(gets[1]!.url).toBe(`/api/pages/${PAGE}/publish`);
+    expect(gets[1]!.url).not.toContain("coastal-tea");
   });
 
   it("公開中に別の発信先を選ぶと「発信先を変える」", async () => {

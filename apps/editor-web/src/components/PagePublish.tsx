@@ -307,7 +307,13 @@ export function usePagePublish(input: {
         // 保存を待つあいだに別のページへ移った: 前のページの読み込みを始めない（始めると seq が進み、移った先の応答が捨てられる）
         if (epoch !== pageEpoch.current) return null;
         if (!saved) patch(pageId, { error: PUBLISH_MESSAGES.unsaved });
-        return load(pageId, handoffSelection());
+        // まず現在の保存状態をサーバーから読む。Experience からの手渡しは
+        // まだ一度も公開していないページの初期選択に限る。
+        return load(pageId, null).then((sheet) => {
+          if (!sheet) return null;
+          const handoff = sheet.publication === null ? handoffSelection() : null;
+          return handoff === null ? sheet : load(pageId, handoff);
+        });
       })
       .then((sheet) => {
         if (sheet) patch(pageId, { selection: sheet.selection });
