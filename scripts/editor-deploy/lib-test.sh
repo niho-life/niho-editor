@@ -302,3 +302,6 @@ fi
 [[ $failed -eq 0 ]] || { printf 'lib-test: failed\n' >&2; exit 1; }
 bash "$dir/private-jobs-infra.test.sh"
 printf 'lib-test: all passed\n'
+
+# Background Docs export uses a separate queue and remains closed without prerequisites.
+bash "$dir/google-docs-infra.test.sh"

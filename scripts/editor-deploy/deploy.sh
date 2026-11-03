@@ -148,7 +148,7 @@ gcp run deploy "$SERVICE" \
   --add-cloudsql-instances "$CONNECTION" \
   --network "$VPC_NETWORK" --subnet "$VPC_SUBNET" --vpc-egress private-ranges-only \
   --set-secrets "$(service_secrets "$ai" "$tr" "$google" "$gem")" \
-  --set-env-vars "$(service_env_vars "$ai" "$tr" "$gem")$(steps_env_vars)$(transcribe_env_vars)$(private_jobs_env_vars)" \
+  --set-env-vars "$(service_env_vars "$ai" "$tr" "$gem")$(steps_env_vars)$(transcribe_env_vars)$(private_jobs_env_vars)$(google_docs_env_vars)" \
   --labels "$COST_LABEL,commit=${TAG:0:12}"
 
 # 一度でも特定の revision へ traffic を割り当てる（docs/ops/editor-deploy.md §9 の戻し方）と、Cloud Run は以降のデプロイもその割り当てを
