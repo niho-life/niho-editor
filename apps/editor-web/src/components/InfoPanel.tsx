@@ -3,9 +3,10 @@
 import { useMemo, useSyncExternalStore } from "react";
 import type { PageSummary } from "@niho/editor-store";
 import { ShellPageSettings, ShellRail, ShellRailSection } from "niho-docs-ui/shell";
-import type { AttachedPage, PageText } from "@/lib/attached-page";
+import type { AttachedAiSteps, AttachedPage, PageText } from "@/lib/attached-page";
 import type { FolderFieldsState } from "@/lib/use-folder-fields";
 import { countText, pageInfoRows, type TextCounts } from "@/lib/page-info";
+import { AiPanel } from "./AiBox";
 
 /** 本文を数え直すまでの待ち（打っているあいだは数えない）。 */
 export const COUNT_DELAY_MS = 300;
@@ -68,6 +69,12 @@ export type InfoPanelProps = {
   /** 「ページ設定」の節を開いているか（閉じると見出しに「自分だけ」）。 */
   open: boolean;
   onToggle: () => void;
+  /** 会話が表示域を越えた。枠が、そのページでまだ手動選択されていないときだけ設定を閉じる。 */
+  onChatOverflow: () => void;
+  /** PageSteps が持つ既存の工程。通常ページは null。 */
+  aiSteps: AttachedAiSteps | null;
+  /** レールが操作可能か。閉じたレールでは文字数購読など表示専用の処理を止める。AI 自体は mount したまま保つ。 */
+  active: boolean;
   onExportMarkdown: () => void;
   onDelete: () => void;
 };
@@ -86,15 +93,15 @@ export type InfoPanelProps = {
  * - ページ: 作成・更新（日付）・録音（録音ページの長さ）・文字数（ja は文字数・en は語数）。
  * - 書き出し: Markdown だけ（「…」の書き出しと同じ。Google ドキュメントは NIHO の API 待ち）。
  * - ページを削除: 「…」の削除と同じ確認のダイアログを開く。
- * 手順・「AIと作る」の節はまだ出さない。
+ * 「AIと作る」は常設し、レールを閉じても会話 draft と実行中の処理を保つ。
  */
-export function InfoPanel({ summary, page, author, recordingSec, folders, folderNote, onFolder, order, fields, onExportFolder, open, onToggle, onExportMarkdown, onDelete }: InfoPanelProps) {
-  const text = page?.text ?? null;
+export function InfoPanel({ summary, page, author, recordingSec, folders, folderNote, onFolder, order, fields, onExportFolder, open, onToggle, onChatOverflow, aiSteps, active, onExportMarkdown, onDelete }: InfoPanelProps) {
+  const text = active ? page?.text ?? null : null;
   const store = useMemo(() => countStore(text), [text]);
   const counts = useSyncExternalStore(store.subscribe, store.get, noCounts);
   const lang = page?.lang ?? summary.lang;
   return (
-    <ShellRail label="このページの設定">
+    <ShellRail label="このページの設定と AI">
       <ShellRailSection title="ページ設定" summary={RAIL_SUMMARY} open={open} onToggle={onToggle}>
         <ShellPageSettings
           folder={folders && onFolder ? { value: summary.parent, options: folders, note: folderNote ?? undefined, onPick: onFolder } : undefined}
@@ -110,6 +117,7 @@ export function InfoPanel({ summary, page, author, recordingSec, folders, folder
           onDelete={onDelete}
         />
       </ShellRailSection>
+      <AiPanel pageId={page?.id ?? null} context={page?.ai ?? null} steps={aiSteps} onHistoryOverflow={onChatOverflow} />
     </ShellRail>
   );
 }

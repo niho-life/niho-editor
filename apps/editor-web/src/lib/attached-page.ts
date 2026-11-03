@@ -1,4 +1,6 @@
 import type { PageLang } from "@niho/editor-store";
+import type { Editor } from "@tiptap/react";
+import type { AiBridge } from "./ai-bridge";
 import type { RestoredPage } from "./page-actions-client";
 import type { SaveStatus } from "./save-status";
 
@@ -8,6 +10,29 @@ export type PageText = {
   read: () => string;
   /** 本文が変わったら onChange（入力のたびに呼ぶので、受ける側でまとめる）。返す関数で外す。 */
   subscribe: (onChange: () => void) => () => void;
+};
+
+/** 右レールの AI が使う、開いている PageEditor の安定した境界。 */
+export type AttachedAi = {
+  editor: Editor | null;
+  bridge: AiBridge;
+  title: string;
+  kind: "note" | "rec" | "step" | "article";
+  lang: PageLang;
+};
+
+/** PageSteps が持つ既存の工程状態を、AI の工程選択へ読み取り専用で共有する。 */
+export type AttachedAiStep = {
+  id: string;
+  label: string;
+  hint: string;
+  disabledReason: string | null;
+};
+
+export type AttachedAiSteps = {
+  ownerId: string;
+  options: readonly AttachedAiStep[];
+  start: (id: string) => Promise<{ ok: boolean; message: string }>;
 };
 
 /**
@@ -44,6 +69,8 @@ export type AttachedPage = {
   /** 言語を保存できなかったときの短い文言（次に言語を変えるまで）。無ければ null。 */
   langNote: string | null;
   text: PageText;
+  /** 下書き復元前は id が null なので、AI は描画だけして操作を受け付けない。 */
+  ai?: AttachedAi;
 };
 
 /** 操作の持ち主（ページの id と、その画面の flush）。別のページ・開き直した画面とは別の持ち主になる。 */

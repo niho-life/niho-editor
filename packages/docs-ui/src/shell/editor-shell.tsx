@@ -9,7 +9,7 @@ export type EditorShellProps = {
   sidebar: ReactNode;
   /** ヘッダー（ShellHeader）。 */
   header: ReactNode;
-  /** 右のレール（ShellRail）。開いているときだけ渡す。 */
+  /** 右のレール（ShellRail）。閉じている間も状態を保つため、ページがある限り渡し続ける。 */
   rail?: ReactNode;
   /** 900px 未満で下端に出る道具の帯（ShellMobileToolbar）。 */
   toolbar?: ReactNode;
@@ -56,7 +56,18 @@ export function EditorShell({ sidebar, header, rail, toolbar, sidebarOpen, railO
               <main ref={main} id={SHELL_MAIN_ID} className="es-canvas" tabIndex={-1}>
                 {children}
               </main>
-              {railOpen && rail}
+              {rail ? (
+                <div
+                  ref={(node) => {
+                    node?.toggleAttribute("inert", !railOpen);
+                  }}
+                  className="es-rail-presence"
+                  hidden={!railOpen}
+                  aria-hidden={!railOpen ? true : undefined}
+                >
+                  {rail}
+                </div>
+              ) : null}
             </div>
             {toolbar}
           </div>

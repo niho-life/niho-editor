@@ -354,8 +354,8 @@ export async function recordDeviceAiChat(pageId: string, body: { conversationId?
 }
 
 /** その依頼で書いた分を元に戻す（直したページは依頼の前へ、作ったページはゴミ箱へ）。 */
-export async function undoAiChat(pageId: string, messageId: string): Promise<AiUndoResult> {
-  const data = await post(pagePath(pageId, `/ai/chat/${encodeURIComponent(messageId)}/undo`), {});
+export async function undoAiChat(pageId: string, messageId: string, options: { signal?: AbortSignal } = {}): Promise<AiUndoResult> {
+  const data = await post(pagePath(pageId, `/ai/chat/${encodeURIComponent(messageId)}/undo`), {}, options.signal);
   if (!isRecord(data) || !Array.isArray(data.undone)) throw new AiRequestError("failed");
   const kept = Array.isArray(data.kept)
     ? data.kept.flatMap((item) => (isRecord(item) && typeof item.pageId === "string" ? [{ pageId: item.pageId, reason: String(item.reason) }] : []))

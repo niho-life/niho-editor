@@ -58,7 +58,7 @@ const MADE: Record<BlockChoiceId, JSONContent> = {
 };
 
 /** PageEditor と同じ並び（`.be` の中に本文と PageChrome）だけを描く。 */
-function Harness({ content, onAi }: { content: Doc; onAi?: () => void }) {
+function Harness({ content }: { content: Doc }) {
   const editor = useEditor({
     extensions: buildPageExtensions(),
     content,
@@ -69,7 +69,7 @@ function Harness({ content, onAi }: { content: Doc; onAi?: () => void }) {
     <div data-docs-app-root="" data-docs-shared-ui="">
       <div className="be">
         <EditorContent editor={editor} />
-        <PageChrome editor={editor} onAi={onAi} />
+        <PageChrome editor={editor} />
       </div>
     </div>
   );
@@ -94,7 +94,7 @@ function fakeTimersWithFrames() {
   vi.stubGlobal("cancelAnimationFrame", (handle: number) => clearTimeout(handle));
 }
 
-async function renderHarness(content: Doc, options: { strict?: boolean; onAi?: () => void } = {}): Promise<Editor> {
+async function renderHarness(content: Doc, options: { strict?: boolean } = {}): Promise<Editor> {
   fakeTimersWithFrames();
   container = document.createElement("div");
   document.body.append(container);
@@ -103,10 +103,10 @@ async function renderHarness(content: Doc, options: { strict?: boolean; onAi?: (
     root!.render(
       options.strict ? (
         <StrictMode>
-          <Harness content={content} onAi={options.onAi} />
+          <Harness content={content} />
         </StrictMode>
       ) : (
-        <Harness content={content} onAi={options.onAi} />
+        <Harness content={content} />
       ),
     );
   });
@@ -383,19 +383,14 @@ describe("the link field of the format bar", () => {
   });
 });
 
-describe("the AI button of the format bar", () => {
-  it("asks the page to open the AI box, keeping the selection and the text as they are", async () => {
-    const onAi = vi.fn();
-    const editor = await renderHarness(doc(paragraph("合成の本文")), { onAi });
+describe("the format bar without the retired AI entry", () => {
+  it("does not render an AI button and keeps the selection and text as they are", async () => {
+    const editor = await renderHarness(doc(paragraph("合成の本文")));
     await select(editor, 1, 3);
     const before = JSON.stringify(editor.getJSON());
-    await click(labelled("AI に頼む")!);
-    expect(onAi).toHaveBeenCalledTimes(1);
-    // 箱を開く側が、このときの選択から範囲を読む（src/components/AiBox.test.tsx）
+    expect(labelled("AI に頼む")).toBeNull();
     expect([editor.state.selection.from, editor.state.selection.to]).toEqual([1, 3]);
     expect(JSON.stringify(editor.getJSON())).toBe(before);
-    // 「まだ使えません」の通知はもう出さない
-    expect(chrome().querySelector("[data-ai-notice]")).toBeNull();
   });
 });
 

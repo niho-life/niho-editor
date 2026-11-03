@@ -15,6 +15,7 @@ import { useShortcuts } from "@/lib/shortcuts";
 import { arrangeSidebarItems, folderOptions, orderNeighbours, reorderedPages, searchRows, withoutPageTree, type SidebarPublication } from "@/lib/sidebar-items";
 import { usePageHistory } from "@/lib/use-page-history";
 import { usePageMenu, type AttachedPage } from "@/lib/use-page-menu";
+import type { AttachedAiSteps } from "@/lib/attached-page";
 import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
 import { useFolderFields } from "@/lib/use-folder-fields";
 import { usePageShare } from "@/lib/use-page-share";
@@ -93,6 +94,8 @@ export type EditorFrameApi = {
    * ページを閉じるときは null（帯は出したままで、押しても何もしない）。
    */
   registerTools: (tools: PageChromeTools | null) => void;
+  /** PageSteps の既存 state/start を右レールの AI へ共有する。登録元が外れたら返す関数で外す。 */
+  registerAiSteps: (steps: AttachedAiSteps) => () => void;
   /** 公開のシートを開く（ページを開いている画面だけで出る）。 */
   openPublish: () => void;
 };
@@ -108,6 +111,7 @@ const FrameContext = createContext<EditorFrameApi>({
   pageCreated: noop,
   registerPageSaver: () => noop,
   registerTools: noop,
+  registerAiSteps: () => noop,
   pageRemoved: noop,
   stepPagesChanged: noop,
   attachPage: () => noop,
@@ -246,10 +250,10 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // 狭い画面で一覧を出している path（path が変われば閉じる）
   const [listFor, setListFor] = useState<string | null>(null);
   // 情報パネル: デスクトップで開いているか（ページを替えても持つ）と、狭い画面で開いている path（path が変われば閉じる）
-  const [railOpenWide, setRailOpenWide] = useState(false);
+  const [railOpenWide, setRailOpenWide] = useState(true);
   const [railFor, setRailFor] = useState<string | null>(null);
-  // 情報パネルの「ページ設定」の節を開いているか（ページを替えても持つ）
-  const [settingsOpen, setSettingsOpen] = useState(true);
+  // ページ設定の開閉。自動で閉じたことと、利用者が手動で選んだことをページごとに保持する。
+  const [settingsByPage, setSettingsByPage] = useState<ReadonlyMap<string, { open: boolean; manual: boolean; autoCollapsed: boolean }>>(() => new Map());
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const [meOpen, setMeOpen] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
@@ -269,6 +273,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // 開いているページ（ページの中の PageEditor が登録する）。ref は非同期の操作のあとに今の値を読むため（描画を待たない）
   const [attached, setAttached] = useState<AttachedPage | null>(null);
   const attachedRef = useRef<AttachedPage | null>(null);
+  const [aiSteps, setAiSteps] = useState<AttachedAiSteps | null>(null);
+  const aiStepsRef = useRef<AttachedAiSteps | null>(null);
   // 版に戻して開き直したページ。そのページが登録し直したとき、フォーカスが外れていたら「…」へ戻す
   const refocusRef = useRef<string | null>(null);
 
@@ -366,6 +372,15 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         };
       },
       registerTools: (next) => setTools(next),
+      registerAiSteps: (steps) => {
+        aiStepsRef.current = steps;
+        setAiSteps(steps);
+        return () => {
+          if (aiStepsRef.current !== steps) return;
+          aiStepsRef.current = null;
+          setAiSteps(null);
+        };
+      },
       pageRemoved: (id) => {
         setRemovedTick((tick) => tick + 1);
         setList((current) => {
@@ -660,6 +675,22 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     : undefined;
   const railPage = attached && attached.id !== null && attached.id === railId ? attached : null;
   const railShown = railSummary !== undefined && (narrow ? railFor === pathname : railOpenWide);
+  const settingsState = railId ? (settingsByPage.get(railId) ?? { open: true, manual: false, autoCollapsed: false }) : { open: true, manual: false, autoCollapsed: false };
+  const togglePageSettings = useCallback(() => {
+    if (!railId) return;
+    setSettingsByPage((current) => {
+      const previous = current.get(railId) ?? { open: true, manual: false, autoCollapsed: false };
+      return new Map(current).set(railId, { ...previous, open: !previous.open, manual: true });
+    });
+  }, [railId]);
+  const collapseSettingsForChat = useCallback(() => {
+    if (!railId) return;
+    setSettingsByPage((current) => {
+      const previous = current.get(railId);
+      if (previous?.manual || previous?.autoCollapsed) return current;
+      return new Map(current).set(railId, { open: false, manual: false, autoCollapsed: true });
+    });
+  }, [railId]);
   // 入れられるフォルダ（読み込んである上の段のページ）。入れ先が無く、いま上の段にいるなら「フォルダ」の節を出さない
   const railFolders = useMemo(() => (railSummary ? folderOptions(list.pages, railSummary.id) : []), [railSummary, list.pages]);
   // フォルダ（＝子を持つ上の段のページ）でだけ「このフォルダの背景」とフォルダの書き出しを出す。
@@ -681,7 +712,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           railOpen={railShown}
           toolbar={editorBar && narrow ? <ShellMobileToolbar {...editorBar} /> : undefined}
           rail={
-            railShown && railSummary ? (
+            railSummary ? (
               <InfoPanel
                 summary={railSummary}
                 page={railPage}
@@ -697,8 +728,11 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 fields={railIsFolder ? folderFields : undefined}
                 onExportFolder={railIsFolder ? menu.exportFolder : undefined}
                 recordingSec={list.details?.id === railSummary.id ? list.details.recordingSec : null}
-                open={settingsOpen}
-                onToggle={() => setSettingsOpen((open) => !open)}
+                open={settingsState.open}
+                onToggle={togglePageSettings}
+                onChatOverflow={collapseSettingsForChat}
+                aiSteps={aiSteps?.ownerId === railId ? aiSteps : null}
+                active={railShown}
                 onExportMarkdown={menu.exportMarkdown}
                 onDelete={menu.askDelete}
               />

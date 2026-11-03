@@ -8,11 +8,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import type { PageKind, PageLang } from "@niho/editor-store";
 import { PageTitle } from "niho-docs-ui/components/BlockEditor";
-import { AiEntry, AiLayer, type AiOpenRequest } from "@/components/AiBox";
 import { ConflictBand } from "@/components/ConflictBand";
 import { useEditorFrame } from "@/components/EditorFrame";
 import { PageChrome } from "niho-docs-ui/page/PageChrome";
-import { selectionRange } from "@/editor/ai-scope";
 import { docFromBlocks, replaceBlocks } from "@/editor/doc";
 import { buildPageExtensions } from "@/editor/page-extensions";
 import { normalizePastedHtml } from "@/editor/paste";
@@ -200,8 +198,8 @@ export function PageEditor(props: PageEditorProps) {
  * どちらも本文を変える操作は TipTap の transaction なので、新しいページ（id が null）でも、手で打った変更と同じく
  * 下書きと保存（最初の保存で作る）に乗る。
  *
- * AI の箱（src/components/AiBox.tsx）は、選んだ文字の上の「AI」（選んだ範囲）とページの上の「AI」（ページ全体）から開く。
- * 頼む前に未保存の入力を保存し終え、採用の結果は本文を差し替えて revision を進める（自動保存は起こさない。src/lib/ai-bridge.ts）。
+ * AI は右レールの常設パネル（src/components/AiBox.tsx）に出す。PageEditor は editor と安定した保存 bridge だけを枠へ登録する。
+ * 頼む前に未保存の入力を保存し終え、結果は本文を差し替えて revision を進める（自動保存は起こさない。src/lib/ai-bridge.ts）。
  *
  * 言語（情報パネル）、公開用のカバーとリードも同じ自動保存・下書きに載せる（別の PATCH を撃たない。revision・
  * 競合の判定・端末の下書きは題名・本文と同じ）。カバーは本文に挿入済みのこのページの画像から選び、本文と共有して使う。
@@ -258,8 +256,7 @@ function EditorScreen(props: ScreenProps) {
   const autosaveRef = useRef<Autosave<PageBody> | null>(null);
   const keeperRef = useRef<DraftKeeper | null>(null);
   const eventsRef = useRef<PageEditorEvents>(props);
-  // AI の箱（src/components/AiBox.tsx）。頼む前の保存と、結果を載せるのは保存の部品を通す（src/lib/ai-bridge.ts）
-  const [ai, setAi] = useState<AiOpenRequest | null>(null);
+  // 右レールの AI。頼む前の保存と、結果を載せるのは保存の部品を通す（src/lib/ai-bridge.ts）
   const aiDeps: AiBridgeDeps = {
     editor: () => editorRef.current,
     saver: () => saverRef.current,
@@ -283,8 +280,6 @@ function EditorScreen(props: ScreenProps) {
     },
     replace: (page, options) => replaceForAi(aiDeps, page, options),
   }));
-  const openAi = (range: AiOpenRequest["range"]) => setAi((current) => ({ key: (current?.key ?? 0) + 1, range }));
-
   useEffect(() => {
     eventsRef.current = props;
   });
@@ -608,8 +603,21 @@ function EditorScreen(props: ScreenProps) {
 
   const status = statusOf(state);
   useEffect(
-    () => attachPage({ id: ready ? pageId : null, status, flush, revision, reopen: reopenHere, shared, setShared, lang, setLang: changeLang, langNote, text }),
-    [attachPage, ready, pageId, status, flush, revision, reopenHere, shared, setShared, lang, changeLang, langNote, text],
+    () => attachPage({
+      id: ready ? pageId : null,
+      status,
+      flush,
+      revision,
+      reopen: reopenHere,
+      shared,
+      setShared,
+      lang,
+      setLang: changeLang,
+      langNote,
+      text,
+      ai: { editor, bridge: aiBridge, title, kind: page.kind ?? "note", lang },
+    }),
+    [attachPage, ready, pageId, status, flush, revision, reopenHere, shared, setShared, lang, changeLang, langNote, text, editor, aiBridge, title, page.kind],
   );
 
   const overwrite = () => {
@@ -657,7 +665,6 @@ function EditorScreen(props: ScreenProps) {
       <p data-save-state={status} data-drafts={hasStorage && draftsKept ? "kept" : "none"}>
         {SAVE_STATUS_TEXT[status]}
       </p>
-      <AiEntry expanded={ai !== null} onOpen={() => (ai?.range === null ? setAi(null) : openAi(null))} />
       {conflict && <ConflictBand page={conflict} overwriting={state === "saving"} container={root} onCopy={copyBody} onOverwrite={overwrite} />}
       <PageTitle
         value={title}
@@ -770,9 +777,8 @@ function EditorScreen(props: ScreenProps) {
       <div className="be">
         <EditorContent editor={editor} />
         {/* ヘッダーに常設の書式の帯（ShellTools）を出すため、本文の操作を枠へ渡す（#37 T9） */}
-        <PageChrome editor={editor} onAi={() => editor && openAi(selectionRange(editor.state))} onTools={registerTools} />
+        <PageChrome editor={editor} onTools={registerTools} />
       </div>
-      <AiLayer editor={editor} bridge={aiBridge} title={title} kind={page.kind ?? "note"} lang={page.lang ?? "ja"} request={ai} onClose={() => setAi(null)} />
     </div>
   );
 }

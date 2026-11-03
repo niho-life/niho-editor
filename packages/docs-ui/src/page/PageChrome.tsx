@@ -357,7 +357,7 @@ function FormatBarRoute({ editor, root }: { editor: Editor; root: HTMLElement })
   return null;
 }
 
-function Chrome({ editor, onAi, onTools }: { editor: Editor; onAi?: () => void; onTools?: (tools: PageChromeTools | null) => void }) {
+function Chrome({ editor, onTools }: { editor: Editor; onTools?: (tools: PageChromeTools | null) => void }) {
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const [panel, setPanel] = useState<Panel | null>(null);
   const escaped = useRef(false);
@@ -469,7 +469,7 @@ function Chrome({ editor, onAi, onTools }: { editor: Editor; onAi?: () => void; 
     <div ref={setRoot} className="es-root" data-page-chrome="">
       {root && (
         <>
-          <ShellBubbleMenu editor={editor} onTextType={openLineType} onLink={openLink} onAi={onAi} textType={currentLineTypeName(editor)} />
+          <ShellBubbleMenu editor={editor} onTextType={openLineType} onLink={openLink} hideAi textType={currentLineTypeName(editor)} />
           {inTable && (
             <div className="es-tablebar" role="toolbar" aria-label="表の操作">
               <button type="button" onMouseDown={keepFocus} onClick={() => editor.chain().focus().addRowAfter().run()}>行を追加</button>
@@ -542,7 +542,7 @@ function Chrome({ editor, onAi, onTools }: { editor: Editor; onAi?: () => void; 
  * 本文のエディタに付ける操作の部品（モック v6 の shell の部品で描く。見た目は niho-docs-ui/styles/shell.css・
  * niho-ui/styles/editor-tokens.css で、読むのは呼ぶ側（Mac・Web の画面））。
  * - 選んだ文字の上の書式の帯（ShellBubbleMenu）: 太字・斜体・見出し・箇条書きは帯が editor のコマンドへ、
- *   行の種類（ShellMenu）・リンク（帯の下の小さな入力）はここが持つ。AI は呼ぶ側の onAi（AI の箱を開く。src/components/AiBox.tsx）。
+ *   行の種類（ShellMenu）・リンク（帯の下の小さな入力）はここが持つ。
  * - 空の行の「/」（src/editor/slash-menu.ts）と、常設の帯・⌘/ から開くブロックの一覧。
  * 作れるのは限定 AST の範囲だけ（src/editor/block-types.ts）。常設の書式の帯（ShellTools）はヘッダーの側が持つ。
  *
@@ -550,7 +550,7 @@ function Chrome({ editor, onAi, onTools }: { editor: Editor; onAi?: () => void; 
  * 本文の見た目（リストの印・リンクの下線など）が shell の reset で変わるので、.es-root はこの部品の入れ物だけにし、
  * 浮かぶ部品（帯・一覧・入力）はすべてこの中に付ける。`.be`（position: relative）の中に置く。
  */
-export function PageChrome({ editor, onAi, onTools }: { editor: Editor | null; onAi?: () => void; onTools?: (tools: PageChromeTools | null) => void }) {
+export function PageChrome({ editor, onTools }: { editor: Editor | null; onTools?: (tools: PageChromeTools | null) => void }) {
   if (!editor) return null;
-  return <Chrome editor={editor} onAi={onAi} onTools={onTools} />;
+  return <Chrome editor={editor} onTools={onTools} />;
 }

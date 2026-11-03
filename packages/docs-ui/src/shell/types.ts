@@ -89,4 +89,5 @@ export type ShellIconName =
   | "phone"
   | "mail"
   | "check"
+  | "edit"
   | "trash";

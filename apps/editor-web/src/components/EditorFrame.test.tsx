@@ -27,6 +27,17 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
 }));
 
+// AI の通信・race は AiBox.test.tsx で本物を検証する。枠のテストでは常設・自動折りたたみの境界だけを見る。
+vi.mock("./AiBox", () => ({
+  AiPanel: ({ onHistoryOverflow }: { onHistoryOverflow: () => void }) => (
+    <section aria-label="AIと作る">
+      <h2>AIと作る</h2>
+      <button type="button" aria-label="会話を表示域より長くする" onClick={onHistoryOverflow}>会話を長くする</button>
+      <textarea aria-label="AIへのメッセージ" />
+    </section>
+  ),
+}));
+
 /** jsdom に無い IntersectionObserver の代わり。callback を手で呼んで「末尾が見えた」にする。 */
 const observers: { callback: IntersectionObserverCallback; disconnected: boolean }[] = [];
 class FakeIntersectionObserver {
@@ -116,6 +127,10 @@ const buttonByText = (text: string, scope: ParentNode = container!) => [...scope
 const rows = () => [...container!.querySelectorAll(".es-sb-list li .es-di-t")].map((node) => node.textContent);
 const shell = () => container!.querySelector<HTMLElement>("[data-editor-shell]")!.dataset;
 const click = (selector: string) => act(async () => container!.querySelector<HTMLElement>(selector)!.click());
+const openInfoRail = () => {
+  const button = container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="このページの設定と AI"]');
+  return button?.getAttribute("aria-expanded") === "false" ? click('.es-dt button[aria-label="このページの設定と AI"]') : Promise.resolve();
+};
 const intersect = () => act(async () => observers.filter((entry) => !entry.disconnected).at(-1)!.callback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
 
 function chunkResponse(pages: PageSummary[], next: string | null): Response {
@@ -144,7 +159,7 @@ describe("EditorFrame", () => {
     expect(container!.querySelector(".ProseMirror")?.textContent).toBe("");
     expect(window.location.pathname).toBe(`/p/${PAGE_ID}`);
     expect(buttonByText("公開")).toBeDefined();
-    await click('button[aria-label="このページの設定と AI"]');
+    await openInfoRail();
     expect(buttonByText("日本語", container!.querySelector(".es-rail")!)?.getAttribute("aria-pressed")).toBe("true");
     expect(container!.querySelector(".es-rail")?.textContent).toContain("文字数0");
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -587,7 +602,11 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
   }
   // 情報パネル（#34 第 3 段）
   const railButton = () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="このページの設定と AI"]');
-  const rail = () => container!.querySelector<HTMLElement>("#es-rail");
+  const mountedRail = () => container!.querySelector<HTMLElement>("#es-rail");
+  const rail = () => {
+    const presence = container!.querySelector<HTMLElement>(".es-rail-presence");
+    return presence && !presence.hidden ? presence.querySelector<HTMLElement>("#es-rail") : null;
+  };
   const inRail = (label: string) => [...(rail()?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent?.trim() === label);
   const pressedLang = () => [...(rail()?.querySelectorAll('button[aria-pressed="true"]') ?? [])].map((button) => button.textContent);
   const railAlert = () => rail()?.querySelector('[role="alert"]')?.textContent;
@@ -597,7 +616,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     const date = new Date(iso);
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   };
-  const openRail = () => act(async () => railButton()!.click());
+  const openRail = () => railButton()?.getAttribute("aria-expanded") === "true" ? Promise.resolve() : act(async () => railButton()!.click());
 
   beforeEach(() => {
     nav.pathname = `/p/${A}`;
@@ -763,6 +782,8 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     const pages = [{ ...page(C, "手順の結果"), parent: A }, page(A, "合成の題名"), page(D, "別のページ")];
     await mount({ pages }, <FakePage page={fakePage(A, { flush: vi.fn(async () => (calls.push("flush"), true)) })} />);
     expect(rows()).toEqual(["合成の題名", "手順の結果", "別のページ"]);
+    // 既定で開くレールがフォルダ背景を読む初期 GET は、削除確認の検査対象ではない。
+    calls.length = 0;
     await choose("削除");
     // 確認だけでは何も送らない
     expect(calls).toEqual([]);
@@ -1390,21 +1411,16 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     it("opens and closes from the header (aria-expanded, aria-controls, a named rail, h2 then h3); the rail has no publish items (the 公開 button is the frame header's)", async () => {
       await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A)} />);
       const button = railButton()!;
-      expect(button.getAttribute("aria-expanded")).toBe("false");
-      expect(button.getAttribute("aria-controls")).toBe("es-rail");
-      expect(rail()).toBeNull();
-      expect(shell().rail).toBe("closed");
-
-      await openRail();
       expect(button.getAttribute("aria-expanded")).toBe("true");
+      expect(button.getAttribute("aria-controls")).toBe("es-rail");
       expect(rail()?.tagName).toBe("ASIDE");
-      expect(rail()?.getAttribute("aria-label")).toBe("このページの設定");
+      expect(rail()?.getAttribute("aria-label")).toBe("このページの設定と AI");
       expect(shell().rail).toBe("open");
-      expect(headings()).toEqual(["H2:ページ設定", "H3:言語", "H3:著者", "H3:ページ", "H3:書き出し"]);
+      expect(headings()).toEqual(["H2:ページ設定", "H3:言語", "H3:著者", "H3:ページ", "H3:書き出し", "H2:AIと作る"]);
       // 公開の項目（発信先・カテゴリ・関連する体験）・Google ドキュメントはレールに出さない。公開ボタンは枠のヘッダーのもの（#39）
       expect(rail()!.textContent).not.toMatch(/発信先|カテゴリ|関連する体験|公開|Google/);
       expect(container!.querySelector(".es-pubbtn")).not.toBeNull();
-      expect([...rail()!.querySelectorAll("button")].map((item) => item.textContent?.replace("▾", "").trim())).toEqual(["ページ設定", "日本語", "English", "Markdown", "ページを削除"]);
+      expect([...rail()!.querySelectorAll("button")].map((item) => item.textContent?.replace("▾", "").trim())).toEqual(["ページ設定", "日本語", "English", "Markdown", "ページを削除", "会話を長くする"]);
 
       // 節を閉じると、見出しに「自分だけ」
       const section = rail()!.querySelector<HTMLButtonElement>("h2 button")!;
@@ -1414,10 +1430,41 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       await act(async () => section.click());
       expect(section.textContent).not.toContain("自分だけ");
 
+      const draft = rail()!.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')!;
+      draft.value = "閉じても残す draft";
       await act(async () => button.click());
       expect(rail()).toBeNull();
+      expect(mountedRail()).not.toBeNull();
+      expect(container!.querySelector<HTMLElement>(".es-rail-presence")?.hidden).toBe(true);
       expect(button.getAttribute("aria-expanded")).toBe("false");
       expect(shell().rail).toBe("closed");
+      await openRail();
+      expect(rail()!.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')?.value).toBe("閉じても残す draft");
+    });
+
+    it("会話が表示域を越えると設定だけを一度閉じ、手動で開いた後は自動で閉じない", async () => {
+      await mount({ pages: [page(A, "合成の題名"), page(B, "別のページ")] }, <FakePage page={fakePage(A)} />);
+      const settings = () => rail()!.querySelector<HTMLButtonElement>("h2 button")!;
+      const overflow = () => rail()!.querySelector<HTMLButtonElement>('button[aria-label="会話を表示域より長くする"]')!;
+      expect(settings().getAttribute("aria-expanded")).toBe("true");
+      await act(async () => overflow().click());
+      expect(settings().getAttribute("aria-expanded")).toBe("false");
+      await act(async () => overflow().click());
+      expect(settings().getAttribute("aria-expanded")).toBe("false");
+      await act(async () => settings().click());
+      expect(settings().getAttribute("aria-expanded")).toBe("true");
+      await act(async () => overflow().click());
+      expect(settings().getAttribute("aria-expanded")).toBe("true");
+
+      // 手動優先はページ単位。別ページは初期状態から始まり、戻ると A の手動選択が残る。
+      nav.pathname = `/p/${B}`;
+      await rerender(<FakePage page={fakePage(B)} />);
+      expect(settings().getAttribute("aria-expanded")).toBe("true");
+      await act(async () => overflow().click());
+      expect(settings().getAttribute("aria-expanded")).toBe("false");
+      nav.pathname = `/p/${A}`;
+      await rerender(<FakePage page={fakePage(A)} />);
+      expect(settings().getAttribute("aria-expanded")).toBe("true");
     });
 
     it("desktop: stays open when another page opens (as the mock v6), is not there on the settings, and is back on a page", async () => {
@@ -2029,7 +2076,7 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
     );
     nav.pathname = `/p/${CHILD}`;
     await mount({ pages: [page(PARENT, "鎌倉の記事"), page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
-    await click('.es-dt button[aria-label="このページの設定と AI"]');
+    await openInfoRail();
     const select = container!.querySelector<HTMLSelectElement>('.es-rail select[aria-label="フォルダ"]')!;
     expect([...select.options].map((option) => option.textContent)).toEqual(["フォルダに入れない", "鎌倉の記事"]);
     expect(select.value).toBe("");
@@ -2060,7 +2107,7 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "too_deep" }), { status: 409, headers: { "content-type": "application/json" } })));
     nav.pathname = `/p/${CHILD}`;
     await mount({ pages: [page(PARENT, "鎌倉の記事"), page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
-    await click('.es-dt button[aria-label="このページの設定と AI"]');
+    await openInfoRail();
     const select = () => container!.querySelector<HTMLSelectElement>('.es-rail select[aria-label="フォルダ"]')!;
     await act(async () => {
       select().value = PARENT;
@@ -2077,7 +2124,7 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
   it("「フォルダ」の節は、入れ先が無く上の段にいるページには出さない", async () => {
     nav.pathname = `/p/${CHILD}`;
     await mount({ pages: [page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
-    await click('.es-dt button[aria-label="このページの設定と AI"]');
+    await openInfoRail();
     expect(container!.querySelector('.es-rail select[aria-label="フォルダ"]')).toBeNull();
   });
 
@@ -2184,7 +2231,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     // 上の段は渡した順（更新の新しい順）。別のページが下
     await mount({ pages: [page(FOLDER, "鎌倉の記事"), page(OTHER, "別のページ")] }, <FakePage page={fakePage(OTHER)} />);
     expect(rows()).toEqual(["鎌倉の記事", "別のページ"]);
-    await click('.es-dt button[aria-label="このページの設定と AI"]');
+    await openInfoRail();
 
     const up = railButton("1 つ上へ")!;
     expect(up.getAttribute("aria-disabled")).toBeNull();
@@ -2216,7 +2263,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     nav.pathname = `/p/${A}`;
     await mount({ pages: [{ ...page(A, "A の記事"), sortOrder: 1 }, { ...page(C, "C の記事"), sortOrder: 3 }] }, <FakePage page={fakePage(A)} />);
     expect(rows()).toEqual(["A の記事", "C の記事"]);
-    await click('.es-dt button[aria-label="このページの設定と AI"]');
+    await openInfoRail();
 
     await act(async () => railButton("1 つ下へ")!.click());
     await act(async () => {
@@ -2238,7 +2285,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     );
     nav.pathname = `/p/${FOLDER}`;
     await mount({ pages: [page(FOLDER, "鎌倉の記事"), inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER)} />);
-    await click('.es-dt button[aria-label="このページの設定と AI"]');
+    await openInfoRail();
     await until(() => calls.some((call) => call.url.includes("/fields")));
     expect(container!.querySelector(".es-psfields")?.textContent).toContain("このフォルダの背景");
 
@@ -2271,7 +2318,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
       let finishSave: (saved: boolean) => void = () => undefined;
       const flush = vi.fn(() => new Promise<boolean>((resolve) => { finishSave = resolve; }));
       await mount({ pages: [page(FOLDER, "鎌倉の記事"), inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER, { flush })} />);
-      await click('.es-dt button[aria-label="このページの設定と AI"]');
+      await openInfoRail();
       const exportButton = () => [...container!.querySelectorAll<HTMLButtonElement>(".es-rail button")].find((item) => item.textContent?.includes("このフォルダの中をまとめて"))!;
 
       // 保存を待っているあいだは、ダウンロードを始めない
@@ -2302,7 +2349,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
       vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ fields: { entities: [], terms: [] } }), { status: 200, headers: { "content-type": "application/json" } })));
       nav.pathname = `/p/${FOLDER}`;
       await mount({ pages: [page(FOLDER, "鎌倉の記事"), inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER)} />);
-      await click('.es-dt button[aria-label="このページの設定と AI"]');
+      await openInfoRail();
       const button = [...container!.querySelectorAll<HTMLButtonElement>(".es-rail button")].find((item) => item.textContent?.includes("このフォルダの中をまとめて"))!;
       await act(async () => button.click());
       expect(clicked).toEqual([`/api/pages/${FOLDER}/export.zip`]);
