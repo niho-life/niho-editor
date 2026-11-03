@@ -21,6 +21,7 @@ import {
   findImageUploadByKey,
   getRecording,
   getRecordingCandidate,
+  getRecordingCandidateVersion,
   getShare,
   imageAsset,
   latestRun,
@@ -28,6 +29,8 @@ import {
   resumeMacTranscription,
   listAudioParts,
   listRecordingCandidates,
+  listRecordingCandidateVersions,
+  restoreRecordingCandidateVersion,
   rotateShare,
   searchPages,
   sharedImageAsset,
@@ -40,6 +43,7 @@ import {
   finishMacTranscription,
   updateImageMeta,
   updateRecording,
+  updateRecordingCandidate,
 } from "@niho/editor-store";
 import { getAuthProvider, getPhotoAuthProvider } from "../auth";
 import type { AuthRoutesDeps } from "./auth-routes";
@@ -137,7 +141,11 @@ export const candidatesDeps: CandidatesApiDeps = {
       listCandidates: (owner, pageId) => listRecordingCandidates(pool, owner, pageId),
       getCandidate: (owner, pageId, candidateId) => getRecordingCandidate(pool, owner, pageId, candidateId),
       addCandidate: (owner, pageId, input) => addRecordingCandidate(pool, owner, pageId, input),
-      adoptCandidate: (owner, pageId, candidateId) => adoptRecordingCandidate(pool, owner, pageId, candidateId),
+      updateCandidate: (owner, pageId, candidateId, input) => updateRecordingCandidate(pool, owner, pageId, candidateId, input),
+      listVersions: (owner, pageId, candidateId) => listRecordingCandidateVersions(pool, owner, pageId, candidateId),
+      getVersion: (owner, pageId, candidateId, version) => getRecordingCandidateVersion(pool, owner, pageId, candidateId, version),
+      restoreVersion: (owner, pageId, candidateId, version, input) => restoreRecordingCandidateVersion(pool, owner, pageId, candidateId, version, input),
+      adoptCandidate: (owner, pageId, candidateId, input) => adoptRecordingCandidate(pool, owner, pageId, candidateId, input),
       deleteCandidate: (owner, pageId, candidateId) => deleteRecordingCandidate(pool, owner, pageId, candidateId),
       enqueue: (owner, pageId, input) => enqueueTranscription(pool, owner, pageId, input),
       failRun: (runId, generation, errorCode) => failRun(pool, runId, generation, errorCode),

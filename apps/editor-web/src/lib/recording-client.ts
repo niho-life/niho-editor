@@ -20,6 +20,7 @@ export type RecordingSpeaker = { speaker: number; name: string | null; count: nu
 /** 文字起こしの案（#36 段 3b-4。一覧に出す分。本文は getCandidate で読む）。 */
 export type RecordingCandidateSummary = {
   id: string;
+  revision: number;
   name: string;
   engine: string | null;
   /** 画面に出すエンジンの名前。 */
@@ -30,6 +31,7 @@ export type RecordingCandidateSummary = {
   adopted: boolean;
   /** pending=作っている・ready=できた・failed=できなかった。 */
   state: "pending" | "ready" | "failed";
+  busy: boolean;
   segmentCount: number;
   preview: string[];
   createdAt: string;
@@ -37,6 +39,20 @@ export type RecordingCandidateSummary = {
 };
 
 export type RecordingCandidateFull = RecordingCandidateSummary & { segments: RecordingSegment[]; speakerNames: Record<string, string> };
+export type RecordingCandidateVersionSummary = {
+  version: number;
+  reason: "initial" | "edit" | "recording" | "asr" | "restore";
+  name: string;
+  segmentCount: number;
+  createdAt: string;
+};
+export type RecordingCandidateVersion = RecordingCandidateVersionSummary & {
+  engine: string | null;
+  language: "ja" | "en";
+  durationSec: number | null;
+  segments: RecordingSegment[];
+  speakerNames: Record<string, string>;
+};
 
 /**
  * 録音の読み取りの結果。`audios`（音声の列）と `candidates`（文字起こしの案）は GET のときだけ入る
@@ -73,6 +89,14 @@ export class RecordingRequestError extends Error {
 export class RecordingConflictError extends RecordingRequestError {
   override readonly name: string = "RecordingConflictError";
   constructor(readonly snapshot: RecordingSnapshot) {
+    super(409, "conflict");
+  }
+}
+
+/** 候補が別の画面で先に直された。画面は自分の draft を保持し、candidate を最新表示に使う。 */
+export class RecordingCandidateConflictError extends RecordingRequestError {
+  override readonly name: string = "RecordingCandidateConflictError";
+  constructor(readonly candidate: RecordingCandidateFull) {
     super(409, "conflict");
   }
 }
@@ -116,8 +140,25 @@ function isAudioPart(value: unknown): value is AudioPartView {
 
 function isCandidate(value: unknown): value is RecordingCandidateSummary {
   if (!isRecord(value)) return false;
-  const { id, name, state, adopted } = value;
-  return typeof id === "string" && typeof name === "string" && (state === "pending" || state === "ready" || state === "failed") && typeof adopted === "boolean";
+  const { id, revision, name, engine, engineLabel, language, durationSec, state, adopted, busy, segmentCount, preview, createdAt, updatedAt } = value;
+  return typeof id === "string" && UUID_PATTERN.test(id) && positiveInteger(revision) && typeof name === "string" &&
+    (engine === null || typeof engine === "string") && typeof engineLabel === "string" && (language === "ja" || language === "en") &&
+    isNullableNumber(durationSec) && (state === "pending" || state === "ready" || state === "failed") && typeof adopted === "boolean" &&
+    typeof busy === "boolean" && typeof segmentCount === "number" && Number.isSafeInteger(segmentCount) && segmentCount >= 0 &&
+    Array.isArray(preview) && preview.every((text) => typeof text === "string") && typeof createdAt === "string" && typeof updatedAt === "string";
+}
+
+function positiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+function fullCandidateOf(value: unknown): RecordingCandidateFull | null {
+  if (!isRecord(value)) return null;
+  const { segments, speakerNames } = value;
+  if (!isCandidate(value) || !Array.isArray(segments) || !isRecord(speakerNames)) return null;
+  if (!segments.every((segment: unknown) => isRecord(segment) && isNullableNumber(segment.start) && isNullableNumber(segment.end) && typeof segment.text === "string" && (segment.speaker === null || isSpeakerNumber(segment.speaker)))) return null;
+  if (!Object.values(speakerNames).every((name: unknown) => typeof name === "string")) return null;
+  return value as RecordingCandidateFull;
 }
 
 function snapshotOf(data: unknown): RecordingSnapshot | null {
@@ -134,25 +175,32 @@ function timeoutSignal(): AbortSignal | undefined {
   return typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(REQUEST_TIMEOUT_MS) : undefined;
 }
 
-async function request(path: string, method: "GET" | "POST" | "PATCH" | "DELETE", body?: unknown): Promise<unknown> {
-  const signal = timeoutSignal();
+async function request(path: string, method: "GET" | "POST" | "PATCH" | "DELETE", body?: unknown, retryNetwork = false): Promise<unknown> {
   let response: Response;
-  try {
-    response = await fetch(path, {
-      method,
-      credentials: "same-origin",
-      cache: "no-store",
-      ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
-      ...(signal ? { signal } : {}),
-    });
-  } catch {
-    // つながらない・時間切れ
-    throw new RecordingRequestError(0);
+  const serialized = body === undefined ? undefined : JSON.stringify(body);
+  let attempts = retryNetwork ? 2 : 1;
+  for (;;) {
+    try {
+      const signal = timeoutSignal();
+      response = await fetch(path, {
+        method,
+        credentials: "same-origin",
+        cache: "no-store",
+        ...(serialized === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: serialized }),
+        ...(signal ? { signal } : {}),
+      });
+      break;
+    } catch {
+      attempts -= 1;
+      if (attempts <= 0) throw new RecordingRequestError(0);
+    }
   }
   if (response.status === 409) {
     const body: unknown = await response.json().catch(() => null);
     const snapshot = snapshotOf(body);
     if (snapshot) throw new RecordingConflictError(snapshot);
+    const candidate = isRecord(body) ? fullCandidateOf(body.candidate) : null;
+    if (candidate) throw new RecordingCandidateConflictError(candidate);
     // 競合の形でない 409（案が未完成・案が多すぎる・始められない）は、短い code を reason にして返す
     const reason = isRecord(body) ? [body.reason, body.error].find((value) => typeof value === "string") : undefined;
     throw new RecordingRequestError(409, typeof reason === "string" ? reason : null);
@@ -224,8 +272,9 @@ function candidatePath(pageId: string, candidateId?: string): string {
 
 function candidateOrThrow(data: unknown): RecordingCandidateFull {
   const candidate = isRecord(data) ? data.candidate : null;
-  if (!isCandidate(candidate) || !Array.isArray((candidate as { segments?: unknown }).segments)) throw new RecordingRequestError(500);
-  return candidate as RecordingCandidateFull;
+  const full = fullCandidateOf(candidate);
+  if (!full) throw new RecordingRequestError(500);
+  return full;
 }
 
 function candidatesOf(data: unknown): RecordingCandidateSummary[] {
@@ -256,10 +305,80 @@ export async function addCandidate(pageId: string, engine?: string): Promise<Add
   return { candidate, candidates, started: isRecord(data) && data.run !== null && data.run !== undefined, cannotStart };
 }
 
-/** その案を採用する（正本に写す）。応答は最新の録音・話者・案。 */
-export async function adoptCandidate(pageId: string, candidateId: string): Promise<RecordingSnapshot & { candidates: RecordingCandidateSummary[] }> {
-  const data = await request(`${candidatePath(pageId, candidateId)}/adopt`, "POST");
+/** 名前、または非採用案の本文・話者名を candidate revision CAS で保存する。 */
+export async function updateCandidate(
+  pageId: string,
+  candidateId: string,
+  input: { expectedRevision: number; name?: string; segments?: readonly RecordingSegment[]; speakerNames?: Readonly<Record<string, string>> },
+): Promise<RecordingCandidateFull> {
+  const data = await request(
+    candidatePath(pageId, candidateId),
+    "PATCH",
+    { ...input, operationId: crypto.randomUUID() },
+    true,
+  );
+  return candidateOrThrow(data);
+}
+
+/** その案を採用する（正本に写す）。candidate と recording の両 revision を確認する。 */
+export async function adoptCandidate(
+  pageId: string,
+  candidateId: string,
+  expectedCandidateRevision: number,
+  expectedRecordingRevision: number,
+): Promise<RecordingSnapshot & { candidates: RecordingCandidateSummary[] }> {
+  const data = await request(
+    `${candidatePath(pageId, candidateId)}/adopt`,
+    "POST",
+    { expectedCandidateRevision, expectedRecordingRevision, operationId: crypto.randomUUID() },
+    true,
+  );
   return { ...snapshotOrThrow(data), candidates: candidatesOf(data) };
+}
+
+function isVersionSummary(value: unknown): value is RecordingCandidateVersionSummary {
+  if (!isRecord(value)) return false;
+  return positiveInteger(value.version) && ["initial", "edit", "recording", "asr", "restore"].includes(String(value.reason)) &&
+    typeof value.name === "string" && typeof value.segmentCount === "number" && Number.isSafeInteger(value.segmentCount) && value.segmentCount >= 0 &&
+    typeof value.createdAt === "string";
+}
+
+/** 候補の履歴（新しい順・current を含む最大 100 件）。 */
+export async function listCandidateVersions(pageId: string, candidateId: string): Promise<RecordingCandidateVersionSummary[]> {
+  const data = await request(`${candidatePath(pageId, candidateId)}/versions`, "GET");
+  const versions = isRecord(data) ? data.versions : null;
+  if (!Array.isArray(versions) || !versions.every(isVersionSummary)) throw new RecordingRequestError(500);
+  return versions;
+}
+
+/** 候補の版 1 件（本文つき）。 */
+export async function getCandidateVersion(pageId: string, candidateId: string, version: number): Promise<RecordingCandidateVersion> {
+  const data = await request(`${candidatePath(pageId, candidateId)}/versions/${version}`, "GET");
+  const found = isRecord(data) ? data.version : null;
+  if (!isRecord(found)) throw new RecordingRequestError(500);
+  const { engine, language, durationSec, segments, speakerNames } = found;
+  if (
+    !isVersionSummary(found) ||
+    (engine !== null && typeof engine !== "string") ||
+    (language !== "ja" && language !== "en") ||
+    !isNullableNumber(durationSec) ||
+    !Array.isArray(segments) ||
+    !segments.every((segment: unknown) => isRecord(segment) && isNullableNumber(segment.start) && isNullableNumber(segment.end) && typeof segment.text === "string" && (segment.speaker === null || isSpeakerNumber(segment.speaker))) ||
+    !isRecord(speakerNames) ||
+    !Object.values(speakerNames).every((name) => typeof name === "string")
+  ) throw new RecordingRequestError(500);
+  return found as RecordingCandidateVersion;
+}
+
+/** 旧版を新しい revision として復元する。 */
+export async function restoreCandidateVersion(pageId: string, candidateId: string, version: number, expectedRevision: number): Promise<RecordingCandidateFull> {
+  const data = await request(
+    `${candidatePath(pageId, candidateId)}/versions/${version}/restore`,
+    "POST",
+    { expectedRevision, operationId: crypto.randomUUID() },
+    true,
+  );
+  return candidateOrThrow(data);
 }
 
 /** その案の文字起こしをもう一度始める。 */
@@ -299,6 +418,8 @@ const REASON_MESSAGES: Record<string, string> = {
   other_run_active: "ほかの文字起こしを作っている途中です。できてから、もう一度試してください。",
   adopted: "採用中の案は消せません。別の案を採用してから消してください。",
   running: "この案は作っている途中です。できてから消してください。",
+  busy: "文字起こしを生成中です。完了してから編集・復元・採用してください。",
+  operation_conflict: "同じ操作番号で別の内容が送られました。ページを読み直してください。",
   transcription_unavailable: "いまは文字起こしを始められません。少ししてから、もう一度試してください。",
 };
 

@@ -508,6 +508,7 @@ describe("RecordingTranscript: speakers", () => {
     expect(status().textContent).toContain("保存されていない段落が 1 つあります");
     server.state.getOnly.candidates = [{
       id: "11111111-1111-4111-8111-111111111111", name: "Gemini（このMacのCLI）", engine: "gemini-cli",
+      revision: 1, busy: false,
       engineLabel: "Gemini（このMacのCLI）", language: "ja", durationSec: 125,
       adopted: false, state: "ready", segmentCount: 4, preview: [],
       createdAt: "2030-01-01T00:00:00.000Z", updatedAt: "2030-01-01T00:00:00.000Z",
@@ -529,6 +530,7 @@ describe("RecordingTranscript: speakers", () => {
       candidates: [
         {
           id: "11111111-1111-4111-8111-111111111111",
+          revision: 1,
           name: "Deepgram",
           engine: "deepgram",
           engineLabel: "Deepgram",
@@ -536,6 +538,7 @@ describe("RecordingTranscript: speakers", () => {
           durationSec: 125,
           adopted: true,
           state: "ready",
+          busy: false,
           segmentCount: 4,
           preview: [],
           createdAt: "2030-01-01T00:00:00.000Z",

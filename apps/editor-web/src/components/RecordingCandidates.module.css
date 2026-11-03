@@ -1,0 +1,99 @@
+.root {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.compareControls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.compareControls label,
+.nameField,
+.speakers label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--niho-text-sub);
+  font-size: 12px;
+}
+
+.compareControls select,
+.nameField input,
+.speakers input,
+.segment textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--niho-border);
+  border-radius: 8px;
+  background: var(--niho-docs-surface);
+  color: var(--niho-text);
+  font: inherit;
+  font-size: 14px;
+  padding: 8px;
+}
+
+.comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  margin-top: 12px;
+}
+
+.comparison[data-comparison-count="1"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.panel {
+  min-width: 0;
+  border: 1px solid var(--niho-border);
+  border-radius: 12px;
+  background: var(--niho-surface-subtle);
+  padding: 12px;
+}
+
+.nameField { flex: 1 1 180px; }
+
+.speakers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  min-width: 0;
+  margin-top: 12px;
+  border: 1px solid var(--niho-border);
+  border-radius: 8px;
+}
+
+.segments { display: grid; gap: 10px; margin-top: 12px; }
+.segment { display: grid; gap: 4px; min-width: 0; }
+.segmentMeta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--niho-text-sub); font-size: 12px; }
+.segment textarea { min-height: 84px; resize: vertical; }
+.history { display: grid; gap: 8px; margin: 12px 0 0; padding-left: 20px; }
+.history li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; }
+
+.versionPreview {
+  overflow-wrap: anywhere;
+  margin-top: 10px;
+  border: 1px solid var(--niho-border);
+  border-radius: 8px;
+  background: var(--niho-docs-surface);
+  padding: 10px;
+  font-size: 12px;
+}
+
+.mobileSwitch { display: none; }
+
+@media (max-width: 520px) {
+  .compareControls label { flex: 1 1 100%; width: 100%; }
+  .comparison { grid-template-columns: minmax(0, 1fr); }
+  .panel[data-mobile-hidden="true"] { display: none; }
+  .mobileSwitch { display: inline-flex; gap: 4px; }
+}

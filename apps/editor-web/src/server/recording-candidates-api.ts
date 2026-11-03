@@ -2,6 +2,7 @@ import type {
   AddRecordingCandidateInput,
   AddRecordingCandidateResult,
   AdoptRecordingCandidateResult,
+  AdoptRecordingCandidateInput,
   DeleteRecordingCandidateResult,
   EnqueueTranscriptionInput,
   EnqueueTranscriptionResult,
@@ -9,8 +10,14 @@ import type {
   Recording,
   RecordingCandidate,
   RecordingCandidateView,
+  RecordingCandidateVersion,
+  RecordingCandidateVersionSummary,
+  RestoreRecordingCandidateResult,
+  UpdateRecordingCandidateInput,
+  UpdateRecordingCandidateResult,
   TranscriptionErrorCode,
 } from "@niho/editor-store";
+import { InvalidRecordingError } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
 import type { TranscriptionEngineName } from "../transcription/engine";
 import { candidateEngineLabel, nextCandidateName, primaryCandidateName } from "../recording/candidate-names";
@@ -40,7 +47,17 @@ export type CandidatesStore = {
   listCandidates: (owner: OwnerId, pageId: string) => Promise<RecordingCandidateView[]>;
   getCandidate: (owner: OwnerId, pageId: string, candidateId: string) => Promise<RecordingCandidate | null>;
   addCandidate: (owner: OwnerId, pageId: string, input: AddRecordingCandidateInput) => Promise<AddRecordingCandidateResult | null>;
-  adoptCandidate: (owner: OwnerId, pageId: string, candidateId: string) => Promise<AdoptRecordingCandidateResult | null>;
+  updateCandidate: (owner: OwnerId, pageId: string, candidateId: string, input: UpdateRecordingCandidateInput) => Promise<UpdateRecordingCandidateResult | null>;
+  listVersions: (owner: OwnerId, pageId: string, candidateId: string) => Promise<RecordingCandidateVersionSummary[] | null>;
+  getVersion: (owner: OwnerId, pageId: string, candidateId: string, version: number) => Promise<RecordingCandidateVersion | null>;
+  restoreVersion: (
+    owner: OwnerId,
+    pageId: string,
+    candidateId: string,
+    version: number,
+    input: { expectedRevision: number; operationId: string },
+  ) => Promise<RestoreRecordingCandidateResult | null>;
+  adoptCandidate: (owner: OwnerId, pageId: string, candidateId: string, input: AdoptRecordingCandidateInput) => Promise<AdoptRecordingCandidateResult | null>;
   deleteCandidate: (owner: OwnerId, pageId: string, candidateId: string) => Promise<DeleteRecordingCandidateResult | null>;
   enqueue: (owner: OwnerId, pageId: string, input: EnqueueTranscriptionInput) => Promise<EnqueueTranscriptionResult | null>;
   failRun: (runId: string, generation: number, errorCode: TranscriptionErrorCode) => Promise<boolean>;
@@ -57,6 +74,8 @@ export type CandidatesApiDeps = {
 
 /** 案を作る要求の本文の上限（今は空の本文だけ）。 */
 export const CANDIDATE_BODY_MAX_BYTES = 4 * 1024;
+/** 本文 8 MiB と最大 20,000 segment の JSON overhead を受ける余裕。 */
+export const CANDIDATE_WRITE_BODY_MAX_BYTES = 12 * 1024 * 1024;
 
 /**
  * 想定外の失敗は 500 の汎用エラー（内部の情報は応答に出さず、ログにも名前と code だけを書く）。
@@ -66,6 +85,7 @@ async function guarded(route: string, handler: () => Promise<Response>): Promise
   try {
     return await handler();
   } catch (error) {
+    if (error instanceof InvalidRecordingError) return jsonResponse(400, { error: "bad_request", reason: error.problem });
     const name = error instanceof Error ? error.name : "unknown";
     const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : undefined;
     console.error("editor-web: request failed", { route, name, code });
@@ -77,6 +97,7 @@ async function guarded(route: string, handler: () => Promise<Response>): Promise
 export function candidateBody(candidate: RecordingCandidateView) {
   return {
     id: candidate.id,
+    revision: candidate.revision,
     name: candidate.name,
     engine: candidate.engine,
     engineLabel: candidateEngineLabel(candidate.engine),
@@ -84,6 +105,7 @@ export function candidateBody(candidate: RecordingCandidateView) {
     durationSec: candidate.durationSec,
     adopted: candidate.adopted,
     state: candidate.state,
+    busy: candidate.busy,
     segmentCount: candidate.segmentCount,
     preview: [...candidate.preview],
     createdAt: candidate.createdAt,
@@ -92,12 +114,41 @@ export function candidateBody(candidate: RecordingCandidateView) {
 }
 
 /** 本文つきの案（見比べる画面が読む）。 */
-function fullCandidateBody(candidate: RecordingCandidate) {
+export function fullCandidateBody(candidate: RecordingCandidate) {
   return {
     ...candidateBody(candidate),
     segments: candidate.segments.map(({ start, end, text, speaker }) => ({ start, end, text, speaker })),
     speakerNames: { ...candidate.speakerNames },
   };
+}
+
+function versionSummaryBody(version: RecordingCandidateVersionSummary) {
+  return { version: version.version, reason: version.reason, name: version.name, segmentCount: version.segmentCount, createdAt: version.createdAt };
+}
+
+function versionBody(version: RecordingCandidateVersion) {
+  return {
+    ...versionSummaryBody(version),
+    engine: version.engine,
+    language: version.language,
+    durationSec: version.durationSec,
+    segments: version.segments.map(({ start, end, text, speaker }) => ({ start, end, text, speaker })),
+    speakerNames: { ...version.speakerNames },
+  };
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function object(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function positiveRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 }
 
 function cannotStart(reason: string): Response {
@@ -199,6 +250,108 @@ export function getCandidateRoute(request: Request, id: string, candidateId: str
   });
 }
 
+/** PATCH /api/pages/{id}/recording/candidates/{candidateId} — 名前、または非採用案の本文・話者名を CAS 保存する。 */
+export function updateCandidateRoute(request: Request, id: string, candidateId: string, deps: CandidatesApiDeps): Promise<Response> {
+  return guarded("PATCH /api/pages/[id]/recording/candidates/[candidateId]", async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    const body = await readJsonBody(request, CANDIDATE_WRITE_BODY_MAX_BYTES);
+    if (!body.ok) return body.response.status === 400 ? jsonResponse(400, { error: "bad_request", reason: "body" }) : body.response;
+    const value = body.value;
+    if (
+      !object(value) ||
+      !exactKeys(value, ["expectedRevision", "operationId", "name", "segments", "speakerNames"]) ||
+      !positiveRevision(value.expectedRevision) ||
+      typeof value.operationId !== "string" ||
+      !UUID.test(value.operationId) ||
+      (value.name === undefined && value.segments === undefined && value.speakerNames === undefined) ||
+      (value.name !== undefined && typeof value.name !== "string") ||
+      ((value.segments === undefined) !== (value.speakerNames === undefined)) ||
+      (value.segments !== undefined && !Array.isArray(value.segments)) ||
+      (value.speakerNames !== undefined && !object(value.speakerNames))
+    ) {
+      return jsonResponse(400, { error: "bad_request", reason: "body" });
+    }
+    const result = await store.updateCandidate(session.userId, id, candidateId, {
+      expectedRevision: value.expectedRevision,
+      operationId: value.operationId,
+      ...(value.name === undefined ? {} : { name: value.name }),
+      ...(value.segments === undefined
+        ? {}
+        : { segments: value.segments as UpdateRecordingCandidateInput["segments"], speakerNames: value.speakerNames as Record<string, string> }),
+    });
+    if (!result) return notFoundResponse();
+    if (result.status === "conflict") return jsonResponse(409, { error: "conflict", candidate: fullCandidateBody(result.candidate) });
+    if (result.status !== "ok") return jsonResponse(409, { error: result.status });
+    return jsonResponse(200, { candidate: fullCandidateBody(result.candidate), replayed: result.replayed });
+  });
+}
+
+/** GET /versions — 新しい順・current を含む最大 100 件（本文なし）。 */
+export function listCandidateVersionsRoute(request: Request, id: string, candidateId: string, deps: Pick<CandidatesApiDeps, "auth" | "store">): Promise<Response> {
+  return guarded("GET /api/pages/[id]/recording/candidates/[candidateId]/versions", async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    const versions = await store.listVersions(session.userId, id, candidateId);
+    return versions ? jsonResponse(200, { versions: versions.map(versionSummaryBody) }) : notFoundResponse();
+  });
+}
+
+/** GET /versions/{version} — 本文つき immutable snapshot。 */
+export function getCandidateVersionRoute(
+  request: Request,
+  id: string,
+  candidateId: string,
+  versionParam: string,
+  deps: Pick<CandidatesApiDeps, "auth" | "store">,
+): Promise<Response> {
+  return guarded("GET /api/pages/[id]/recording/candidates/[candidateId]/versions/[version]", async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    const version = Number(versionParam);
+    if (!Number.isSafeInteger(version) || version < 1) return notFoundResponse();
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    const found = await store.getVersion(session.userId, id, candidateId, version);
+    return found ? jsonResponse(200, { version: versionBody(found) }) : notFoundResponse();
+  });
+}
+
+/** POST /versions/{version}/restore — expected candidate revision で復元し、復元結果も新版にする。 */
+export function restoreCandidateVersionRoute(
+  request: Request,
+  id: string,
+  candidateId: string,
+  versionParam: string,
+  deps: CandidatesApiDeps,
+): Promise<Response> {
+  return guarded("POST /api/pages/[id]/recording/candidates/[candidateId]/versions/[version]/restore", async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const version = Number(versionParam);
+    if (!Number.isSafeInteger(version) || version < 1) return notFoundResponse();
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    const body = await readJsonBody(request, CANDIDATE_BODY_MAX_BYTES);
+    if (!body.ok) return body.response.status === 400 ? jsonResponse(400, { error: "bad_request", reason: "body" }) : body.response;
+    const value = body.value;
+    if (!object(value) || !exactKeys(value, ["expectedRevision", "operationId"]) || !positiveRevision(value.expectedRevision) || typeof value.operationId !== "string" || !UUID.test(value.operationId)) {
+      return jsonResponse(400, { error: "bad_request", reason: "body" });
+    }
+    const result = await store.restoreVersion(session.userId, id, candidateId, version, { expectedRevision: value.expectedRevision, operationId: value.operationId });
+    if (!result || result.status === "version_missing") return notFoundResponse();
+    if (result.status === "conflict") return jsonResponse(409, { error: "conflict", candidate: fullCandidateBody(result.candidate) });
+    if (result.status !== "ok") return jsonResponse(409, { error: result.status });
+    return jsonResponse(200, { candidate: fullCandidateBody(result.candidate), replayed: result.replayed });
+  });
+}
+
 /**
  * POST /api/pages/{id}/recording/candidates/{candidateId}/adopt — その案を採用する（正本に写す）。
  * 200 `{ recording, speakers, candidates }`。本文のできていない案は 409 `{ error: "not_ready" }`。
@@ -210,9 +363,36 @@ export function adoptCandidateRoute(request: Request, id: string, candidateId: s
     if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
     const store = deps.store();
     if (!store) return errorResponse("unavailable");
-    const result = await store.adoptCandidate(session.userId, id, candidateId);
+    const body = await readJsonBody(request, CANDIDATE_BODY_MAX_BYTES);
+    if (!body.ok) return body.response.status === 400 ? jsonResponse(400, { error: "bad_request", reason: "body" }) : body.response;
+    const value = body.value;
+    if (
+      !object(value) ||
+      !exactKeys(value, ["expectedCandidateRevision", "expectedRecordingRevision", "operationId"]) ||
+      !positiveRevision(value.expectedCandidateRevision) ||
+      !positiveRevision(value.expectedRecordingRevision) ||
+      typeof value.operationId !== "string" ||
+      !UUID.test(value.operationId)
+    ) {
+      return jsonResponse(400, { error: "bad_request", reason: "body" });
+    }
+    const result = await store.adoptCandidate(session.userId, id, candidateId, {
+      expectedCandidateRevision: value.expectedCandidateRevision,
+      expectedRecordingRevision: value.expectedRecordingRevision,
+      operationId: value.operationId,
+    });
     if (!result) return notFoundResponse();
     if (result.status === "not_ready") return jsonResponse(409, { error: "not_ready" });
+    if (result.status === "busy") return jsonResponse(409, { error: "busy" });
+    if (result.status === "conflict") {
+      const candidates = await store.listCandidates(session.userId, id);
+      return jsonResponse(409, {
+        error: "conflict",
+        ...withSpeakers(result.recording),
+        candidate: fullCandidateBody(result.candidate),
+        candidates: candidates.map(candidateBody),
+      });
+    }
     return jsonResponse(200, { ...withSpeakers(result.recording), candidates: result.candidates.map(candidateBody) });
   });
 }

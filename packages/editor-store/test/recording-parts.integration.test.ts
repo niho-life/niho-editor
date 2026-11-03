@@ -20,7 +20,11 @@ import {
   adoptRecordingCandidate,
   deleteRecordingCandidate,
   getRecordingCandidate,
+  getRecordingCandidateVersion,
+  listRecordingCandidateVersions,
   listRecordingCandidates,
+  restoreRecordingCandidateVersion,
+  updateRecordingCandidate,
 } from "../src/recording-candidates.ts";
 import { InvalidRecordingError, createRecordingPage, getRecording, updateRecording } from "../src/recordings.ts";
 import { claimRun, enqueueTranscription, finishRun, type EnqueueTranscriptionInput } from "../src/transcription-runs.ts";
@@ -345,6 +349,17 @@ describe("transcript candidates on PostgreSQL（別のエンジンの案）", { 
 
   const add = (page: string, name: string, engine = "fake", owner: string = OWNER) =>
     addRecordingCandidate(pool, owner, page, { name, engine, primaryName: "Deepgram" });
+  const adopt = async (page: string, candidateId: string, owner: string = OWNER) => {
+    const [recording, candidate] = await Promise.all([
+      getRecording(pool, owner, page),
+      getRecordingCandidate(pool, owner, page, candidateId),
+    ]);
+    return adoptRecordingCandidate(pool, owner, page, candidateId, {
+      expectedCandidateRevision: candidate?.revision ?? 1,
+      expectedRecordingRevision: recording?.revision ?? 1,
+      operationId: randomUUID(),
+    });
+  };
 
   it("2 つ目の案を足すと、いまの文字起こしが 1 つ目の案（採用中）として台帳に載る", async () => {
     const page = await transcribed();
@@ -434,7 +449,17 @@ describe("transcript candidates on PostgreSQL（別のエンジンの案）", { 
       speakerNames: data.speakerNames,
     }));
 
-    const adopted = await adoptRecordingCandidate(pool, OWNER, page, second);
+    const [beforeAdoptRecording, beforeAdoptCandidate] = await Promise.all([
+      getRecording(pool, OWNER, page),
+      getRecordingCandidate(pool, OWNER, page, second),
+    ]);
+    assert.ok(beforeAdoptRecording && beforeAdoptCandidate);
+    const adoptInput = {
+      expectedCandidateRevision: beforeAdoptCandidate.revision,
+      expectedRecordingRevision: beforeAdoptRecording.revision,
+      operationId: randomUUID(),
+    };
+    const adopted = await adoptRecordingCandidate(pool, OWNER, page, second, adoptInput);
     assert.ok(adopted && adopted.status === "ok");
     assert.deepEqual(
       adopted.recording.segments.map((segment) => segment.text),
@@ -460,8 +485,12 @@ describe("transcript candidates on PostgreSQL（別のエンジンの案）", { 
     );
     assert.deepEqual(kept?.speakerNames, { "1": "司会役" });
 
+    const adoptedReplay = await adoptRecordingCandidate(pool, OWNER, page, second, adoptInput);
+    assert.ok(adoptedReplay?.status === "ok");
+    assert.equal(adoptedReplay.recording.revision, adopted.recording.revision, "採用応答消失後の再送で正本をもう一度進めない");
+
     // もう一度採用し直すと、1 つ目の案に戻る（今の本文は Fake の案に残る）
-    const back = await adoptRecordingCandidate(pool, OWNER, page, primary);
+    const back = await adopt(page, primary);
     assert.ok(back && back.status === "ok");
     assert.deepEqual(
       back.recording.segments.map((segment) => segment.text),
@@ -474,16 +503,146 @@ describe("transcript candidates on PostgreSQL（別のエンジンの案）", { 
     const page = await transcribed();
     const added = await add(page, "Fake");
     assert.ok(added && added.status === "created");
-    assert.deepEqual(await adoptRecordingCandidate(pool, OWNER, page, added.candidate.id), { status: "not_ready" });
-    assert.equal(await adoptRecordingCandidate(pool, OTHER, page, added.candidate.id), null);
-    assert.equal(await adoptRecordingCandidate(pool, OWNER, page, randomUUID()), null);
-    assert.equal(await adoptRecordingCandidate(pool, OWNER, page, "not-a-uuid"), null);
+    assert.deepEqual(await adopt(page, added.candidate.id), { status: "not_ready" });
+    assert.equal(await adopt(page, added.candidate.id, OTHER), null);
+    assert.equal(await adopt(page, randomUUID()), null);
+    assert.equal(await adopt(page, "not-a-uuid"), null);
     // 別のページの案は、このページからは採用できない
     const other = await transcribed();
-    assert.equal(await adoptRecordingCandidate(pool, OWNER, other, added.candidate.id), null);
+    assert.equal(await adopt(other, added.candidate.id), null);
     await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [page]);
-    assert.equal(await adoptRecordingCandidate(pool, OWNER, page, added.candidates[0]!.id), null);
+    assert.equal(await adopt(page, added.candidates[0]!.id), null);
     assert.deepEqual(await listRecordingCandidates(pool, OWNER, page), [], "ゴミ箱のページの案は読めない");
+  });
+
+  it("非採用案はCAS編集・冪等再送・履歴・復元ができ、採用中本文は録音editorから同期する", async () => {
+    const page = await transcribed();
+    const added = await add(page, "Fake");
+    assert.ok(added?.status === "created");
+    const primary = added.candidates[0]!;
+    const second = added.candidate;
+    const operationId = randomUUID();
+    const edited = await updateRecordingCandidate(pool, OWNER, page, second.id, {
+      expectedRevision: second.revision,
+      operationId,
+      name: "聞き直した案",
+      segments: [{ start: 0, end: 8, text: "独立して直した本文", speaker: 1 }],
+      speakerNames: { "1": "聞き手" },
+    });
+    assert.ok(edited?.status === "ok");
+    assert.equal(edited.candidate.revision, second.revision + 1);
+    assert.deepEqual(edited.candidate.speakerNames, { "1": "聞き手" });
+
+    const replay = await updateRecordingCandidate(pool, OWNER, page, second.id, {
+      expectedRevision: second.revision,
+      operationId,
+      name: "聞き直した案",
+      segments: [{ start: 0, end: 8, text: "独立して直した本文", speaker: 1 }],
+      speakerNames: { "1": "聞き手" },
+    });
+    assert.ok(replay?.status === "ok" && replay.replayed);
+    assert.equal(replay.candidate.revision, edited.candidate.revision, "応答消失後の再送で版を増やさない");
+
+    const stale = await updateRecordingCandidate(pool, OWNER, page, second.id, { expectedRevision: second.revision, operationId: randomUUID(), name: "古い保存" });
+    assert.ok(stale?.status === "conflict");
+    const versions = await listRecordingCandidateVersions(pool, OWNER, page, second.id);
+    assert.deepEqual(versions?.map((item) => item.reason), ["edit", "initial"]);
+    const initial = await getRecordingCandidateVersion(pool, OWNER, page, second.id, 1);
+    assert.equal(initial?.name, "Fake");
+
+    const restoreInput = {
+      expectedRevision: edited.candidate.revision,
+      operationId: randomUUID(),
+    };
+    const restored = await restoreRecordingCandidateVersion(pool, OWNER, page, second.id, 1, restoreInput);
+    assert.ok(restored?.status === "ok");
+    assert.equal(restored.candidate.revision, edited.candidate.revision + 1);
+    assert.equal((await listRecordingCandidateVersions(pool, OWNER, page, second.id))?.[0]?.reason, "restore");
+    const restoreReplay = await restoreRecordingCandidateVersion(pool, OWNER, page, second.id, 1, restoreInput);
+    assert.ok(restoreReplay?.status === "ok" && restoreReplay.replayed);
+    assert.equal(restoreReplay.candidate.revision, restored.candidate.revision, "復元応答消失後の再送で版を増やさない");
+
+    const sameContentRestore = await restoreRecordingCandidateVersion(pool, OWNER, page, second.id, 1, {
+      expectedRevision: restored.candidate.revision,
+      operationId: randomUUID(),
+    });
+    assert.ok(sameContentRestore?.status === "ok");
+    assert.equal(sameContentRestore.candidate.revision, restored.candidate.revision + 1, "同じ内容でも明示復元は新版にする");
+
+    const before = await getRecordingCandidate(pool, OWNER, page, primary.id);
+    const recording = await getRecording(pool, OWNER, page);
+    assert.ok(before && recording);
+    await updateRecording(pool, OWNER, page, recording.revision, (data) => ({
+      segments: data.segments.map((segment, index) => index === 0 ? { ...segment, text: "録音editorで直した本文" } : segment),
+      speakerNames: data.speakerNames,
+    }));
+    const synced = await getRecordingCandidate(pool, OWNER, page, primary.id);
+    assert.equal(synced?.segments[0]?.text, "録音editorで直した本文");
+    assert.equal(synced?.revision, before.revision + 1);
+    assert.equal((await listRecordingCandidateVersions(pool, OWNER, page, primary.id))?.[0]?.reason, "recording");
+  });
+
+  it("生成中は編集・採用を拒否し、candidate revisionが変わった後の遅着結果を捨てる", async () => {
+    const page = await transcribed();
+    const added = await add(page, "Fake");
+    assert.ok(added?.status === "created");
+    const target = added.candidate;
+    const created = await enqueueTranscription(pool, OWNER, page, run({ candidate: target.id }));
+    assert.ok(created?.status === "created");
+    const claimed = await claimRun(pool, created.run.id);
+    assert.ok(claimed);
+    assert.deepEqual(await updateRecordingCandidate(pool, OWNER, page, target.id, { expectedRevision: target.revision, operationId: randomUUID(), name: "生成中の変更" }), { status: "busy" });
+    assert.deepEqual(await restoreRecordingCandidateVersion(pool, OWNER, page, target.id, 1, {
+      expectedRevision: target.revision,
+      operationId: randomUUID(),
+    }), { status: "busy" });
+    const currentRecording = await getRecording(pool, OWNER, page);
+    assert.ok(currentRecording);
+    assert.deepEqual(await adoptRecordingCandidate(pool, OWNER, page, target.id, {
+      expectedCandidateRevision: target.revision,
+      expectedRecordingRevision: currentRecording.revision,
+      operationId: randomUUID(),
+    }), { status: "busy" });
+
+    // 将来別writerが増えても finish の fence が効くことを、DB上の競合変更で確認する。
+    await pool.query("UPDATE page_recording_candidates SET name = '先に届いた編集' WHERE id = $1", [target.id]);
+    assert.equal(await finishRun(pool, created.run.id, claimed.generation, {
+      segments: [{ start: 0, end: 5, text: "遅れて届いたASR", speaker: 1 }],
+      durationSec: 5,
+    }), "superseded");
+    assert.equal((await getRecordingCandidate(pool, OWNER, page, target.id))?.name, "先に届いた編集");
+    assert.equal((await getRecordingCandidate(pool, OWNER, page, target.id))?.segments.length, 0);
+  });
+
+  it("理由settingを持たない新しい接続のwriterも履歴を残せる", async () => {
+    const page = await transcribed();
+    const added = await add(page, "Fake");
+    assert.ok(added?.status === "created");
+    const schema = (await pool.query<{ schema: string }>("SELECT current_schema() AS schema")).rows[0]!.schema;
+    const { Pool } = await import("pg");
+    const fresh = new Pool({ connectionString: databaseUrl, max: 1, options: `-c search_path=${schema}` });
+    try {
+      assert.equal((await fresh.query("SELECT current_setting('niho.recording_candidate_reason', true) AS reason")).rows[0].reason, null);
+      await fresh.query("UPDATE page_recording_candidates SET name = $2 WHERE id = $1", [added.candidate.id, "新しい接続からの編集"]);
+      const versions = await listRecordingCandidateVersions(pool, OWNER, page, added.candidate.id);
+      assert.equal(versions?.[0]?.reason, "edit");
+      assert.equal(versions?.[0]?.version, 2);
+    } finally {
+      await fresh.end();
+    }
+  });
+
+  it("候補履歴はcurrentを含む直近100版に有界化する", async () => {
+    const page = await transcribed();
+    const added = await add(page, "Fake");
+    assert.ok(added?.status === "created");
+    for (let index = 0; index < 105; index += 1) {
+      await pool.query("UPDATE page_recording_candidates SET name = $2 WHERE id = $1", [added.candidate.id, `案 ${index}`]);
+    }
+    const versions = await listRecordingCandidateVersions(pool, OWNER, page, added.candidate.id);
+    assert.equal(versions?.length, 100);
+    assert.equal(versions?.[0]?.version, 106);
+    assert.equal(versions?.at(-1)?.version, 7);
   });
 
   it("別の人・存在しないページには案を足せない。数の上限は too_many", async () => {
@@ -491,13 +650,29 @@ describe("transcript candidates on PostgreSQL（別のエンジンの案）", { 
     assert.equal(await add(page, "Fake", "fake", OTHER), null);
     assert.equal(await add(randomUUID(), "Fake"), null);
     assert.equal(await add("not-a-uuid", "Fake"), null);
+    const boundary = await add(page, "境界確認");
+    assert.ok(boundary?.status === "created");
+    assert.equal(await getRecordingCandidate(pool, OTHER, page, boundary.candidate.id), null);
+    assert.equal(await listRecordingCandidateVersions(pool, OTHER, page, boundary.candidate.id), null);
+    assert.equal(await updateRecordingCandidate(pool, OTHER, page, boundary.candidate.id, {
+      expectedRevision: boundary.candidate.revision,
+      operationId: randomUUID(),
+      name: "他人の変更",
+    }), null);
+
+    const deletedPage = await transcribed();
+    const deletedCandidate = await add(deletedPage, "削除境界");
+    assert.ok(deletedCandidate?.status === "created");
+    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [deletedPage]);
+    assert.equal(await getRecordingCandidate(pool, OWNER, deletedPage, deletedCandidate.candidate.id), null);
+    assert.equal(await listRecordingCandidateVersions(pool, OWNER, deletedPage, deletedCandidate.candidate.id), null);
     await assert.rejects(() => add(page, " 前後に空白 "), InvalidRecordingError);
     await assert.rejects(() => add(page, "改\n行"), InvalidRecordingError);
     await assert.rejects(() => add(page, "あ".repeat(61)), InvalidRecordingError);
     await assert.rejects(() => add(page, "Fake", ""), InvalidRecordingError);
-    // 1 回目で 2 つ（1 つ目の案＋新しい案）。そのあとは 1 つずつ
-    assert.ok((await add(page, "案 2"))?.status === "created");
-    for (let n = 3; n <= RECORDING_CANDIDATES_MAX; n += 1) assert.ok((await add(page, `案 ${n}`))?.status === "created", `案 ${n}`);
+    // 境界確認で 2 つ（1 つ目の案＋新しい案）。そのあとは 1 つずつ
+    assert.ok((await add(page, "案 3"))?.status === "created");
+    for (let n = 4; n <= RECORDING_CANDIDATES_MAX; n += 1) assert.ok((await add(page, `案 ${n}`))?.status === "created", `案 ${n}`);
     assert.deepEqual(await add(page, "溢れる案"), { status: "too_many" });
     assert.equal((await listRecordingCandidates(pool, OWNER, page)).length, RECORDING_CANDIDATES_MAX);
   });
@@ -540,10 +715,19 @@ describe("transcript candidates on PostgreSQL（別のエンジンの案）", { 
     await addPart(pool, page, { durationSec: 30 });
     const added = await add(page, "Fake");
     assert.ok(added?.status === "created");
+    const candidateIds = added.candidates.map((candidate) => candidate.id);
+    const edited = await updateRecordingCandidate(pool, OWNER, page, added.candidate.id, {
+      expectedRevision: added.candidate.revision,
+      operationId: randomUUID(),
+      name: "削除前の案",
+    });
+    assert.ok(edited?.status === "ok");
     const store = (await import("../src/store.ts")).EditorStore;
     await new store(pool).deletePage(OWNER, page);
     await pool.query("DELETE FROM pages WHERE id = $1 AND owner = $2", [page, OWNER]);
     assert.equal((await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM page_recording_audios WHERE page_id = $1", [page])).rows[0]!.n, 0);
     assert.equal((await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM page_recording_candidates WHERE page_id = $1", [page])).rows[0]!.n, 0);
+    assert.equal((await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM page_recording_candidate_versions WHERE candidate_id = ANY($1::uuid[])", [candidateIds])).rows[0]!.n, 0);
+    assert.equal((await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM page_recording_candidate_operations WHERE candidate_id = ANY($1::uuid[])", [candidateIds])).rows[0]!.n, 0);
   });
 });
