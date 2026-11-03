@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { NIHO_SESSION_COOKIE } from "./niho";
+import { AuthTemporarilyUnavailable } from "./types";
 import {
   createNihoExperienceAuthProvider,
   EXPERIENCE_EDITOR_FIREBASE_REFRESH_COOKIE,
@@ -137,6 +139,55 @@ describe("NIHO Experience editor auth", () => {
     const session = await auth.getSession({ headers: new Headers({ cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}` }) });
     expect(session).toEqual({ userId: USER_ID, mode: "niho", sessionId: CONNECTION_ID, expiresAt: CONNECTION_EXPIRY });
     expect(await auth.apiToken?.(session!)).toBeNull();
+  });
+
+  it("does not authorize Editor with the legacy Photo cookie or a browser bearer token", async () => {
+    const upstream = vi.fn(async () => json(sessionResponse()));
+    const auth = provider(upstream);
+    const session = await auth.getSession({ headers: new Headers({
+      cookie: `${NIHO_SESSION_COOKIE}=${"P".repeat(100)}`,
+      authorization: `Bearer ${ID_TOKEN}`,
+    }) });
+    expect(session).toBeNull();
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("uses only the Editor cookie when both products have credentials", async () => {
+    const auth = provider(async (input, init) => {
+      expect(String(input)).toBe(`${NIHO}/api/auth/experience-editor-connect/session`);
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ID_TOKEN}`);
+      return json(sessionResponse());
+    });
+    const session = await auth.getSession({ headers: new Headers({
+      cookie: `${NIHO_SESSION_COOKIE}=${"P".repeat(100)}; ${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}`,
+    }) });
+    expect(session?.userId).toBe(USER_ID);
+  });
+
+  it("rejects the next request after NIHO revokes an accepted connection", async () => {
+    const upstream = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(json(sessionResponse()))
+      .mockResolvedValueOnce(json({ error: "unauthenticated" }, 401));
+    const auth = provider(upstream);
+    const request = { headers: new Headers({ cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}` }) };
+    expect((await auth.getSession(request))?.userId).toBe(USER_ID);
+    expect(await auth.getSession(request)).toBeNull();
+    expect(upstream).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { ...sessionResponse(), account: { active: false } },
+    { ...sessionResponse(), connection: { id: CONNECTION_ID, expiresAt: new Date(NOW).toISOString() } },
+  ])("grants no session for an inactive account or expired connection", async (payload) => {
+    const auth = provider(async () => json(payload));
+    await expect(auth.getSession({ headers: new Headers({ cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}` }) }))
+      .rejects.toBeInstanceOf(AuthTemporarilyUnavailable);
+  });
+
+  it("keeps an upstream outage distinct from an unauthenticated session", async () => {
+    const auth = provider(async () => json({ error: "temporarily_unavailable" }, 503));
+    await expect(auth.getSession({ headers: new Headers({ cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}` }) }))
+      .rejects.toBeInstanceOf(AuthTemporarilyUnavailable);
   });
 
   it("refreshes Firebase ID tokens server-side and confirms the connection remains active", async () => {
