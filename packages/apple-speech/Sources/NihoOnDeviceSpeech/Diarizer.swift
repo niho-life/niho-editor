@@ -64,6 +64,7 @@ public actor NihoDiarizer {
                 }
                 turns.append(try SpeakerTurn(start: start, end: min(end, duration), id: id))
             }
+            try constraint.validateDetectedSpeakers(turns)
             return try SpeakerMap(duration: duration, turns: turns)
         } catch let error as NihoSpeechError {
             throw error

@@ -174,4 +174,25 @@ public enum SpeakerConstraint: Codable, Equatable, Sendable {
     case automatic
     case exactly(Int)
     case atLeast(Int)
+
+    /// Clustering can return fewer speakers than requested. Never report that as a successful constraint.
+    public func validateDetectedSpeakers(_ turns: [SpeakerTurn]) throws {
+        let detected = Set(turns.map(\.id)).count
+        switch self {
+        case .automatic:
+            return
+        case .exactly(let count), .atLeast(let count):
+            guard (2 ... 20).contains(count) else {
+                throw NihoSpeechError.invalidInput("話者人数が範囲外です。")
+            }
+        }
+        switch self {
+        case .exactly(let count) where detected != count:
+            throw NihoSpeechError.diarizationFailed("指定した話者数は\(count)ですが、検出結果は\(detected)です。音声と人数の設定を確認してください。")
+        case .atLeast(let count) where detected < count:
+            throw NihoSpeechError.diarizationFailed("指定した最少話者数は\(count)ですが、検出結果は\(detected)です。音声と人数の設定を確認してください。")
+        default:
+            return
+        }
+    }
 }
