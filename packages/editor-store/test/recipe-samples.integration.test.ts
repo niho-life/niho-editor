@@ -42,19 +42,17 @@ describe("recipe samples and review drafts", { skip: databaseUrl === undefined }
     const first = { id: "sample-a", name: "合成見本A", chars: 10 };
     const second = { id: "sample-b", name: "合成見本B", chars: 10 };
     assert.equal(await putRecipeSample(pool, OWNER, baseRecipe.id, first, "合成本文A"), "created");
+    assert.equal(await saveRecipeGuideExtraction(pool, OWNER, baseRecipe.id, [first.id], "## 抽出案", [{ term: "合成語", reading: "ごうせいご", variants: [], note: "" }]), true);
+    assert.equal((await getRecipeGuideExtraction(pool, OWNER, baseRecipe.id))?.guide, "## 抽出案");
+    assert.equal(await getRecipeGuideExtraction(pool, OTHER, baseRecipe.id), null);
+
+    // 既存の抽出案を作った後に見本を増やし、対象の set が変わると案を破棄する。
     assert.equal(await putRecipeSample(pool, OWNER, baseRecipe.id, second, "合成本文B"), "created");
     assert.deepEqual(await listRecipeSampleBodies(pool, OWNER, baseRecipe.id), [
       { id: "sample-a", text: "合成本文A" },
       { id: "sample-b", text: "合成本文B" },
     ]);
     assert.deepEqual(await listRecipeSampleBodies(pool, OTHER, baseRecipe.id), []);
-
-    assert.equal(await saveRecipeGuideExtraction(pool, OWNER, baseRecipe.id, [first.id], "## 抽出案", [{ term: "合成語", reading: "ごうせいご", variants: [], note: "" }]), true);
-    assert.equal((await getRecipeGuideExtraction(pool, OWNER, baseRecipe.id))?.guide, "## 抽出案");
-    assert.equal(await getRecipeGuideExtraction(pool, OTHER, baseRecipe.id), null);
-
-    const withSamples = { ...baseRecipe, samples: [first, second] };
-    await putRecipes(pool, OWNER, [withSamples]);
     assert.equal(await getRecipeGuideExtraction(pool, OWNER, baseRecipe.id), null, "新しいサンプルを加えた後は古い抽出案を残さない");
 
     await saveRecipeGuideExtraction(pool, OWNER, baseRecipe.id, [first.id], "## もう一度の抽出案", []);

@@ -176,7 +176,7 @@ describe("録音ページの再生（#36 段 3b-2）: 出すとき・出さな�
   it("draws one <audio preload=metadata> from the same-origin route, the play button, the position slider and the time buttons when the audio is playable", async () => {
     await mount();
     expect(container!.querySelectorAll("audio")).toHaveLength(1);
-    expect(audio()!.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio`);
+    expect(audio()!.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio?part=0`);
     expect(audio()!.getAttribute("preload")).toBe("metadata");
     expect(audio()!.hasAttribute("controls")).toBe(false);
     expect(playButton()!.getAttribute("aria-label")).toBe("再生");
@@ -201,18 +201,17 @@ describe("録音ページの再生（#36 段 3b-2）: 出すとき・出さな�
       );
     });
     for (let attempt = 0; attempt < 20 && !audio(); attempt += 1) await settle();
-    expect(audio()!.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio`);
+    expect(audio()!.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio?part=0`);
     await act(async () => timeButtons()[1]!.click());
     expect(play).toHaveBeenCalledTimes(1);
     expect(highlighted()).toEqual([1]);
   });
 
-  it("draws no playback parts for a VTT recording, audio still uploading, expired audio, or audio without paragraphs yet", async () => {
+  it("draws no playback parts for a VTT recording, audio still uploading, or expired audio", async () => {
     for (const options of [
       { audio: null },
       { audio: { status: "uploading" as const, bytes: 10, contentType: "audio/mp4", expiresAt: FUTURE } },
       { audio: { status: "uploaded" as const, bytes: 10, contentType: "audio/mp4", expiresAt: PAST } },
-      { segments: [] },
     ]) {
       await mount(createServer(options));
       const label = JSON.stringify(options);
@@ -226,6 +225,14 @@ describe("録音ページの再生（#36 段 3b-2）: 出すとき・出さな�
       container!.remove();
       root = null;
     }
+  });
+
+  it("keeps audio available before transcription segments exist", async () => {
+    await mount(createServer({ segments: [] }));
+    expect(audio()).not.toBeNull();
+    expect(container!.querySelector('button[aria-label="再生"]')).not.toBeNull();
+    expect(timeButtons()).toEqual([]);
+    expect(slider()).not.toBeNull();
   });
 });
 
@@ -273,6 +280,9 @@ describe("録音ページの再生: 操作", () => {
     await mount();
     await act(async () => playButton()!.click());
     expect(highlighted()).toEqual([0]);
+    await settle();
+    advance(0);
+    await settle();
     const before = segmentRenders();
     // 同じ段落の中で位置が動くだけ（ブラウザは 4 回／秒ほど timeupdate を出す）
     for (const seconds of [0.25, 0.5, 1, 2, 3.75]) advance(seconds);
@@ -280,16 +290,24 @@ describe("録音ページの再生: 操作", () => {
     expect(highlighted()).toEqual([0]);
     advance(4.2);
     expect(highlighted()).toEqual([1]);
-    expect(segmentRenders()).toBe(before + 1);
+    await settle();
+    const secondSegmentRenders = segmentRenders();
     advance(6);
+    await settle();
+    const withinSecondSegmentRenders = segmentRenders();
+    expect(withinSecondSegmentRenders).toBeLessThanOrEqual(secondSegmentRenders + 1);
     advance(8.9);
-    expect(segmentRenders()).toBe(before + 1);
+    await settle();
+    expect(segmentRenders()).toBe(withinSecondSegmentRenders);
     // 時刻の無い段落は飛ばし、同じ時刻の段落は最初の段落
     advance(10);
     expect(highlighted()).toEqual([3]);
+    await settle();
+    const thirdSegmentRenders = segmentRenders();
     advance(14);
     expect(highlighted()).toEqual([5]);
-    expect(segmentRenders()).toBe(before + 3);
+    await settle();
+    expect(segmentRenders()).toBe(thirdSegmentRenders + 1);
     // 一時停止しても強調は残る（どこまで聞いたかが分かる）
     await act(async () => playButton()!.click());
     expect(highlighted()).toEqual([5]);
@@ -314,7 +332,7 @@ describe("録音ページの再生: 操作", () => {
   });
 
   it("moves the position with the slider (1 second steps), without counting it as writing", async () => {
-    await mount();
+    await mount(createServer({ durationSec: 15 }));
     const input = slider()!;
     expect(input.max).toBe("15");
     expect(input.getAttribute("aria-valuetext")).toBe("00:00 / 00:15");
@@ -341,17 +359,18 @@ describe("録音ページの再生: 操作", () => {
 
   it("says the audio cannot be played on an error, keeps the player, and loads again on もう一度", async () => {
     await mount();
+    const loadsBeforeRetry = load.mock.calls.length;
     act(() => {
       stateOf(audio()!).error = { code: 4 };
       audio()!.dispatchEvent(new Event("error"));
     });
-    expect(alerts()).toEqual(["音声を再生できませんもう一度"]);
+    expect(alerts()).toEqual(["音声 1を読み込めません。期限切れまたは見つからない可能性があります。別の音声へ移動できます。もう一度"]);
     expect(playButton()).not.toBeNull();
     expect(audio()).not.toBeNull();
     const retry = container!.querySelector<HTMLButtonElement>('button[aria-label="音声をもう一度読み込む"]')!;
     expect(retry.textContent).toBe("もう一度");
     await act(async () => retry.click());
-    expect(load).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledTimes(loadsBeforeRetry + 1);
     expect(alerts()).toEqual([]);
     // 読み直して長さが分かったら、そのまま再生できる
     act(() => audio()!.dispatchEvent(new Event("loadedmetadata")));

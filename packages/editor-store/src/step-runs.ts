@@ -730,7 +730,9 @@ export type CommitResult =
  * 世代が一致して実行中のときだけ通る。サブページが削除されていたら何も書かずに `page_missing`。
  */
 export async function commitAttempt(db: StepRunsDb, input: CommitInput): Promise<CommitResult> {
-  if (!parseStepBasis(input.inputBasis) && !(typeof input.inputBasis === "string" && /^[0-9a-f]{64}$/.test(input.inputBasis))) throw new TypeError("editor-store: inputBasis must be a complete basis or legacy digest");
+  const structuredBasis = parseStepBasis(input.inputBasis);
+  if (!structuredBasis && !(typeof input.inputBasis === "string" && /^[0-9a-f]{64}$/.test(input.inputBasis))) throw new TypeError("editor-store: inputBasis must be a complete basis or legacy digest");
+  const legacyBasis = structuredBasis ? null : input.inputBasis as string;
   if (!isPageId(input.runId)) return { ok: false, reason: "stale_generation" };
   return inTransaction<CommitResult>(db, async (client) => {
     const run = await client.query<{ owner: string; state: RunState }>("SELECT owner, state FROM step_runs WHERE id = $1 FOR UPDATE", [input.runId]);
@@ -738,11 +740,11 @@ export async function commitAttempt(db: StepRunsDb, input: CommitInput): Promise
     if (!runRow || runRow.state !== "running") return { ok: false, reason: "stale_generation" } satisfies CommitResult;
     const done = await client.query<{ page_id: string }>(
       `UPDATE step_attempts
-          SET state = 'succeeded', input_basis = $4::jsonb, finished_at = clock_timestamp(), lease_until = NULL, error_code = NULL,
+          SET state = 'succeeded', input_basis = $4, input_basis_v2 = $5::jsonb, finished_at = clock_timestamp(), lease_until = NULL, error_code = NULL,
               partial_blocks = NULL
         WHERE run_id = $1 AND step_index = $2 AND generation = $3 AND state = 'running'
         RETURNING page_id`,
-      [input.runId, input.stepIndex, input.generation, JSON.stringify(input.inputBasis)],
+      [input.runId, input.stepIndex, input.generation, legacyBasis, structuredBasis ? JSON.stringify(structuredBasis) : null],
     );
     const pageId = done.rows[0]?.page_id;
     if (!pageId) return { ok: false, reason: "stale_generation" } satisfies CommitResult;
@@ -1005,7 +1007,7 @@ type StalePageRow = { id: string; blocks: Block[]; step_status: StepStatus | nul
 
 /**
  * 前提変更の再計算。完了済み（done / stale）の段階について、今の基準（前の段階のサブページ・段階 0 は録音ページの blocks と指示文）
- * が記録した基準（最後に成功した attempt の input_basis）と違えば、その段階から後の done を stale にし、戻れば done に戻す。
+ * が記録した基準（最後に成功した attempt の input_basis_v2）と違えば、その段階から後の done を stale にし、戻れば done に戻す。
  * 読むのは 1 つの snapshot、書くのは「読んだときから行が変わっていない（xmin が同じ）」ときだけ（並行する確定・作り直しを上書きしない）。
  * 戻り値は状態を変えたサブページの数。
  */
@@ -1047,15 +1049,15 @@ export async function refreshStale(db: StepRunsDb, owner: OwnerId, parentId: str
         [owner, parentId, recipe.id, pageIds],
       );
       pages = new Map(rows.rows.map((row) => [row.id, row]));
-      const bases = await client.query<{ step_id: string; input_basis: unknown }>(
-        `SELECT DISTINCT ON (a.step_id) a.step_id, a.input_basis
+      const bases = await client.query<{ step_id: string; input_basis_v2: unknown }>(
+        `SELECT DISTINCT ON (a.step_id) a.step_id, a.input_basis_v2
            FROM step_attempts a
            JOIN step_runs r ON r.id = a.run_id
-          WHERE r.owner = $1 AND r.parent = $2 AND r.recipe = $3 AND a.state = 'succeeded' AND a.input_basis IS NOT NULL
+          WHERE r.owner = $1 AND r.parent = $2 AND r.recipe = $3 AND a.state = 'succeeded' AND a.input_basis_v2 IS NOT NULL
           ORDER BY a.step_id, a.finished_at DESC`,
         [owner, parentId, recipe.id],
       );
-      recorded = new Map(bases.rows.map((row) => [row.step_id, row.input_basis]));
+      recorded = new Map(bases.rows.map((row) => [row.step_id, row.input_basis_v2]));
       current = new Map();
       for (const [index] of recipe.steps.entries()) {
         const stepIds = recipe.steps.slice(0, index).map((step, prior) => ({ id: step.id, pageId: pageIds[prior]! }));
@@ -1116,13 +1118,13 @@ export async function readStepStaleReasons(db: StepRunsDb, owner: OwnerId, paren
           ORDER BY a.step_index`, [owner, parentId, recipe.id],
       );
       const pageByStep = new Map(latest.rows.map((row) => [row.step_id, row.page_id] as const));
-      const rows = await client.query<{ step_id: string; input_basis: unknown }>(
-        `SELECT DISTINCT ON (a.step_id) a.step_id, a.input_basis
+      const rows = await client.query<{ step_id: string; input_basis_v2: unknown }>(
+        `SELECT DISTINCT ON (a.step_id) a.step_id, a.input_basis_v2
            FROM step_attempts a JOIN step_runs r ON r.id = a.run_id
-          WHERE r.owner = $1 AND r.parent = $2 AND r.recipe = $3 AND a.state = 'succeeded' AND a.input_basis IS NOT NULL
+          WHERE r.owner = $1 AND r.parent = $2 AND r.recipe = $3 AND a.state = 'succeeded' AND a.input_basis_v2 IS NOT NULL
           ORDER BY a.step_id, a.finished_at DESC`, [owner, parentId, recipe.id],
       );
-      const recorded = new Map(rows.rows.map((row) => [row.step_id, row.input_basis]));
+      const recorded = new Map(rows.rows.map((row) => [row.step_id, row.input_basis_v2]));
       const reasons: Record<number, StepStaleReason[]> = {};
       let inherited: StepStaleReason[] = [];
       for (const [index] of recipe.steps.entries()) {

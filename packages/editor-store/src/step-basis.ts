@@ -31,7 +31,7 @@ function inline(value: unknown): string {
 }
 export function stepBlockText(block: unknown): string {
   if (!object(block)) return "";
-  if (block.type === "paragraph" || block.type === "heading") return inline(block.content);
+  if (block.type === "paragraph" || block.type === "heading" || block.type === "codeBlock") return inline(block.content);
   if (block.type === "image") return object(block.attrs) && typeof block.attrs.alt === "string" ? block.attrs.alt : "";
   return Array.isArray(block.content) ? block.content.map(stepBlockText).filter(Boolean).join("\n") : "";
 }

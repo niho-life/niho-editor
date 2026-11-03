@@ -253,6 +253,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
   const player = snapshot !== null && loadedPage === pageId && timelineParts.some((part) => part.state === "ready");
   const playback = useRecordingPlayback(pageId, player ? timelineParts : [], snapshot?.recording.segments ?? NO_SEGMENTS);
   const { playFrom } = playback;
+  const seekDurationSec = playback.durationSec ?? (timelineParts.length === 1 ? undefined : null);
   const onPlayFrom = useCallback(
     (id: string) => {
       const start = segmentStart(snapshotRef.current?.recording.segments ?? NO_SEGMENTS, id);
@@ -350,7 +351,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
           position={player ? undefined : durationLabel(snapshot.recording)}
           onPlay={player ? playback.toggle : undefined}
           playing={player && playback.playing}
-          seek={player ? <PlaybackSeek audio={playback.element} recordingSec={snapshot.recording.durationSec} durationSec={playback.durationSec} positionOf={playback.positionOf} onSeek={playback.seekTo} /> : undefined}
+          seek={player ? <PlaybackSeek audio={playback.element} recordingSec={snapshot.recording.durationSec} durationSec={seekDurationSec} positionOf={playback.positionOf} onSeek={playback.seekTo} /> : undefined}
           onPlayFrom={player ? onPlayFrom : undefined}
           editing={editing}
           onToggleEdit={() => setEditing((value) => !value)}
@@ -370,7 +371,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
           <button type="button" className="es-btn es-btn--outline es-btn--sm" aria-label={playback.playing ? "一時停止" : "再生"} onClick={playback.toggle}>
             {playback.playing ? "一時停止" : "再生"}
           </button>
-          <PlaybackSeek audio={playback.element} recordingSec={snapshot.recording.durationSec} durationSec={playback.durationSec} positionOf={playback.positionOf} onSeek={playback.seekTo} />
+          <PlaybackSeek audio={playback.element} recordingSec={snapshot.recording.durationSec} durationSec={seekDurationSec} positionOf={playback.positionOf} onSeek={playback.seekTo} />
         </div>
       )}
       {audio && (

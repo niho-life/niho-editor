@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { computeStepBasis, parseStepBasis, stepStaleReasons, type StepMaterials, type StepRecipe } from "../src/index.ts";
+import { computeStepBasis, parseStepBasis, stepBlockText, stepStaleReasons, type StepMaterials, type StepRecipe } from "../src/index.ts";
 
 const block = (text: string) => [{ type: "paragraph", content: [{ type: "text", text }] }];
 const recipe: StepRecipe = {
@@ -49,4 +49,26 @@ test("the full normalized folder body is hashed even past the prompt's backgroun
   const recorded = computeStepBasis(recipe, 0, { ...materials, backgroundBlocks: block(longBody + "末尾A") });
   const current = computeStepBasis(recipe, 0, { ...materials, backgroundBlocks: block(longBody + "末尾B") });
   assert.deepEqual(stepStaleReasons(recorded, current), ["info"]);
+});
+
+test("code block text contributes to source, context, references, and upstream artifact hashes", () => {
+  const code = (text: string) => [{ type: "codeBlock", content: [{ type: "text", text }] }];
+  const firstCodeBlock = code("const value = 1;")[0];
+  assert.equal(stepBlockText(firstCodeBlock), "const value = 1;");
+
+  const source = computeStepBasis(recipe, 0, { ...materials, parentBlocks: code("const value = 1;") });
+  const sourceChanged = computeStepBasis(recipe, 0, { ...materials, parentBlocks: code("const value = 2;") });
+  assert.notEqual(source.source, sourceChanged.source);
+
+  const context = computeStepBasis(recipe, 0, { ...materials, backgroundBlocks: code("const value = 1;") });
+  const contextChanged = computeStepBasis(recipe, 0, { ...materials, backgroundBlocks: code("const value = 2;") });
+  assert.notEqual(context.info, contextChanged.info);
+
+  const reference = computeStepBasis(recipe, 0, { ...materials, refs: [{ id: "ref-1", blocks: code("const value = 1;") }] });
+  const referenceChanged = computeStepBasis(recipe, 0, { ...materials, refs: [{ id: "ref-1", blocks: code("const value = 2;") }] });
+  assert.notEqual(reference.refs, referenceChanged.refs);
+
+  const artifact = computeStepBasis(recipe, 1, { ...materials, upstream: [{ id: "one", blocks: code("const value = 1;") }] });
+  const artifactChanged = computeStepBasis(recipe, 1, { ...materials, upstream: [{ id: "one", blocks: code("const value = 2;") }] });
+  assert.notEqual(artifact.artifacts.one, artifactChanged.artifacts.one);
 });

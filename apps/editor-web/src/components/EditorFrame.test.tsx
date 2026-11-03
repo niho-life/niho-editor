@@ -1254,7 +1254,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       await tick();
       expect(dialog()).toBeNull();
       expect(reopen).toHaveBeenCalledTimes(1);
-      expect(reopen).toHaveBeenCalledWith({ id: A, title: "合成の題名", blocks: RESTORED.blocks, revision: 8, updatedAt: RESTORED.updatedAt });
+      expect(reopen).toHaveBeenCalledWith({ id: A, title: "合成の題名", blocks: RESTORED.blocks, cover: null, lead: null, revision: 8, updatedAt: RESTORED.updatedAt });
       expect(headerStatus()).toBe("この版の本文に戻しました");
       expect(document.activeElement).toBe(moreButton());
     });
@@ -2075,6 +2075,8 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
       "テキスト、行の種類",
       "太字",
       "斜体",
+      "取り消し線",
+      "インラインコード",
       "リンク",
       "見出し",
       "箇条書き",

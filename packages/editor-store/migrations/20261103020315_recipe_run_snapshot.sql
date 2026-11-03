@@ -4,10 +4,9 @@ BEGIN;
 ALTER TABLE step_runs ADD COLUMN recipe_snapshot jsonb;
 ALTER TABLE step_runs ADD COLUMN recipe_revision integer;
 
--- #224: old single digests carry no reason information. Preserve them as JSON strings;
--- the reader treats them as unrecorded, so deployment alone never marks pages stale.
-ALTER TABLE step_attempts DROP CONSTRAINT step_attempts_input_basis_check;
-ALTER TABLE step_attempts ALTER COLUMN input_basis TYPE jsonb USING to_jsonb(input_basis);
+-- #224: expand beside the legacy text column. Older workers keep writing SHA-256 text
+-- to input_basis during rollout; new workers write structured reasons to input_basis_v2.
+ALTER TABLE step_attempts ADD COLUMN input_basis_v2 jsonb;
 CREATE FUNCTION editor_step_basis_valid(value jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE
   item text;
@@ -32,9 +31,19 @@ BEGIN
   RETURN true;
 END;
 $$;
-ALTER TABLE step_attempts ADD CONSTRAINT step_attempts_input_basis_check CHECK (
-  input_basis IS NULL OR (jsonb_typeof(input_basis) = 'string' AND input_basis #>> '{}' ~ '^[0-9a-f]{64}$') OR editor_step_basis_valid(input_basis)
+ALTER TABLE step_attempts ADD CONSTRAINT step_attempts_input_basis_v2_check CHECK (
+  input_basis_v2 IS NULL OR editor_step_basis_valid(input_basis_v2)
 );
+CREATE FUNCTION editor_clear_step_basis_v2_on_attempt_restart() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.input_basis_v2 := NULL;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER step_attempts_clear_basis_v2_before_restart
+  BEFORE UPDATE OF state ON step_attempts
+  FOR EACH ROW WHEN (NEW.state <> 'succeeded')
+  EXECUTE FUNCTION editor_clear_step_basis_v2_on_attempt_restart();
 
 -- Templates are copied from docs-core at migration creation time. Existing owners normally
 -- have a recipes row; settings and these templates cover pre-table runs. Sample bodies stay out.

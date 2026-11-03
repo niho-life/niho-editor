@@ -26,7 +26,7 @@ type Patch = {
 function createServer(initial?: Partial<RecordingData>) {
   const state = {
     revision: 1,
-    durationSec: 125,
+    durationSec: 125 as number | null,
     data: {
       segments: [
         { start: 0, end: 4, text: "最初の段落です。", speaker: 1 },
@@ -143,6 +143,7 @@ async function mount(server = createServer()) {
 }
 
 const paragraphs = () => [...container!.querySelectorAll<HTMLElement>(".es-seg p")];
+const seekSlider = () => container!.querySelector<HTMLInputElement>('input[aria-label="再生位置"]');
 const whoOf = () => [...container!.querySelectorAll(".es-who > span")].map((node) => node.textContent);
 const status = () => container!.querySelector("[data-save-state]")!;
 const chip = (name: string) => container!.querySelector<HTMLButtonElement>(`button[aria-label="${name} の名前を変える"]`)!;
@@ -181,6 +182,7 @@ function installAudioMedia() {
       audio.dispatchEvent(new Event("ended"));
     },
     currentTime(audio: HTMLMediaElement) { return state(audio).currentTime; },
+    setDuration(audio: HTMLMediaElement, duration: number) { state(audio).duration = duration; },
   };
 }
 
@@ -630,8 +632,41 @@ describe("RecordingTranscript: timestamps", () => {
 
 describe("RecordingTranscript: multiple audio parts", () => {
   const audio = { status: "uploaded", bytes: 64, contentType: "audio/mp4", expiresAt: "2030-02-01T00:00:00.000Z" };
-  const part = (partIndex: number, offsetSec: number, durationSec: number, extra: Record<string, unknown> = {}) => ({
+  const part = (partIndex: number, offsetSec: number, durationSec: number | null, extra: Record<string, unknown> = {}) => ({
     partIndex, status: "uploaded", bytes: 64, contentType: "audio/mp4", durationSec, offsetSec, sourceName: `part-${partIndex}.m4a`, expiresAt: "2030-02-01T00:00:00.000Z", ...extra,
+  });
+
+  it("uses browser metadata for a single part when saved and transcript lengths are unknown", async () => {
+    const media = installAudioMedia();
+    const server = createServer();
+    server.state.durationSec = null;
+    server.state.getOnly = { audio, audios: [part(0, 0, null)], candidates: [] };
+    await mount(server);
+    await until(() => seekSlider() !== null);
+    const element = container!.querySelector<HTMLAudioElement>("audio")!;
+
+    media.setDuration(element, Number.POSITIVE_INFINITY);
+    act(() => element.dispatchEvent(new Event("durationchange")));
+    expect(seekSlider()!.disabled).toBe(true);
+
+    media.setDuration(element, 37);
+    act(() => element.dispatchEvent(new Event("loadedmetadata")));
+    expect(seekSlider()!.max).toBe("37");
+    expect(seekSlider()!.disabled).toBe(false);
+  });
+
+  it("does not use one part's metadata as the total when multiple part lengths are unknown", async () => {
+    const media = installAudioMedia();
+    const server = createServer();
+    server.state.durationSec = null;
+    server.state.getOnly = { audio, audios: [part(0, 0, null), part(1, 600, null)], candidates: [] };
+    await mount(server);
+    await until(() => seekSlider() !== null);
+    const element = container!.querySelector<HTMLAudioElement>("audio")!;
+    media.setDuration(element, 37);
+    act(() => element.dispatchEvent(new Event("loadedmetadata")));
+    expect(seekSlider()!.max).toBe("600");
+    expect(seekSlider()!.disabled).toBe(false);
   });
 
   it("plays the next uploaded part automatically at the boundary", async () => {

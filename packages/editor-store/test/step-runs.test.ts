@@ -204,8 +204,8 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
   }
 
   async function attemptRow(runId: string, stepIndex: number) {
-    const result = await pool.query<{ state: string; generation: number; tries: number; error_code: string | null; input_basis: string | null; lease_until: Date | null; partial_blocks: unknown }>(
-      "SELECT state, generation, tries, error_code, input_basis, lease_until, partial_blocks FROM step_attempts WHERE run_id = $1 AND step_index = $2",
+    const result = await pool.query<{ state: string; generation: number; tries: number; error_code: string | null; input_basis: string | null; input_basis_v2: unknown; lease_until: Date | null; partial_blocks: unknown }>(
+      "SELECT state, generation, tries, error_code, input_basis, input_basis_v2, lease_until, partial_blocks FROM step_attempts WHERE run_id = $1 AND step_index = $2",
       [runId, stepIndex],
     );
     return result.rows[0];
@@ -442,6 +442,7 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     const attempt = await attemptRow(run.id, 0);
     assert.equal(attempt?.state, "succeeded");
     assert.equal(attempt?.input_basis, basis);
+    assert.equal(attempt?.input_basis_v2, null);
     assert.equal(attempt?.lease_until, null);
     assert.equal((await attemptRow(run.id, 1))?.state, "queued");
     assert.deepEqual(await commitAttempt(pool, { ...refOf(claim), blocks: paragraph("二度目"), inputBasis: basis }), { ok: false, reason: "stale_generation" });
@@ -835,8 +836,16 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     await assert.rejects(() => pool.query("UPDATE step_runs SET state = 'paused' WHERE id = $1", [run.id]), { code: "23514" });
     await assert.rejects(() => pool.query("UPDATE step_runs SET idempotency_key = $2 WHERE id = $1", [run.id, "k".repeat(129)]), { code: "23514" });
     await assert.rejects(() => pool.query("UPDATE step_attempts SET error_code = 'Message: secret' WHERE run_id = $1", [run.id]), { code: "23514" });
-    await assert.rejects(() => pool.query("UPDATE step_attempts SET input_basis = '\"abc\"'::jsonb WHERE run_id = $1", [run.id]), { code: "23514" });
-    await assert.rejects(() => pool.query("UPDATE step_attempts SET input_basis = '{\"source\":\"abc\"}'::jsonb WHERE run_id = $1", [run.id]), { code: "23514" });
+    const legacyBasis = "a".repeat(64);
+    await pool.query("UPDATE step_attempts SET input_basis = $2 WHERE run_id = $1 AND step_index = 0", [run.id, legacyBasis]);
+    const structuredBasis = JSON.stringify({ source: legacyBasis, artifacts: {}, refs: legacyBasis, info: legacyBasis, guide: legacyBasis, step: legacyBasis });
+    await pool.query("UPDATE step_attempts SET input_basis_v2 = $2::jsonb WHERE run_id = $1 AND step_index = 0", [run.id, structuredBasis]);
+    await pool.query("UPDATE step_attempts SET state = 'running', lease_until = clock_timestamp() WHERE run_id = $1 AND step_index = 0", [run.id]);
+    assert.equal((await attemptRow(run.id, 0))?.input_basis_v2, null, "an old worker's retry clears only the new structured basis");
+    await pool.query("UPDATE step_attempts SET state = 'succeeded', input_basis = $2, lease_until = NULL, finished_at = clock_timestamp() WHERE run_id = $1 AND step_index = 0", [run.id, legacyBasis]);
+    await assert.rejects(() => pool.query("UPDATE step_attempts SET input_basis_v2 = '\"abc\"'::jsonb WHERE run_id = $1", [run.id]), { code: "23514" });
+    await assert.rejects(() => pool.query("UPDATE step_attempts SET input_basis_v2 = '{\"source\":\"abc\"}'::jsonb WHERE run_id = $1", [run.id]), { code: "23514" });
+    await assert.rejects(() => pool.query("UPDATE step_attempts SET input_basis = 'not-a-digest' WHERE run_id = $1", [run.id]), { code: "23514" });
     await assert.rejects(() => pool.query("UPDATE step_attempts SET state = 'running', lease_until = NULL WHERE run_id = $1 AND step_index = 0", [run.id]), { code: "23514" });
     // 実行中の attempt は run あたり 1 つまで
     await assert.rejects(
