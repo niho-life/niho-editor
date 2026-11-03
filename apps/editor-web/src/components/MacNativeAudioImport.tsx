@@ -212,7 +212,16 @@ export function MacNativeAudioImport({ onCreated }: { onCreated: (page: { id: st
       const recovery = await prepareWithCancellation((jobId) => shell.audioPrepareResume(jobId, active.stagingId, scope));
       await upload(recovery);
     } catch {
+      recordingRef.current = null;
+      setRecording(null);
       setError("録音を正常終了できませんでした。音声はこのMacに残しています。");
+      try {
+        await assertCurrentOwner();
+        const recovery = await prepareWithCancellation((jobId) => shell.audioPrepareResume(jobId, active.stagingId, scope));
+        setRecoveries((items) => [...items.filter((item) => item.stagingId !== recovery.stagingId), recovery]);
+      } catch {
+        await refresh(shell, scope).catch(() => undefined);
+      }
       setBusy(false);
     } finally {
       stopping.current = false;

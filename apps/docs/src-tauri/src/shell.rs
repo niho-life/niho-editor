@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use tauri::ipc::{Channel, Response};
 use tauri::State;
 
@@ -1112,15 +1113,17 @@ pub async fn shell_transcribe_local(
   }
   let binary = speech::resolve_speech_binary().ok_or(SpeechError::NotFound)?;
   let hints_json = speech::hints_json(&hints);
+  let transcribe_language = language.clone();
+  let transcribe_speaker_mode = speaker_mode.clone();
   let job = crate::register_job(&state, &job_id)?;
   let result = tauri::async_runtime::spawn_blocking(move || {
     speech::transcribe(
       &job,
       &binary.path,
       &paths,
-      &language,
+      &transcribe_language,
       &hints_json,
-      &speaker_mode,
+      &transcribe_speaker_mode,
       &mut |value| {
         let _ = on_event.send(value);
       },

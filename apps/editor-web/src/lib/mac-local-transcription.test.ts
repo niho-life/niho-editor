@@ -15,7 +15,7 @@ function run(status: "running" | "failed" | "succeeded" = "running", generation 
     settings: { engine: "apple-speech", speakerMode: "auto" }, audioManifest: manifest, candidateId: null };
 }
 
-function setup(options: { complete?: "ok" | "network" | "changed"; v2?: boolean; changedStage?: boolean; rangeContentType?: string } = {}) {
+function setup(options: { complete?: "ok" | "network" | "changed"; v2?: boolean; changedStage?: boolean; rangeContentType?: string; startStatus?: "running" | "failed"; resume?: "ok" | "stale" } = {}) {
   const calls: Array<[string, ...unknown[]]> = [];
   const shell = {
     capabilities: async () => ({ version: "test", dev: true, features: { recording: true, localTranscription: true, localTranscriptionV2: options.v2 ?? true, cliAi: true } }),
@@ -43,6 +43,8 @@ function setup(options: { complete?: "ok" | "network" | "changed"; v2?: boolean;
       if (options.complete === "changed") return Response.json({ error: "recording_changed" }, { status: 409 });
       return Response.json({ status: "succeeded" });
     }
+    if (body?.action === "start") return Response.json(run(options.startStatus ?? "running"));
+    if (body?.action === "resume" && options.resume === "stale") return Response.json({ error: "stale_run" }, { status: 409 });
     if (body?.action === "fail" || body?.action === "stop") return Response.json({ status: "failed" });
     return Response.json(run());
   });
@@ -130,6 +132,15 @@ describe("Apple on-device transcription orchestration", () => {
     await expect(runMacLocalTranscription({ shell: f.shell, pageId: PAGE, signal: new AbortController().signal, onProgress: () => undefined }))
       .rejects.toMatchObject({ code: "changed" } satisfies Partial<MacLocalTranscriptionError>);
     expect(f.calls.filter(([name]) => name === "transcribe")).toHaveLength(1);
+    expect(f.calls.some(([name]) => name === "discard")).toBe(false);
+  });
+
+  it("releases a failed operation when its audio revision can no longer be resumed", async () => {
+    const f = setup({ startStatus: "failed", resume: "stale" });
+    await expect(runMacLocalTranscription({ shell: f.shell, pageId: PAGE, operationId: OP, signal: new AbortController().signal, onProgress: () => undefined }))
+      .rejects.toMatchObject({ code: "changed" } satisfies Partial<MacLocalTranscriptionError>);
+    expect(f.bodies.map((body) => (body as { action?: string }).action)).toEqual(["start", "resume"]);
+    expect(f.calls.some(([name]) => name === "transcribe")).toBe(false);
     expect(f.calls.some(([name]) => name === "discard")).toBe(false);
   });
 

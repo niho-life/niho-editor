@@ -126,7 +126,18 @@ export async function runMacLocalTranscription(input: {
     input.onProgress({ phase: "done", completed: 1, total: 1 });
     return;
   }
-  if (run.run.status === "failed") run = await resumeMacLocalTranscription(input.pageId, run);
+  if (run.run.status === "failed") {
+    try {
+      run = await resumeMacLocalTranscription(input.pageId, run);
+    } catch (error) {
+      // 音声・ページ revision が変わった failed run は再開できない。UI に stale operationId を
+      // 保持させず、次の操作で新しい run を開始できるよう「変更済み」として返す。
+      if (error instanceof MacLocalTranscriptionRequestError && error.status === 409) {
+        throw new MacLocalTranscriptionError("changed");
+      }
+      throw error;
+    }
+  }
   let resultReady = false;
   const stop = () => { void input.shell.transcribeStop(run.run.id).catch(() => undefined); };
   input.signal.addEventListener("abort", stop, { once: true });
