@@ -15,6 +15,7 @@ import {
 } from "@/lib/recording-client";
 import { canDiscloseTranscriptionEngine, candidateEngineLabel, transcriptionServiceNote } from "@/recording/candidate-names";
 import { formatClock, speakerLabel } from "@/lib/recording-view";
+import { MacGeminiTranscription } from "./MacGeminiTranscription";
 
 const ROW_STYLE: CSSProperties = { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 8 };
 const LIST_STYLE: CSSProperties = { listStyle: "none", margin: "6px 0 0", padding: 0 };
@@ -187,6 +188,7 @@ export function RecordingCandidates({
         )}
         <span className="es-note">同じ音声をもう一度文字起こしして、見比べて選べます</span>
       </div>
+      <MacGeminiTranscription pageId={pageId} hasTranscript disabled={locked} onSucceeded={onChanged} />
       {candidates.length > 0 && (
         <ul style={LIST_STYLE} aria-label="案の一覧">
           {candidates.map((candidate) => (

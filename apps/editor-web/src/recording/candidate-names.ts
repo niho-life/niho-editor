@@ -16,6 +16,7 @@ const ENGINE_LABELS: Readonly<Record<string, string>> = {
   fake: "開発の偽物",
   "vtt-import": "取り込んだ字幕",
   gemini: "Gemini",
+  "gemini-cli": "Gemini（このMacのCLI）",
   "this-mac": "この Mac",
 };
 
@@ -31,6 +32,8 @@ export function transcriptionServiceNote(engine: string | null): string {
       return "文字起こしを始めると、音声は Deepgram に送られます";
     case "gemini":
       return "文字起こしを始めると、音声は Google Gemini に送られます";
+    case "gemini-cli":
+      return "このMacのAntigravity CLIから音声をGoogle Geminiへ送ります";
     case "fake":
       return "開発用エンジンで文字起こしします。音声は外部サービスへ送られません";
     case "this-mac":

@@ -17,12 +17,15 @@ import {
   enqueueTranscription,
   finalStepPageNames,
   failRun,
+  failMacTranscription,
   findImageUploadByKey,
   getRecording,
   getRecordingCandidate,
   getShare,
   imageAsset,
   latestRun,
+  macTranscriptionStatus,
+  resumeMacTranscription,
   listAudioParts,
   listRecordingCandidates,
   rotateShare,
@@ -33,6 +36,8 @@ import {
   startImageUpload,
   stopShare,
   transcriptionStatus,
+  startMacTranscription,
+  finishMacTranscription,
   updateImageMeta,
   updateRecording,
 } from "@niho/editor-store";
@@ -62,6 +67,7 @@ import type { RecordingsApiDeps } from "./recordings-api";
 import type { SearchApiDeps } from "./search-api";
 import type { ShareApiDeps } from "./share-api";
 import type { TranscriptionApiDeps } from "./transcription-api";
+import type { MacTranscriptionApiDeps } from "./mac-transcription-api";
 
 /** 実行時の依存（方式の選択・DB の接続は要求のたびに遅延して決める）。`/auth/*` の route も同じものを使う。 */
 export const runtimeDeps: PagesApiDeps & Pick<AuthRoutesDeps, "photoAuth"> = {
@@ -241,6 +247,25 @@ export const transcriptionDeps: TranscriptionApiDeps = {
   runner: () => {
     const pool = getPool();
     return pool ? getTranscriptionRunner(pool, process.env) : null;
+  },
+};
+
+/** Mac の Gemini CLI 文字起こし受付。server runner / provider key が無くても DB があれば動く。 */
+export const macTranscriptionDeps: MacTranscriptionApiDeps = {
+  auth: () => getAuthProvider(),
+  store: () => {
+    const pool = getPool();
+    if (!pool) return null;
+    return {
+      getRecording: (owner, pageId) => getRecording(pool, owner, pageId),
+      listCandidates: (owner, pageId) => listRecordingCandidates(pool, owner, pageId),
+      addCandidate: (owner, pageId, input) => addRecordingCandidate(pool, owner, pageId, input),
+      start: (owner, pageId, input) => startMacTranscription(pool, owner, pageId, input),
+      status: (owner, pageId) => macTranscriptionStatus(pool, owner, pageId),
+      finish: (owner, pageId, runId, operationId, generation, output) => finishMacTranscription(pool, owner, pageId, runId, operationId, generation, output),
+      resume: (owner, pageId, runId, operationId, generation) => resumeMacTranscription(pool, owner, pageId, runId, operationId, generation),
+      fail: (owner, pageId, runId, operationId, generation, errorCode) => failMacTranscription(pool, owner, pageId, runId, operationId, generation, errorCode),
+    };
   },
 };
 

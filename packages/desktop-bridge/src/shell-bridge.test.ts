@@ -53,6 +53,15 @@ describe("createShellBridge", () => {
       noop,
     );
     await shell.aiStop("turn-1");
+    await shell.geminiAudioBegin("00000000-0000-4000-8000-000000000001", 0, 3, "audio/mp4", "a".repeat(64));
+    await shell.geminiAudioChunk("00000000-0000-4000-8000-000000000001", 0, 0, new Uint8Array([1, 2, 3]));
+    await shell.geminiAudioFinish("00000000-0000-4000-8000-000000000001", 0);
+    await shell.geminiPrepare("00000000-0000-4000-8000-000000000001", { kind: "server", files: 1 }, noop);
+    await shell.geminiTranscribePart("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002", 0, 0, "system", "user", noop);
+    await shell.geminiCheckpointRead("00000000-0000-4000-8000-000000000001");
+    await shell.geminiCheckpointWrite("00000000-0000-4000-8000-000000000001", { state: "running" });
+    await shell.geminiStop("00000000-0000-4000-8000-000000000001");
+    await shell.geminiDiscard("00000000-0000-4000-8000-000000000001");
     expect(calls).toEqual([
       { command: "shell_capabilities", args: undefined },
       { command: "shell_mic_status", args: { request: true } },
@@ -88,6 +97,15 @@ describe("createShellBridge", () => {
         },
       },
       { command: "shell_ai_stop", args: { turnId: "turn-1" } },
+      { command: "shell_gemini_audio_begin", args: { jobId: "00000000-0000-4000-8000-000000000001", partIndex: 0, bytes: 3, contentType: "audio/mp4", sha256: "a".repeat(64) } },
+      { command: "shell_gemini_audio_chunk", args: { jobId: "00000000-0000-4000-8000-000000000001", partIndex: 0, offset: 0, chunk: new Uint8Array([1, 2, 3]) } },
+      { command: "shell_gemini_audio_finish", args: { jobId: "00000000-0000-4000-8000-000000000001", partIndex: 0 } },
+      { command: "shell_gemini_prepare", args: { jobId: "00000000-0000-4000-8000-000000000001", source: { kind: "server", files: 1 }, onEvent: { channel: 4 } } },
+      { command: "shell_gemini_transcribe_part", args: { jobId: "00000000-0000-4000-8000-000000000001", turnId: "00000000-0000-4000-8000-000000000002", file: 0, part: 0, systemPrompt: "system", userPrompt: "user", onEvent: { channel: 5 } } },
+      { command: "shell_gemini_checkpoint_read", args: { jobId: "00000000-0000-4000-8000-000000000001" } },
+      { command: "shell_gemini_checkpoint_write", args: { jobId: "00000000-0000-4000-8000-000000000001", checkpoint: { state: "running" } } },
+      { command: "shell_gemini_stop", args: { jobId: "00000000-0000-4000-8000-000000000001" } },
+      { command: "shell_gemini_discard", args: { jobId: "00000000-0000-4000-8000-000000000001" } },
     ]);
     // 全部の command を 1 度ずつ呼んだ（読み出しの 2 つは下のテスト）
     const used = new Set(calls.map((call) => call.command));

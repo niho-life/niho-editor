@@ -11,6 +11,7 @@ import {
 } from "@/lib/transcription-view";
 import { canDiscloseTranscriptionEngine, transcriptionServiceNote } from "@/recording/candidate-names";
 import { useTranscription } from "@/lib/use-transcription";
+import { MacGeminiTranscription } from "./MacGeminiTranscription";
 
 const ROW_STYLE: CSSProperties = { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 8 };
 
@@ -29,6 +30,7 @@ export function RecordingTranscription({
   hasTranscript,
   onSucceeded,
   onHasTranscript,
+  showMacCli = true,
 }: {
   pageId: string;
   audio: RecordingAudio;
@@ -38,6 +40,7 @@ export function RecordingTranscription({
   onSucceeded: () => void;
   /** 段落がすでにあると断られた（録音を読み直す）。 */
   onHasTranscript: () => void;
+  showMacCli?: boolean;
 }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -146,6 +149,7 @@ export function RecordingTranscription({
         </div>
       )}
       {expiry && <p className="es-note">{expiry}</p>}
+      {showMacCli && uploaded && !expired && <MacGeminiTranscription pageId={pageId} hasTranscript={hasTranscript} onSucceeded={onSucceeded} />}
     </div>
   );
 }

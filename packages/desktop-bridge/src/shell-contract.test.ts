@@ -29,6 +29,13 @@ describe("殻の command の契約", () => {
     expect(new Set(Object.values(SHELL_COMMANDS))).toEqual(allowedByEditorShell());
   });
 
+  it("Rust の ACL テストの許可一覧も同じ（native CI だけで追加漏れを検知しない）", () => {
+    const block = /fn shell_commands\(\)[\s\S]*?\[([^\]]*)\]/.exec(read("src/acl_tests.rs"));
+    if (!block?.[1]) throw new Error("Rust の shell_commands の一覧が無い");
+    const expected = new Set([...block[1].matchAll(/"(shell_[a-z_]+)"/g)].map((match) => match[1]));
+    expect(new Set(Object.values(SHELL_COMMANDS))).toEqual(expected);
+  });
+
   it("remote から届く command は全部 shell_ で始まり、remote の capability は allow-editor-shell だけ", () => {
     for (const command of Object.values(SHELL_COMMANDS)) {
       expect(command.startsWith("shell_"), command).toBe(true);

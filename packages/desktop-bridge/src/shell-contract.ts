@@ -24,6 +24,15 @@ export const SHELL_COMMANDS = {
   aiEngines: "shell_ai_engines",
   aiTurn: "shell_ai_turn",
   aiStop: "shell_ai_stop",
+  geminiAudioBegin: "shell_gemini_audio_begin",
+  geminiAudioChunk: "shell_gemini_audio_chunk",
+  geminiAudioFinish: "shell_gemini_audio_finish",
+  geminiPrepare: "shell_gemini_prepare",
+  geminiTranscribePart: "shell_gemini_transcribe_part",
+  geminiCheckpointRead: "shell_gemini_checkpoint_read",
+  geminiCheckpointWrite: "shell_gemini_checkpoint_write",
+  geminiStop: "shell_gemini_stop",
+  geminiDiscard: "shell_gemini_discard",
 } as const;
 
 export type ShellCommand = (typeof SHELL_COMMANDS)[keyof typeof SHELL_COMMANDS];
@@ -50,6 +59,8 @@ export type ShellFeatures = {
   localTranscription: boolean;
   /** CLI の AI（Claude Code・Codex CLI・Antigravity CLI）。 */
   cliAi: boolean;
+  /** Antigravity CLIで録音を固定設定の10分区切りで文字起こしできる新しいshell。旧版では undefined。 */
+  geminiCliTranscription?: boolean;
 };
 
 export type ShellCapabilities = {
@@ -216,3 +227,16 @@ export type ShellAiTurn = {
   /** CLI が `page/` に作ったほかのファイルの数（反映しない）。 */
   extraFiles: number;
 };
+
+// ---------------------------------------------------------------------------
+// Gemini CLI の録音文字起こし（端末の力 ③）
+
+export type ShellGeminiAudioSource =
+  | { kind: "server"; files: number }
+  | { kind: "recording"; recordingId: string }
+  | { kind: "staged"; stagingId: string };
+
+export type ShellGeminiAudioStage = { receivedBytes: number; complete: boolean };
+export type ShellGeminiPreparedPart = { startSec: number; endSec: number; soundSec: number };
+export type ShellGeminiPreparedFile = { durationSec: number; parts: ShellGeminiPreparedPart[] };
+export type ShellGeminiTurn = { finalEvent: ShellAiEvent | null };

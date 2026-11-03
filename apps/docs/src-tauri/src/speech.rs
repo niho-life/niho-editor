@@ -11,7 +11,7 @@
 //!
 //! Gemini（サブスクリプション＝Antigravity CLI）の文字起こし（S2a #18383）は、`prepare_audio` で音声ごとに `convert` →
 //! `silence` までを行って区切りの境目を返し、区切りごとに `slice_part` で WAV を書き出して agy に読ませる（lib.rs の
-//! `transcribe_audio_part`）。指示文と結合は画面側（docs-core の gemini-transcription.ts）。
+//! `transcribe_audio_part`）。指示文と結合は画面側（docs-core の audio-transcription.ts）。
 
 use crate::process::{child_command, executable_from_env, read_tail, signal_group, PrivateTempDir, SIGKILL, SIGTERM};
 use serde_json::{json, Value};
@@ -28,10 +28,10 @@ pub const SPEECH_PATH_ENV: &str = "NIHO_DOCS_SPEECH_PATH";
 /// 本物が見つからず、偽物で代わりに動いているときの案内（開発ビルドだけ）。
 pub const STAND_IN_NOTICE: &str =
   "文字起こしの部品が見つかりません。`npm run sidecar:build` で作ってください（今は偽物の固定の文で動いています）。";
-/// この Mac の区切りは15分、Gemini は出力の省略を抑えるため5分。窓・最短は共通。
+/// この Mac の区切りは15分、Gemini は10分。窓・最短は共通。
 const SILENCE_TARGET_SEC: &str = "900";
 /// Gemini は長い区切りでの出力省略を抑えるため、既存の Flash 15 分より短くする。
-const GEMINI_SILENCE_TARGET_SEC: &str = "300";
+pub const GEMINI_SILENCE_TARGET_SEC: &str = "600";
 const SILENCE_WINDOW_SEC: &str = "60";
 const SILENCE_MIN_SEC: &str = "60";
 const KILL_GRACE: Duration = Duration::from_secs(3);
@@ -889,24 +889,24 @@ esac"#,
   }
 
   #[test]
-  fn gemini_preparation_uses_five_minute_parts_and_passes_sound_metadata() {
+  fn gemini_preparation_uses_ten_minute_parts_and_passes_sound_metadata() {
     let dir = temp_dir("gemini-short-parts");
     let audio = dir.join("a.m4a");
     fs::write(&audio, b"x").unwrap();
     let binary = script(
       &dir,
       r#"case "$1" in
-  convert) printf '%s\n' '{"durationSec":600.0}' ;;
+  convert) printf '%s\n' '{"durationSec":1200.0}' ;;
   silence)
     case " $* " in
-      *" --target 300 "*) printf '%s\n' '{"cuts":[300.0],"soundSec":[200.0,250.0]}' ;;
+      *" --target 600 "*) printf '%s\n' '{"cuts":[600.0],"soundSec":[500.0,550.0]}' ;;
       *) exit 1 ;;
     esac ;;
 esac"#,
     );
     let files = prepare_audio(&SpeechJob::new(), &binary, &[audio], &dir, &mut |_| {}).unwrap();
-    assert_eq!(files[0].bounds, vec![(0.0, 300.0), (300.0, 600.0)]);
-    assert_eq!(files[0].sound_sec, vec![200.0, 250.0]);
+    assert_eq!(files[0].bounds, vec![(0.0, 600.0), (600.0, 1200.0)]);
+    assert_eq!(files[0].sound_sec, vec![500.0, 550.0]);
     let _ = fs::remove_dir_all(dir);
   }
 

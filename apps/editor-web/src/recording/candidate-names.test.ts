@@ -12,6 +12,7 @@ describe("案の名前（#36 段 3b-4）", () => {
 
   it("知らないエンジンは id をそのまま出し、長い名前は数だけで区別する", () => {
     expect(candidateEngineLabel("whisper-x")).toBe("whisper-x");
+    expect(candidateEngineLabel("gemini-cli")).toBe("Gemini（このMacのCLI）");
     const long = "あ".repeat(60);
     expect(nextCandidateName([long], long)).toBe("案 2");
   });
@@ -19,6 +20,7 @@ describe("案の名前（#36 段 3b-4）", () => {
   it("文字起こしの送信先を名前で示し、未知の engine は推測しない", () => {
     expect(transcriptionServiceNote("deepgram")).toContain("Deepgram");
     expect(transcriptionServiceNote("gemini")).toContain("Google Gemini");
+    expect(transcriptionServiceNote("gemini-cli")).toContain("Antigravity CLI");
     expect(transcriptionServiceNote("fake")).toContain("外部サービスへ送られません");
     expect(canDiscloseTranscriptionEngine("deepgram")).toBe(true);
     expect(canDiscloseTranscriptionEngine("whisper-x")).toBe(false);
