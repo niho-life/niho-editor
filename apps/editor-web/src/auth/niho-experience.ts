@@ -5,7 +5,7 @@ import { loginPath, safeReturnTo } from "./return-to";
 import { AuthTemporarilyUnavailable, type AuthProvider, type Session, type SessionRequest } from "./types";
 
 const CLIENT_ID = "niho-experience-editor";
-const CONNECT_PATH = "/connect/niho-experience-editor";
+const CONNECT_PATH = "/connect/niho-editor";
 const CONNECT_START_PATH = `${CONNECT_PATH}/start`;
 const EXCHANGE_PATH = "/api/auth/experience-editor-connect/exchange";
 const REFRESH_PATH = "/api/auth/experience-editor-connect/refresh";
