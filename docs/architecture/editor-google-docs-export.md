@@ -40,7 +40,7 @@ workerがNIHOを呼ぶときはruntimeの固定Google metadata identityを使い
 
 ## 取消・保持・消去
 
-取消は後続作成を止め、現在の本人からNIHO grantをrevokeする。既に送った1件は完成しうるため、その事実を表示する。取消・期限切れ・接続失効後はactiveなownerと登録grant/item/caller一致時のDB completed receiptだけで確定し、Google/OAuth再照会・create・再処理をしない。結果不明を未作成と断定しない。既存Google文書を削除しない。
+取消は後続作成を止め、現在の本人からNIHO grantをrevokeする。既に送った1件は完成しうるため、その事実を表示する。取消・期限切れ・接続失効後はactiveなownerと登録grant/item/caller一致時のDB completed receiptだけで確定し、Google/OAuth再照会・create・再処理をしない。workerはinternal statusへ`receiptOnly:true`を明示し、NIHOへのrevoke要求が未確認でも照会を狭める。NIHO #19731のこの追加契約が未反映なら400で止まり、通常のstatusへfallbackしない。結果不明を未作成と断定しない。既存Google文書を削除しない。
 
 Google account/Editor接続の変更で旧jobを止め、本人の確認なしに新しいgrantへ切り替えない。本人・元ページの消去で一時snapshotを消す。NIHO grantは統合先へ移さず、退会/PII purgeに接続する。
 

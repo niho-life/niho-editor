@@ -155,6 +155,32 @@ describe("migration files", () => {
     assert.doesNotMatch(copies, /UNIQUE \(target_asset_id\)/, "a later proposal may reuse an already-adopted independent target asset");
   });
 
+  it("adds durable Google Docs batches without plaintext content or credentials", async () => {
+    const migration = (await readMigrations()).find((file) => file.name.endsWith("_google_docs_batches.sql"));
+    assert.ok(migration);
+    const sql = withoutComments(migration.sql);
+    for (const table of ["google_docs_batch_jobs", "google_docs_batch_items", "google_docs_batch_outbox"]) {
+      assert.ok(tableBody(sql, table).length > 0, `missing ${table}`);
+    }
+    const jobs = tableBody(sql, "google_docs_batch_jobs");
+    assert.match(jobs, /expires_at <= created_at \+ interval '23 hours 50 minutes'/);
+    assert.match(jobs, /grant_expires_at <= expires_at \+ interval '10 minutes'/);
+    assert.match(jobs, /UNIQUE \(owner, operation_id\)/);
+    assert.match(jobs, /grant_revoked_at timestamptz/);
+    const items = tableBody(sql, "google_docs_batch_items");
+    assert.match(items, /payload_nonce bytea/);
+    assert.match(items, /payload_ciphertext bytea/);
+    assert.match(items, /payload_tag bytea/);
+    assert.match(items, /payload_bytes > 0 AND payload_bytes <= 4194304/);
+    assert.doesNotMatch(items, /\b(title|markdown|body|cookie|refresh_token)\s+(text|jsonb|bytea)\b/i);
+    assert.match(items, /UNIQUE \(job_id, ordinal\)/);
+    assert.match(sql, /google_docs_batch_outbox_pending_idx/);
+    assert.match(sql, /CREATE TRIGGER pages_purge_google_docs_batches\s+BEFORE DELETE ON pages/);
+    assert.match(sql, /DELETE FROM google_docs_batch_jobs j\s+WHERE j\.owner = OLD\.owner/);
+    assert.match(sql, /j\.root_page_id = OLD\.id OR EXISTS/);
+    assert.match(sql, /i\.job_id = j\.id AND i\.owner = OLD\.owner AND i\.page_id = OLD\.id/);
+  });
+
   it("does not embed records, secrets, credentials, real addresses, or token columns", async () => {
     for (const file of await readMigrations()) {
       const sql = file.sql;

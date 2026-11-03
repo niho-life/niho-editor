@@ -1,7 +1,7 @@
 /**
  * Google ドキュメント書き出しの方式（`EDITOR_GOOGLE_DOCS_MODE=niho`）。
  *
- * editor は Google を直接呼ばない。NIHO が既に動かしている `me/docs-drive/*`（旧 NIHO docs と同じ口）を本人として呼ぶ。
+ * editor は Google を直接呼ばない。NIHO の Editor 専用 `auth/experience-editor-connect/docs-drive/*` を本人として呼ぶ。
  * 設計は docs/architecture/editor-google-docs-export.md、配備は docs/ops/editor-google-docs.md。
  *
  * - `niho`: NIHO の API を使う。API の起点（`EDITOR_NIHO_API_ORIGIN`）と `returnTo`（`EDITOR_NIHO_RETURN_TO`）は既定を持つ。
@@ -16,9 +16,9 @@
 export const GOOGLE_DOCS_MODES = ["niho", "off"] as const;
 export type GoogleDocsMode = (typeof GOOGLE_DOCS_MODES)[number];
 
-/** NIHO の API の起点（旧 Mac アプリと同じ。`apps/docs/src-tauri/src/google_docs.rs` の `api_url`）。 */
+/** NIHO の API の起点。専用 path は runtime 側で固定して足す。 */
 export const DEFAULT_NIHO_API_ORIGIN = "https://niho.life/api";
-/** Google の同意のあとに本人を戻す先を決める値（niho-app 側が受け入れる値。旧 Mac アプリは `niho-docs`）。 */
+/** Google の同意のあとに固定 Editor connect 面へ戻す閉じた値。 */
 export const DEFAULT_NIHO_RETURN_TO = "niho-editor";
 /** 1 回の呼び出しの時間切れ（旧 Mac アプリと同じ 45 秒）。 */
 export const NIHO_API_TIMEOUT_MS = 45_000;
@@ -39,9 +39,6 @@ export type GoogleDocsConfig =
 export class GoogleDocsConfigError extends Error {
   override readonly name = "GoogleDocsConfigError";
 }
-
-/** `returnTo` として受け付ける形（短い英小文字の名前）。 */
-const RETURN_TO = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
 
 function isMode(value: string): value is GoogleDocsMode {
   return (GOOGLE_DOCS_MODES as readonly string[]).includes(value);
@@ -77,9 +74,8 @@ function apiBase(env: GoogleDocsEnv): string {
 
 function returnTo(env: GoogleDocsEnv): string {
   const raw = env.EDITOR_NIHO_RETURN_TO?.trim() ?? "";
-  if (raw === "") return DEFAULT_NIHO_RETURN_TO;
-  if (!RETURN_TO.test(raw)) throw new GoogleDocsConfigError("EDITOR_NIHO_RETURN_TO is not a valid name");
-  return raw;
+  if (raw === "" || raw === DEFAULT_NIHO_RETURN_TO) return DEFAULT_NIHO_RETURN_TO;
+  throw new GoogleDocsConfigError("EDITOR_NIHO_RETURN_TO must be niho-editor");
 }
 
 /** 方式を決める。誤りは GoogleDocsConfigError（値を含めない）。 */

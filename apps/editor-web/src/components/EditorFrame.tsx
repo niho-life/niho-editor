@@ -475,6 +475,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     },
     openSheet: (sheet, owner) => (sheet === "share" ? share.open(owner) : history.open(owner)),
     focusMore,
+    goToGoogleDocsBatch: (path) => router.push(path),
   });
   const restoredNote = history.notice && history.notice.id === currentId ? history.notice.text : "";
 

@@ -61,6 +61,7 @@ function authAs(userId: string | null, token: string | null = TOKEN): AuthProvid
     completeLogin: notUsed,
     logout: notUsed,
     apiToken: async () => token,
+    docsApiToken: async () => token,
   };
 }
 
@@ -106,8 +107,8 @@ function deps(options: DepsOptions = {}): GoogleDocsApiDeps {
     auth: () => auth,
     store: () => (options.store === undefined ? memoryStore([]) : options.store),
     gateway: () => (options.gateway === undefined ? fakeGateway().gateway : options.gateway),
-    credential: async (session) => {
-      const token = await auth.apiToken?.(session);
+    credential: async (session, sessionRequest) => {
+      const token = await auth.docsApiToken?.(session, sessionRequest);
       return token ? { idToken: () => token } : null;
     },
     env: { EDITOR_ORIGIN: ORIGIN },

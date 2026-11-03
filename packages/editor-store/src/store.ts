@@ -703,6 +703,18 @@ export class EditorStore {
           [ids],
         );
         if (published.rows.length > 0) return "published";
+        // A root is authoritative even when it was not selected as an export item. Removing any
+        // source tree page atomically fences future Google creates and cascades encrypted payload/outbox.
+        await client.query(
+          `DELETE FROM google_docs_batch_jobs j
+            WHERE j.owner = $1
+              AND (j.root_page_id = ANY($2::uuid[])
+                   OR EXISTS (
+                     SELECT 1 FROM google_docs_batch_items i
+                      WHERE i.job_id = j.id AND i.owner = $1 AND i.page_id = ANY($2::uuid[])
+                   ))`,
+          [owner, ids],
+        );
         // 同じ時刻を全ての行に入れる（clock_timestamp() を行ごとに呼ぶと、一緒に入れた子を見分けられない）。
         // MATERIALIZED の CTE は 1 度だけ評価される
         await client.query(

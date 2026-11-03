@@ -34,6 +34,8 @@ export interface AuthProvider {
   apiToken?(session: Session): Promise<string | null>;
   /** NIHOの記事連携API専用token。現在のrequestとsessionを再照合し、固定用途だけに使う。 */
   articleApiToken?(session: Session, request: SessionRequest, purpose: "roles" | "article-links"): Promise<string | null>;
+  /** NIHOのEditor専用Docs gatewayだけに渡すtoken。現在のrequestとsessionを毎回再照合する。 */
+  docsApiToken?(session: Session, request: SessionRequest): Promise<string | null>;
 }
 
 /** 上流NIHOが一時的に確認不能。未認証(null)へ降格させず、API routeは503として再試行可能にし、SSRではエラー境界へ伝える。 */

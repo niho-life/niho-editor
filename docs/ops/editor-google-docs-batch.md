@@ -4,7 +4,7 @@
 
 ## 配備順
 
-1. NIHO側の専用gateway、grant migrationとlifecycleをマージ・公式配備する。`EDITOR_DOCS_DRIVE_ENABLED`は初期false。`EDITOR_DOCS_DRIVE_AUDIENCE`に固定HTTPS audience、`EDITOR_DOCS_DRIVE_WORKER_SERVICE_ACCOUNT_EMAIL`にEditor runtimeの実行identityを指定する。値はNIHOの非公開運用設定で管理する。本人tokenではinternal口を呼べない。
+1. NIHO側の専用gateway、grant migrationとlifecycleをマージ・公式配備する。`EDITOR_DOCS_DRIVE_ENABLED`は初期false。`EDITOR_DOCS_DRIVE_AUDIENCE`に固定HTTPS audience、`EDITOR_DOCS_DRIVE_WORKER_SERVICE_ACCOUNT_EMAIL`にEditor runtimeの実行identityを指定する。値はNIHOの非公開運用設定で管理する。本人tokenではinternal口を呼べない。internal statusの`receiptOnly:true`対応も必須。取消確認の通信が失敗してもDBだけを読む指定であり、この対応が未反映のstrict APIで400となる間は新機能を有効化しない。
 2. Editorを`GOOGLE_DOCS_MODE=off`・`GOOGLE_DOCS_BATCH_MODE=off`・`PRIVATE_JOBS_MAINTENANCE=true`・keyring参照なしで配備し、新migrationと共通private-job cleanupの固定command/argsを確認する。
 3. `private-jobs-infra.sh`で共通の5分回収を設定し、`google-docs-infra.sh`で専用queueと5分の復旧sweepを設定する。後者はtask identityとqueueだけに既存の最小権限を与え、ユーザー資格情報・Google秘密を持たない。停止中のSchedulerを自動再開しない。この時点ではアプリ機能を有効にしない。
 4. オーナーが`set-private-jobs-keyring.sh`へ、安全な標準入力で1行JSONのkeyringを渡す。鍵はチャット・コマンド引数・ファイル・AIへ渡さない。helperが返す非機密の固定数値版参照だけを`EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF`へ設定する。翻訳と共通のkeyringを使い、purpose/AADは用途別に分離する。回収が準備できるまで参照付き配備を拒否する。

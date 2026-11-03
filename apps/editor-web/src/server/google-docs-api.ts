@@ -1,5 +1,5 @@
 import type { EditorStore } from "@niho/editor-store";
-import type { AuthProvider, Session } from "../auth/types";
+import type { AuthProvider, Session, SessionRequest } from "../auth/types";
 import { exportFullMarkdown, MarkdownExportError } from "../export/markdown";
 import {
   checkExportRequest,
@@ -16,7 +16,7 @@ import { errorResponse, guarded, isSameOriginRequest, jsonResponse, notFoundResp
 /**
  * Google ドキュメントへの書き出しの API（設計 docs/architecture/editor-google-docs-export.md）。
  *
- * editor は Google を直接呼ばない。NIHO が既に動かしている `me/docs-drive/*` を**サーバー側から本人として**呼ぶ
+ * editor は Google を直接呼ばない。NIHO の Editor 専用 Docs prefix を**サーバー側から本人として**呼ぶ
  * （src/google-docs/niho.ts）。本人の token はこの層から外へ出さず、ブラウザへ返すのは接続の状態・`documentId`・短い code だけ。
  *
  * - 本人のものだけ。未認証は 401、他人のページ・存在しない id は 404（同じ応答）。更新系は同じ origin からだけ（違えば 403）。
@@ -35,7 +35,7 @@ export type GoogleDocsApiDeps = {
   /** 方式が閉じているときは null（503 `google_docs_unavailable`）。 */
   gateway: () => GoogleDocsGateway | null;
   /** 本人の資格情報。出せないときは null（503 `google_docs_unavailable`）。 */
-  credential: (session: Session) => Promise<GoogleDocsCredential | null>;
+  credential: (session: Session, request: SessionRequest) => Promise<GoogleDocsCredential | null>;
   env?: Readonly<Record<string, string | undefined>>;
 };
 
@@ -78,7 +78,7 @@ async function ready(request: Request, deps: GoogleDocsApiDeps): Promise<Ready |
   if (!session) return { response: errorResponse("unauthorized") };
   const gateway = deps.gateway();
   if (!gateway) return { response: failure("google_docs_unavailable") };
-  const credential = await deps.credential(session);
+  const credential = await deps.credential(session, request);
   if (!credential) return { response: failure("google_docs_unavailable") };
   return { session, gateway, credential };
 }

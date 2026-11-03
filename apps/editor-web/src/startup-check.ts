@@ -1,6 +1,7 @@
 import { resolveAuthMode } from "./auth/config";
 import { resolveStorageConfig } from "./storage/config";
 import { resolveGoogleDocsConfig } from "./google-docs/config";
+import { resolveGoogleDocsBatchConfig } from "./google-docs/batch-config";
 import { resolveTranscriptionConfig } from "./transcription/config";
 import { FACE_CREDENTIALS_ENV, parseFaceCredentials } from "./public-api/source";
 import { parseRateLimit, RATE_LIMIT_ENV } from "./public-api/rate-limit";
@@ -35,6 +36,13 @@ export function checkStartupConfig(env: NodeJS.ProcessEnv = process.env): void {
     resolveGoogleDocsConfig(env);
   } catch (error) {
     const message = error instanceof Error ? error.message : "invalid Google Docs configuration";
+    console.error(`editor-web: refusing to start: ${message}`);
+    process.exit(1);
+  }
+  try {
+    resolveGoogleDocsBatchConfig(env);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "invalid Google Docs batch configuration";
     console.error(`editor-web: refusing to start: ${message}`);
     process.exit(1);
   }
