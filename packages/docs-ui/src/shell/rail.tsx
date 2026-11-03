@@ -39,7 +39,9 @@ export function ShellRail({ children, label = "このページの設定と AI", 
   const narrow = useSyncExternalStore(subscribeNarrow, isNarrow, isNarrowOnServer);
   const view = useContext(ShellViewContext);
   // 900px 未満で一覧が全画面のあいだ（view=list）は、レールを含むページ全体が隠れている。見えないダイアログで外を inert にしない
-  if (narrow && onClose && view !== "list") {
+  // EditorShell は閉じたレールも state 保持のため mount する。dialog にするのは実際に rail view の間だけ。
+  // 枠の外（view=null）は従来どおり onClose を持つ narrow rail を sheet として扱う。
+  if (narrow && onClose && (view === null || view === "rail")) {
     return (
       <ShellSheet label={label} onClose={onClose} className="es-sheet--rail">
         <div className="es-sh-hd">

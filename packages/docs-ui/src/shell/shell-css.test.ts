@@ -136,6 +136,18 @@ describe("shell.css（モック v6 の枠のスタイル）", () => {
     expect(bodyOf(".es-cb")).toContain("overflow:auto");
     expect(bodyOf(".es-rail")).toContain("overflow:hidden");
     expect(bodyOf(".es-rail")).toContain("flex-direction:column");
+    expect(bodyOf(".es-rail-presence")).toBe("display:contents");
+  });
+
+  it("AI 入力欄はレールの面を透過して使い、320px で縮められ、縦方向だけ手動リサイズできる", () => {
+    const composer = bodyOf(".es-ai-composer") ?? "";
+    const textarea = bodyOf(".es-ai-composer textarea") ?? "";
+    expect(composer).toContain("min-width:0");
+    expect(composer).not.toContain("background:");
+    expect(textarea).toContain("width:100%");
+    expect(textarea).toContain("min-width:0");
+    expect(textarea).toContain("resize:vertical");
+    expect(textarea).toContain("background:transparent");
   });
 
   it("--ed-ink-faint は文字に使わない（装飾の矢印 ▾ と「＋」のアイコンだけ。非テキストの 3:1。#43）", () => {

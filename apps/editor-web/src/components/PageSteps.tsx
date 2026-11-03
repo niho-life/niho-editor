@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { Block, PageKind } from "@niho/editor-store";
 import { ShellSteps, ShellStepsStart, type ShellStepsAction } from "niho-docs-ui/shell";
 import { StepsRequestError, cancelStepRun, getStepPartialOutput, getSteps, isStepRunDone, startStepRun, updateStepRunRecipe, type StepRecipeChoice, type StepRun, type StepRunStep } from "@/lib/steps-client";
 import {
   isStepRunActive,
+  maxStepFrom,
   stepBandActions,
   stepBandNote,
   stepBandSteps,
@@ -17,6 +18,7 @@ import {
   type StepBandAction,
 } from "@/lib/steps-view";
 import { useEditorFrame } from "./EditorFrame";
+import type { AttachedAiSteps } from "@/lib/attached-page";
 
 /**
  * 状態を読み直す間隔（ms）。動いている間だけ、だんだん空けながら読む（短い間隔で回さない）。
@@ -139,7 +141,7 @@ export function PageSteps({
   children: ReactNode;
 }) {
   const router = useRouter();
-  const { stepPagesChanged } = useEditorFrame();
+  const { stepPagesChanged, registerAiSteps } = useEditorFrame();
   // 手順は録音ページを根に持つ。サブページを開いているときは親で読む
   const rootId = kind === "rec" ? pageId : parentId;
   const [run, setRun] = useState<StepRun | null>(null);
@@ -147,6 +149,16 @@ export function PageSteps({
   const [recipes, setRecipes] = useState<readonly StepRecipeChoice[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const ownerGeneration = useRef(0);
+  const [loadedRoot, setLoadedRoot] = useState<string | null>(null);
+  useEffect(() => {
+    const generation = ++ownerGeneration.current;
+    busyRef.current = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the pending request belongs to the previous page
+    setBusy(false);
+    return () => { ownerGeneration.current = generation + 1; };
+  }, [rootId, pageId]);
   // 読み直しの合図（始めた・やり直した直後にもう一度読む）
   const [tick, setTick] = useState(0);
   // 通知の文のために、いま読んでいる手順の一覧（apply を作り直さず、送る直前の値を読む）
@@ -189,6 +201,7 @@ export function PageSteps({
         setNotice(null);
         recipesRef.current = latest.recipes;
         setRecipes(latest.recipes);
+        setLoadedRoot(rootId);
         if (latest.run) apply(latest.run);
         else setRun(null);
         if (!isStepRunActive(latest.run)) return;
@@ -214,6 +227,66 @@ export function PageSteps({
     };
   }, [rootId, tick, apply]);
 
+  const send = useCallback(async (job: () => Promise<StepRun>): Promise<{ ok: boolean; message: string }> => {
+    if (busyRef.current) return { ok: false, message: "いま工程を開始しています。終わるまで待ってください。" };
+    const generation = ownerGeneration.current;
+    busyRef.current = true;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const next = await job();
+      if (generation !== ownerGeneration.current) return { ok: false, message: "ページを移動したため、元のページで工程の状態を確認してください。" };
+      apply(next);
+      setTick((value) => value + 1);
+      return { ok: true, message: "工程を開始しました。進み具合はページの手順に反映されます。" };
+    } catch (error) {
+      const message = messageOf(error);
+      if (generation === ownerGeneration.current) setNotice(message);
+      return { ok: false, message };
+    } finally {
+      if (generation === ownerGeneration.current) {
+        busyRef.current = false;
+        setBusy(false);
+      }
+    }
+  }, [apply]);
+
+  const start = useCallback((recipe: string, fromStep?: number) => {
+    if (!rootId) return Promise.resolve({ ok: false, message: "このページには実行できる工程がありません。" });
+    askNotifyPermission();
+    return send(() => startStepRun(rootId, fromStep === undefined ? { recipe } : { recipe, fromStep }));
+  }, [rootId, send]);
+
+  const aiSteps = useMemo<AttachedAiSteps | null>(() => {
+    if (!rootId || loadedRoot !== rootId) return null;
+    const commonReason = isStepRunActive(run) ? "いま別の手順が動いています。終わるまで待ってください。" : busy ? "いま工程を開始しています。" : null;
+    const options = run ? run.steps.map((step) => ({
+      id: `stage:${step.index}`,
+      label: step.name,
+      hint: `${run.recipeName ?? stepRecipeName(recipes, run.recipe)} · この段階から作り直す`,
+      disabledReason: commonReason ?? (step.index > maxStepFrom(run) ? "手前の段階が済んでいません。" : null),
+    })) : recipes.map((recipe) => ({
+      id: recipe.id,
+      label: recipe.name,
+      hint: "この手順をはじめから開始",
+      disabledReason: recipe.unusableReason ?? commonReason,
+    }));
+    return {
+      ownerId: pageId,
+      options,
+      start: async (id) => {
+        const option = options.find((item) => item.id === id);
+        if (!option) return { ok: false, message: "この工程は現在の手順にありません。" };
+        if (option.disabledReason) return { ok: false, message: option.disabledReason };
+        const step = run?.steps.find((item) => `stage:${item.index}` === id);
+        const result = await start(step && run ? run.recipe : id, step?.index);
+        return result.ok ? { ...result, message: `「${option.label}」を開始しました。進み具合はページの手順に反映されます。` } : result;
+      },
+    };
+  }, [rootId, loadedRoot, pageId, recipes, run, busy, start]);
+
+  useEffect(() => (aiSteps ? registerAiSteps(aiSteps) : undefined), [aiSteps, registerAiSteps]);
+
   if (!rootId) {
     return (
       <>
@@ -224,26 +297,6 @@ export function PageSteps({
   }
   const root = rootId;
 
-  const send = async (job: () => Promise<StepRun>) => {
-    if (busy) return;
-    setBusy(true);
-    setNotice(null);
-    try {
-      apply(await job());
-      // 積んだ直後の状態を読み直す（間隔の数え直しも兼ねる）
-      setTick((value) => value + 1);
-    } catch (error) {
-      setNotice(messageOf(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const start = (recipe: string, fromStep?: number) => {
-    askNotifyPermission();
-    void send(() => startStepRun(root, fromStep === undefined ? { recipe } : { recipe, fromStep }));
-  };
-
   const actions: StepBandAction[] = run ? stepBandActions(run, pageId) : [];
   const shellActions: ShellStepsAction[] = actions.map((action) => ({ id: action.id, label: action.label, tone: action.tone, busy }));
   const onAction = (id: string) => {
@@ -252,7 +305,7 @@ export function PageSteps({
     // 設定の画面の節へ（今月の使用量・手順の指示とお手本。節の id は docs-ui の EDITOR_SETTINGS_NAV と同じ）
     if (action.settings) router.push(action.settings === "usage" ? "/settings#es-s-ai" : "/settings#es-s-steps");
     else if (action.cancel) void send(() => cancelStepRun(root, run.id));
-    else if (action.fromStep !== undefined) start(run.recipe, action.fromStep);
+    else if (action.fromStep !== undefined) void start(run.recipe, action.fromStep);
   };
 
   return (
@@ -297,7 +350,7 @@ export function PageSteps({
       {media}
       {/* 録音ページで、手順が動いていないときの入口（終わったあとは別の手順も始められる） */}
       {kind === "rec" && recipes.length > 0 && !isStepRunActive(run) && (
-        <ShellStepsStart choices={stepStartChoices(recipes)} busy={busy} onPick={(recipe) => start(recipe)} onChangeSteps={() => router.push("/settings")} />
+        <ShellStepsStart choices={stepStartChoices(recipes)} busy={busy} onPick={(recipe) => void start(recipe)} onChangeSteps={() => router.push("/settings")} />
       )}
       {children}
     </>

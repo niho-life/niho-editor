@@ -9,10 +9,11 @@ import { StepError, fakeBlocks, type StepExecutor } from "@/steps/executor";
 import { MemoryStepRunStore } from "@/steps/memory-store";
 import { MemoryTaskQueue } from "@/steps/queue";
 import { recipesOf } from "@/steps/recipes";
+import type { AttachedAiSteps } from "@/lib/attached-page";
 import { runAttempt } from "@/steps/runner";
 
 const router = { push: vi.fn(), refresh: vi.fn(), replace: vi.fn() };
-const frame = { stepPagesChanged: vi.fn() };
+const frame = { stepPagesChanged: vi.fn(), registerAiSteps: vi.fn<(steps: AttachedAiSteps) => () => void>(() => () => undefined) };
 const onBodyReplaced = vi.fn();
 
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
@@ -164,6 +165,39 @@ const pressEntry = (label: string) => press(label, ".es-makefrom");
 const pressAction = (label: string) => press(label, ".es-redo");
 
 describe("PageSteps（手順の帯）", () => {
+  it("AI レールへ同じ工程一覧と start callback を登録し、選択した工程を既存 API で開始する", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    const registered = frame.registerAiSteps.mock.calls.at(-1)?.[0];
+    expect(registered?.ownerId).toBe(api.recording);
+    expect(registered?.options.map((option) => option.label)).toEqual(["記事制作", "議事録", "インサイト整理", "コーチング"]);
+
+    let result: Awaited<ReturnType<AttachedAiSteps["start"]>> | undefined;
+    await act(async () => {
+      result = await registered!.start(registered!.options[0]!.id);
+    });
+    await settle();
+    expect(result).toEqual({ ok: true, message: "「記事制作」を開始しました。進み具合はページの手順に反映されます。" });
+    expect(api.calls).toContain(`POST /api/pages/${api.recording}/steps/runs`);
+    expect(band().map((step) => step.label)).toEqual(["文字起こし修正", "記事方針", "記事本文"]);
+    let stages = frame.registerAiSteps.mock.calls.at(-1)![0];
+    expect(stages.options.map((option) => option.label)).toEqual(["文字起こし修正", "記事方針", "記事本文"]);
+    expect(stages.options.every((option) => option.disabledReason !== null)).toBe(true);
+    await api.work(executorFailingAt(1));
+    await wait(4_000);
+    stages = frame.registerAiSteps.mock.calls.at(-1)![0];
+    expect(stages.options[1]!.disabledReason).toBeNull();
+    expect(stages.options[2]!.disabledReason).toContain("手前の段階");
+    await act(async () => { result = await stages.start(stages.options[2]!.id); });
+    expect(result?.ok).toBe(false);
+    await act(async () => { result = await stages.start(stages.options[1]!.id); });
+    expect(result?.ok).toBe(true);
+    const request = api.fetchImpl.mock.calls.filter((call) => call[1]?.method === "POST").at(-1)!;
+    expect(JSON.parse(String(request[1]!.body))).toMatchObject({ recipe: "tpl-1", fromStep: 1 });
+
+  });
+
   it("polling does not fetch partial text; opening the keyboard disclosure fetches it on demand", async () => {
     const api = server();
     vi.stubGlobal("fetch", api.fetchImpl);

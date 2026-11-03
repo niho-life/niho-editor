@@ -63,6 +63,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-doc{display:flex;flex-direction:column;min-width:0;min-height:0;height:100%}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dbody{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-rail="open"] .es-dbody{grid-template-columns:minmax(0,1fr) 340px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-rail-presence{display:contents}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas{min-width:0;min-height:0;overflow:auto;padding:8px 48px 120px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas-in{max-width:680px;margin:auto}
 /* 本文へ移動（skip link）。普段は切り抜いて見せず（場所と大きさは保つので、はみ出しにならない）、フォーカスで現れる。移動先の main（tabindex=-1）には枠を出さない */
@@ -378,7 +379,47 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-composer{flex:none;border-top:1px solid var(--ed-line);padding:10px 12px 12px;background:var(--ed-canvas)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-composer-row{display:flex;align-items:center;gap:6px;border:1px solid var(--ed-line-2);border-radius:14px;background:var(--ed-white);padding:4px 6px 4px 10px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-composer-row .es-ico{color:var(--ed-ink-mute)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-composer-row input{flex:1;min-width:0;border:0;outline:none;font-size:13.5px;padding:7px 0;background:none}/* ===== フェーズ2：公開のシート・ログイン・公開プレビュー・設定系ページ ===== */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-composer-row input{flex:1;min-width:0;border:0;outline:none;font-size:13.5px;padding:7px 0;background:none}
+/* AI と作る（右レール常設。面はレールの --ed-canvas のまま、区切りは細い線だけ） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-rail:has(>.es-ai-panel)>.es-cd--open:not(.es-ai-panel){flex:0 1 50%;max-height:50%}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-panel{position:relative;min-width:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-head{height:42px;flex:none;display:flex;align-items:center;gap:4px;padding:0 10px 0 16px;font-size:13px;font-weight:600}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-body{position:relative;flex:1;min-height:0;padding:0;display:flex;flex-direction:column;overflow:hidden}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-thread{flex:1;min-height:72px;overflow:auto;padding:10px 13px 14px;display:flex;flex-direction:column;gap:14px;scrollbar-width:thin}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-empty{margin:auto;color:var(--ed-ink-mute);font-size:12.5px;text-align:center}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message{flex:none;min-width:0;font-size:12.5px;line-height:1.75;overflow-wrap:anywhere;white-space:pre-wrap}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message--user{align-self:flex-end;max-width:94%;padding:8px 11px;border:1px solid var(--ed-line-2);border-radius:12px 12px 3px 12px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message--assistant{padding:0 3px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message ul{margin:6px 0 0;padding-left:18px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-change{margin-top:8px;padding:8px 9px;border:1px solid var(--ed-line-2);border-radius:8px;font-size:12px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-change button,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-stop{margin-top:6px;color:var(--ed-accent-ink);font-size:12px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-status{flex:none;color:var(--ed-ink-mute);font-size:12px;line-height:1.55;overflow-wrap:anywhere}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-composer{position:relative;flex:none;margin:0 12px 11px;padding:8px;border:1px solid var(--ed-line-2);border-radius:10px;min-width:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-composer textarea{display:block;width:100%;min-width:0;min-height:48px;resize:vertical;overflow-y:hidden;border:0;outline:0;background:transparent;padding:2px 3px;font:inherit;font-size:12.5px;line-height:1.6;color:var(--ed-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-compose-actions{display:flex;align-items:center;gap:4px;padding-top:4px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-send{width:28px;height:28px;margin-left:auto;border-radius:50%;display:grid;place-items:center;background:var(--ed-primary-bg);color:var(--ed-primary-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-send:disabled{opacity:.4;cursor:not-allowed}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-send .es-ico{width:16px;height:16px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip{display:flex;align-items:center;gap:5px;margin:0 1px 7px;padding:4px 6px;border:1px solid var(--ed-line-2);border-radius:6px;color:var(--ed-accent-ink);font-size:12px;min-width:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip .es-ico{width:14px;height:14px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip button{margin-left:auto;padding:0 4px;font-size:16px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-popover{position:absolute;z-index:35;left:8px;right:8px;border:1px solid var(--ed-line-2);border-radius:10px;background:var(--ed-canvas);box-shadow:0 12px 32px rgba(0,0,0,.12);padding:5px;max-height:310px;overflow:auto}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-history{top:40px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-skills{bottom:calc(100% + 8px)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-popover>p{padding:8px;font-size:12px;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-menu-row{width:100%;min-width:0;display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border-radius:7px;text-align:left;font-size:12.5px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-menu-row:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-menu-row[aria-current="true"]{box-shadow:inset 0 0 0 1px var(--ed-line-2)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-menu-row[aria-disabled="true"]{color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-menu-row .es-ico{width:15px;height:15px;margin-top:2px;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-menu-row span{min-width:0;overflow-wrap:anywhere}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-menu-row small{display:block;margin-top:1px;color:var(--ed-ink-mute);font-size:12px;font-weight:400}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-menu-note{display:grid;gap:5px;padding:7px 8px;font-size:12px;color:var(--ed-amber-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-menu-note button{justify-self:start;text-decoration:underline}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-route{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;margin-bottom:7px;padding-bottom:7px;border-bottom:1px solid var(--ed-line);font-size:12px;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-route label{display:grid;grid-template-columns:56px minmax(0,1fr);align-items:center;gap:6px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-route select{min-width:0;width:100%;border:1px solid var(--ed-line-2);border-radius:6px;background:transparent;color:var(--ed-ink);font-size:12px;padding:3px 4px}
+/* ===== フェーズ2：公開のシート・ログイン・公開プレビュー・設定系ページ ===== */
 
 /* スクロールする全画面（ログイン・公開プレビュー。枠の外の単独の画面） */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root.es-root--scroll{display:flex;flex-direction:column;overflow:auto}

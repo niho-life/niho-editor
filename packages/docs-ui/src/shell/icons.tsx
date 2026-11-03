@@ -129,6 +129,12 @@ const PATHS: Record<ShellIconName, ReactNode> = {
     </>
   ),
   check: <path d="m5 12.5 4.5 4.5L19 7.5" />,
+  edit: (
+    <>
+      <path d="M4.5 19.5h4l10-10a2.8 2.8 0 0 0-4-4l-10 10z" />
+      <path d="m13 7 4 4M4.5 19.5l1-4" />
+    </>
+  ),
   trash: <path d="M5 7h14M9 7V4.5h6V7M7 7l1 13h8l1-13" />,
 };
 

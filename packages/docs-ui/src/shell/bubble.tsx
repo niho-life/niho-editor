@@ -24,10 +24,12 @@ function SelectionButtons({
   actions,
   pressed,
   textType = "テキスト",
+  showAi = true,
 }: {
   actions: ShellSelectionActions;
   pressed?: { bold?: boolean; italic?: boolean; strike?: boolean; code?: boolean };
   textType?: string;
+  showAi?: boolean;
 }) {
   return (
     <>
@@ -58,11 +60,15 @@ function SelectionButtons({
       <button type="button" aria-label="箇条書き" onMouseDown={keepFocus} onClick={actions.onList}>
         <Icon name="list" />
       </button>
-      <span className="es-sep" aria-hidden="true" />
-      <button type="button" className="es-aibtn" aria-label="AI に頼む" onMouseDown={keepFocus} onClick={actions.onAi}>
-        <Icon name="spark" />
-        AI
-      </button>
+      {showAi && (
+        <>
+          <span className="es-sep" aria-hidden="true" />
+          <button type="button" className="es-aibtn" aria-label="AI に頼む" onMouseDown={keepFocus} onClick={actions.onAi}>
+            <Icon name="spark" />
+            AI
+          </button>
+        </>
+      )}
     </>
   );
 }
@@ -85,6 +91,8 @@ export type ShellBubbleMenuProps = {
   onTextType?: () => void;
   onLink?: () => void;
   onAi?: () => void;
+  /** 右レールに AI が常設される画面では、選択ツールバーの重複入口を出さない。 */
+  hideAi?: boolean;
   /** 「行の種類」のボタンに見せる、いまの行の種類（既定は「テキスト」）。 */
   textType?: string;
 };
@@ -93,7 +101,7 @@ export type ShellBubbleMenuProps = {
  * 選んだ文字の上に出る書式の帯（TipTap の bubble-menu）。BlockEditor の BubbleMenu と同じ import で、editor を props で受ける。
  * 太字・斜体・見出し・箇条書きは editor のコマンドへ、行の種類・リンク・AI は props の関数へ渡す。
  */
-export function ShellBubbleMenu({ editor, onTextType, onLink, onAi, textType }: ShellBubbleMenuProps) {
+export function ShellBubbleMenu({ editor, onTextType, onLink, onAi, hideAi, textType }: ShellBubbleMenuProps) {
   useEffect(() => {
     const update = () => {
       const bar = editor.view.dom.closest(".be")?.querySelector(".es-selbar--live");
@@ -116,6 +124,7 @@ export function ShellBubbleMenu({ editor, onTextType, onLink, onAi, textType }: 
     >
       <SelectionButtons
         textType={textType}
+        showAi={!hideAi}
         pressed={{ bold: editor.isActive("bold"), italic: editor.isActive("italic"), strike: editor.isActive("strike"), code: editor.isActive("code") }}
         actions={{
           onTextType,

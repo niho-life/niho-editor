@@ -321,7 +321,9 @@ describe("レールのシート（900px 未満。#43）", () => {
     expect(inert.sort()).toEqual(["es-canvas", "es-dt", "es-sb", "es-skip"]);
     expect(host.querySelector('[role="dialog"]')!.closest("[inert]")).toBeNull();
     key(document.activeElement!, "Escape");
-    expect(host.querySelectorAll("[inert]")).toHaveLength(0);
+    // 閉じたレールは会話 state を保つため mount したまま、専用 wrapper だけが hidden + inert になる。
+    expect([...host.querySelectorAll("[inert]")].map((element) => element.className)).toEqual(["es-rail-presence"]);
+    expect(host.querySelector<HTMLElement>(".es-rail-presence")?.hidden).toBe(true);
   });
 
   it("一覧が全画面のあいだ（view=list）は、隠れているレールをダイアログにしない: 見えている一覧を inert にしない", () => {
