@@ -4,15 +4,15 @@
 
 ## 結論
 
-**editor は Google を直接呼びません。NIHO が既に動かしている `https://niho.life/api/me/docs-drive/*` を、サーバー側から本人として呼びます。**
+**editor は Google を直接呼びません。将来、NIHO が Editor 専用の credential 契約を用意した場合に限り、`https://niho.life/api/me/docs-drive/*` をサーバー側から本人として呼びます。**
 
 Google の側（OAuth クライアント・同意画面・本人ごとの接続と refresh token の保管・Markdown から Google ドキュメントへの変換）は **niho-app に既にあり、本番で動いています**。
 editor はそれの 2 番目の客になるだけです。**Google Cloud のコンソールでの作業も、client secret も、refresh token を預かる表も要りません。**
 
-> **依存：この機能はDocs API専用の最小権限credential契約が出るまで使えません。** NIHO editorのopaque browser sessionは写真本人確認に限定し、
-> native AppConnect・Experience token・一般NIHO API tokenを流用せず、`apiToken`はnullのままにします。
-> それでもこの方式を採ります（書き出しは今すぐ要る機能ではなく、ここで token の預かりとコンソール作業を増やす見返りが小さい）。
-> **先に使いたくなったときは §7 の予備案から作れます。**
+> **依存：NIHO側にDocs API専用の最小権限credential契約はまだありません。** NIHO editorのopaque browser sessionは写真本人確認に限定し、
+> native AppConnect・Experience token・一般NIHO API token・NIHO ID tokenを流用しません。現在のruntimeは`apiToken`が無い場合に閉じ、routeは503を返します。
+> credentialの発行元、scope、owner binding、失効・本人切替時の動作がNIHO側で定義され、Editorの接続経路が承認されるまでは、このAPIを呼ばず、フラグも有効にしません。
+> **書き出しを実装するときは、まずNIHO側の契約と実APIを確認し、この文書を更新します。§7の予備案はオーナー判断なしに採りません。**
 
 ## 1. 旧版の棚卸し（何が、どこに、生きているか）
 
@@ -21,23 +21,25 @@ editor はそれの 2 番目の客になるだけです。**Google Cloud のコ�
 | Google の OAuth クライアント・同意画面・scope | **niho-app（本番）** | **そのまま使う。** 作り直さない |
 | 本人ごとの接続と refresh token の保管 | **niho-app（本番）** | **そのまま使う。** editor は持たない |
 | Markdown → Google ドキュメントの変換 | **niho-app（本番）** | **そのまま使う。** editor は Markdown を渡すだけ |
-| HTTP の契約（`me/docs-drive/*`） | `apps/docs/src-tauri/src/google_docs.rs`（この repo） | **写す。** 検証・失敗の対応づけも含めて §2 |
+| HTTP の旧版参考形状（`me/docs-drive/*`） | `apps/docs/src-tauri/src/google_docs.rs`（この repo） | Editor向けcredential/API契約ではない。NIHO側の確認後に実装する |
 | 画面の状態機械（受付・再試行・再接続） | `packages/docs-ui/src/lib/use-google-docs.ts`（この repo） | 意味を引き継ぐ。コードは使わない（§4） |
 | Mac だけの部品（Tauri の bridge・ローカルのファイル） | `apps/docs`・`local-google-docs-folder-export.ts` | 使わない |
 
 旧版の Rust（`google_docs.rs`）は **Google を呼んでいません**。「本人の Google ドキュメント接続・書き出し専用の HTTP 境界」で、相手は NIHO の API です。
 `DocsDriveConnection` の注記（「内部 credential や token は Bridge へ出さない」）も同じことを言っています。**Google を呼ぶ場所は、最初から 1 か所だけ**でした。
 
-API が生きていることは確かめました（資格情報なしの要求に 401 が返る。中身は見ていません）:
+API route が存在することだけは過去に確認しています（資格情報なしの要求に 401 が返る。応答本文は読んでいません）。これはEditorからの認証・権限・response契約が使える証拠ではありません:
 
 ```
 GET  https://niho.life/api/me/docs-drive/connection → 401
 POST https://niho.life/api/me/docs-drive/exports    → 401
 ```
 
-## 2. 使う契約（`google_docs.rs` から写す）
+## 2. 旧版の参考形状（Editorの接続契約ではない）
 
-`Authorization: Bearer <NIHO の ID token>`。応答の本文は 1 MiB まで、1 回の呼び出しは 45 秒で切る。
+**Authorization headerとcredentialは未確定です。** 旧版のMac clientが使ったtoken形状をEditorへ引き継ぎません。現行EditorはDocs API専用credentialを取得できないため、`runtime.ts`で閉じます。
+
+以下のroute、body、response、error mappingは旧版の調査記録です。Editor実装の前にniho-app側の正式なAPI契約・認証境界と照合し、契約に合わない項目は更新してください。推測でendpointやtokenを実装しません。
 
 | | |
 | --- | --- |
