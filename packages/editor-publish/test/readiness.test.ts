@@ -48,9 +48,9 @@ describe("evaluateReadiness: NIHO Experience", () => {
 
   it.each([
     ["Japanese page", { lang: "ja" as const }, {}, ["lang-en"]],
-    ["no cover", { coverAssetId: null }, {}, ["cover"]],
-    ["no lead", { lead: null }, {}, ["lead"]],
-    ["blank lead", { lead: "   " }, {}, ["lead"]],
+    ["no cover", { coverAssetId: null }, {}, []],
+    ["no lead", { lead: null }, {}, []],
+    ["blank lead", { lead: "   " }, {}, []],
     ["lead over 200 characters", { lead: "あ".repeat(201) }, {}, ["lead"]],
     ["no heading", { content: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Only text." }] }] } }, {}, ["headings"]],
     ["CONFIRM in the body", { content: bodyWith({ type: "paragraph", content: [{ type: "text", text: "Hours [CONFIRM: winter]" }] }) }, {}, ["no-confirm"]],
@@ -101,7 +101,7 @@ describe("evaluateReadiness: NIHO Experience", () => {
 
   it("puts problems in a stable order: built-in first, then requires in declaration order", () => {
     const result = evaluate(EXP, { title: "", lang: "ja", lead: null, coverAssetId: null }, { choices: { category: null, related: [] } });
-    expect(ids(result)).toEqual(["title", "lang-en", "cover", "lead", "category", "related-live"]);
+    expect(ids(result)).toEqual(["title", "lang-en", "category", "related-live"]);
   });
 });
 
@@ -116,8 +116,8 @@ describe("evaluateReadiness: NIHO", () => {
   });
 
   it.each([
-    ["no cover", { coverAssetId: null }, {}, ["cover"]],
-    ["no lead", { lead: null }, {}, ["lead"]],
+    ["no cover", { coverAssetId: null }, {}, []],
+    ["no lead", { lead: null }, {}, []],
     ["no category", {}, { choices: { category: null, related: [] } }, ["category"]],
     ["a blank category", {}, { choices: { category: "  ", related: [] } }, ["category"]],
   ] as const)("reports %s", (_name, page, options, expected) => {

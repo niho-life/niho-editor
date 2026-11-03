@@ -8,6 +8,18 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { NEW_PAGE_DRAFT_KEY, createIndexedDbDraftStorage, type DraftStorage, type PageDraft } from "@/lib/drafts";
 import { MAX_TITLE_CHARS } from "@/lib/page-limits";
 import { PageEditor, type EditablePage, type PageEditorEvents } from "./PageEditor";
+import { EditorFrame } from "./EditorFrame";
+
+const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => navigation,
+  usePathname: () => "/p/00000000-0000-4000-8000-000000000001",
+  useSearchParams: () => new URLSearchParams(),
+}));
+vi.mock("@/lib/publish-client", async (original) => ({
+  ...(await original<typeof import("@/lib/publish-client")>()),
+  loadPublishSheet: vi.fn(async () => ({ ok: false as const, retryable: true, message: "合成: 読み込まない" })),
+}));
 
 const appRequire = createRequire(import.meta.url);
 
@@ -22,6 +34,7 @@ beforeAll(() => {
   Range.prototype.getBoundingClientRect = rect;
   Range.prototype.getClientRects = () => ({ length: 0, item: () => null, [Symbol.iterator]: [][Symbol.iterator] }) as unknown as DOMRectList;
   Element.prototype.scrollIntoView = () => undefined;
+  window.matchMedia = ((query: string) => ({ matches: false, media: query, addEventListener: () => undefined, removeEventListener: () => undefined })) as unknown as typeof window.matchMedia;
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 });
 
@@ -81,7 +94,7 @@ async function settleIdb() {
   });
 }
 
-async function renderEditor(page: Partial<EditablePage> & { revision: number }, options: { drafts?: DraftStorage | null; events?: PageEditorEvents } = {}) {
+async function renderEditor(page: Partial<EditablePage> & { revision: number }, options: { drafts?: DraftStorage | null; events?: PageEditorEvents; settings?: boolean } = {}) {
   // 自動保存・下書きの時計だけを差し替える（開いたときに下書きを載せると、その時点で自動保存の時計が動く）
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   container = document.createElement("div");
@@ -89,7 +102,13 @@ async function renderEditor(page: Partial<EditablePage> & { revision: number }, 
   root = createRoot(container);
   const full: EditablePage = { id: PAGE_ID, title: "合成の題名", blocks: [], updatedAt: UPDATED_AT, ...page };
   await act(async () => {
-    root!.render(<PageEditor page={full} drafts={options.drafts === undefined ? null : options.drafts} {...options.events} />);
+    const editor = <PageEditor page={full} drafts={options.drafts === undefined ? null : options.drafts} {...options.events} />;
+    root!.render(options.settings ? (
+      <EditorFrame initial={{
+        pages: [{ id: PAGE_ID, title: full.title, kind: "note", lang: "ja", parent: null, stepStatus: null, sortOrder: 0, createdAt: UPDATED_AT, updatedAt: UPDATED_AT, publication: null }],
+        next: null, recent: [], now: Date.parse(UPDATED_AT), initialNarrow: false, me: { name: "合成の書き手", caption: "stub", initial: "合" },
+      }}>{editor}</EditorFrame>
+    ) : editor);
   });
   // 端末の下書きを読み終えて書けるようになるまで待つ
   for (let index = 0; index < 100; index++) {
@@ -97,6 +116,12 @@ async function renderEditor(page: Partial<EditablePage> & { revision: number }, 
     await settleIdb();
   }
   expect(container.querySelector(".ProseMirror")?.getAttribute("contenteditable")).toBe("true");
+  if (options.settings) {
+    const toggle = container!.querySelector<HTMLButtonElement>('button[aria-label="このページの設定と AI"]')!;
+    if (toggle.getAttribute("aria-expanded") === "false") await act(async () => toggle.click());
+    const section = container!.querySelector<HTMLButtonElement>('#es-rail h2 button')!;
+    if (section.getAttribute("aria-expanded") === "false") await act(async () => section.click());
+  }
 }
 
 async function advance(ms: number) {
@@ -192,15 +217,61 @@ describe("niho-docs-ui on React 19", () => {
 });
 
 describe("PageEditor autosave", () => {
+  it("右サイドバーのリードも日本語変換中は保存せず、確定後の値だけを下書きとサーバーへ保存する", async () => {
+    const { bodies } = acceptingFetch();
+    const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
+    await renderEditor({ revision: 5 }, { drafts, settings: true });
+    const input = container!.querySelector<HTMLTextAreaElement>("[data-page-lead]")!;
+    const type = (value: string) => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    await act(async () => {
+      input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      type("へんかんちゅう");
+    });
+    await advance(1500);
+    await settleIdb();
+    expect(bodies).toEqual([]);
+    expect(await drafts.get(PAGE_ID)).toBeNull();
+
+    await act(async () => {
+      type("確定したリード");
+      input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    });
+    await advance(0);
+    await settleIdb();
+    expect(await drafts.get(PAGE_ID)).toMatchObject({ lead: "確定したリード", baseRevision: 5 });
+    await waitForAutosave();
+    expect(bodies).toEqual([{ lead: "確定したリード", baseRevision: 5 }]);
+  });
+
+  it("通常の編集には公開情報の欄を出さず、題名を変えても既存のリードを消さない", async () => {
+    const { bodies } = acceptingFetch();
+    await renderEditor({ revision: 5, lead: "保存済みの要約" });
+    expect(container!.querySelector("[data-page-lead]")).toBeNull();
+    expect(container!.querySelector("[data-page-cover]")).toBeNull();
+    await act(async () => typeTitle("書き直した題名"));
+    await waitForAutosave();
+    expect(bodies).toEqual([{ title: "書き直した題名", baseRevision: 5 }]);
+  });
+
   it("autosaves the public lead with the page revision and keeps it in the local draft", async () => {
     const { bodies } = acceptingFetch();
     const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
-    await renderEditor({ revision: 5, lead: "古い要約" }, { drafts });
+    await renderEditor({ revision: 5, lead: "古い要約" }, { drafts, settings: true });
     const input = container!.querySelector<HTMLTextAreaElement>("[data-page-lead]")!;
+    expect(container!.querySelector('#es-main [data-page-lead]')).toBeNull();
+    expect(input.closest('#es-rail')).not.toBeNull();
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "新しい要約");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
+    const toggle = container!.querySelector<HTMLButtonElement>('button[aria-label="このページの設定と AI"]')!;
+    await act(async () => toggle.click());
+    expect(container!.querySelector<HTMLElement>('[data-editor-shell]')?.dataset.rail).toBe("closed");
+    await act(async () => toggle.click());
+    expect(container!.querySelector<HTMLTextAreaElement>("[data-page-lead]")?.value).toBe("新しい要約");
     await advance(300);
     await settleIdb();
     expect(await drafts.get(PAGE_ID)).toMatchObject({ lead: "新しい要約", baseRevision: 5 });
@@ -221,7 +292,7 @@ describe("PageEditor autosave", () => {
       patches.push(body);
       return json(200, { page: { id: PAGE_ID, revision: (body.baseRevision as number) + 1 } });
     }));
-    await renderEditor({ revision: 5, blocks: [{ type: "image", attrs: { assetId } }] });
+    await renderEditor({ revision: 5, blocks: [{ type: "image", attrs: { assetId } }] }, { settings: true });
     const select = container!.querySelector<HTMLSelectElement>("[data-page-cover]")!;
     expect([...select.options].map((option) => option.value)).toEqual(["", assetId]);
     await act(async () => {

@@ -209,9 +209,9 @@ function conditionMet(condition: Condition, facts: ReadinessFacts): boolean {
     case "lang":
       return facts.lang === condition.equals;
     case "cover":
-      return facts.cover === "ok" || (!condition.consent && facts.cover === "no-consent");
+      return facts.cover === "none" || facts.cover === "ok" || (!condition.consent && facts.cover === "no-consent");
     case "lead":
-      return facts.lead !== null && (condition.max === undefined || codePointLength(facts.lead) <= condition.max);
+      return facts.lead === null || condition.max === undefined || codePointLength(facts.lead) <= condition.max;
     case "category":
       return facts.categoryValid && facts.category !== null && (condition.oneOf === undefined || condition.oneOf.includes(facts.category));
     case "headings":

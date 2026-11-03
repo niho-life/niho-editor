@@ -139,7 +139,7 @@ describe("reasons", () => {
     const result = await world.service.publish(world.input("exp"));
     expect(result).toMatchObject({ ok: false, reason: "not_ready" });
     if (result.ok || result.reason !== "not_ready") return;
-    expect(result.problems.map((problem) => problem.id)).toEqual(["lang-en", "lead"]);
+    expect(result.problems.map((problem) => problem.id)).toEqual(["lang-en"]);
     expect(world.store.dump()).toBe(before);
   });
 
@@ -320,7 +320,7 @@ describe("update and save", () => {
   it("re-evaluates the conditions on update", async () => {
     const world = createWorld();
     ok(await world.service.publish(world.input("niho")));
-    world.editDraft({ coverAssetId: null });
+    world.editDraft({ coverAssetId: "missing-cover" });
     expect(await world.service.update(world.input("niho"))).toMatchObject({ ok: false, reason: "not_ready", problems: [{ id: "cover" }] });
     expect(world.store.versions(PAGE_ID)).toHaveLength(1);
   });

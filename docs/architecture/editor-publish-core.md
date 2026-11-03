@@ -38,6 +38,7 @@ Condition = { id, message, fix, kind, …kind ごとの引数 }
 
 - どの発信先でも要る条件：題名が空でない、本文に内容がある、`accepts` の外の要素（例：NIHO Experience に引用）がない。
 - 発信先の `requires` を順に評価し、満たさないものを `problems`（`id`、一言の `message`、`fix`）に積む。`ready` は `problems` が空のときだけ true。**true になるまで公開ボタンは押せない**。
+- `cover` と `lead` は任意の公開情報。宣言に条件があっても未設定なら公開・更新を止めず、設定されているときだけ画像の使用可否・掲載許諾・リードの長さを検証する。画像を設定したまま削除・許諾撤回された場合の公開停止は維持する。
 - `notices` は止めない知らせ：録音のブロックは公開版に含まれない、など。
 - 入力は `collectFacts(page, assets, serverFacts)` が作る。評価は純粋関数で、同じ入力に同じ出力。
 

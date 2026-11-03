@@ -96,8 +96,8 @@ describe("sheetPlan: destinations", () => {
 
 describe("sheetPlan: the primary button", () => {
   it("is disabled (null) while any problem remains, and lists the problems", () => {
-    const result = plan({ page: { lead: null } });
-    expect(result.problems.map((problem) => problem.id)).toEqual(["lead"]);
+    const result = plan({ page: { title: "" } });
+    expect(result.problems.map((problem) => problem.id)).toEqual(["title"]);
     expect(result.primary).toBeNull();
   });
 
@@ -142,7 +142,7 @@ describe("sheetPlan: the primary button", () => {
   });
 
   it("stays null on a live page with edits while a problem remains", () => {
-    const result = plan({ publication: live("niho", { fingerprint: OTHER }), page: { coverAssetId: null } });
+    const result = plan({ publication: live("niho", { fingerprint: OTHER }), page: { coverAssetId: "missing-cover" } });
     expect(result.status).toBe("updated");
     expect(result.primary).toBeNull();
   });

@@ -1,8 +1,11 @@
+import type { ReactNode } from "react";
 import { ShellEntitiesEditor, ShellTermsEditor, type EditorSettingsEntityDraft, type EditorSettingsTermDraft } from "./editor-settings";
 import { Icon } from "./icons";
 import type { ShellDest, ShellLang } from "./types";
 
 export type ShellPageSettingsProps = {
+  /** 任意の公開情報。保存や画像の操作は呼ぶ側が持つ。 */
+  publicationFields?: ReactNode;
   /** 発信先。公開中は公開先と URL、予定は「に公開する予定」と足りないもの。 */
   destination?: {
     dest: ShellDest;
@@ -70,9 +73,10 @@ export type ShellPageSettingsProps = {
 };
 
 /** 右のレールの「ページ設定」の中身。上のバーが状態を言うので、ここは「どこに・何が足りないか」だけを置く。 */
-export function ShellPageSettings({ destination, category, related, folder, order, fields, lang, onLang, langNote, author, info, onExportMarkdown, onExportGoogle, onExportFolder, onDelete }: ShellPageSettingsProps) {
+export function ShellPageSettings({ publicationFields, destination, category, related, folder, order, fields, lang, onLang, langNote, author, info, onExportMarkdown, onExportGoogle, onExportFolder, onDelete }: ShellPageSettingsProps) {
   return (
     <div className="es-ps">
+      {publicationFields}
       {destination && (
         <section>
           <h3>
