@@ -134,10 +134,10 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
   });
 
   /** サービス一式。store を差し替えれば、包んだ adapter で同じ操作を動かせる。 */
-  function services(over: ConnectionStore = store) {
+  function services(over: ConnectionStore = store, actorRoles: readonly string[] = ["writer"]) {
     const roles = new MemoryRoles();
-    roles.set(ACTOR, ["writer", "kamakura"]);
-    roles.set(OTHER_ACTOR, ["writer", "kamakura"]);
+    roles.set(ACTOR, actorRoles);
+    roles.set(OTHER_ACTOR, ["writer"]);
     const faces = new MemoryDeclarations();
     faces.set("exp", FACE_DECLARATIONS.exp);
     faces.set("niho", FACE_DECLARATIONS.niho);
@@ -226,11 +226,11 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
     const { publisher } = services();
     const { pageId, slug } = await readyPage();
 
-    const first = await publisher.publish(input(pageId, NIHO, SETTINGS.niho));
-    expect(first).toMatchObject({ ok: true, status: "published", version: 1, url: `https://niho.example.com/article/${slug}` });
+    const first = await publisher.publish(input(pageId, EXP, SETTINGS.exp));
+    expect(first).toMatchObject({ ok: true, status: "published", version: 1, url: `https://exp.example.com/guides/${slug}` });
     if (!first.ok) throw new Error(first.reason);
-    expect(await getPublication(pool, pageId)).toMatchObject({ dest: "niho", handle: "niho", slug, version: 1, stoppedAt: null });
-    expect((await listLivePublished(pool, "niho")).items.map((item) => item.publication.pageId)).toContain(pageId);
+    expect(await getPublication(pool, pageId)).toMatchObject({ dest: "exp", handle: "exp", slug, version: 1, stoppedAt: null });
+    expect((await listLivePublished(pool, "exp")).items.map((item) => item.publication.pageId)).toContain(pageId);
     const v1 = (await getPublicationVersion(pool, pageId, 1))!.snapshot as { fingerprint: string; title: string };
     // 公開したばかりの下書きの fingerprint は公開版と同じ（DraftFingerprints の Postgres の実装）
     expect(await pgDraftFingerprints(pool).read(pageId)).toBe(v1.fingerprint);
@@ -238,10 +238,10 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
     // 下書きを直すと「更新あり」。公開版は直した内容に追従しない
     await pool.query("UPDATE pages SET title = $2 WHERE id = $1", [pageId, "A morning walk, revised"]);
     expect(deriveStatus({ range: "live", stoppedAt: null, fingerprint: v1.fingerprint }, (await pgDraftFingerprints(pool).read(pageId))!)).toBe("updated");
-    const live = await readPublishedForHandle(pool, "niho", pageId);
+    const live = await readPublishedForHandle(pool, "exp", pageId);
     expect(live?.status === "live" && (live.snapshot as { title: string }).title).toBe(v1.title);
 
-    const updated = await publisher.update(input(pageId, NIHO, SETTINGS.niho));
+    const updated = await publisher.update(input(pageId, EXP, SETTINGS.exp));
     expect(updated).toMatchObject({ ok: true, status: "published", version: 2, url: first.url });
     if (!updated.ok) throw new Error(updated.reason);
     expect(updated.publication.publishedAt).toBe(first.publication.publishedAt);
@@ -251,60 +251,71 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
     const stopped = await publisher.stop({ actorId: ACTOR, pageId });
     expect(stopped).toMatchObject({ ok: true, status: "stopped" });
     expect(await publisher.stop({ actorId: ACTOR, pageId })).toEqual(stopped);
-    expect(await redirectsOf(pageId)).toEqual([{ from_handle: "niho", from_slug: slug, to_handle: null, to_slug: null }]);
-    expect((await listLivePublished(pool, "niho")).items.map((item) => item.publication.pageId)).not.toContain(pageId);
-    expect(await readPublishedForHandle(pool, "niho", pageId)).toMatchObject({ status: "left", slug, version: 2, movedTo: null });
+    expect(await redirectsOf(pageId)).toEqual([{ from_handle: "exp", from_slug: slug, to_handle: null, to_slug: null }]);
+    expect((await listLivePublished(pool, "exp")).items.map((item) => item.publication.pageId)).not.toContain(pageId);
+    expect(await readPublishedForHandle(pool, "exp", pageId)).toMatchObject({ status: "left", slug, version: 2, movedTo: null });
     // 公開をやめたページはゴミ箱へ入れられる。戻してから再公開する
     const editor = new EditorStore(pool);
     expect(await editor.deletePage(ACTOR, pageId)).toBe("deleted");
-    expect(await publisher.publish(input(pageId, NIHO, SETTINGS.niho))).toEqual({ ok: false, reason: "not_found" });
+    expect(await publisher.publish(input(pageId, EXP, SETTINGS.exp))).toEqual({ ok: false, reason: "not_found" });
     expect(await editor.restoreFromTrash(ACTOR, pageId)).toBe(true);
 
-    const again = await publisher.publish(input(pageId, NIHO, SETTINGS.niho));
+    const again = await publisher.publish(input(pageId, EXP, SETTINGS.exp));
     expect(again).toMatchObject({ ok: true, version: 3, url: first.url });
     expect(await redirectsOf(pageId)).toEqual([]);
-    expect(await readPublishedForHandle(pool, "niho", pageId)).toMatchObject({ status: "live", publication: { version: 3, stoppedAt: null } });
+    expect(await readPublishedForHandle(pool, "exp", pageId)).toMatchObject({ status: "live", publication: { version: 3, stoppedAt: null } });
     expect(await editor.deletePage(ACTOR, pageId)).toBe("published");
     // 公開版は追記だけ（番号は使い回さない）
     expect((await versionsOf(pageId)).map((version) => version.version)).toEqual([1, 2, 3]);
   });
 
-  it("moves face → face with a one-step redirect, and refuses a slug another page holds there", async () => {
-    const { publisher } = services();
+  it("moves Experience ↔ a connected site, preserving URL and slug invariants", async () => {
+    const { publisher, connections } = services();
     const moving = await readyPage();
     const holder = await readyPage();
-    expect((await publisher.publish(input(moving.pageId, NIHO, SETTINGS.niho))).ok).toBe(true);
-    // 移し先の exp で、別のページが同じ slug を持っている
-    expect((await publisher.publish(input(holder.pageId, EXP, SETTINGS.exp, { slug: moving.slug }))).ok).toBe(true);
+    const handle = `move-${randomUUID().slice(0, 8)}`;
+    const connected = await connections.createConnection({ actorId: ACTOR, handle, mode: "api", siteUrl: "https://move.example.net" });
+    if (!connected.ok) throw new Error(connected.reason);
+    const site: Target = { dest: "site", handle };
+    expect((await publisher.publish(input(moving.pageId, EXP, SETTINGS.exp))).ok).toBe(true);
+    // 移し先の本人siteで、別のページが同じ slug を持っている
+    expect((await publisher.publish(input(holder.pageId, site, SETTINGS.site, { slug: moving.slug }))).ok).toBe(true);
 
-    const taken = await publisher.changeDestination(input(moving.pageId, EXP, SETTINGS.exp, { slug: moving.slug }));
+    const taken = await publisher.changeDestination(input(moving.pageId, site, SETTINGS.site, { slug: moving.slug }));
     expect(taken).toEqual({ ok: false, reason: "slug_taken", suggestion: `${moving.slug}-2` });
-    expect(await getPublication(pool, moving.pageId)).toMatchObject({ handle: "niho", stoppedAt: null });
+    expect(await getPublication(pool, moving.pageId)).toMatchObject({ handle: "exp", stoppedAt: null });
 
-    const moved = await publisher.changeDestination(input(moving.pageId, EXP, SETTINGS.exp));
-    expect(moved).toMatchObject({ ok: true, version: 2, url: `https://exp.example.com/guides/${moving.slug}-2` });
-    expect(await redirectsOf(moving.pageId)).toEqual([{ from_handle: "niho", from_slug: moving.slug, to_handle: "exp", to_slug: `${moving.slug}-2` }]);
-    expect(await readPublishedForHandle(pool, "niho", moving.pageId)).toEqual({
+    const moved = await publisher.changeDestination(input(moving.pageId, site, SETTINGS.site));
+    expect(moved).toMatchObject({ ok: true, version: 2, url: `https://move.example.net/${moving.slug}-2` });
+    expect(await redirectsOf(moving.pageId)).toEqual([{ from_handle: "exp", from_slug: moving.slug, to_handle: null, to_slug: null }]);
+    expect(await readPublishedForHandle(pool, "exp", moving.pageId)).toEqual({
       status: "left",
       pageId: moving.pageId,
-      handle: "niho",
-      dest: "niho",
+      handle: "exp",
+      dest: "exp",
       slug: moving.slug,
       range: "live",
       version: 1,
       stoppedAt: moved.ok ? moved.publication.updatedAt : "",
-      movedTo: { handle: "exp", dest: "exp", canonicalUrl: `https://exp.example.com/guides/${moving.slug}-2` },
+      movedTo: null,
     });
 
-    // 元の URL へ戻すと、その URL の転送は消え、鎖は 1 段のまま（exp の旧 URL → niho）
-    const back = await publisher.changeDestination(input(moving.pageId, NIHO, SETTINGS.niho, { slug: moving.slug }));
-    expect(back).toMatchObject({ ok: true, version: 3, url: `https://niho.example.com/article/${moving.slug}` });
-    expect(await redirectsOf(moving.pageId)).toEqual([{ from_handle: "exp", from_slug: `${moving.slug}-2`, to_handle: "niho", to_slug: moving.slug }]);
-    // exp の旧い slug は転送を残したこのページが押さえているので、ほかのページは取れない
+    // Experience の元 URL へ戻すと、一覧への転送は消える。site の旧 URL には転送を作らない。
+    const back = await publisher.changeDestination(input(moving.pageId, EXP, SETTINGS.exp, { slug: moving.slug }));
+    expect(back).toMatchObject({ ok: true, version: 3, url: `https://exp.example.com/guides/${moving.slug}` });
+    expect(await redirectsOf(moving.pageId)).toEqual([]);
+    // 公開中の Experience slug は、ほかのページは取れない
     const other = await readyPage();
-    expect(await publisher.publish(input(other.pageId, EXP, SETTINGS.exp, { slug: `${moving.slug}-2` }))).toMatchObject({ ok: false, reason: "slug_taken" });
+    expect(await publisher.publish(input(other.pageId, EXP, SETTINGS.exp, { slug: moving.slug }))).toMatchObject({ ok: false, reason: "slug_taken" });
     // 公開後の slug は固定
-    expect(await publisher.publish(input(holder.pageId, EXP, SETTINGS.exp, { slug: "another-slug" }))).toEqual({ ok: false, reason: "slug_locked", slug: moving.slug });
+    expect(await publisher.publish(input(holder.pageId, site, SETTINGS.site, { slug: "another-slug" }))).toEqual({ ok: false, reason: "slug_locked", slug: moving.slug });
+  });
+
+  it.each([["writer"], ["kamakura"]])("refuses new NIHO publications and updates for the %s role", async (role) => {
+    const { publisher } = services(store, [role]);
+    const { pageId } = await readyPage();
+    expect(await publisher.publish(input(pageId, NIHO, SETTINGS.niho))).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
+    expect(await publisher.update(input(pageId, NIHO, SETTINGS.niho))).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
   });
 
   it("disconnecting stops every live page on the site; the old keys and the handle stop working", async () => {
@@ -385,19 +396,19 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
       const { pageId } = await readyPage();
       const before = await dump();
       const broken = faulty((name) => name === "putPublication");
-      expect(await services(broken).publisher.publish(input(pageId, NIHO, SETTINGS.niho))).toEqual({ ok: false, reason: "failed", retryable: true });
+      expect(await services(broken).publisher.publish(input(pageId, EXP, SETTINGS.exp))).toEqual({ ok: false, reason: "failed", retryable: true });
       expect(broken.calls.indexOf("addVersion")).toBeGreaterThan(-1);
       expect(broken.calls.indexOf("addVersion")).toBeLessThan(broken.calls.indexOf("putPublication"));
       expect(await dump()).toBe(before);
       expect(await latestPublicationVersion(pool, pageId)).toBe(0);
 
       // 公開中のページの更新でも、前の公開版・公開・下書きが残る
-      expect((await services().publisher.publish(input(pageId, NIHO, SETTINGS.niho))).ok).toBe(true);
+      expect((await services().publisher.publish(input(pageId, EXP, SETTINGS.exp))).ok).toBe(true);
       await pool.query("UPDATE pages SET title = 'A revised title' WHERE id = $1", [pageId]);
       const published = await dump();
-      expect(await services(broken).publisher.update(input(pageId, NIHO, SETTINGS.niho))).toEqual({ ok: false, reason: "failed", retryable: true });
+      expect(await services(broken).publisher.update(input(pageId, EXP, SETTINGS.exp))).toEqual({ ok: false, reason: "failed", retryable: true });
       expect(await dump()).toBe(published);
-      expect(await services().publisher.update(input(pageId, NIHO, SETTINGS.niho))).toMatchObject({ ok: true, version: 2 });
+      expect(await services().publisher.update(input(pageId, EXP, SETTINGS.exp))).toMatchObject({ ok: true, version: 2 });
     });
 
     type Operation = { name: string; prepare: () => Promise<(store: ConnectionStore) => Promise<{ ok: boolean }>> };
@@ -414,26 +425,28 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
         name: "update",
         prepare: async () => {
           const { pageId } = await readyPage();
-          await services().publisher.publish(input(pageId, NIHO, SETTINGS.niho));
+          await services().publisher.publish(input(pageId, EXP, SETTINGS.exp));
           await pool.query("UPDATE pages SET title = 'Updated in place' WHERE id = $1", [pageId]);
-          return (over) => services(over).publisher.update(input(pageId, NIHO, SETTINGS.niho));
+          return (over) => services(over).publisher.update(input(pageId, EXP, SETTINGS.exp));
         },
       },
       {
         name: "stop",
         prepare: async () => {
           const { pageId } = await readyPage();
-          await services().publisher.publish(input(pageId, NIHO, SETTINGS.niho));
-          await services().publisher.changeDestination(input(pageId, EXP, SETTINGS.exp));
+          await services().publisher.publish(input(pageId, EXP, SETTINGS.exp));
           return (over) => services(over).publisher.stop({ actorId: ACTOR, pageId });
         },
       },
       {
         name: "changeDestination",
         prepare: async () => {
+          const handle = `atomic-move-${randomUUID().slice(0, 8)}`;
+          const created = await services().connections.createConnection({ actorId: ACTOR, handle, mode: "api", siteUrl: "https://atomic-move.example.net" });
+          if (!created.ok) throw new Error(created.reason);
           const { pageId } = await readyPage();
           await services().publisher.publish(input(pageId, EXP, SETTINGS.exp));
-          return (over) => services(over).publisher.changeDestination(input(pageId, NIHO, SETTINGS.niho));
+          return (over) => services(over).publisher.changeDestination(input(pageId, { dest: "site", handle }, SETTINGS.site));
         },
       },
       {
@@ -515,17 +528,17 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
       const slug = `race-x${randomUUID().slice(0, 8)}`;
       const wait = barrier(2);
       const results: PublishResult[] = await Promise.all([
-        services(racing(wait)).publisher.publish(input(a.pageId, NIHO, SETTINGS.niho, { slug })),
-        services(racing(wait)).publisher.publish(input(b.pageId, NIHO, SETTINGS.niho, { slug })),
+        services(racing(wait)).publisher.publish(input(a.pageId, EXP, SETTINGS.exp, { slug })),
+        services(racing(wait)).publisher.publish(input(b.pageId, EXP, SETTINGS.exp, { slug })),
       ]);
       expect(results.filter((result) => result.ok)).toHaveLength(1);
       expect(results.filter((result) => !result.ok)).toEqual([{ ok: false, reason: "failed", retryable: true }]);
-      const rows = await pool.query<{ page_id: string }>("SELECT page_id FROM publications WHERE handle = 'niho' AND slug = $1", [slug]);
+      const rows = await pool.query<{ page_id: string }>("SELECT page_id FROM publications WHERE handle = 'exp' AND slug = $1", [slug]);
       expect(rows.rows).toHaveLength(1);
       const loser = rows.rows[0]!.page_id === a.pageId ? b.pageId : a.pageId;
       expect(await latestPublicationVersion(pool, loser)).toBe(0);
       // やり直すと、使われている slug として断られる
-      expect(await services().publisher.publish(input(loser, NIHO, SETTINGS.niho, { slug }))).toEqual({ ok: false, reason: "slug_taken", suggestion: `${slug}-2` });
+      expect(await services().publisher.publish(input(loser, EXP, SETTINGS.exp, { slug }))).toEqual({ ok: false, reason: "slug_taken", suggestion: `${slug}-2` });
     });
 
     it("two key rotations of one connection at once are serialized: the second revokes the first's new key, one key stays active", async () => {
@@ -567,8 +580,8 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
     it("two publishes of the same page at once are serialized: both succeed with consecutive versions", async () => {
       const { pageId, slug } = await readyPage();
       const results = await Promise.all([
-        services().publisher.publish(input(pageId, NIHO, SETTINGS.niho)),
-        services().publisher.publish(input(pageId, NIHO, SETTINGS.niho)),
+        services().publisher.publish(input(pageId, EXP, SETTINGS.exp)),
+        services().publisher.publish(input(pageId, EXP, SETTINGS.exp)),
       ]);
       expect(results.map((result) => result.ok)).toEqual([true, true]);
       expect((await versionsOf(pageId)).map((version) => version.version)).toEqual([1, 2]);

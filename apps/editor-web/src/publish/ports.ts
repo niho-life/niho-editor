@@ -2,6 +2,7 @@ import "server-only";
 import {
   connectionSource,
   draftFingerprint,
+  PUBLISHABLE_FACE_DESTS,
   siteDeclarationSource,
   type AssetBytes,
   type AssetUrls,
@@ -26,7 +27,7 @@ import { DEV_DECLARATIONS } from "./dev-declarations";
  * 公開（#39）のポートの組み立て。store（Postgres）以外を、要求の本人（session）ごとに作る。
  * store は `pgPublishStore(pool)`（src/publish/pg-store.ts。src/server/deps.ts がつなぐ）。テストは MemoryPublishStore。
  *
- * - roles: stub の方式は `EDITOR_STUB_ROLES`（既定 writer,kamakura）。niho の方式は役割なし（fail closed。役割の契約は #42 と niho-app 側）。
+ * - roles: stub の方式は `EDITOR_STUB_ROLES`（既定 writer）。niho の方式は要求ごとに用途専用APIから読む。
  * - declarations: 本人のサイトは接続の設定から（editor-publish の siteDeclarationSource）、面は config.ts の DeclarationPlan に従う。
  * - authors: session の profile の名前（handle・url は null）。名前が無ければ公開を失敗にする。
  * - facts: 関連する体験が掲載中かは、まだ読めない（null＝不明＝満たさない）。
@@ -142,7 +143,9 @@ export function storeDraftFingerprints(store: ConnectionStore): DraftFingerprint
 
 const devFaces: DeclarationSource = {
   async get(handle) {
-    return handle === "exp" || handle === "niho" ? structuredClone(DEV_DECLARATIONS[handle]) : null;
+    return (PUBLISHABLE_FACE_DESTS as readonly string[]).includes(handle)
+      ? structuredClone(DEV_DECLARATIONS[handle as (typeof PUBLISHABLE_FACE_DESTS)[number]])
+      : null;
   },
 };
 

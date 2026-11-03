@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { createHash, randomUUID } from "node:crypto";
 import {
+  buildSnapshot,
   ConnectionService,
   PublishService,
   connectionSource,
@@ -181,8 +182,8 @@ interface Side {
 
 function ports(store: ConnectionStore, clock: ManualClock, drafts: DraftFingerprints) {
   const roles = new MemoryRoles();
-  roles.set(ACTOR, ["writer", "kamakura"]);
-  roles.set(OTHER_ACTOR, ["writer", "kamakura"]);
+  roles.set(ACTOR, ["writer"]);
+  roles.set(OTHER_ACTOR, ["writer"]);
   const faces = new MemoryDeclarations();
   faces.set("exp", FACE_DECLARATIONS.exp);
   faces.set("niho", FACE_DECLARATIONS.niho);
@@ -313,6 +314,50 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
     const published = (result: PublishResult) => expect(result.ok, JSON.stringify(result)).toBe(true);
     const place = (pageId: string, target: Target, settings: PublishSettings, actorId = ACTOR): PlaceInput => ({ actorId, pageId, target, settings });
 
+    /**
+     * NIHO 面が廃止される前に公開済みだった版のみを明示seedする。新規公開の権限は迂回せず、
+     * 正規transactionと buildSnapshot で読み取り／停止の互換性に必要な旧wireだけを作る。
+     */
+    async function seedLegacyNiho(side: Side, page: SeedPage, slug: string): Promise<void> {
+      const now = side.clock.now();
+      await side.store.transaction(async (tx) => {
+        const draft = await tx.getPage(page.id);
+        if (!draft) throw new Error("legacy seed page missing");
+        const built = await buildSnapshot({
+          page: draft,
+          assets: await tx.listAssets(page.id),
+          dest: "niho",
+          slug,
+          canonicalUrl: `https://niho.example.com/article/${slug}`,
+          range: "live",
+          extras: SETTINGS.niho.extras,
+          category: SETTINGS.niho.category,
+          related: SETTINGS.niho.related,
+          author: { name: "Example Writer", handle: "example-writer", url: "https://writer.example.com/" },
+          version: 1,
+          publishedAt: now,
+          updatedAt: now,
+          assetUrls: memoryAssetUrls(),
+        });
+        if (!built.ok) throw new Error(`legacy snapshot invalid: ${JSON.stringify(built.issues)}`);
+        await tx.addVersion({ pageId: page.id, version: 1, handle: "niho", snapshot: built.snapshot });
+        await tx.putPublication({
+          pageId: page.id,
+          dest: "niho",
+          handle: "niho",
+          slug,
+          range: "live",
+          extras: SETTINGS.niho.extras,
+          category: SETTINGS.niho.category,
+          related: SETTINGS.niho.related,
+          version: 1,
+          publishedAt: now,
+          updatedAt: now,
+          stoppedAt: null,
+        });
+      });
+    }
+
     // 接続と鍵
     await both("connect alpha", async (side) => {
       const created = await side.connections.createConnection({ actorId: ACTOR, handle: "site-alpha", mode: "api", siteUrl: "https://alpha.example.net" });
@@ -336,10 +381,11 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
       live1: seedPage("live one"),
       live2: seedPage("live two"),
       live3: seedPage("live three"),
-      faceToFace: seedPage("face to face"),
+      legacyNihoLive: seedPage("legacy NIHO live"),
+      legacyNihoStopped: seedPage("legacy NIHO stopped"),
       unlisted: seedPage("unlisted"),
       stopped: seedPage("stopped"),
-      faceToSite: seedPage("face to site"),
+      expToSite: seedPage("Experience to site"),
       republished: seedPage("republished"),
       beta: seedPage("beta", OTHER_ACTOR),
       siteToFace: seedPage("site to face"),
@@ -355,9 +401,17 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
     await both("publish live2", (side) => side.publisher.publish(place(pages.live2.id, ALPHA, SETTINGS.site)), published);
     await both("publish live3", (side) => side.publisher.publish(place(pages.live3.id, ALPHA, SETTINGS.site)), published);
     tick();
-    await both("publish faceToFace", (side) => side.publisher.publish(place(pages.faceToFace.id, EXP, SETTINGS.exp)), published);
+    await both("reject new NIHO publish", (side) => side.publisher.publish(place(pages.legacyNihoLive.id, NIHO, SETTINGS.niho)), (result) => {
+      expect(result).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
+    });
     tick();
-    await both("move faceToFace", (side) => side.publisher.changeDestination(place(pages.faceToFace.id, NIHO, SETTINGS.niho)), published);
+    await both("seed legacy NIHO live", (side) => seedLegacyNiho(side, pages.legacyNihoLive, "legacy-niho-live"));
+    await both("seed legacy NIHO stopped", (side) => seedLegacyNiho(side, pages.legacyNihoStopped, "legacy-niho-stopped"));
+    await both("reject legacy NIHO update", (side) => side.publisher.update(place(pages.legacyNihoLive.id, NIHO, SETTINGS.niho)), (result) => {
+      expect(result).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
+    });
+    tick();
+    await both("stop legacy NIHO", (side) => side.publisher.stop({ actorId: ACTOR, pageId: pages.legacyNihoStopped.id }), (result) => expect(result.ok).toBe(true));
     tick();
     await both("publish unlisted", (side) => side.publisher.publish(place(pages.unlisted.id, EXP, { ...SETTINGS.exp, range: "unlisted" })), published);
     tick();
@@ -365,9 +419,9 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
     tick();
     await both("stop stopped", (side) => side.publisher.stop({ actorId: ACTOR, pageId: pages.stopped.id }), (result) => expect(result.ok).toBe(true));
     tick();
-    await both("publish faceToSite", (side) => side.publisher.publish(place(pages.faceToSite.id, NIHO, SETTINGS.niho)), published);
+    await both("publish expToSite", (side) => side.publisher.publish(place(pages.expToSite.id, EXP, SETTINGS.exp)), published);
     tick();
-    await both("move faceToSite", (side) => side.publisher.changeDestination(place(pages.faceToSite.id, ALPHA, SETTINGS.site)), published);
+    await both("move expToSite", (side) => side.publisher.changeDestination(place(pages.expToSite.id, ALPHA, SETTINGS.site)), published);
     tick();
     await both("publish republished", (side) => side.publisher.publish(place(pages.republished.id, EXP, SETTINGS.exp)), published);
     tick();
@@ -484,7 +538,7 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
     const alphaList = await ask("list alpha", { url: "/v1/site-alpha/published.json", key: "alpha2" });
     expect(alphaList.status).toBe(200);
     const alphaItems = (body(alphaList).items as { id: string; title: string }[]);
-    expect(alphaItems.map((item) => item.id).sort()).toEqual([pages.live1.id, pages.live2.id, pages.live3.id, pages.faceToSite.id].sort());
+    expect(alphaItems.map((item) => item.id).sort()).toEqual([pages.live1.id, pages.live2.id, pages.live3.id, pages.expToSite.id].sort());
     expect(alphaList.body).not.toContain("DRAFT-ONLY");
     const walks = [
       ["site-alpha", { key: "alpha2" }, "", 4],
@@ -524,10 +578,13 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
     const updated = await statusOf("site-alpha", pages.live1.id, { key: "alpha2" });
     expect(body(updated)).toMatchObject({ title: "Coastal walk live one, revised", version: 2 });
     expect((await statusOf("site-alpha", pages.stopped.id, { key: "alpha2" })).status).toBe(410);
-    const moved = await statusOf("exp", pages.faceToFace.id, { face: EXP_TOKEN });
+    const moved = await statusOf("exp", pages.expToSite.id, { face: EXP_TOKEN });
     expect(moved.status).toBe(410);
-    expect(body(moved).movedTo).toMatchObject({ dest: "niho" });
-    expect(body(await statusOf("niho", pages.faceToSite.id, { face: NIHO_TOKEN })).movedTo).toBeUndefined();
+    expect(body(moved).movedTo).toBeUndefined();
+    expect((await statusOf("niho", pages.legacyNihoLive.id, { face: NIHO_TOKEN })).status).toBe(200);
+    const legacyStopped = await statusOf("niho", pages.legacyNihoStopped.id, { face: NIHO_TOKEN });
+    expect(legacyStopped.status).toBe(410);
+    expect(body(legacyStopped).movedTo).toBeUndefined();
     expect((await statusOf("site-alpha", pages.siteToFace.id, { key: "alpha2" })).status).toBe(410);
     expect((await statusOf("exp", pages.republished.id, { face: EXP_TOKEN })).status).toBe(200);
     expect((await statusOf("exp", pages.draftOnly.id, { face: EXP_TOKEN })).status).toBe(404);

@@ -21,38 +21,38 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "publish (re-publication after stop)",
     setup: async (world) => {
-      await must(world.service.publish(world.input("niho")));
+      await must(world.service.publish(world.input("exp")));
       await must(stop(world));
     },
-    run: (world) => world.service.publish(world.input("niho")),
+    run: (world) => world.service.publish(world.input("exp")),
   },
   {
     name: "publish (stopped page on another destination)",
     setup: async (world) => {
-      await must(world.service.publish(world.input("niho")));
+      await must(world.service.publish(world.input("exp")));
       await must(stop(world));
     },
-    run: (world) => world.service.publish(world.input("exp", { slug: "coast-walk" })),
+    run: (world) => world.service.publish(world.input("site", { slug: "coast-walk" })),
   },
   {
     name: "update (edited draft)",
     setup: async (world) => {
-      await must(world.service.publish(world.input("niho")));
+      await must(world.service.publish(world.input("exp")));
       world.editDraft({ title: "A morning walk, revised" });
     },
-    run: (world) => world.service.update(world.input("niho")),
+    run: (world) => world.service.update(world.input("exp")),
   },
   {
     name: "update (save: settings only)",
     setup: async (world) => {
-      await must(world.service.publish(world.input("niho")));
+      await must(world.service.publish(world.input("exp")));
     },
-    run: (world) => world.service.update(world.input("niho", { settings: { ...world.input("niho").settings, category: "food", range: "unlisted" } })),
+    run: (world) => world.service.update(world.input("exp", { settings: { ...world.input("exp").settings, category: "food", range: "unlisted" } })),
   },
   {
     name: "stop (face, after a move: re-points the chain)",
     setup: async (world) => {
-      await must(world.service.publish(world.input("niho")));
+      await must(world.service.publish(world.input("site")));
       await must(world.service.changeDestination(world.input("exp")));
     },
     run: stop,
@@ -65,17 +65,9 @@ export const SCENARIOS: readonly Scenario[] = [
     run: stop,
   },
   {
-    name: "changeDestination (face → face)",
-    setup: async (world) => {
-      await must(world.service.publish(world.input("niho")));
-    },
-    run: (world) => world.service.changeDestination(world.input("exp")),
-  },
-  {
     name: "changeDestination (face → site, re-pointing an older redirect)",
     setup: async (world) => {
-      await must(world.service.publish(world.input("niho")));
-      await must(world.service.changeDestination(world.input("exp")));
+      await must(world.service.publish(world.input("exp")));
     },
     run: (world) => world.service.changeDestination(world.input("site")),
   },
@@ -84,21 +76,21 @@ export const SCENARIOS: readonly Scenario[] = [
     setup: async (world) => {
       await must(world.service.publish(world.input("site")));
     },
-    run: (world) => world.service.changeDestination(world.input("niho")),
+    run: (world) => world.service.changeDestination(world.input("exp")),
   },
   {
     name: "changeDestination (moving back removes a redirect)",
     setup: async (world) => {
-      await must(world.service.publish(world.input("niho")));
-      await must(world.service.changeDestination(world.input("exp")));
+      await must(world.service.publish(world.input("exp")));
+      await must(world.service.changeDestination(world.input("site")));
     },
-    run: (world) => world.service.changeDestination(world.input("niho")),
+    run: (world) => world.service.changeDestination(world.input("exp")),
   },
   {
     name: "publish on a live page (acts as a move)",
     setup: async (world) => {
-      await must(world.service.publish(world.input("niho")));
+      await must(world.service.publish(world.input("exp")));
     },
-    run: (world) => world.service.publish(world.input("exp")),
+    run: (world) => world.service.publish(world.input("site")),
   },
 ];

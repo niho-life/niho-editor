@@ -9,8 +9,8 @@ const SESSION: Session = { userId: "user-a", mode: "stub", profile: { name: "合
 const FIREBASE_WEB_API_KEY = "A".repeat(39);
 
 describe("公開の設定（環境変数）", () => {
-  it("EDITOR_STUB_ROLES: 未設定は writer,kamakura、空は役割なし、形の合わないものは捨てる", () => {
-    expect(stubRolesOf(undefined)).toEqual(["writer", "kamakura"]);
+  it("EDITOR_STUB_ROLES: 未設定は writer、空は役割なし、形の合わないものは捨てる", () => {
+    expect(stubRolesOf(undefined)).toEqual(["writer"]);
     expect(stubRolesOf("")).toEqual([]);
     expect(stubRolesOf(" writer , Bad Role,writer,kamakura ")).toEqual(["writer", "kamakura"]);
   });
@@ -36,7 +36,7 @@ describe("公開の設定（環境変数）", () => {
   });
 
   it("方式ごとの既定: stub は dev の宣言と既定の役割、niho は宣言も役割も無し（fail closed）", () => {
-    expect(publishConfig({ EDITOR_AUTH_MODE: "stub" })).toEqual({ mode: "stub", stubRoles: ["writer", "kamakura"], declarations: { kind: "dev" }, assetOrigin: null });
+    expect(publishConfig({ EDITOR_AUTH_MODE: "stub" })).toEqual({ mode: "stub", stubRoles: ["writer"], declarations: { kind: "dev" }, assetOrigin: null });
     expect(publishConfig({ EDITOR_AUTH_MODE: "niho", EDITOR_NIHO_ORIGIN: "https://niho.example.invalid", EDITOR_NIHO_FIREBASE_API_KEY: FIREBASE_WEB_API_KEY, EDITOR_STUB_ROLES: "writer" })).toEqual({ mode: "niho", stubRoles: [], declarations: { kind: "none" }, assetOrigin: null });
   });
 });

@@ -4,7 +4,7 @@ import { resolveAuthMode, type AuthMode } from "../auth/config";
 /**
  * 公開（#39）の実行時の設定。環境変数だけから決め、値はログ・応答に出さない。
  *
- * - `EDITOR_STUB_ROLES`（stub の方式だけ）: NIHO の役割の代わり。カンマ区切り。未設定なら `writer,kamakura`（dev で両方の面に出せる）。
+ * - `EDITOR_STUB_ROLES`（stub の方式だけ）: NIHO の役割の代わり。カンマ区切り。未設定なら `writer`。
  *   niho の方式では読まない（役割の契約は #42 と niho-app 側。それまでは役割なし＝面には出せない）。
  * - `EDITOR_DESTINATION_DECLARATIONS`: 面の宣言の取得先。JSON `{"exp": url, "niho": url}`（https だけ。片方だけでもよい）。
  *   未設定なら、stub の方式では同梱の dev 用の宣言、niho の方式では宣言なし（「いまは公開できません」）。
@@ -15,7 +15,7 @@ import { resolveAuthMode, type AuthMode } from "../auth/config";
 
 export type PublishEnv = Readonly<Record<string, string | undefined>>;
 
-export const DEFAULT_STUB_ROLES: readonly string[] = Object.freeze(["writer", "kamakura"]);
+export const DEFAULT_STUB_ROLES: readonly string[] = Object.freeze(["writer"]);
 
 /** 面の宣言をどこから読むか。dev は同梱の宣言、fetch は https の URL、none は無し（どの面も「いまは公開できません」）。 */
 export type DeclarationPlan =

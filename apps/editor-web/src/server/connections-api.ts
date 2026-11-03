@@ -1,4 +1,4 @@
-import { FACE_DESTS, isConnectionHandle, type FaceDest } from "@niho/editor-publish-contract";
+import { isConnectionHandle, type FaceDest } from "@niho/editor-publish-contract";
 import {
   CONNECTION_MODES,
   ConnectionService,
@@ -8,6 +8,7 @@ import {
   isUrlShape,
   parseDestinationDeclaration,
   roleAllows,
+  PUBLISHABLE_FACE_DESTS,
   type ConnectionMode,
   type ConnectionView,
   type ExportArchive,
@@ -165,7 +166,7 @@ function issuedKeyDto(key: { id: string; plaintext: string; masked: string; crea
 async function faceRows(wiring: PublishWiring, actorId: string, counts: Map<string, number>): Promise<FaceDestinationDto[]> {
   const roles = await wiring.publish.roles.read(actorId);
   const rows: FaceDestinationDto[] = [];
-  for (const handle of FACE_DESTS) {
+  for (const handle of PUBLISHABLE_FACE_DESTS) {
     const allowed = roleAllows(roles, handle);
     const parsed = allowed ? parseDestinationDeclaration(await wiring.publish.declarations.get(handle)) : null;
     const declaration = parsed?.ok ? parsed.value : null;
@@ -245,7 +246,7 @@ export async function destinationsFor(wiring: PublishWiring, actorId: string, co
   if (!listed.ok) throw new Error(`connections are not available: ${listed.reason}`);
   const live = listed.connections.filter((connection) => connection.removedAt === null);
   // 数えるのは本人のページの公開版だけ（面の handle は全員で共有するので、owner を必ず渡す）
-  const counts = await countLive(actorId, [...FACE_DESTS, ...live.map((connection) => connection.handle)]);
+  const counts = await countLive(actorId, [...PUBLISHABLE_FACE_DESTS, ...live.map((connection) => connection.handle)]);
   return {
     faces: await faceRows(wiring, actorId, counts),
     sites: live.map((connection) => siteDto(connection, counts.get(connection.handle) ?? 0)),

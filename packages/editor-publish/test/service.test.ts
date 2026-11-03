@@ -26,7 +26,6 @@ async function statusOf(world: World, pageId = PAGE_ID) {
 describe("publish", () => {
   it.each([
     ["exp", "https://exp.example.com/guides/a-morning-walk-along-the-coast"],
-    ["niho", "https://niho.example.com/article/a-morning-walk-along-the-coast"],
     ["site", "https://notes.example.net/a-morning-walk-along-the-coast"],
   ] as const)("publishes to %s with a slug from the title", async (dest, url) => {
     const world = createWorld();
@@ -49,7 +48,7 @@ describe("publish", () => {
   it("uses a slug chosen on the sheet", async () => {
     const world = createWorld();
     const result = ok(await world.service.publish(world.input("niho", { slug: "coast-walk" })));
-    expect(result.url).toBe("https://niho.example.com/article/coast-walk");
+    expect(result.url).toBe("https://exp.example.com/guides/coast-walk");
   });
 
   it("stores the author, settings and time of publication in the version", async () => {
@@ -90,7 +89,7 @@ describe("reasons", () => {
     world.roles.set(ACTOR, ["kamakura"]);
     expect(await world.service.publish(world.input("exp"))).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
     world.roles.set(ACTOR, ["writer", "resident"]);
-    expect(await world.service.publish(world.input("niho"))).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
+    expect(await world.service.publish(world.input("exp", { target: { dest: "niho" } }))).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
   });
 
   it("forbidden_destination for a site that is not connected, or someone else's", async () => {
@@ -115,21 +114,20 @@ describe("reasons", () => {
     const world = createWorld();
     const site = world.input("site").settings;
     expect(await world.service.publish(world.input("site", { settings: { ...site, range: "unlisted" } }))).toEqual({ ok: false, reason: "forbidden_destination", detail: "range" });
-    const niho = world.input("niho").settings;
-    expect(await world.service.publish(world.input("niho", { settings: { ...niho, extras: { app: false, news: false, xp: true } } }))).toEqual({ ok: false, reason: "forbidden_destination", detail: "extras" });
-    expect(await world.service.publish(world.input("niho", { settings: { ...niho, range: "public" as never } }))).toEqual({ ok: false, reason: "forbidden_destination", detail: "range" });
+    expect(await world.service.publish(world.input("site", { settings: { ...site, extras: { app: true, news: false, xp: false } } }))).toEqual({ ok: false, reason: "forbidden_destination", detail: "extras" });
+    expect(await world.service.publish(world.input("site", { settings: { ...site, range: "public" as never } }))).toEqual({ ok: false, reason: "forbidden_destination", detail: "range" });
   });
 
   it("destination_unavailable when the declaration is missing, broken or for another destination", async () => {
     const world = createWorld();
-    world.declarations.remove("niho");
-    expect(await world.service.publish(world.input("niho"))).toEqual({ ok: false, reason: "destination_unavailable" });
-    world.declarations.set("niho", { ...DECLARATIONS.niho, requires: [{ id: "x", kind: "lead", message: "m", fix: "lead", strict: true }] });
-    expect(await world.service.publish(world.input("niho"))).toEqual({ ok: false, reason: "destination_unavailable" });
-    world.declarations.set("niho", DECLARATIONS.exp);
-    expect(await world.service.publish(world.input("niho"))).toEqual({ ok: false, reason: "destination_unavailable" });
-    world.declarations.set("niho", "{not json");
-    expect(await world.service.publish(world.input("niho"))).toEqual({ ok: false, reason: "destination_unavailable" });
+    world.declarations.remove("exp");
+    expect(await world.service.publish(world.input("exp"))).toEqual({ ok: false, reason: "destination_unavailable" });
+    world.declarations.set("exp", { ...DECLARATIONS.exp, requires: [{ id: "x", kind: "lead", message: "m", fix: "lead", strict: true }] });
+    expect(await world.service.publish(world.input("exp"))).toEqual({ ok: false, reason: "destination_unavailable" });
+    world.declarations.set("exp", DECLARATIONS.niho);
+    expect(await world.service.publish(world.input("exp"))).toEqual({ ok: false, reason: "destination_unavailable" });
+    world.declarations.set("exp", "{not json");
+    expect(await world.service.publish(world.input("exp"))).toEqual({ ok: false, reason: "destination_unavailable" });
   });
 
   it("not_ready with the problems, even though the sheet would have disabled the button", async () => {
@@ -164,7 +162,7 @@ describe("reasons", () => {
     ok(await world.service.publish(world.input("niho", { pageId: PAGE_2, slug: "coast-walk" })));
     expect(await world.service.publish(world.input("niho", { slug: "coast-walk" }))).toEqual({ ok: false, reason: "slug_taken", suggestion: "coast-walk-2" });
     // The same slug is free on another destination.
-    ok(await world.service.publish(world.input("exp", { slug: "coast-walk" })));
+    ok(await world.service.publish(world.input("site", { slug: "coast-walk" })));
   });
 
   it("suggests past a numbered candidate another page holds under the stem of a 160-character slug", async () => {
@@ -191,7 +189,7 @@ describe("reasons", () => {
     const world = createWorld();
     addPage(world, PAGE_2);
     ok(await world.service.publish(world.input("niho", { pageId: PAGE_2, slug: "coast-walk" })));
-    ok(await world.service.changeDestination(world.input("exp", { pageId: PAGE_2 })));
+    ok(await world.service.changeDestination(world.input("site", { pageId: PAGE_2 })));
     expect(await world.service.publish(world.input("niho", { slug: "coast-walk" }))).toEqual({ ok: false, reason: "slug_taken", suggestion: "coast-walk-2" });
   });
 
@@ -244,10 +242,11 @@ describe("reasons", () => {
 describe("roles are read from NIHO on every operation, never stored", () => {
   it("reads roles for publish, update and changeDestination", async () => {
     const world = createWorld();
-    ok(await world.service.publish(world.input("niho")));
+    ok(await world.service.publish(world.input("exp")));
     expect(world.roles.reads).toBe(1);
-    ok(await world.service.update(world.input("niho")));
+    ok(await world.service.update(world.input("exp")));
     expect(world.roles.reads).toBe(2);
+    ok(await world.service.changeDestination(world.input("site")));
     ok(await world.service.changeDestination(world.input("exp")));
     expect(world.roles.reads).toBe(3);
     expect(world.store.dump()).not.toContain("kamakura");
@@ -278,7 +277,7 @@ describe("update and save", () => {
     world.editDraft({ title: "A morning walk, revised" });
     expect(await statusOf(world)).toBe("updated");
     const result = ok(await world.service.update(world.input("niho")));
-    expect(result).toMatchObject({ status: "published", version: 2, url: `https://niho.example.com/article/${SLUG}` });
+    expect(result).toMatchObject({ status: "published", version: 2, url: `https://exp.example.com/guides/${SLUG}` });
     const [v1, v2] = world.store.versions(PAGE_ID);
     expect(v1).toEqual(first);
     expect(v1?.snapshot.title).toBe("A morning walk along the coast");
@@ -332,12 +331,12 @@ describe("update and save", () => {
       await world.service.stop({ actorId: ACTOR, pageId: PAGE_ID });
     }],
     ["live on another destination", async (world: World) => {
-      ok(await world.service.publish(world.input("exp")));
+      ok(await world.service.publish(world.input("site")));
     }],
   ])("not_found when the page is %s", async (_name, setup) => {
     const world = createWorld();
     await setup(world);
-    expect(await world.service.update(world.input("niho"))).toEqual({ ok: false, reason: "not_found" });
+    expect(await world.service.update(world.input("exp"))).toEqual({ ok: false, reason: "not_found" });
   });
 });
 
@@ -349,7 +348,7 @@ describe("stop and re-publication", () => {
     const result = await world.service.stop({ actorId: ACTOR, pageId: PAGE_ID });
     expect(result).toMatchObject({ ok: true, status: "stopped", publication: { stoppedAt: "2026-10-01T09:01:00.000Z", slug: SLUG } });
     expect(world.store.versions(PAGE_ID)).toEqual(versions);
-    expect(resolveRedirect(world.store.redirects(), { handle: "niho", slug: SLUG })).toBe("list");
+    expect(resolveRedirect(world.store.redirects(), { handle: "exp", slug: SLUG })).toBe("list");
     expect(await statusOf(world)).toBe("stopped");
   });
 
@@ -385,7 +384,7 @@ describe("stop and re-publication", () => {
     expect(again.url).toBe(first.url);
     expect(again.publication).toMatchObject({ slug: SLUG, stoppedAt: null, version: 2, publishedAt: first.publication.publishedAt });
     expect(world.store.versions(PAGE_ID)[1]?.snapshot.id).toBe(PAGE_ID);
-    expect(resolveRedirect(world.store.redirects(), { handle: "niho", slug: SLUG })).toBeNull();
+    expect(resolveRedirect(world.store.redirects(), { handle: "exp", slug: SLUG })).toBeNull();
   });
 
   it("refuses another slug when re-publishing on the same destination", async () => {
@@ -399,61 +398,49 @@ describe("stop and re-publication", () => {
     const world = createWorld();
     ok(await world.service.publish(world.input("niho")));
     await world.service.stop({ actorId: ACTOR, pageId: PAGE_ID });
-    const result = ok(await world.service.publish(world.input("exp", { slug: "coast-walk" })));
-    expect(result.url).toBe("https://exp.example.com/guides/coast-walk");
-    expect(resolveRedirect(world.store.redirects(), { handle: "niho", slug: SLUG })).toBe("list");
+    const result = ok(await world.service.publish(world.input("site", { slug: "coast-walk" })));
+    expect(result.url).toBe("https://notes.example.net/coast-walk");
+    expect(resolveRedirect(world.store.redirects(), { handle: "exp", slug: SLUG })).toBe("list");
   });
 });
 
 describe("changeDestination", () => {
-  it("face → face: redirects the old URL to the new one", async () => {
-    const world = createWorld();
-    ok(await world.service.publish(world.input("niho")));
-    const result = ok(await world.service.changeDestination(world.input("exp")));
-    expect(result).toMatchObject({ status: "published", version: 2, url: `https://exp.example.com/guides/${SLUG}` });
-    expect(result.publication).toMatchObject({ dest: "exp", handle: "exp", slug: SLUG });
-    expect(resolveRedirect(world.store.redirects(), { handle: "niho", slug: SLUG })).toEqual({ handle: "exp", slug: SLUG });
-  });
-
   it("face → site: redirects the old URL to the list", async () => {
     const world = createWorld();
-    ok(await world.service.publish(world.input("niho")));
+    ok(await world.service.publish(world.input("exp")));
     ok(await world.service.changeDestination(world.input("site")));
-    expect(resolveRedirect(world.store.redirects(), { handle: "niho", slug: SLUG })).toBe("list");
+    expect(resolveRedirect(world.store.redirects(), { handle: "exp", slug: SLUG })).toBe("list");
   });
 
   it("site → face: does nothing to the old URL", async () => {
     const world = createWorld();
     ok(await world.service.publish(world.input("site")));
-    ok(await world.service.changeDestination(world.input("niho")));
+    ok(await world.service.changeDestination(world.input("exp")));
     expect(world.store.redirects()).toEqual([]);
   });
 
   it("keeps chains one step long across several moves and a stop", async () => {
     const world = createWorld();
-    ok(await world.service.publish(world.input("niho")));
-    ok(await world.service.changeDestination(world.input("exp")));
+    ok(await world.service.publish(world.input("exp")));
     ok(await world.service.changeDestination(world.input("site")));
     const redirects = world.store.redirects();
-    expect(resolveRedirect(redirects, { handle: "niho", slug: SLUG })).toBe("list");
     expect(resolveRedirect(redirects, { handle: "exp", slug: SLUG })).toBe("list");
     expect(redirects.every((redirect) => redirect.to === "list")).toBe(true);
   });
 
   it("moving back removes the redirect from the live URL", async () => {
     const world = createWorld();
-    ok(await world.service.publish(world.input("niho")));
+    ok(await world.service.publish(world.input("exp")));
+    ok(await world.service.changeDestination(world.input("site")));
     ok(await world.service.changeDestination(world.input("exp")));
-    ok(await world.service.changeDestination(world.input("niho")));
     const redirects = world.store.redirects();
-    expect(resolveRedirect(redirects, { handle: "niho", slug: SLUG })).toBeNull();
-    expect(resolveRedirect(redirects, { handle: "exp", slug: SLUG })).toEqual({ handle: "niho", slug: SLUG });
+    expect(resolveRedirect(redirects, { handle: "exp", slug: SLUG })).toBeNull();
   });
 
   it("re-evaluates the conditions on the new destination", async () => {
     const world = createWorld();
     world.editDraft({ lang: "ja" });
-    ok(await world.service.publish(world.input("niho")));
+    ok(await world.service.publish(world.input("site")));
     const before = world.store.dump();
     expect(await world.service.changeDestination(world.input("exp"))).toMatchObject({ ok: false, reason: "not_ready", problems: [{ id: "lang-en" }] });
     expect(world.store.dump()).toBe(before);
@@ -463,18 +450,18 @@ describe("changeDestination", () => {
     const world = createWorld();
     addPage(world, PAGE_2);
     ok(await world.service.publish(world.input("exp", { pageId: PAGE_2, slug: SLUG })));
-    ok(await world.service.publish(world.input("niho")));
+    ok(await world.service.publish(world.input("site")));
     expect(await world.service.changeDestination(world.input("exp", { slug: SLUG }))).toEqual({ ok: false, reason: "slug_taken", suggestion: `${SLUG}-2` });
     const moved = ok(await world.service.changeDestination(world.input("exp", { slug: "coast-walk" })));
     expect(moved.url).toBe("https://exp.example.com/guides/coast-walk");
-    expect(resolveRedirect(world.store.redirects(), { handle: "niho", slug: SLUG })).toEqual({ handle: "exp", slug: "coast-walk" });
+    expect(world.store.publication(PAGE_ID)).toMatchObject({ handle: "exp", slug: "coast-walk" });
   });
 
   it("without a slug, keeps the current one or suggests -2", async () => {
     const world = createWorld();
     addPage(world, PAGE_2);
     ok(await world.service.publish(world.input("exp", { pageId: PAGE_2, slug: SLUG })));
-    ok(await world.service.publish(world.input("niho")));
+    ok(await world.service.publish(world.input("site")));
     expect(ok(await world.service.changeDestination(world.input("exp"))).publication.slug).toBe(`${SLUG}-2`);
   });
 
@@ -489,10 +476,10 @@ describe("changeDestination", () => {
 
   it("publish on a live page acts as update (same destination) or as a move (another one)", async () => {
     const world = createWorld();
-    ok(await world.service.publish(world.input("niho")));
-    expect(ok(await world.service.publish(world.input("niho"))).version).toBe(2);
     ok(await world.service.publish(world.input("exp")));
-    expect(resolveRedirect(world.store.redirects(), { handle: "niho", slug: SLUG })).toEqual({ handle: "exp", slug: SLUG });
+    expect(ok(await world.service.publish(world.input("exp"))).version).toBe(2);
+    ok(await world.service.publish(world.input("site")));
+    expect(resolveRedirect(world.store.redirects(), { handle: "exp", slug: SLUG })).toBe("list");
   });
 
   it("never touches another page", async () => {
@@ -500,8 +487,8 @@ describe("changeDestination", () => {
     addPage(world, PAGE_2);
     ok(await world.service.publish(world.input("niho", { pageId: PAGE_2, slug: "other-page" })));
     const other = JSON.stringify([world.store.publication(PAGE_2), world.store.versions(PAGE_2)]);
-    ok(await world.service.publish(world.input("niho")));
-    ok(await world.service.changeDestination(world.input("exp")));
+    ok(await world.service.publish(world.input("exp")));
+    ok(await world.service.changeDestination(world.input("site")));
     await world.service.stop({ actorId: ACTOR, pageId: PAGE_ID });
     expect(JSON.stringify([world.store.publication(PAGE_2), world.store.versions(PAGE_2)])).toBe(other);
   });

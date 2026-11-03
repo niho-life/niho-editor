@@ -115,7 +115,6 @@ describe("公開のシート GET", () => {
     expect(sheet.selection).toBeNull();
     expect(sheet.destinations.map(({ handle, available, reason, url }) => ({ handle, available, reason, url }))).toEqual([
       { handle: "exp", available: true, reason: null, url: "https://experience.niho.life/guides/morning-walk" },
-      { handle: "niho", available: true, reason: null, url: "https://niho.life/article/morning-walk" },
     ]);
     expect(sheet.primary).toBeNull();
     expect(sheet.canStop).toBe(false);
@@ -150,23 +149,20 @@ describe("公開のシート GET", () => {
 
   it("最終工程名のままの題名をシートでも再評価でも止め、公開データは書かない", async () => {
     const { deps, store } = world({ finalStepNames: ["Morning walk"] });
-    const sheet = await sheetOf(await getSheet(deps, PAGE, "?handle=niho"));
+    const sheet = await sheetOf(await getSheet(deps, PAGE, "?handle=exp"));
     expect(sheet.problems.map((problem) => problem.id)).toEqual(["step-title"]);
     expect(sheet.primary).toBeNull();
 
     const before = store.dump();
-    const response = await post(deps, to("niho"));
+    const response = await post(deps, to("exp"));
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: "not_ready", problems: [{ id: "step-title" }] });
     expect(store.dump()).toBe(before);
   });
 
-  it("選べない設定（NIHO の「体験ページに載せる」）は selectionError、使えない slug は slug.error", async () => {
+  it("使えない slug は slug.error", async () => {
     const { deps } = world();
-    const extras = await sheetOf(await getSheet(deps, PAGE, "?handle=niho&extras=xp"));
-    expect(extras.selectionError).toBe("extras");
-    expect(extras.primary).toBeNull();
-    const reserved = await sheetOf(await getSheet(deps, PAGE, "?handle=niho&slug=index"));
+    const reserved = await sheetOf(await getSheet(deps, PAGE, "?handle=exp&slug=index"));
     expect(reserved.slug).toEqual({ value: "index", editable: true, error: "reserved" });
     expect(reserved.primary).toBeNull();
   });
@@ -176,7 +172,6 @@ describe("公開のシート GET", () => {
     const sheet = await sheetOf(await getSheet(deps, PAGE, "?handle=exp"));
     expect(sheet.destinations.map((entry) => [entry.handle, entry.reason])).toEqual([
       ["exp", "role"],
-      ["niho", "role"],
     ]);
     expect(sheet.primary).toBeNull();
   });
@@ -192,12 +187,12 @@ describe("公開のシート GET", () => {
 describe("公開する・更新を公開・保存・発信先を変える・公開をやめる", () => {
   it("公開する → 公開中。GET は公開版の URL・やめられる。サーバーは公開の前の評価をもう一度する", async () => {
     const { deps } = world();
-    const published = await publishedOf(await post(deps, to("niho", { extras: { app: true, news: false, xp: false } })));
-    expect(published).toMatchObject({ status: "published", operation: "publish", url: "https://niho.life/article/morning-walk", version: 1 });
+    const published = await publishedOf(await post(deps, to("exp", { extras: { app: true, news: false, xp: false } })));
+    expect(published).toMatchObject({ status: "published", operation: "publish", url: "https://experience.niho.life/guides/morning-walk", version: 1 });
     const sheet = await sheetOf(await getSheet(deps));
     expect(sheet.status).toBe("published");
-    expect(sheet.publication).toMatchObject({ handle: "niho", dest: "niho", label: "NIHO", slug: "morning-walk", url: "https://niho.life/article/morning-walk", stopped: false });
-    expect(sheet.selection).toEqual({ handle: "niho", range: "live", extras: { app: true, news: false, xp: false }, slug: null, category: null, related: [] });
+    expect(sheet.publication).toMatchObject({ handle: "exp", dest: "exp", label: "NIHO Experience", slug: "morning-walk", url: "https://experience.niho.life/guides/morning-walk", stopped: false });
+    expect(sheet.selection).toEqual({ handle: "exp", range: "live", extras: { app: true, news: false, xp: false }, slug: null, category: null, related: [] });
     // 公開中で何も変えていなければ、することが無い
     expect(sheet.primary).toBeNull();
     expect(sheet.slug.editable).toBe(false);
@@ -219,35 +214,23 @@ describe("公開する・更新を公開・保存・発信先を変える・公�
 
   it("本文を直すと「更新あり」→ 更新を公開（同じ URL・版が進む）。設定だけ変えると保存（限定公開）", async () => {
     const { deps, store } = world();
-    await publishedOf(await post(deps, to("niho")));
+    await publishedOf(await post(deps, to("exp")));
     store.putPage(page(PAGE, ME, { content: [...READY, { type: "paragraph", content: [{ type: "text", text: "Added later." }] }] }));
     const updated = await sheetOf(await getSheet(deps));
     expect(updated.status).toBe("updated");
     expect(updated.primary).toBe("update");
-    const update = await publishedOf(await post(deps, to("niho")));
-    expect(update).toMatchObject({ operation: "update", status: "published", version: 2, url: "https://niho.life/article/morning-walk" });
+    const update = await publishedOf(await post(deps, to("exp")));
+    expect(update).toMatchObject({ operation: "update", status: "published", version: 2, url: "https://experience.niho.life/guides/morning-walk" });
     expect((await sheetOf(await getSheet(deps))).status).toBe("published");
 
-    expect((await sheetOf(await getSheet(deps, PAGE, "?handle=niho&range=unlisted&extras="))).primary).toBe("save");
-    const save = await publishedOf(await post(deps, to("niho", { range: "unlisted" })));
+    expect((await sheetOf(await getSheet(deps, PAGE, "?handle=exp&range=unlisted&extras="))).primary).toBe("save");
+    const save = await publishedOf(await post(deps, to("exp", { range: "unlisted" })));
     expect(save).toMatchObject({ operation: "update", status: "limited", version: 3 });
   });
 
-  it("公開中に別の発信先を選ぶと発信先を変える（NIHO の面の間は旧 URL から転送）", async () => {
+  it("公開をやめる → 公開をやめた。もう一度呼んでも同じ。再公開は同じ Experience URL", async () => {
     const { deps, store } = world();
-    await publishedOf(await post(deps, to("niho")));
-    const plan = await sheetOf(await getSheet(deps, PAGE, "?handle=exp"));
-    expect(plan.primary).toBe("publish");
-    expect(plan.changesDestination).toBe(true);
-    const moved = await publishedOf(await post(deps, to("exp")));
-    expect(moved).toMatchObject({ operation: "move", url: "https://experience.niho.life/guides/morning-walk" });
-    expect(store.redirects().map((redirect) => [redirect.from, redirect.to])).toEqual([[{ handle: "niho", slug: "morning-walk" }, { handle: "exp", slug: "morning-walk" }]]);
-    expect(store.publication(PAGE)).toMatchObject({ handle: "exp", stoppedAt: null });
-  });
-
-  it("公開をやめる → 公開をやめた（URL は一覧へ転送）。もう一度呼んでも同じ。再公開は同じ URL", async () => {
-    const { deps, store } = world();
-    await publishedOf(await post(deps, to("niho")));
+    await publishedOf(await post(deps, to("exp")));
     const response = await stop(deps);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ stopped: { status: "stopped" } });
@@ -257,13 +240,28 @@ describe("公開する・更新を公開・保存・発信先を変える・公�
     expect(sheet.canStop).toBe(false);
     expect(sheet.primary).toBe("publish");
     expect(store.redirects().map((redirect) => redirect.to)).toEqual(["list"]);
-    const again = await publishedOf(await post(deps, to("niho")));
-    expect(again).toMatchObject({ operation: "publish", url: "https://niho.life/article/morning-walk" });
+    const again = await publishedOf(await post(deps, to("exp")));
+    expect(again).toMatchObject({ operation: "publish", url: "https://experience.niho.life/guides/morning-walk" });
   });
 
   it("公開していないページの「公開をやめる」は 404", async () => {
     const { deps } = world();
     expect((await stop(deps)).status).toBe(404);
+  });
+
+  it("deprecated な NIHO 公開が残っていても、本人は公開をやめられる", async () => {
+    const { deps, store } = world();
+    await publishedOf(await post(deps, to("exp")));
+    await store.transaction(async (tx) => {
+      const publication = await tx.getPublication(PAGE);
+      if (!publication) throw new Error("expected publication");
+      await tx.putPublication({ ...publication, handle: "niho", dest: "niho" });
+    });
+    const before = await sheetOf(await getSheet(deps));
+    expect(before.publication).toMatchObject({ handle: "niho", dest: "niho" });
+    expect(before.canStop).toBe(true);
+    expect((await stop(deps)).status).toBe(200);
+    expect((await sheetOf(await getSheet(deps))).status).toBe("stopped");
   });
 });
 
@@ -276,23 +274,16 @@ describe("失敗の応答（reason → HTTP と一言）", () => {
     expect(await response.json()).toEqual({ error: "forbidden_destination", detail: "role", message: "この発信先に出す役割がありません" });
     expect(store.dump()).toBe(before);
     const sheet = await sheetOf(await getSheet(deps));
-    expect(sheet.destinations.find((entry) => entry.handle === "niho")).toMatchObject({ available: false, reason: "role" });
-  });
-
-  it("forbidden: 発信先が出していない「あわせて」は 400（extras）", async () => {
-    const { deps } = world();
-    const response = await post(deps, to("niho", { extras: { app: false, news: false, xp: true } }));
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: "forbidden_destination", detail: "extras" });
+    expect(sheet.destinations.some((entry) => entry.handle === "niho")).toBe(false);
   });
 
   it("storage_not_cloud: 保存先がこの Mac だけ・移行中・知らない値なら 403 で何も書かない。シートは主ボタンを出さず storageBlock を返す。クラウドと未選択は公開できる", async () => {
     for (const [storage, block] of [["LOCAL", "LOCAL"], ["CLOSING", "CLOSING"], ["MARS", "unknown"]] as const) {
       const { deps } = world({ storage: storage as StorageMode });
-      const sheet = await sheetOf(await getSheet(deps, PAGE, "?handle=niho"));
+      const sheet = await sheetOf(await getSheet(deps, PAGE, "?handle=exp"));
       expect(sheet.storageBlock, storage).toBe(block);
       expect(sheet.primary).toBeNull();
-      const response = await post(deps, to("niho"));
+      const response = await post(deps, to("exp"));
       expect(response.status, storage).toBe(403);
       expect(await response.json()).toEqual({ error: "storage_not_cloud", detail: block, message: "保存先が NIHO クラウドではないので、公開できません（公開は保存先がクラウドのときだけです）" });
       // 何も書いていない
@@ -300,31 +291,31 @@ describe("失敗の応答（reason → HTTP と一言）", () => {
     }
     for (const storage of ["CLOUD", "UNSET"] as const) {
       const { deps } = world({ storage });
-      expect((await sheetOf(await getSheet(deps, PAGE, "?handle=niho"))).storageBlock, storage).toBeNull();
-      expect((await post(deps, to("niho"))).status, storage).toBe(200);
+      expect((await sheetOf(await getSheet(deps, PAGE, "?handle=exp"))).storageBlock, storage).toBeNull();
+      expect((await post(deps, to("exp"))).status, storage).toBe(200);
     }
   });
 
   it("slug_taken: 409 と提案。GET でもその slug は slug_taken", async () => {
     const { deps, store } = world();
     store.putPage(page(PAGE_2, ME));
-    await publishedOf(await post(deps, to("niho")));
-    const sheet = await sheetOf(await getSheet(deps, PAGE_2, "?handle=niho&slug=morning-walk"));
+    await publishedOf(await post(deps, to("exp")));
+    const sheet = await sheetOf(await getSheet(deps, PAGE_2, "?handle=exp&slug=morning-walk"));
     expect(sheet.slug.error).toBe("slug_taken");
     // 提案は空いている slug
-    expect((await sheetOf(await getSheet(deps, PAGE_2, "?handle=niho"))).slug.value).toBe("morning-walk-2");
-    const response = await post(deps, to("niho", { slug: "morning-walk" }), PAGE_2);
+    expect((await sheetOf(await getSheet(deps, PAGE_2, "?handle=exp"))).slug.value).toBe("morning-walk-2");
+    const response = await post(deps, to("exp", { slug: "morning-walk" }), PAGE_2);
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "slug_taken", suggestion: "morning-walk-2", message: "この URL は使われています（morning-walk-2 なら使えます）" });
   });
 
   it("invalid_slug は 400、slug_locked（公開したあとの URL の変更）は 409", async () => {
     const { deps } = world();
-    const invalid = await post(deps, to("niho", { slug: "Morning Walk" }));
+    const invalid = await post(deps, to("exp", { slug: "Morning Walk" }));
     expect(invalid.status).toBe(400);
     expect(await invalid.json()).toEqual({ error: "invalid_slug", detail: "format", message: "URL は半角の英小文字・数字と、間のハイフンだけで書いてください" });
-    await publishedOf(await post(deps, to("niho", { slug: "first-walk" })));
-    const locked = await post(deps, to("niho", { slug: "second-walk" }));
+    await publishedOf(await post(deps, to("exp", { slug: "first-walk" })));
+    const locked = await post(deps, to("exp", { slug: "second-walk" }));
     expect(locked.status).toBe(409);
     expect(await locked.json()).toEqual({ error: "slug_locked", slug: "first-walk", message: "公開したあとは URL を変えられません" });
   });
@@ -335,7 +326,6 @@ describe("失敗の応答（reason → HTTP と一言）", () => {
     const sheet = await sheetOf(await getSheet(deps));
     expect(sheet.destinations.map((entry) => [entry.handle, entry.reason])).toEqual([
       ["exp", "unavailable"],
-      ["niho", "unavailable"],
     ]);
     const response = await post(deps, to("exp"));
     expect(response.status).toBe(503);
@@ -344,11 +334,11 @@ describe("失敗の応答（reason → HTTP と一言）", () => {
 
   it("failed: store の途中の失敗は 503（もう一度）。前の公開版と下書きはそのまま", async () => {
     const { deps, store } = world();
-    await publishedOf(await post(deps, to("niho")));
+    await publishedOf(await post(deps, to("exp")));
     store.putPage(page(PAGE, ME, { title: "Morning walk, revised" }));
     const before = store.dump();
     store.failOnCall(4);
-    const response = await post(deps, to("niho"));
+    const response = await post(deps, to("exp"));
     store.failOnCall(null);
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ error: "failed", retryable: true, message: "公開できませんでした。前の公開版と下書きはそのままです。もう一度お試しください" });
@@ -362,7 +352,7 @@ describe("失敗の応答（reason → HTTP と一言）", () => {
     missing.store.putPage(page(PAGE, ME, { content: [...READY, image] }));
     missing.store.putAsset(PAGE, photo);
     const before = missing.store.dump();
-    const refused = await post(missing.deps, to("niho"));
+    const refused = await post(missing.deps, to("exp"));
     expect(refused.status).toBe(422);
     expect(await refused.json()).toEqual({
       error: "failed",
@@ -371,20 +361,20 @@ describe("失敗の応答（reason → HTTP と一言）", () => {
       message: "写真の置き場所がまだ設定されていないので、写真のあるページは公開できません",
     });
     expect(missing.store.dump()).toBe(before);
-    const blocked = await sheetOf(await getSheet(missing.deps, PAGE, "?handle=niho"));
+    const blocked = await sheetOf(await getSheet(missing.deps, PAGE, "?handle=exp"));
     expect(blocked.problems.map((problem) => problem.id)).toEqual(["photos-unavailable"]);
     expect(blocked.primary).toBeNull();
     // カバー写真だけでも同じ
     missing.store.putPage(page(PAGE, ME, { coverAssetId: "asset-photo-01" }));
-    expect((await post(missing.deps, to("niho"))).status).toBe(422);
+    expect((await post(missing.deps, to("exp"))).status).toBe(422);
     // 写真の無いページは出せる
     missing.store.putPage(page(PAGE, ME));
-    expect((await post(missing.deps, to("niho"))).status).toBe(200);
+    expect((await post(missing.deps, to("exp"))).status).toBe(200);
 
     const set = world({ env: { EDITOR_ASSET_ORIGIN: "https://assets.example.com" } });
     set.store.putPage(page(PAGE, ME, { content: [...READY, image] }));
     set.store.putAsset(PAGE, photo);
-    await publishedOf(await post(set.deps, to("niho")));
+    await publishedOf(await post(set.deps, to("exp")));
     const [version] = set.store.versions(PAGE);
     expect(version!.snapshot.assets.map((asset) => asset.url)).toEqual([`https://assets.example.com/assets/${"b".repeat(64)}.jpg`]);
   });
@@ -393,7 +383,7 @@ describe("失敗の応答（reason → HTTP と一言）", () => {
 describe("本人だけ・同じ origin・DB", () => {
   const ROUTES: Array<[string, (deps: PublishApiDeps, id: string, headers?: Record<string, string>) => Promise<Response>]> = [
     ["GET", (deps, id, headers) => getSheet(deps, id, "", headers)],
-    ["POST publish", (deps, id, headers) => post(deps, to("niho"), id, headers)],
+    ["POST publish", (deps, id, headers) => post(deps, to("exp"), id, headers)],
     ["POST stop", (deps, id, headers) => stop(deps, id, headers)],
   ];
 

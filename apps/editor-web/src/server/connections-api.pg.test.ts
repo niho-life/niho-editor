@@ -78,8 +78,8 @@ describe.skipIf(databaseUrl === undefined)("発信先の設定の route を Post
     }
     const store = pgPublishStore(pool);
     const roles = new MemoryRoles();
-    roles.set(ACTOR, ["writer", "kamakura"]);
-    roles.set(OTHER, ["writer", "kamakura"]);
+    roles.set(ACTOR, ["writer"]);
+    roles.set(OTHER, ["writer"]);
     const authors = new MemoryAuthors();
     authors.set(ACTOR, { name: "Example Writer", handle: null, url: null });
     authors.set(OTHER, { name: "Another Writer", handle: null, url: null });
@@ -165,10 +165,7 @@ describe.skipIf(databaseUrl === undefined)("発信先の設定の route を Post
 
     // 1 件も公開していない本人には 0 件しか見えない
     const mine = (await (await listDestinations(request("GET", "/api/destinations"), deps)).json()) as { destinations: { faces: { handle: string; published: number }[] } };
-    expect(mine.destinations.faces.map((face) => [face.handle, face.published])).toEqual([
-      ["exp", 0],
-      ["niho", 0],
-    ]);
+    expect(mine.destinations.faces.map((face) => [face.handle, face.published])).toEqual([["exp", 0]]);
 
     // 本人が 1 件公開すると、自分の 1 件だけが数に入る
     const own = await publisher.publish({

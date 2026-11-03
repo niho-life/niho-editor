@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { ConnectionService, deriveStatus } from "../src/index.js";
 import { MemoryPublishStore } from "../test-support/memory-store.js";
 import { ACTOR, OTHER_ACTOR, OTHER_HANDLE, PAGE_ID, createSiteWorld, type SiteWorld } from "./support/site-world.js";
+import { SETTINGS } from "./support/world.js";
 
 const PAGE_2 = "7a1d3b5f-2c4e-4d6f-9a81-0b2c3d4e5f60";
 const PAGE_3 = "9c3f5d7b-4e6a-4b8c-9d0e-2f4a6b8c0d1e";
@@ -70,7 +71,7 @@ describe("disconnect", () => {
     const before = world.store.dump();
     expect(await world.publish(PAGE_ID)).toEqual({ ok: false, reason: "forbidden_destination", detail: "connection" });
     expect(world.store.dump()).toBe(before);
-    expect(await world.publisher.publish({ actorId: ACTOR, pageId: PAGE_ID, target: { dest: "niho" }, settings: { range: "live", extras: { app: false, news: false, xp: false }, category: "essay", related: [] } }))
+    expect(await world.publisher.publish({ actorId: ACTOR, pageId: PAGE_ID, target: { dest: "exp" }, settings: SETTINGS.exp }))
       .toMatchObject({ ok: true });
   });
 });
@@ -101,7 +102,7 @@ describe("listPublished", () => {
 
   it("a page that moved to another destination is no longer on the connection", async () => {
     const world = await populated();
-    const moved = await world.publisher.changeDestination({ actorId: ACTOR, pageId: PAGE_ID, target: { dest: "niho" }, settings: { range: "live", extras: { app: false, news: false, xp: false }, category: "essay", related: [] } });
+    const moved = await world.publisher.changeDestination({ actorId: ACTOR, pageId: PAGE_ID, target: { dest: "exp" }, settings: SETTINGS.exp });
     expect(moved.ok).toBe(true);
     const listed = await world.connections.listPublished({ actorId: ACTOR, connectionId: world.connectionId });
     expect(listed.ok && listed.items.map((item) => item.pageId).sort()).toEqual([PAGE_2, PAGE_3].sort());

@@ -108,11 +108,13 @@ export function destOf(handle: string): Dest | null {
 }
 
 /** Roles read from NIHO that open each face (design §10). Owners' sites need a connection instead. */
-export const FACE_ROLES: { readonly [K in FaceDest]: string } = {
+export const FACE_ROLES = {
   exp: "writer",
-  niho: "kamakura",
-};
+} as const;
+
+/** Faces offered for a new publication. `niho` remains a wire identifier for old records only. */
+export const PUBLISHABLE_FACE_DESTS = ["exp"] as const satisfies readonly FaceDest[];
 
 export function roleAllows(roles: readonly string[], dest: FaceDest): boolean {
-  return roles.includes(FACE_ROLES[dest]);
+  return dest === "exp" && roles.includes(FACE_ROLES.exp);
 }

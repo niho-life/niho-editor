@@ -32,12 +32,13 @@ const ASSETS = [COVER, FIGURE, AUDIO];
 const SLUG = "a-morning-walk-along-the-coast";
 
 function handleOf(dest: DestName): string {
-  return dest === "site" ? SITE : dest;
+  return dest === "site" ? SITE : dest === "niho" ? "exp" : dest;
 }
 
 async function sheet(world: World, dest: DestName): Promise<ReturnType<typeof sheetPlan>> {
   const page = world.store.page(PAGE_ID) as DraftPage;
-  const settings = SETTINGS[dest];
+  const active = dest === "niho" ? "exp" : dest;
+  const settings = SETTINGS[active];
   const input: SheetPlanInput = {
     pageId: PAGE_ID,
     title: page.title,
@@ -51,7 +52,7 @@ async function sheet(world: World, dest: DestName): Promise<ReturnType<typeof sh
     facts: collectFacts(page, ASSETS, await world.facts.read({
       actorId: ACTOR,
       pageId: PAGE_ID,
-      dest: TARGETS[dest].dest,
+      dest: TARGETS[active].dest,
       handle: handleOf(dest),
       related: settings.related,
       category: settings.category,
@@ -70,7 +71,7 @@ const MISSING: readonly { dest: DestName; name: string; break: Partial<DraftPage
 ];
 
 describe("条件がそろうまで公開ボタンが押せない", () => {
-  it.each(["exp", "niho", "site"] as const)("%s: リードとカバーが未設定でも公開・更新できる", async (dest) => {
+  it.each(["exp", "site"] as const)("%s: リードとカバーが未設定でも公開・更新できる", async (dest) => {
     const world = createWorld();
     world.editDraft({ coverAssetId: null, lead: null });
     expect((await sheet(world, dest)).primary).toBe("publish");
@@ -131,40 +132,40 @@ describe("条件がそろうまで公開ボタンが押せない", () => {
     world.editDraft({ title: "記事本文" });
     world.facts.set(ACTOR, { relatedLive: true, finalStepNames: ["旧・記事本文", "記事本文"] });
 
-    const blocked = await sheet(world, "niho");
+    const blocked = await sheet(world, "exp");
     expect(blocked.primary).toBeNull();
     expect(blocked.problems.map((problem) => problem.id)).toEqual(["step-title"]);
     const before = world.store.dump();
-    expect(await world.service.publish(world.input("niho"))).toMatchObject({ ok: false, reason: "not_ready", problems: [{ id: "step-title" }] });
+    expect(await world.service.publish(world.input("exp"))).toMatchObject({ ok: false, reason: "not_ready", problems: [{ id: "step-title" }] });
     expect(world.store.dump()).toBe(before);
 
     world.editDraft({ title: "海辺の朝" });
-    const ready = await sheet(world, "niho");
+    const ready = await sheet(world, "exp");
     expect(ready.primary).toBe("publish");
     expect(ready.problems).toEqual([]);
-    expect((await world.service.publish(world.input("niho"))).ok).toBe(true);
+    expect((await world.service.publish(world.input("exp"))).ok).toBe(true);
   });
 
   it("a destination whose declaration is broken cannot be published to (fail closed)", async () => {
     const world = createWorld();
-    world.declarations.set("niho", { ...DECLARATIONS.niho, requires: [{ id: "x", kind: "somethingNew", message: "m", fix: "body" }] });
-    expect(await world.service.publish(world.input("niho"))).toEqual({ ok: false, reason: "destination_unavailable" });
+    world.declarations.set("exp", { ...DECLARATIONS.exp, requires: [{ id: "x", kind: "somethingNew", message: "m", fix: "body" }] });
+    expect(await world.service.publish(world.input("exp"))).toEqual({ ok: false, reason: "destination_unavailable" });
   });
 });
 
 describe("公開に失敗しても前の公開版と下書きが残る", () => {
   async function publishedThenEdited(): Promise<World> {
     const world = createWorld();
-    const result: PublishResult = await world.service.publish(world.input("niho"));
+    const result: PublishResult = await world.service.publish(world.input("exp"));
     expect(result.ok).toBe(true);
     world.editDraft({ title: "A morning walk, revised", lead: "A revised lead." });
     return world;
   }
 
   it.each([
-    ["update", (world: World) => world.service.update(world.input("niho"))],
+    ["update", (world: World) => world.service.update(world.input("exp"))],
     ["stop", (world: World) => world.service.stop({ actorId: ACTOR, pageId: PAGE_ID })],
-    ["changeDestination", (world: World) => world.service.changeDestination(world.input("exp"))],
+    ["changeDestination", (world: World) => world.service.changeDestination(world.input("site"))],
   ] as const)("%s: a failure at any store call keeps the previous version, the draft and the redirects", async (_name, operation) => {
     const probe = await publishedThenEdited();
     probe.store.resetCallCount();
@@ -213,7 +214,7 @@ describe("公開に失敗しても前の公開版と下書きが残る", () => {
 });
 
 describe("公開をやめた記事の URL が一覧へ転送される（NIHO の面）", () => {
-  it.each(["exp", "niho"] as const)("%s: after stop, the old URL resolves to the list", async (dest) => {
+  it.each(["exp"] as const)("%s: after stop, the old URL resolves to the list", async (dest) => {
     const world = createWorld();
     expect((await world.service.publish(world.input(dest))).ok).toBe(true);
     expect(resolveRedirect(world.store.redirects(), { handle: dest, slug: SLUG })).toBeNull();
@@ -226,12 +227,11 @@ describe("公開をやめた記事の URL が一覧へ転送される（NIHO の
 
   it("older URLs of a moved page also go to the list after stop (one step)", async () => {
     const world = createWorld();
-    expect((await world.service.publish(world.input("niho"))).ok).toBe(true);
-    expect((await world.service.changeDestination(world.input("exp"))).ok).toBe(true);
+    expect((await world.service.publish(world.input("exp"))).ok).toBe(true);
+    expect((await world.service.changeDestination(world.input("site"))).ok).toBe(true);
     expect((await world.service.stop({ actorId: ACTOR, pageId: PAGE_ID })).ok).toBe(true);
     const redirects = world.store.redirects();
-    expect(redirects.map((redirect) => redirect.to)).toEqual(["list", "list"]);
-    expect(resolveRedirect(redirects, { handle: "niho", slug: SLUG })).toBe("list");
+    expect(redirects.map((redirect) => redirect.to)).toEqual(["list"]);
     expect(resolveRedirect(redirects, { handle: "exp", slug: SLUG })).toBe("list");
   });
 
@@ -244,11 +244,11 @@ describe("公開をやめた記事の URL が一覧へ転送される（NIHO の
 
   it("re-publishing brings the same URL back and removes the redirect", async () => {
     const world = createWorld();
-    const first = await world.service.publish(world.input("niho"));
+    const first = await world.service.publish(world.input("exp"));
     await world.service.stop({ actorId: ACTOR, pageId: PAGE_ID });
-    const again = await world.service.publish(world.input("niho"));
+    const again = await world.service.publish(world.input("exp"));
     expect(again.ok && first.ok && again.url === first.url).toBe(true);
-    expect(resolveRedirect(world.store.redirects(), { handle: "niho", slug: SLUG })).toBeNull();
+    expect(resolveRedirect(world.store.redirects(), { handle: "exp", slug: SLUG })).toBeNull();
     expect(readyPage().id).toBe(PAGE_ID);
   });
 });
