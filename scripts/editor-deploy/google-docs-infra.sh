@@ -44,13 +44,14 @@ google_docs_infra() {
     --uri "$worker_url/api/internal/google-docs/sweep" --http-method post
     --oidc-service-account-email "$TASKS_SA_EMAIL" --oidc-token-audience "$worker_url"
     --attempt-deadline 300s --max-retry-attempts 0
+    --message-body '{}'
     --description "NIHO editor Google Docs batches (#238): requeue durable export items and reconcile receipts"
   )
   # update keeps the job's state (a paused job stays paused: docs/ops/editor-deploy.md docs/ops/editor-google-docs-batch.md)
   if gcp scheduler jobs describe "$GOOGLE_DOCS_SWEEP_JOB" --location "$GCP_REGION" > /dev/null 2>&1; then
-    gcp scheduler jobs update http "$GOOGLE_DOCS_SWEEP_JOB" "${job_flags[@]}" > /dev/null
+    gcp scheduler jobs update http "$GOOGLE_DOCS_SWEEP_JOB" "${job_flags[@]}" --update-headers "Content-Type=application/json" > /dev/null
   else
-    gcp scheduler jobs create http "$GOOGLE_DOCS_SWEEP_JOB" "${job_flags[@]}"
+    gcp scheduler jobs create http "$GOOGLE_DOCS_SWEEP_JOB" "${job_flags[@]}" --headers "Content-Type=application/json"
   fi
 
   if [[ "$GOOGLE_DOCS_BATCH_MODE" == cloud-tasks ]]; then

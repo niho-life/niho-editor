@@ -44,7 +44,9 @@ tasks_sa="niho-editor-tasks@$project.iam.gserviceaccount.com"
 runner_sa="niho-editor-runner@$project.iam.gserviceaccount.com"
 # One transcription takes up to 20 minutes: fewer attempts, a longer backoff and fewer at once than the steps queue.
 queue_flags="--location $region --max-attempts=3 --min-backoff=60s --max-backoff=300s --max-concurrent-dispatches=3"
-job_flags="--location $region --schedule */5 * * * * --time-zone Asia/Tokyo --uri $url/api/internal/google-docs/sweep --http-method post --oidc-service-account-email $tasks_sa --oidc-token-audience $url --attempt-deadline 300s --max-retry-attempts 0 --description NIHO editor Google Docs batches (#238): requeue durable export items and reconcile receipts"
+job_flags="--location $region --schedule */5 * * * * --time-zone Asia/Tokyo --uri $url/api/internal/google-docs/sweep --http-method post --oidc-service-account-email $tasks_sa --oidc-token-audience $url --attempt-deadline 300s --max-retry-attempts 0 --message-body {} --description NIHO editor Google Docs batches (#238): requeue durable export items and reconcile receipts"
+create_job_flags="$job_flags --headers Content-Type=application/json"
+update_job_flags="$job_flags --update-headers Content-Type=application/json"
 g="--project $project --quiet"
 
 # Nothing exists yet: everything is created.
@@ -55,7 +57,7 @@ expect_line "$calls" "$g iam service-accounts create niho-editor-tasks --display
 expect_line "$calls" "$g tasks queues create niho-editor-google-docs $queue_flags"
 expect_line "$calls" "$g tasks queues add-iam-policy-binding niho-editor-google-docs --location $region --member serviceAccount:$runner_sa --role roles/cloudtasks.enqueuer"
 expect_line "$calls" "$g iam service-accounts add-iam-policy-binding $tasks_sa --member serviceAccount:$runner_sa --role roles/iam.serviceAccountUser"
-expect_line "$calls" "$g scheduler jobs create http niho-editor-google-docs-sweep $job_flags"
+expect_line "$calls" "$g scheduler jobs create http niho-editor-google-docs-sweep $create_job_flags"
 # The tasks account is only an identity: no role is granted to it anywhere.
 refuse_line "$calls" "--member serviceAccount:$tasks_sa"
 # The steps queue and its sweep belong to steps-infra.sh; this script does not touch them.
@@ -65,7 +67,7 @@ refuse_line "$calls" "/api/internal/steps/"
 # Everything exists: updated in place, nothing created.
 run_infra 1
 expect_line "$calls" "$g tasks queues update niho-editor-google-docs $queue_flags"
-expect_line "$calls" "$g scheduler jobs update http niho-editor-google-docs-sweep $job_flags"
+expect_line "$calls" "$g scheduler jobs update http niho-editor-google-docs-sweep $update_job_flags"
 refuse_line "$calls" " create"
 refuse_line "$calls" "--member serviceAccount:$tasks_sa"
 

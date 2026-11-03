@@ -85,6 +85,20 @@ describe("Google Docs batch payload", () => {
     expect(planned.omissions).toContainEqual({ reason: "private_link_removed", count: 3 });
   });
 
+  it("does not treat public DNS names beginning with IPv6 prefixes as private", () => {
+    const planned = planGoogleDocsBatchPayload(page({ blocks: [{ type: "paragraph", content: [
+      { type: "text", text: "FDA", marks: [{ type: "link", attrs: { href: "https://fda.gov/guidance" } }] },
+      { type: "text", text: "FC2", marks: [{ type: "link", attrs: { href: "https://fc2.com/" } }] },
+      { type: "text", text: "private", marks: [{ type: "link", attrs: { href: "https://[fd12::1]/private" } }] },
+    ] }] }), { includeBackground: false, includeTranscript: false });
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    expect(planned.payload.markdown).toContain("[FDA](https://fda.gov/guidance)");
+    expect(planned.payload.markdown).toContain("[FC2](https://fc2.com/)");
+    expect(planned.payload.markdown).not.toContain("fd12::1");
+    expect(planned.omissions).toContainEqual({ reason: "private_link_removed", count: 1 });
+  });
+
   it("未知blockをcontentごと黙ってskipせず理由を数え、安全な通常linkは保つ", () => {
     const planned = planGoogleDocsBatchPayload(page({ blocks: [
       { type: "paragraph", content: [{ type: "text", text: "公開", marks: [{ type: "link", attrs: { href: "https://public.example.test/page" } }] }] },

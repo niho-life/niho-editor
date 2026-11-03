@@ -36,8 +36,7 @@ function record(value: unknown): MutableNode | null {
 function privateHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")
-    || host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe8") || host.startsWith("fe9")
-    || host.startsWith("fea") || host.startsWith("feb") || host.includes(":")) return true;
+    || host.includes(":")) return true; // A colon here means URL.hostname is an IPv6 literal; exports omit all IPv6 destinations.
   const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
   if (!ipv4) return false;
   const octets = ipv4.slice(1).map(Number);
