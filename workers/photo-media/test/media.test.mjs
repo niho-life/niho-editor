@@ -205,7 +205,7 @@ test("malformed object-store generation is retryable infrastructure failure", as
   assert.equal(invalidStoreResult.state.abandoned.length, 0);
 });
 
-test("timeout and cancellation fence late results, cap retries and clean scratch", async (t) => {
+test("timeout and cancellation fence late results, cap retries and clean scratch", { timeout: 5_000 }, async (t) => {
   const timed = await fixture(t, { timeoutMs: 10, render: async (_state, input) => { await delay(100, null, { signal: input.signal }); } });
   assert.equal(await timed.execute(IDS.job), "timeout");
   assert.equal(timed.state.staged.length, 0);
@@ -220,15 +220,18 @@ test("timeout and cancellation fence late results, cap retries and clean scratch
   setTimeout(() => abort.abort(), 5);
   assert.equal(await running, "cancelled");
   assert.ok(cancelled.state.failures[0].retryAt > Date.now());
+  const renderEntered = Promise.withResolvers();
   const fenced = await fixture(t, { render: async (state, input) => {
     state.source.lifecycle = "trashed";
     state.source.lifecycleGeneration++;
     state.generation++;
+    renderEntered.resolve();
     await delay(100, null, { signal: input.signal });
   } });
   const stop = new AbortController();
   const fencedRun = fenced.execute(IDS.job, stop.signal);
-  setTimeout(() => stop.abort(), 5);
+  await renderEntered.promise;
+  stop.abort();
   assert.equal(await fencedRun, "cancelled");
   assert.equal(fenced.state.failures.length, 0);
 });
