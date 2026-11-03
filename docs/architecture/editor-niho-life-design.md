@@ -264,7 +264,7 @@ Block は段落、見出し（2・3）、箇条書き・チェックリスト（
 - **旧 NIHO docs の画面は退役**：`DocsApp` 一式（レール・フォルダ画面・工程設計・AI と作る・設定）と、#109 で旗の裏に入れた `EditorScreen`・`vault-pages`・`vault-recordings`。残すのは native 層（`src-tauri` の録音・sidecar・AI の crate・鍵）と純粋ロジック（`docs-core` の工程・テンプレート・プロファイル・文字起こし。サーバーの手順の実装がこれを使う）。`desktop-vault`（三方向併合）と `DocsStorageMode` は退役。
 - bundle identifier `life.niho.docs`・deep link `niho-docs`・配布物の名前 `NIHO-docs-<版>-<sha>`・tag `docs-v*` は変えない（#65）。
 - 公開境界は [publication-gates.md](../security/publication-gates.md) のまま：クライアントと契約は公開、API・DB・鍵・認可は非公開。
-- 認証は NIHO の `niho-experience-editor` クライアントを editor.niho.life の origin で使う（niho-app 側）。Mac の殻も同じ origin を読むので、別のクライアントは要らない。
+- 認証は Editor アプリを入口にし、NIHO の公開確認画面 `/connect/niho-editor` から writer連携専用の `niho-experience-editor` client を使う（niho-app 側）。Experience は連携先として編集権限だけを判定する。Mac の殻も `editor.niho.life` の同じ origin を読む。
 - CI は標準の GitHub-hosted runner。secret なし。
 
 ## 14. 進め方

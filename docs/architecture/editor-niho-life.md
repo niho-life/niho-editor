@@ -72,7 +72,7 @@
 | niho-experience の `/editor`（下書き、版、写真と許諾、公開前の検査、TipTap の本文） | editor.niho.life へ移す。experience は発信先に専念し、`/guides` の公開描画（SSR、JSON-LD、sitemap、hreflang）と記事⇄体験の相互リンク、体験の掲載状態の検証を残す |
 | 記事の正本は niho-experience（ADR 0002） | 記事の正本は editor。experience は公開 API から読む。ADR を更新する |
 | experience の記事連携（招待・承諾・取消） | NIHO アカウントの役割の層へ移す |
-| NIHO アプリ | 役割のハブ。アカウント設定の「書く」（体験への導線と並ぶ）から editor へ。公開した記事はカードで載る。editor 用の接続（`niho-experience-editor` クライアント）は editor.niho.life の接続として使う。別のNIHO本文公開面は作らない |
+| NIHO アプリ | 役割のハブ。アカウント設定の「書く」（体験への導線と並ぶ）から独立したEditorへ。公開した記事はカードで載る。Editorの入口は `/connect/niho-editor`、writer連携のclient IDは `niho-experience-editor`。Experienceは連携先として編集権限を持つ。別のNIHO本文公開面は作らない |
 
 進め方は、experience の公開面を今の設計のまま進めつつ、読み取り元を自分の DB から editor の公開 API に差し替えられる形にしておき、editor ができたら `/editor` を移す。NIHO docs の機能は Web の editor に一つずつ移し、Mac アプリは同じ部品で同じ方針に作り直す。
 

@@ -89,7 +89,7 @@ describe("NIHO Experience editor auth", () => {
     expect(response.headers.get("location")).toBeNull();
     expect(response.headers.get("content-security-policy")).toContain(`form-action ${NIHO}`);
     expect(response.headers.get("referrer-policy")).toBe("origin");
-    expect(html).toContain(`action="${NIHO}/connect/niho-experience-editor/start"`);
+    expect(html).toContain(`action="${NIHO}/connect/niho-editor/start"`);
     expect(html).toContain(`name="code_challenge" value="${challenge}"`);
     expect(html).toContain(`name="code_challenge_method" value="S256"`);
     expect(html).toContain(`name="state" value="${STATE}"`);
