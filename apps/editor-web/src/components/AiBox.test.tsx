@@ -319,6 +319,58 @@ describe("AiPanel", () => {
     expect(server.calls.filter((call) => call.url.endsWith("/ai/chat/turns"))).toHaveLength(4);
   });
 
+  it("passes saved conversation history to the Mac CLI when no resumable session exists", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const aiTurn = vi.fn(async (turnId: string, request: Record<string, unknown>) => {
+      void turnId;
+      void request;
+      return {
+        finalEvent: {
+          type: "Done" as const,
+          text: "写真はページへ都度添付する方針。",
+          stop_reason: "EndTurn" as const,
+          session_id: null,
+          usage: { input_tokens: 1, output_tokens: 1, cost_usd: null, model_used: "gpt-5", cost_known: false },
+          duration_ms: 1,
+          continuations: 0,
+        },
+        page: null,
+        pageRemoved: false,
+        extraFiles: 0,
+      };
+    });
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-5"], effort: true, resume: true }]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    const savedMessages = [
+      { id: "saved-user", seq: 1, role: "user", text: "写真をライブラリに共有しない。文書ページへその都度添付する。", preset: null, proposal: null, version: null, result: null, items: [], changes: [] },
+      { id: "saved-assistant", seq: 2, role: "assistant", text: "NIHO-editorでは写真ライブラリを作らず、ページ内の添付として扱います。", preset: null, proposal: null, version: null, result: "done", items: [], changes: [] },
+    ];
+    const server = defaultServer({
+      list: json(200, { conversations: [summary(CHAT_1)] }),
+      get: () => json(200, { conversation: summary(CHAT_1), messages: savedMessages }),
+      device: () => chatResponse("写真はページへ都度添付する方針。", { conversationId: CHAT_1 }),
+    });
+    await render();
+    await until(() => container!.querySelector<HTMLSelectElement>('select[aria-label="自由入力チャットの実行先"]')?.value === "cli:codex");
+    await until(() => logText().includes("NIHO-editorでは写真ライブラリを作らず"));
+    await click(button("工程とスキルを開く"));
+    await click([...container!.querySelectorAll<HTMLButtonElement>(".es-ai-menu-row")].find((item) => item.textContent?.includes("ここまでを要約して軽くする"))!);
+    await until(() => field().value.includes("写真はページへ都度添付する方針"));
+
+    const instruction = String(aiTurn.mock.calls[0]?.[1].instruction);
+    expect(instruction).toContain("保存済み会話");
+    expect(instruction).toContain("写真をライブラリに共有しない");
+    expect(instruction).toContain("NIHO-editorでは写真ライブラリを作らず");
+    expect(aiTurn.mock.calls[0]?.[1]).toMatchObject({ conversationId: CHAT_1 });
+    expect(aiTurn.mock.calls[0]?.[1]).not.toHaveProperty("resumeSession");
+    const recorded = server.calls.find((call) => call.url.endsWith("/ai/chat/turns"));
+    expect(recorded?.body).toMatchObject({ conversationId: CHAT_1, input: expect.stringContaining("会話で決まったこと") });
+    expect(String(recorded?.body.input)).not.toContain("写真をライブラリに共有しない");
+  });
+
   it("aborts/ignores an old reply when the page owner changes", async () => {
     const waiting = deferred<Response>();
     defaultServer({ chat: () => waiting.promise });
