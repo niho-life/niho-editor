@@ -23,7 +23,7 @@ import { PUBLISH_MESSAGES, slugMessage } from "@/publish/messages";
  *
  * - 選ぶ（発信先・範囲・あわせて・URL）たびにシートのデータを読み直す（URL は打ち終わるのを少し待つ）。
  * - シートを開く前と、公開・更新を送る前に、エディタの保存待ちを送り終える（最後の入力を公開版に入れる）。保存できなければ送らない。
- * - 「直す」: 題名・本文・リード・カバー写真の問題はシートを閉じてその欄へフォーカスを移す。
+ * - 「直す」: シートを閉じてその欄へフォーカスを移す。リード・カバー写真は右のページ設定を開く。
  *   言語・カテゴリ・関連する体験の欄はこの editor にまだ無いので、シートは開いたまま「まだ直せない」と一言出す。
  * - 「発信先を追加」「接続する」は発信先の設定（`/destinations`。#41）へ移る。
  * - 本人のサイトの行は docs-ui では発信先の種類ごとに 1 つなので、公開しているサイト（無ければ最初に接続したサイト）だけを出す。
@@ -109,7 +109,7 @@ export function focusPageField(field: PublishFixField): void {
       ? main?.querySelector<HTMLElement>("textarea.page-title")
       : field === "body"
         ? main?.querySelector<HTMLElement>('.doc[contenteditable="true"]')
-        : main?.querySelector<HTMLElement>(field === "cover" ? "[data-page-cover]" : "[data-page-lead]");
+        : document.querySelector<HTMLElement>(field === "cover" ? "[data-page-cover]" : "[data-page-lead]");
   if (!target) return;
   target.focus();
   target.scrollIntoView?.({ block: "nearest" });
@@ -163,6 +163,8 @@ export function usePagePublish(input: {
   onNavigate: (path: string) => void;
   /** エディタの保存待ちを今すぐ送り、届き終わるのを待つ。全て保存できたら true。 */
   saveFirst: () => Promise<boolean>;
+  /** 「直す」の欄が右のページ設定にあるとき、シートを閉じるのと同時に開く。 */
+  revealField?: (field: PublishFixField) => void;
 }): PagePublishUi {
   const { pageId, isArticle } = input;
   const [state, setState] = useState<State>(() => initialState(pageId));
@@ -347,6 +349,7 @@ export function usePagePublish(input: {
       return;
     }
     pendingFix.current = field;
+    events.current.revealField?.(field);
     close();
   };
 

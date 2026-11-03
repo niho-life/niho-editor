@@ -104,6 +104,7 @@ export function InfoPanel({ summary, page, author, recordingSec, folders, folder
     <ShellRail label="このページの設定と AI">
       <ShellRailSection title="ページ設定" summary={RAIL_SUMMARY} open={open} onToggle={onToggle}>
         <ShellPageSettings
+          publicationFields={page?.publicationFields}
           folder={folders && onFolder ? { value: summary.parent, options: folders, note: folderNote ?? undefined, onPick: onFolder } : undefined}
           order={order}
           fields={fields ? { ...fields, note: fields.note ?? undefined } : undefined}

@@ -36,9 +36,9 @@ interface ConditionBase {
 }
 
 export type LangCondition = ConditionBase & { readonly kind: "lang"; readonly equals: Lang };
-/** A cover photo is set and is a usable image; with `consent`, it also has 掲載許諾. */
+/** An optional cover, when set, must be usable; with `consent`, it also has 掲載許諾. */
 export type CoverCondition = ConditionBase & { readonly kind: "cover"; readonly consent: boolean };
-/** A non-blank lead, at most `max` characters when given. */
+/** An optional lead, at most `max` characters when given. */
 export type LeadCondition = ConditionBase & { readonly kind: "lead"; readonly max?: number };
 /** A category is chosen, one of `oneOf` when given. */
 export type CategoryCondition = ConditionBase & { readonly kind: "category"; readonly oneOf?: readonly string[] };

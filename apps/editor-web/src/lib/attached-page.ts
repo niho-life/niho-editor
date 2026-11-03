@@ -1,5 +1,6 @@
 import type { PageLang } from "@niho/editor-store";
 import type { Editor } from "@tiptap/react";
+import type { ReactNode } from "react";
 import type { AiBridge } from "./ai-bridge";
 import type { RestoredPage } from "./page-actions-client";
 import type { SaveStatus } from "./save-status";
@@ -68,6 +69,8 @@ export type AttachedPage = {
   setLang: (lang: PageLang) => void;
   /** 言語を保存できなかったときの短い文言（次に言語を変えるまで）。無ければ null。 */
   langNote: string | null;
+  /** 任意のリード・カバー。本文には置かず、右のページ設定で編集する。 */
+  publicationFields?: ReactNode;
   text: PageText;
   /** 下書き復元前は id が null なので、AI は描画だけして操作を受け付けない。 */
   ai?: AttachedAi;

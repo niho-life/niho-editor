@@ -135,20 +135,24 @@ function summary(): PageSummary {
 /** ページの中身の代わり（題名と本文の欄だけ）。保存を知らせるボタンも持つ。 */
 function FakePage() {
   const frame = useEditorFrame();
-  const { registerPageSaver } = frame;
-  useEffect(
-    () =>
-      registerPageSaver(async () => {
-        order.push("save");
-        return editor.saveGate ?? editor.saved;
-      }),
-    [registerPageSaver],
-  );
+  const { registerPageSaver, attachPage } = frame;
+  useEffect(() => {
+    const save = async () => {
+      order.push("save");
+      return editor.saveGate ?? editor.saved;
+    };
+    const unregister = registerPageSaver(save);
+    const detach = attachPage({
+      id: PAGE, status: "saved", flush: save, revision: () => 1, reopen: () => undefined,
+      shared: null, setShared: () => undefined, lang: "en", setLang: () => undefined, langNote: null,
+      text: { read: () => "合成の本文", subscribe: () => () => undefined },
+      publicationFields: <><textarea data-page-lead="" aria-label="公開用リード" /><input data-page-cover="" type="file" aria-label="カバー画像を選ぶ" /></>,
+    });
+    return () => { unregister(); detach(); };
+  }, [registerPageSaver, attachPage]);
   return (
     <>
       <textarea className="page-title" aria-label="タイトル" defaultValue="Morning walk" />
-      <textarea data-page-lead="" aria-label="公開用リード" />
-      <input data-page-cover="" type="file" aria-label="カバー画像を選ぶ" />
       <div className="doc" contentEditable suppressContentEditableWarning tabIndex={-1} aria-label="本文" />
       <button type="button" data-saved onClick={() => frame.pageSaved(PAGE)}>
         保存した
@@ -314,17 +318,20 @@ describe("公開のシート", () => {
     expect(document.activeElement).toBe($("textarea.page-title"));
   });
 
-  it("「直す」: リードとカバーの問題はそれぞれの欄へ移る", async () => {
+  it("「直す」: 右のページ設定を開き、リードとカバーの問題を直す欄へ移る", async () => {
     const problems = [
       { id: "lead", message: "リードを入れてください", fix: "lead" as const },
       { id: "cover", message: "カバー写真を選んでください", fix: "cover" as const },
     ];
     server({ sheets: [sheet(), nihoPlan({ problems, primary: null })] });
     await mount();
+    await click($('#es-rail h2 button'));
+    await click($('button[aria-label="このページの設定と AI"]'));
     await click($(".es-pubbtn"));
     await click(byText("button", "直す"));
     expect(dialog()).toBeNull();
     expect(document.activeElement).toBe($("[data-page-lead]"));
+    expect($("#es-main [data-page-lead]")).toBeNull();
     await click($(".es-pubbtn"));
     await click(container!.querySelectorAll<HTMLButtonElement>(".es-need button")[1]);
     expect(dialog()).toBeNull();

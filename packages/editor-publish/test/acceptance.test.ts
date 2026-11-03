@@ -62,17 +62,25 @@ async function sheet(world: World, dest: DestName): Promise<ReturnType<typeof sh
 /** For each destination: one thing its conditions need, and how the author fixes it. */
 const MISSING: readonly { dest: DestName; name: string; break: Partial<DraftPage>; problem: string }[] = [
   { dest: "exp", name: "English", break: { lang: "ja" }, problem: "lang-en" },
-  { dest: "exp", name: "a cover photo", break: { coverAssetId: null }, problem: "cover" },
-  { dest: "exp", name: "a lead", break: { lead: null }, problem: "lead" },
   { dest: "exp", name: "a heading", break: { content: [{ type: "paragraph", content: [{ type: "text", text: "Only text." }] }] }, problem: "headings" },
   { dest: "exp", name: "no CONFIRM", break: { title: "Walk [CONFIRM: name]" }, problem: "no-confirm" },
-  { dest: "niho", name: "a cover photo", break: { coverAssetId: null }, problem: "cover" },
-  { dest: "niho", name: "a lead", break: { lead: "  " }, problem: "lead" },
   { dest: "site", name: "a title", break: { title: "" }, problem: "title" },
   { dest: "site", name: "a body", break: { content: [] }, problem: "body" },
 ];
 
 describe("条件がそろうまで公開ボタンが押せない", () => {
+  it.each(["exp", "niho", "site"] as const)("%s: リードとカバーが未設定でも公開・更新できる", async (dest) => {
+    const world = createWorld();
+    world.editDraft({ coverAssetId: null, lead: null });
+    expect((await sheet(world, dest)).primary).toBe("publish");
+    expect(await world.service.publish(world.input(dest))).toMatchObject({ ok: true, version: 1 });
+    expect(world.store.versions(PAGE_ID)[0]?.snapshot).toMatchObject({ cover: null, lead: null });
+
+    world.editDraft({ title: "A revised title" });
+    expect(await world.service.update(world.input(dest))).toMatchObject({ ok: true, version: 2 });
+    expect(world.store.versions(PAGE_ID)[1]?.snapshot).toMatchObject({ cover: null, lead: null });
+  });
+
   it.each(MISSING.map((entry) => [entry.dest, entry.name, entry] as const))("%s: without %s the button is disabled and publishing is refused", async (_dest, _name, entry) => {
     const world = createWorld();
     const original = world.store.page(PAGE_ID) as DraftPage;

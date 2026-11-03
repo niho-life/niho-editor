@@ -621,6 +621,13 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     onPublication,
     onNavigate: (path) => router.push(path),
     saveFirst,
+    revealField: (field) => {
+      if (field !== "cover" && field !== "lead") return;
+      const id = openPage?.id;
+      if (id) setSettingsByPage((current) => new Map(current).set(id, { open: true, manual: true, autoCollapsed: false }));
+      if (narrow) setRailFor(pathname);
+      else setRailOpenWide(true);
+    },
   });
   useEffect(() => {
     publishSaved.current = publishing.pageSaved;

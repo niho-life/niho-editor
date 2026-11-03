@@ -601,6 +601,96 @@ function EditorScreen(props: ScreenProps) {
     [textListeners],
   );
 
+  // 保存と下書きの持ち主はエディタのまま、入力欄だけを右のページ設定へ渡す。
+  const publicationFields = useMemo(() => (
+    <section aria-label="公開情報（任意）" style={{ display: "grid", gap: 10, minWidth: 0 }}>
+      <h3>公開情報（任意）</h3>
+      <p>リードとカバー画像は、未設定でも公開できます。</p>
+      <label style={{ display: "grid", gap: 5 }}>
+        公開用リード（{MAX_LEAD_CHARS}字まで）
+        <textarea
+          className="es-area"
+          data-page-lead=""
+          value={lead ?? ""}
+          maxLength={MAX_LEAD_CHARS}
+          rows={3}
+          disabled={!ready || unreadable}
+          onChange={(event) => {
+            const next = event.currentTarget.value || null;
+            leadRef.current = next;
+            setLead(next);
+            autosaveRef.current?.change({ lead: next });
+            keeperRef.current?.touch();
+          }}
+        />
+      </label>
+      <label style={{ display: "grid", gap: 5 }}>
+        カバー画像
+        {/* The private same-origin image endpoint requires the viewer's session cookie. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        {cover && <img src={imageAssetPath(cover)} alt="カバー画像のプレビュー" style={{ width: "min(100%, 420px)", maxHeight: 220, objectFit: "cover", borderRadius: 8 }} />}
+        <select
+          className="es-input"
+          data-page-cover=""
+          value={cover ?? ""}
+          disabled={!ready || unreadable}
+          onFocus={() => setCoverOptions(imageAssetIds(editorRef.current?.getJSON().content ?? page.blocks, coverRef.current))}
+          onChange={(event) => {
+            const next = event.currentTarget.value || null;
+            coverRef.current = next;
+            setCover(next);
+            setCoverMetadata(null);
+            setCoverError(null);
+            autosaveRef.current?.change({ cover: next });
+            keeperRef.current?.touch();
+          }}
+        >
+          <option value="">なし</option>
+          {coverOptions.map((assetId, index) => <option key={assetId} value={assetId}>本文の画像 {index + 1}</option>)}
+        </select>
+        {coverOptions.length === 0 && <span>カバーにする画像を先に本文へ挿入してください。</span>}
+      </label>
+      {cover && (
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={coverConsent === true}
+            disabled={coverMetaBusy || coverConsent === null || !ready}
+            onChange={(event) => {
+              const assetId = coverRef.current;
+              if (!assetId) return;
+              const previous = coverConsent === true;
+              const next = event.currentTarget.checked;
+              setCoverMetadata({ assetId, consent: next });
+              setCoverMetaBusy(true);
+              setCoverError(null);
+              void pageImages.saveMeta(assetId, { consent: next }).then((saved) => {
+                if (coverRef.current !== assetId) return;
+                if (!saved) {
+                  setCoverMetadata({ assetId, consent: previous });
+                  setCoverError("掲載許諾を保存できませんでした。");
+                  return;
+                }
+                // 資産の掲載メタデータの変更もページ revision に載せ、別端末の編集と競合を検出する。
+                autosaveRef.current?.change({ cover: assetId });
+                keeperRef.current?.touch();
+              }).finally(() => setCoverMetaBusy(false));
+            }}
+          />
+          この画像を公開先に掲載する許諾を確認しました
+        </label>
+      )}
+      {cover && <button type="button" disabled={!ready || unreadable} onClick={() => {
+        coverRef.current = null;
+        setCover(null);
+        setCoverMetadata(null);
+        autosaveRef.current?.change({ cover: null });
+        keeperRef.current?.touch();
+      }}>カバー画像を外す</button>}
+      {coverError && <p role="alert">{coverError}</p>}
+    </section>
+  ), [lead, cover, ready, unreadable, coverOptions, coverConsent, coverMetaBusy, coverError, page.blocks]);
+
   const status = statusOf(state);
   useEffect(
     () => attachPage({
@@ -615,9 +705,10 @@ function EditorScreen(props: ScreenProps) {
       setLang: changeLang,
       langNote,
       text,
+      publicationFields,
       ai: { editor, bridge: aiBridge, title, kind: page.kind ?? "note", lang },
     }),
-    [attachPage, ready, pageId, status, flush, revision, reopenHere, shared, setShared, lang, changeLang, langNote, text, editor, aiBridge, title, page.kind],
+    [attachPage, ready, pageId, status, flush, revision, reopenHere, shared, setShared, lang, changeLang, langNote, text, publicationFields, editor, aiBridge, title, page.kind],
   );
 
   const overwrite = () => {
@@ -692,88 +783,6 @@ function EditorScreen(props: ScreenProps) {
         </p>
       )}
       {unreadable && <p role="alert">本文を読み込めませんでした。この画面では本文を変更しません。</p>}
-      <section aria-label="公開情報" style={{ display: "grid", gap: 10, margin: "16px 0" }}>
-        <label style={{ display: "grid", gap: 5 }}>
-          公開用リード（{MAX_LEAD_CHARS}字まで）
-          <textarea
-            data-page-lead=""
-            value={lead ?? ""}
-            maxLength={MAX_LEAD_CHARS}
-            rows={3}
-            disabled={!ready || unreadable}
-            onChange={(event) => {
-              const next = event.currentTarget.value || null;
-              leadRef.current = next;
-              setLead(next);
-              autosaveRef.current?.change({ lead: next });
-              keeperRef.current?.touch();
-            }}
-          />
-        </label>
-        <label style={{ display: "grid", gap: 5 }}>
-          カバー画像
-          {/* The private same-origin image endpoint requires the viewer's session cookie. */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          {cover && <img src={imageAssetPath(cover)} alt="カバー画像のプレビュー" style={{ width: "min(100%, 420px)", maxHeight: 220, objectFit: "cover", borderRadius: 8 }} />}
-          <select
-            data-page-cover=""
-            value={cover ?? ""}
-            disabled={!ready || unreadable}
-            onFocus={() => setCoverOptions(imageAssetIds(editorRef.current?.getJSON().content ?? page.blocks, coverRef.current))}
-            onChange={(event) => {
-              const next = event.currentTarget.value || null;
-              coverRef.current = next;
-              setCover(next);
-              setCoverMetadata(null);
-              setCoverError(null);
-              autosaveRef.current?.change({ cover: next });
-              keeperRef.current?.touch();
-            }}
-          >
-            <option value="">なし</option>
-            {coverOptions.map((assetId, index) => <option key={assetId} value={assetId}>本文の画像 {index + 1}</option>)}
-          </select>
-          {coverOptions.length === 0 && <span>カバーにする画像を先に本文へ挿入してください。</span>}
-        </label>
-        {cover && (
-          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input
-              type="checkbox"
-              checked={coverConsent === true}
-              disabled={coverMetaBusy || coverConsent === null || !ready}
-              onChange={(event) => {
-                const assetId = coverRef.current;
-                if (!assetId) return;
-                const previous = coverConsent === true;
-                const next = event.currentTarget.checked;
-                setCoverMetadata({ assetId, consent: next });
-                setCoverMetaBusy(true);
-                setCoverError(null);
-                void pageImages.saveMeta(assetId, { consent: next }).then((saved) => {
-                  if (coverRef.current !== assetId) return;
-                  if (!saved) {
-                    setCoverMetadata({ assetId, consent: previous });
-                    setCoverError("掲載許諾を保存できませんでした。");
-                    return;
-                  }
-                  // 資産の掲載メタデータの変更もページ revision に載せ、別端末の編集と競合を検出する。
-                  autosaveRef.current?.change({ cover: assetId });
-                  keeperRef.current?.touch();
-                }).finally(() => setCoverMetaBusy(false));
-              }}
-            />
-            この画像を公開先に掲載する許諾を確認しました
-          </label>
-        )}
-        {cover && <button type="button" disabled={!ready || unreadable} onClick={() => {
-          coverRef.current = null;
-          setCover(null);
-          setCoverMetadata(null);
-          autosaveRef.current?.change({ cover: null });
-          keeperRef.current?.touch();
-        }}>カバー画像を外す</button>}
-        {coverError && <p role="alert">{coverError}</p>}
-      </section>
       <div className="be">
         <EditorContent editor={editor} />
         {/* ヘッダーに常設の書式の帯（ShellTools）を出すため、本文の操作を枠へ渡す（#37 T9） */}
