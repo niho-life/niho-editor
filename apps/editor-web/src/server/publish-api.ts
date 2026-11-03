@@ -54,7 +54,7 @@ import { errorResponse, guarded, isSameOriginRequest, jsonResponse, notFoundResp
 export type PublishApiDeps = {
   auth: () => AuthProvider;
   /** 本人ごとの公開のポート（src/publish/ports.ts）。DB が使えないときは null（503）。 */
-  ports: (session: Session) => PublishWiring | null;
+  ports: (session: Session, request: Request) => PublishWiring | null;
   env?: Readonly<Record<string, string | undefined>>;
 };
 
@@ -65,6 +65,8 @@ export type PublishSelection = {
   extras: Extras;
   /** null は題名から作った提案を使う。 */
   slug: string | null;
+  category: string | null;
+  related: readonly string[];
 };
 
 export type PublishDestinationDto = {
@@ -127,6 +129,7 @@ export type PublishedResultDto = {
 
 /** slug の上限（契約の 160 文字に少し余裕を持たせた、query・本文で受ける長さ）。 */
 const MAX_SLUG_INPUT = 200;
+const SAFE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const NO_EXTRAS: Extras = Object.freeze({ app: false, news: false, xp: false });
 
 function isHandle(value: unknown): value is string {
@@ -167,6 +170,17 @@ export function selectionQueryOf(params: URLSearchParams): Parsed<Partial<Publis
     if (slug.length > MAX_SLUG_INPUT) return { ok: false };
     value.slug = slug;
   }
+  const category = params.get("category");
+  if (category !== null) {
+    if (category !== "" && (category.length > 160 || !SAFE_SLUG.test(category))) return { ok: false };
+    value.category = category || null;
+  }
+  const related = params.get("related");
+  if (related !== null) {
+    const values = related === "" ? [] : related.split(",");
+    if (values.length > 20 || new Set(values).size !== values.length || values.some((item) => item.length > 160 || !SAFE_SLUG.test(item))) return { ok: false };
+    value.related = values;
+  }
   return { ok: true, value };
 }
 
@@ -174,17 +188,19 @@ export function selectionQueryOf(params: URLSearchParams): Parsed<Partial<Publis
 export function placeBodyOf(body: unknown): Parsed<PublishSelection> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) return { ok: false };
   const record = body as Record<string, unknown>;
-  if (Object.keys(record).some((key) => !["handle", "range", "extras", "slug"].includes(key))) return { ok: false };
-  const { handle, range, extras, slug } = record;
+  if (Object.keys(record).some((key) => !["handle", "range", "extras", "slug", "category", "related"].includes(key))) return { ok: false };
+  const { handle, range, extras, slug, category, related } = record;
   if (!isHandle(handle) || !isRange(range)) return { ok: false };
   if (typeof extras !== "object" || extras === null || Array.isArray(extras)) return { ok: false };
   const flags = extras as Record<string, unknown>;
   if (Object.keys(flags).some((key) => !(EXTRA_KEYS as readonly string[]).includes(key))) return { ok: false };
   if (EXTRA_KEYS.some((key) => typeof flags[key] !== "boolean")) return { ok: false };
   if (slug !== undefined && (typeof slug !== "string" || slug.length > MAX_SLUG_INPUT)) return { ok: false };
+  if (category !== undefined && category !== null && (typeof category !== "string" || category.length > 160 || !SAFE_SLUG.test(category))) return { ok: false };
+  if (related !== undefined && (!Array.isArray(related) || related.length > 20 || new Set(related).size !== related.length || related.some((item) => typeof item !== "string" || item.length > 160 || !SAFE_SLUG.test(item)))) return { ok: false };
   return {
     ok: true,
-    value: { handle, range, extras: { app: flags.app === true, news: flags.news === true, xp: flags.xp === true }, slug: slug ?? null },
+    value: { handle, range, extras: { app: flags.app === true, news: flags.news === true, xp: flags.xp === true }, slug: slug ?? null, category: category ?? null, related: (related ?? []) as string[] },
   };
 }
 
@@ -248,8 +264,8 @@ export async function loadPublishSheet(
           range: query.range ?? same?.range ?? "live",
           extras: query.extras ?? same?.extras ?? NO_EXTRAS,
           // カテゴリと関連する体験は editor にまだ欄が無い。公開している発信先ではその値を引き継ぎ、それ以外は無し
-          category: same?.category ?? null,
-          related: same?.related ?? [],
+          category: query.category ?? same?.category ?? null,
+          related: query.related ?? same?.related ?? [],
           slug: query.slug ?? null,
         };
 
@@ -265,7 +281,7 @@ export async function loadPublishSheet(
   const serverFacts =
     selection === null || dest === null
       ? { relatedLive: null }
-      : await ports.facts.read({ actorId, pageId, dest, handle: selection.handle, related: selection.related });
+      : await ports.facts.read({ actorId, pageId, dest, handle: selection.handle, related: selection.related, category: selection.category });
   const facts = collectFacts(page, assets, serverFacts, { category: selection?.category ?? null, related: selection?.related ?? [] });
   const fingerprint = await draftFingerprint(page, assets);
   const plan = sheetPlan({
@@ -333,7 +349,7 @@ export async function loadPublishSheet(
             updatedAt: publication.updatedAt,
           },
     destinations,
-    selection: selection === null ? null : { handle: selection.handle, range: selection.range, extras: { ...selection.extras }, slug: selection.slug },
+    selection: selection === null ? null : { handle: selection.handle, range: selection.range, extras: { ...selection.extras }, slug: selection.slug, category: selection.category, related: [...selection.related] },
     ranges: [...plan.ranges],
     extras: plan.extras.map((entry) => ({ ...entry })),
     selectionError: plan.selectionError,
@@ -354,13 +370,18 @@ export function getPublishSheetRoute(request: Request, id: string, deps: Publish
   return guarded("GET /api/pages/[id]/publish", async () => {
     const session = await deps.auth().getSession(request);
     if (!session) return errorResponse("unauthorized");
-    const wiring = deps.ports(session);
+    const wiring = deps.ports(session, request);
     if (!wiring) return errorResponse("unavailable");
     if (!UUID_PATTERN.test(id)) return notFoundResponse();
     const query = selectionQueryOf(new URL(request.url).searchParams);
     if (!query.ok) return errorResponse("bad_request");
     // owner は認証の層の本人だけ（要求の値からは決めない）
-    const sheet = await loadPublishSheet(wiring, session.userId, id, query.value);
+    let sheet: PublishSheetDto | null;
+    try {
+      sheet = await loadPublishSheet(wiring, session.userId, id, query.value);
+    } catch {
+      return errorResponse("unavailable");
+    }
     return sheet ? jsonResponse(200, { sheet }) : notFoundResponse();
   });
 }
@@ -422,7 +443,7 @@ export function publishRoute(request: Request, id: string, deps: PublishApiDeps)
     const session = await deps.auth().getSession(request);
     if (!session) return errorResponse("unauthorized");
     if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
-    const wiring = deps.ports(session);
+    const wiring = deps.ports(session, request);
     if (!wiring) return errorResponse("unavailable");
     const body = await readJsonBody(request);
     if (!body.ok) return body.response;
@@ -437,7 +458,7 @@ export function publishRoute(request: Request, id: string, deps: PublishApiDeps)
       return jsonResponse(422, { error: "failed", retryable: false, detail: "photos_unavailable", message: PUBLISH_MESSAGES.photosUnavailable });
     }
     const current = read.publication;
-    const { handle, range, extras, slug } = input.value;
+    const { handle, range, extras, slug, category, related } = input.value;
     const live = current !== null && current.stoppedAt === null;
     const same = current !== null && current.handle === handle;
     const operation: PublishOperation = live ? (same ? "update" : "move") : "publish";
@@ -447,7 +468,7 @@ export function publishRoute(request: Request, id: string, deps: PublishApiDeps)
       pageId: id,
       target: targetOf(handle),
       // カテゴリと関連する体験は editor にまだ欄が無い。同じ発信先ではその値を引き継ぐ
-      settings: { range, extras, category: same ? current.category : null, related: same ? [...current.related] : [] },
+      settings: { range, extras, category, related },
       ...(slug !== null ? { slug } : {}),
     };
     const result = operation === "update" ? await service.update(place) : operation === "move" ? await service.changeDestination(place) : await service.publish(place);
@@ -463,7 +484,7 @@ export function stopPublishingRoute(request: Request, id: string, deps: PublishA
     const session = await deps.auth().getSession(request);
     if (!session) return errorResponse("unauthorized");
     if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
-    const wiring = deps.ports(session);
+    const wiring = deps.ports(session, request);
     if (!wiring) return errorResponse("unavailable");
     if (!UUID_PATTERN.test(id)) return notFoundResponse();
     const result = await new PublishService(wiring.publish).stop({ actorId: session.userId, pageId: id });

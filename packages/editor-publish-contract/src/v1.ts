@@ -280,6 +280,14 @@ export interface Extras {
   readonly xp: boolean;
 }
 
+/** Publish-time category presentation snapshot supplied by the destination server. */
+export interface CategoryDisplay {
+  readonly labelEn: string;
+  readonly labelJa: string;
+  readonly displayOrder: number;
+  readonly revision: number;
+}
+
 export interface PublishedListItem {
   readonly id: string;
   readonly slug: string;
@@ -289,6 +297,7 @@ export interface PublishedListItem {
   readonly lead: string | null;
   readonly cover: PublishedAsset | null;
   readonly category: string | null;
+  readonly categoryDisplay?: CategoryDisplay;
   readonly author: Author;
   readonly range: PublicationRange;
   readonly version: number;

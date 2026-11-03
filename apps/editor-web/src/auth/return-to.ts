@@ -6,6 +6,7 @@
 const MAX_RETURN_TO = 2048;
 const BASE = "https://editor.invalid";
 const RECORDING_START = "/p/new?from=recording";
+const EXPERIENCE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const PHOTO_ROOT = "/photo";
 const PHOTO_PATHS = [
   /^\/photo$/,
@@ -25,7 +26,7 @@ const ALLOWED_PATHS = [
   ...PHOTO_PATHS,
 ];
 
-/** 戻り先を editor の中の path にする。query と hash は落とす（`/p/new?from=recording` だけはそのまま）。 */
+/** 戻り先を editor の中の path にする。安全な新規記事の文脈以外の query と hash は落とす。 */
 export function safeReturnTo(raw: string | null | undefined): string {
   if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_RETURN_TO) return "/";
   // `//host`・`/\host` は別の origin になり得る。URL の解析は tab・改行を黙って消すので、制御文字は解析の前に断る
@@ -40,6 +41,19 @@ export function safeReturnTo(raw: string | null | undefined): string {
   if (url.origin !== BASE) return "/";
   if (!ALLOWED_PATHS.some((pattern) => pattern.test(url.pathname))) return "/";
   if (url.pathname === "/p/new" && url.search === "?from=recording") return RECORDING_START;
+  if (url.pathname === "/p/new" && url.search) {
+    const keys = [...url.searchParams.keys()];
+    const experience = url.searchParams.get("experience");
+    if (keys.every((key) => ["destination", "lang", "experience"].includes(key))
+      && new Set(keys).size === keys.length
+      && url.searchParams.get("destination") === "exp"
+      && url.searchParams.get("lang") === "en"
+      && (experience === null || (experience.length <= 160 && EXPERIENCE_SLUG.test(experience)))) {
+      const safe = new URLSearchParams({ destination: "exp", lang: "en" });
+      if (experience) safe.set("experience", experience);
+      return `/p/new?${safe.toString()}`;
+    }
+  }
   return url.pathname;
 }
 

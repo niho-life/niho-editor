@@ -476,3 +476,15 @@ editor を動かしているのと同じ GCP プロジェクトで行う（別�
 - 同意画面を**テスト**のままにしているので、入れるのはテストユーザーに登録したアカウントだけ（最大 100）。公開（本番）にすると審査が要るので、公開しない。
 - セッションは 12 時間で切れる（続けるには入り直す）。複数の端末・ブラウザで同時に入れる。
 - ログインの画面のボタンは共有 UI（niho-docs-ui）の文のまま「NIHOでログイン」と出る。押すと Google のサインインへ行く。一時的な方式なので共有 UI の文は変えていない。サインインのとき毎回アカウントを選べる（`prompt=select_account`）。
+
+## 記事のExperience連携（2026-11-03）
+
+追加APIのsourceは[役割・記事連携契約](../architecture/editor-role-integration.md)を参照する。NIHO追加APIを先行配備し、EditorとExperienceのGoogle ID tokenのaudience・runtimeサービスアカウントを照合するまで、新しい2つのauthority flagは`false`を維持する。固定値はignored `deploy.env`、資格の検証情報はSecret Managerに置く。
+
+`EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED=true`には、`EDITOR_AUTH_MODE=niho`、固定`EDITOR_EXPERIENCE_ORIGIN`・`EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_AUDIENCE`、`EDITOR_FACE_CREDENTIALS_SECRET_REF=secret-name:固定数値版`が必要。公式配備はExperienceの固定公開条件pathを`EDITOR_DESTINATION_DECLARATIONS.exp`へ渡し、`EDITOR_ASSET_ORIGIN`（未指定なら画面origin）も渡す。カバー写真・リードは任意である。
+
+`EDITOR_ARTICLE_AUTHORITY_API_ENABLED=true`には、固定`EDITOR_ARTICLE_AUTHORITY_AUDIENCE`と`EDITOR_ARTICLE_AUTHORITY_SERVICE_ACCOUNT_EMAILS`の許可リストが必要。カンマを含む許可リストはgcloudの`^|^`形式で単一の設定値として渡し、区切り文字を含む入力は配備前に拒否する。
+
+公開APIの面の資格は、生tokenを配る側とSHA-256・audience・期限の検証情報を持つEditor側を分ける。ownerが標準のSecret Manager手順で検証情報を登録し、runtime IDにそのSecretだけの読取権限を付けてから、固定版の参照を`EDITOR_FACE_CREDENTIALS_SECRET_REF`へ入れる。AIセッションはtoken値・秘密値を作成・取得・表示しない。
+
+有効化前に、現在writerの有無、別用途token拒否、別サービス/audience拒否、カテゴリ停止、招待取消・OWNER変更・体験停止、公開停止後の写真404、依存障害時の拒否を合成データで確認する。公開元の切替はExperience側の独立した操作で、既存記事を削除しない。問題時はauthority flagをOFFへ戻して固定SHAを再配備し、本文・公開版・履歴を保持する。

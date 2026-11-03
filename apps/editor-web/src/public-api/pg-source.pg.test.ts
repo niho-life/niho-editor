@@ -17,7 +17,6 @@ import {
   MemoryAssetBytes,
   MemoryAuthors,
   MemoryDeclarations,
-  MemoryFacts,
   MemoryPublishStore,
   MemoryRoles,
   memoryAssetUrls,
@@ -49,6 +48,7 @@ const START = "2026-10-01T09:00:00.000Z";
 const LEAD = "Start early, follow the shoreline, and stop for tea.";
 const EXP_TOKEN = "st_synthetic-exp-face-token-for-pg-test";
 const NIHO_TOKEN = "st_synthetic-niho-face-token-for-pg-test";
+const CATEGORY_DISPLAY = { labelEn: "Walks", labelJa: "散策", displayOrder: 2, revision: 5 } as const;
 
 /** packages/editor-publish/fixtures/destinations の exp・niho の写し（src/publish/pg-store.pg.test.ts と同じ）。 */
 const FACE_DECLARATIONS = {
@@ -189,9 +189,11 @@ function ports(store: ConnectionStore, clock: ManualClock, drafts: DraftFingerpr
   const authors = new MemoryAuthors();
   authors.set(ACTOR, { name: "Example Writer", handle: "example-writer", url: "https://writer.example.com/" });
   authors.set(OTHER_ACTOR, { name: "Another Writer", handle: null, url: null });
-  const facts = new MemoryFacts();
-  facts.set(ACTOR, { relatedLive: true });
-  facts.set(OTHER_ACTOR, { relatedLive: true });
+  const facts = {
+    read: async (query: { dest: string }) => query.dest === "exp"
+      ? { relatedLive: true, categoryCurrent: true, categoryDisplay: CATEGORY_DISPLAY }
+      : { relatedLive: true },
+  };
   const publisher = new PublishService({
     store,
     roles,
@@ -539,7 +541,9 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
     const preview = await ask("preview live1", { url: `/v1/preview/${previews.live1.token}.json`, key: "alpha2" });
     expect(preview.status).toBe(200);
     expect(body(preview)).toMatchObject({ title: "DRAFT-ONLY unpublished title", preview: { dest: "site", noindex: true }, version: saved.get(pages.live1.id)?.revision });
-    expect((await ask("preview unlisted", { url: `/v1/preview/${previews.unlisted.token}.json`, face: EXP_TOKEN })).status).toBe(200);
+    const unlistedPreview = await ask("preview unlisted", { url: `/v1/preview/${previews.unlisted.token}.json`, face: EXP_TOKEN });
+    expect(unlistedPreview.status).toBe(200);
+    expect(body(unlistedPreview)).toMatchObject({ category: "walks", categoryDisplay: CATEGORY_DISPLAY });
     expect((await ask("preview other face", { url: `/v1/preview/${previews.unlisted.token}.json`, face: NIHO_TOKEN })).status).toBe(404);
     expect((await ask("preview expired", { url: `/v1/preview/${previews.expired.token}.json`, key: "alpha2" })).status).toBe(404);
 

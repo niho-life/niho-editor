@@ -22,6 +22,7 @@ import {
   renderMarkdown,
   sha256Hex,
   type Author,
+  type CategoryDisplay,
   type Block,
   type Dest,
   type Extras,
@@ -539,6 +540,7 @@ export interface SnapshotInput {
   readonly range: PublicationRange;
   readonly extras: Extras;
   readonly category: string | null;
+  readonly categoryDisplay?: CategoryDisplay;
   readonly related: readonly string[];
   readonly author: Author;
   readonly version: number;
@@ -626,6 +628,7 @@ export async function buildSnapshot(input: SnapshotInput): Promise<SnapshotResul
     lead: cleanLine(input.page.lead),
     cover,
     category: cleanLine(input.category),
+    ...(input.categoryDisplay === undefined ? {} : { categoryDisplay: input.categoryDisplay }),
     author: input.author,
     range: input.range,
     version: input.version,

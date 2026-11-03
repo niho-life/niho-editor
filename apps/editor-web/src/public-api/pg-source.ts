@@ -9,7 +9,7 @@ import {
   type DeclarationSource,
   type DraftPage,
 } from "@niho/editor-publish";
-import { isFaceDest, type Author, type Extras, type PublicationRange } from "@niho/editor-publish-contract";
+import { isFaceDest, parsePublishedDoc, type Author, type CategoryDisplay, type Extras, type PublicationRange } from "@niho/editor-publish-contract";
 import {
   connectionByKeySha256,
   createPreviewToken,
@@ -63,6 +63,7 @@ interface Placement {
   readonly range: PublicationRange;
   readonly extras: Extras;
   readonly category: string | null;
+  readonly categoryDisplay?: CategoryDisplay;
   readonly related: readonly string[];
   readonly author: Author;
 }
@@ -100,6 +101,15 @@ function canonicalUrlOf(snapshot: unknown): string | null {
   if (typeof snapshot !== "object" || snapshot === null) return null;
   const url = (snapshot as { canonicalUrl?: unknown }).canonicalUrl;
   return typeof url === "string" ? url : null;
+}
+
+/** Preview may preserve only metadata already fixed into a validated published snapshot. */
+function categoryDisplayOf(snapshot: unknown): CategoryDisplay | undefined {
+  if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) return undefined;
+  const document = { ...snapshot as Record<string, unknown> };
+  delete document.fingerprint;
+  const parsed = parsePublishedDoc(document, { requireProjection: true });
+  return parsed.ok ? parsed.value.categoryDisplay : undefined;
 }
 
 /** 一覧の位置の時刻（ミリ秒の ISO）→ editor-store の cursor の時刻（マイクロ秒の文字列）。 */
@@ -179,12 +189,14 @@ export function pgPublicApiSource(db: Database, options: PgPublicApiOptions): Pu
       if (publication !== null && publication.handle === handle) {
         // この handle の公開（やめたものも含む）の設定と、いまの公開版の URL（参照モデルの world と同じ）
         const canonicalUrl = canonicalUrlOf(current);
+        const categoryDisplay = categoryDisplayOf(current);
         placement = canonicalUrl === null ? null : {
           slug: publication.slug,
           canonicalUrl,
           range: publication.range,
           extras: publication.extras,
           category: publication.category,
+          ...(categoryDisplay === undefined ? {} : { categoryDisplay }),
           related: publication.related,
           author,
         };
@@ -211,6 +223,7 @@ export function pgPublicApiSource(db: Database, options: PgPublicApiOptions): Pu
         lead: snapshot.lead,
         cover: snapshot.cover,
         category: snapshot.category,
+        ...(snapshot.categoryDisplay === undefined ? {} : { categoryDisplay: snapshot.categoryDisplay }),
         author: snapshot.author,
         range: snapshot.range,
         canonicalUrl: snapshot.canonicalUrl,

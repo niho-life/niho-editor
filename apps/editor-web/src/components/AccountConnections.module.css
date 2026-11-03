@@ -1,0 +1,15 @@
+.root { display: grid; gap: 16px; width: min(100%, 760px); }
+.card { border: 1px solid var(--niho-border); border-radius: 16px; background: var(--niho-docs-surface); padding: 20px; }
+.card h2 { margin: 0; font-size: 18px; }
+.card p { line-height: 1.6; }
+.heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.list { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 12px; }
+.link { border-top: 1px solid var(--niho-border); padding-top: 14px; }
+.link > div:first-child { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.actions button, .secondary { min-height: 44px; border: 0; border-radius: 10px; padding: 8px 16px; cursor: pointer; font: inherit; }
+.actions button:not(.secondary) { color: var(--niho-primary-ink); background: var(--niho-primary-bg); }
+.secondary { color: inherit; background: var(--niho-surface-subtle); }
+.actions button:disabled, .secondary:disabled { cursor: wait; opacity: .62; }
+.error { color: var(--niho-danger); }
+@media (max-width: 420px) { .card { padding: 16px; } .actions button { flex: 1 1 120px; } }

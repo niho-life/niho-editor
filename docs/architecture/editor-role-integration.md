@@ -1,33 +1,40 @@
-# NIHOの役割・記事連携をEditorへ接続する条件
+# NIHOの役割・記事連携をEditorへ接続する契約
 
-2026-11-03。Editor [#42](https://github.com/niho-life/niho-editor/issues/42) の接続・受入条件。[製品設計 §10](editor-niho-life-design.md) に従う。役割表示・記事連携は、ページ作成・同期・文字起こしの基本提供条件とは別の後続機能。
+2026-11-03。対象: Editor #42、NIHO app #19459 / #19460 / #19462 / #19479、Experience #254 / #255。ページの作成・同期・文字起こしは、記事公開の役割がなくても利用できる。
 
-## 現在の境界
+## 正本と認証
 
-- NIHO app [#19478](https://github.com/niho-coliving/niho-app/issues/19478) のEditor認証接続はclosed。ログインができることは、役割・招待APIを呼べることの証明ではない。
-- [#19479](https://github.com/niho-coliving/niho-app/issues/19479) の役割・招待・連携状態の安定API schemaは未確定。Issueの候補endpointを実装済み契約として使わない。独自endpoint/response shape/RoleReader adapterを追加しない。
-- [#19480](https://github.com/niho-coliving/niho-app/issues/19480) はNIHOカード、[#19481](https://github.com/niho-coliving/niho-app/issues/19481) は記事面。Editorの役割表示・招待操作とは別のconsumerで、公開APIにも依存する。
-- [`AuthProvider.apiToken`](../../apps/editor-web/src/auth/types.ts) は、NIHO側でEditor用途を受け付ける契約が確定するまでnullのままにする。Photoのcredential・cookieやブラウザの自己申告roleで代用しない。
+ページ・本文・画像・下書き・版・公開操作はEditorクラウド、現在のライター権限と記事連携の同意はNIHO、現在の提供者OWNER・公開体験・カテゴリはExperience Storeが所有する。記事ライターは商品・予約・顧客・売上の操作権限を持たない。
 
-## 接続開始に必要な確定事項
+NIHO用の接続はEditor専用cookieからserver-onlyで取得する。同じ要求の現在sessionと本人・接続ID・期限を照合し、資格をSession DTOやブラウザへ返さない。Photoのcookie・旧接続・自己申告roleを代用しない。
 
-NIHO側#19479と依存#19459・#19462・#19470の契約・実装・受入で次を確認し、採用するschema/versionとsource SHAを記録する。
-
-| 契約 | 必要な情報 |
+| NIHOの固定path（`/api/auth/experience-editor-connect`配下） | 契約 |
 | --- | --- |
-| 認証 | Editor client/audience/scopeを受理する本人API、serverからの呼出し方法、期限・失効・上流一時障害の扱い。既存ログインcredentialを無条件に転用しない |
-| 役割の読取 | 本人の役割と公開先の許可、役割剥奪の反映時点、未知roleの扱い。内部ID・不要な個人情報をbrowserへ返さない |
-| 招待 | 本人向け一覧、承諾・辞退、取消済み/期限切れ/重複操作/並行操作の応答と再送条件。管理者向け一覧を流用しない |
-| 連携状態 | 承諾済み・取消・失効を区別する本人向けread modelと、使える公開中体験の候補。承諾前の体験を候補へ混ぜない |
-| 公開時再確認 | サーバーから役割と連携の最新状態を読み、公開先と体験の所有・連携を確認できること。clientのrole/cacheを権限の根拠にしない |
-| 非公開運用 | APIの配備済み版と合成アカウントでの負例受入。endpoint名だけ・未配備sourceだけでEditorを接続しない |
+| `GET /roles` | `{version:1, roles:["writer"]|[], destinations:["exp"]|[]}` |
+| `GET /article-links` | `{items:[ArticleLinkDto]}` |
+| `POST /article-links/{id}/accept`、`/decline` | 空JSONを送り、現在の`ArticleLinkDto`を返す |
 
-## 確定後のEditor実装と受入
+`ArticleLinkDto`は招待UUID、状態、提供者名、招待者名、ライター表示名と短い補助ラベル、期限・受諾・作成時刻だけを持つ。メール・NIHO user ID・tokenを含めない。現在のAPI版が不明、失効、依存障害なら許可へ倒さない。
 
-1. 確定契約のserver-only consumerを接続し、`/account` に本人情報・役割・招待・承諾済み連携を表示する。roleをEditorの永続的な権限として保存しない。
-2. 招待の承諾/辞退を接続する。結果不明の再送、二重クリック、別端末での取消、期限切れを契約どおりに扱い、画面を再取得する。
-3. 本人と承諾済み連携先の公開中体験だけを候補へ出す。拒否・取消・非公開化が次の取得で消えることを確認する。
-4. 既存の公開処理のRoleReaderへ確定adapterを接続する。画面表示後のrole剥奪・連携取消でも、次の公開操作をserverで拒否する。
-5. 別本人、未知role、期限切れ/失効session、未承諾/取消済み連携、上流一時障害の負例を合成データで検証し、NIHO側の固定版との実接続を受け入れる。
+役割はアカウント表示、公開操作、プレビューtoken発行時に読み直し、永続保存しない。今回のExperience連携で確定した役割は`writer`だけで、鎌倉の人・住民等を所属から推測しない。NIHOカード #19480 と niho.life/article #19481 は別の範囲である。
 
-未知role・API確認不能・未受入の接続を許可扱いにしない。token・メール・招待内容・実体験情報を公開fixtureやIssueへ残さない。共有UIはWebとMacで同じものを使い、Photoライブラリは接続しない。
+## 公開条件と現在性
+
+Experienceの現在activeカテゴリと、本人OWNERまたは現在承諾済み連携先の公開中体験をserver-only APIから取得する。公開時には同じ事実を再確認し、停止済みカテゴリ・未承諾・取消済み・OWNER変更・writer解除を古い宣言や画面の選択で許可しない。
+
+カテゴリslugはv1の文字列のまま、英日表示名・表示順・revisionをサーバーの現在カテゴリから公開版へ固定する。カテゴリ停止後も過去の公開版はその表示名を保持する。最新のowner決定により、Experience向けもカバー写真とリードは任意。設定した値の形式・長さ・許諾は検証する。
+
+Experienceの`/write?experience={slug}`は固定Editorの`/p/new?destination=exp&lang=en&experience={slug}`へ移動する。許可した文脈だけをログイン後も保ち、新しい私的ページへ着地させる。slugとroleはヒントで、GETでは公開しない。
+
+Experience runtimeだけがGoogleサービスID tokenで`POST /internal/article-authority/v1/publication`を呼べる。現在expへ公開中の同じ版からだけ、内部の著者IDと関連slugを返す。本人token・Photo資格・公開APIの面の資格では呼べず、通常の公開APIへIDを追加しない。公開写真も現在の公開版・画像状態・許諾を確認し、未公開写真を一般公開しない。
+
+## 配備
+
+追加契約のsourceと本番稼働は区別する。NIHO追加APIを先にレビュー・マージ・配備し、次にEditorとExperienceを固定SHAで配備する。実値はignored `deploy.env`とSecret Managerだけに置く。新機能は既定OFF。
+
+- `EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED`、固定Experience origin/audienceで候補・現在性の確認を開く。公式配備は同じoriginの公開条件宣言を設定する。
+- `EDITOR_ARTICLE_AUTHORITY_API_ENABLED`、固定audienceとExperience runtimeの許可サービスアカウントで公開版authorityを開く。
+- `EDITOR_FACE_CREDENTIALS_SECRET_REF`はownerが作成した公開APIの検証情報の固定Secret版。生tokenを設定ファイルへ書かない。Secretの値の投入はAGENTSのowner専用手順を使う。
+- 設定の検査とCloud Runへの受渡しは`editor-deploy/lib.sh`が担う。flag OFFへ戻す際も公開版・同意履歴を削除しない。
+
+対象の合成テストで、別用途・別本人・失効・未知版・上流障害、カテゴリ停止、関連権限の取消、手渡し文脈、操作後の再取得を確認する。owner指示により画面受入と実機操作は省略する。

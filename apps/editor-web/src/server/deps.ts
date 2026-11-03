@@ -46,6 +46,8 @@ import {
   updateRecordingCandidate,
 } from "@niho/editor-store";
 import { getAuthProvider, getPhotoAuthProvider } from "../auth";
+import { NihoExperienceApiClient } from "../auth/niho-experience-api";
+import { ExperienceArticleAuthorityClient, experienceFactsSource } from "./experience-article-authority-client";
 import type { AuthRoutesDeps } from "./auth-routes";
 import { getGoogleDocsCredential, getGoogleDocsGateway } from "../google-docs/runtime";
 import { publishConfig } from "../publish/config";
@@ -186,22 +188,36 @@ export const previewTokenDeps: PreviewTokenApiDeps = {
     const pool = getPool();
     return pool ? pgPreviewTokenStore(pool) : null;
   },
-  roles: (session) => roleReaderOf(publishConfig(process.env), session),
+  roles: (session, request) => {
+    const auth = getAuthProvider();
+    return roleReaderOf(publishConfig(process.env), session, async () => {
+      const result = await new NihoExperienceApiClient(auth).roles(session, request);
+      return result.destinations.includes("exp") && result.roles.includes("writer") ? ["writer"] : [];
+    });
+  },
   authors: (session) => sessionAuthors(session),
   connections: () => {
     const pool = getPool();
     return pool ? connectionSource(pgPublishStore(pool)) : null;
   },
+  categoryActive: async (session, category) => session.mode !== "niho"
+    || (await new ExperienceArticleAuthorityClient().categories()).some((item) => item.slug === category),
 };
 
 /** 公開のシート（#39）の実行時の依存（DB の接続は要求のたびに遅延して決める。Pool は getStore と共有）。 */
 export const publishDeps: PublishApiDeps = {
   auth: () => getAuthProvider(),
-  ports: (session) => {
+  ports: (session, request) => {
     const pool = getPool();
+    const auth = getAuthProvider();
     return pool ? wirePublishPorts(pgPublishStore(pool), session, {
       drafts: pgDraftFingerprints(pool),
       finalStepNames: (owner, pageId) => finalStepPageNames(pool, owner, pageId),
+      roles: roleReaderOf(publishConfig(process.env), session, async () => {
+        const result = await new NihoExperienceApiClient(auth).roles(session, request);
+        return result.destinations.includes("exp") && result.roles.includes("writer") ? ["writer"] : [];
+      }),
+      ...(session.mode === "niho" ? { facts: experienceFactsSource(session.userId) } : {}),
     }) : null;
   },
 };

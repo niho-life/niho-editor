@@ -1578,17 +1578,17 @@ describe("public API v1 (production build, PostgreSQL)", () => {
   });
 
   it("previews with the publish sheet's wiring (#39): stub roles open a face, photos get EDITOR_ASSET_ORIGIN, an unpublished page gets the site's URL", async () => {
-    const issue = async (pageId, handle) => {
+    const issue = async (pageId, handle, category) => {
       const response = await fetch(`${dev.base}/api/pages/${pageId}/preview-token`, {
         method: "POST",
         headers: { "content-type": "application/json", origin: dev.base },
-        body: JSON.stringify({ handle }),
+        body: JSON.stringify({ handle, ...(category === undefined ? {} : { category }) }),
       });
       assert.equal(response.status, 201, `${pageId} on ${handle}`);
       return (await response.json()).token;
     };
     // stub の既定の役割（writer,kamakura）で NIHO Experience へ出せる。公開中の面のプレビューは、その公開の URL と token の著者
-    const face = await read(`/v1/preview/${await issue(ids.exp, "exp")}.json`, expToken);
+    const face = await read(`/v1/preview/${await issue(ids.exp, "exp", "walks")}.json`, expToken);
     assert.equal(face.status, 200);
     const faceDraft = await face.json();
     assert.equal(faceDraft.preview.dest, "exp");

@@ -19,6 +19,21 @@ export type PublishDestOption = {
 };
 export type PublishRange = "live" | "unlisted";
 export type PublishExtras = { app: boolean; news: boolean; xp: boolean };
+export type PublishExperienceSettings = {
+  categories: readonly { slug: string; labelEn: string; labelJa: string }[];
+  category: string | null;
+  candidates: readonly { slug: string; title: string; providerName: string }[];
+  related: readonly string[];
+  loaded: boolean;
+  unavailable?: boolean;
+  query: string;
+  nextCursor: string | null;
+  loadingMore?: boolean;
+  onCategory: (slug: string | null) => void;
+  onRelated: (slug: string) => void;
+  onQuery: (query: string) => void;
+  onMore: () => void;
+};
 
 /** 公開のシートの URL の欄。slug は初回の公開まで変えられる（公開したあとは固定）。 */
 export type PublishSlug = {
@@ -58,6 +73,8 @@ export type PublishFormProps = {
   submitDisabled?: boolean;
   /** URL の欄。省略すると出さない（足もとの URL だけ）。 */
   slug?: PublishSlug;
+  /** NIHO Experience の任意設定。server が候補と現在権限を決める。 */
+  experience?: PublishExperienceSettings;
   /** 公開に失敗したときなどの 1 行（role="alert"）。 */
   error?: string | null;
 };
@@ -126,6 +143,8 @@ function PublishForm(props: PublishFormProps) {
   const noteId = useId();
   const slugId = useId();
   const slugNoteId = useId();
+  const categoryId = useId();
+  const relatedId = useId();
   const { current, dests, picked, missing, range, extras, slug } = props;
   const chosen = dests.find((dest) => dest.id === picked);
   const blocked = !chosen || !chosen.connected || missing.length > 0 || Boolean(props.submitDisabled);
@@ -236,6 +255,52 @@ function PublishForm(props: PublishFormProps) {
                 限定公開<small>URLを知っている人だけ</small>
               </button>
             </div>
+          </div>
+        )}
+        {chosen?.id === "exp" && props.experience && (
+          <div className="es-sh-sec">
+            <h3>記事の設定</h3>
+            {!props.experience.loaded ? (
+              <p className="es-sh-sub">現在のカテゴリと体験を確認しています。</p>
+            ) : props.experience.unavailable ? (
+              <p role="alert" className="es-sh-err">カテゴリと関連する体験を確認できません。接続が戻ってから再読み込みしてください。</p>
+            ) : props.experience.categories.length === 0 ? (
+              <p className="es-sh-sub">管理者のカテゴリ設定が必要です。設定されるまで公開条件は緩められません。</p>
+            ) : (
+              <>
+                <label htmlFor={categoryId}>カテゴリ</label>
+                <select id={categoryId} data-publish-field="category" className="es-input" value={props.experience.category ?? ""} onChange={(event) => props.experience?.onCategory(event.target.value || null)}>
+                  <option value="">選んでください</option>
+                  {props.experience.categories.map((item) => <option key={item.slug} value={item.slug}>{item.labelJa} / {item.labelEn}</option>)}
+                </select>
+                <h3 id={relatedId}>関連する体験</h3>
+                <label htmlFor={`${relatedId}-query`}>体験を検索</label>
+                <input
+                  id={`${relatedId}-query`}
+                  type="search"
+                  className="es-input"
+                  value={props.experience.query}
+                  maxLength={100}
+                  onChange={(event) => props.experience?.onQuery(event.target.value)}
+                />
+                <div role="group" aria-labelledby={relatedId} data-publish-field="related" tabIndex={-1}>
+                  {props.experience.related.filter((slug) => !props.experience?.candidates.some((item) => item.slug === slug)).map((slug) => (
+                    <button key={slug} type="button" role="checkbox" aria-checked="true" className="es-chk es-chk--on" onClick={() => props.experience?.onRelated(slug)}>
+                      <i aria-hidden="true" />選択中の体験<small>{slug} · 現在の掲載・権限は公開時に再確認します</small>
+                    </button>
+                  ))}
+                  {props.experience.candidates.map((item) => {
+                    const checked = props.experience?.related.includes(item.slug) ?? false;
+                    return <button key={item.slug} type="button" role="checkbox" aria-checked={checked} className={`es-chk${checked ? " es-chk--on" : ""}`} onClick={() => props.experience?.onRelated(item.slug)}><i aria-hidden="true" />{item.title}<small>{item.providerName}</small></button>;
+                  })}
+                </div>
+                {props.experience.nextCursor && (
+                  <button type="button" className="es-btn es-btn--quiet es-btn--sm" disabled={props.experience.loadingMore} onClick={props.experience.onMore}>
+                    {props.experience.loadingMore ? "読み込み中…" : "さらに表示"}
+                  </button>
+                )}
+              </>
+            )}
           </div>
         )}
         {chosen && (

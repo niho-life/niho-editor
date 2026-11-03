@@ -48,11 +48,13 @@ export type PreviewTokenApiDeps = {
   /** DB が使えないときは null（503）。 */
   store: () => PreviewTokenStore | null;
   /** 本人の NIHO の役割（要求のたびに読む。保存しない）。 */
-  roles: (session: Session) => RoleReader;
+  roles: (session: Session, request: Request) => RoleReader;
   /** 本人の著者（公開と同じ。発行のときに読み、token に結ぶ）。 */
   authors: (session: Session) => AuthorSource;
   /** 本人の解除していない接続（DB が使えないときは null で 503）。 */
   connections: () => ConnectionSource | null;
+  /** Experience categories are checked from the destination for every token issuance. */
+  categoryActive?: (session: Session, category: string) => Promise<boolean>;
   clock?: Clock;
   /** 乱数（既定は node:crypto の randomBytes）。 */
   random?: (size: number) => Uint8Array;
@@ -73,11 +75,15 @@ const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]|\p{Cs}/u;
 const systemClock: Clock = { now: () => new Date().toISOString() };
 
 /** `{ handle }`（他の field は不可）。handle は面か、接続に使える形。 */
-function parseHandle(value: unknown): string | null {
+function parseHandle(value: unknown): { handle: string; category: string | null } | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).length !== 1 || typeof record.handle !== "string") return null;
-  return isFaceDest(record.handle) || isConnectionHandle(record.handle) ? record.handle : null;
+  if (typeof record.handle !== "string" || !(isFaceDest(record.handle) || isConnectionHandle(record.handle))) return null;
+  if (record.handle === "exp") {
+    if (Object.keys(record).sort().join(",") !== "category,handle" || typeof record.category !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(record.category) || record.category.length > 160) return null;
+    return { handle: record.handle, category: record.category };
+  }
+  return Object.keys(record).length === 1 ? { handle: record.handle, category: null } : null;
 }
 
 function isBindableText(value: unknown): value is string {
@@ -110,14 +116,28 @@ export function issuePreviewTokenRoute(request: Request, id: string, deps: Previ
     if (!store || !connections) return errorResponse("unavailable");
     const body = await readJsonBody(request, MAX_PREVIEW_TOKEN_BODY_BYTES);
     if (!body.ok) return body.response;
-    const handle = parseHandle(body.value);
-    if (handle === null) return errorResponse("bad_request");
+    const parsed = parseHandle(body.value);
+    if (parsed === null) return errorResponse("bad_request");
+    const { handle, category } = parsed;
     if (!UUID_PATTERN.test(id)) return notFoundResponse();
     // owner は認証の層の本人だけ（要求の値からは決めない）
-    const allowed = isFaceDest(handle)
-      ? roleAllows(await deps.roles(session).read(session.userId), handle)
-      : await connections.has(session.userId, handle);
+    let allowed: boolean;
+    try {
+      allowed = isFaceDest(handle)
+        ? roleAllows(await deps.roles(session, request).read(session.userId), handle)
+        : await connections.has(session.userId, handle);
+    } catch {
+      return errorResponse("unavailable");
+    }
     if (!allowed) return notFoundResponse();
+    if (handle === "exp") {
+      if (!deps.categoryActive) return errorResponse("unavailable");
+      try {
+        if (!(await deps.categoryActive(session, category!))) return notFoundResponse();
+      } catch {
+        return errorResponse("unavailable");
+      }
+    }
     // 256 bit の乱数（base64url の 43 文字。契約の `pv_` の形）
     const token = `${PREVIEW_TOKEN_PREFIX}${Buffer.from((deps.random ?? randomBytes)(32)).toString("base64url")}`;
     const issuedAt = new Date((deps.clock ?? systemClock).now()).toISOString();

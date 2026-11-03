@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageSummary } from "@niho/editor-store";
 import { ShellSettingsPage } from "niho-docs-ui/shell";
 import { rememberLastPage } from "@/lib/last-page";
@@ -137,6 +137,9 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
   const frame = useEditorFrame();
   const createdRef = useRef<string | null>(null);
   const titleRef = useRef("");
+  const query = useSearchParams();
+  const experience = query.get("experience");
+  const handoff = query.get("destination") === "exp" && query.get("lang") === "en" && (experience === null || /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(experience));
   // この下書きのエディタがまだ画面にあるか。保存（POST）が終わる前に「録音から」へ移った・別の下書きへ戻ったときは、
   // URL が `/p/new` のままでも、その URL を作ったページの ID へ替えない（pathname だけでは別の画面と区別できない）
   const aliveRef = useRef(true);
@@ -148,7 +151,7 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
   }, []);
   return (
     <PageEditor
-      page={{ id: null, title: "", blocks: [], revision: null }}
+      page={{ id: null, title: "", blocks: [], revision: null, ...(handoff ? { lang: "en" as const } : {}) }}
       createOnOpen
       // 作ったばかりのページは共有していない
       shared={false}
@@ -162,7 +165,7 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
         frame.pageCreated(id, titleRef.current);
         // 保存が終わる前に別の画面へ移っていたら、その画面の URL は替えない
         if (!aliveRef.current || window.location.pathname !== "/p/new") return;
-        window.history.replaceState(null, "", `/p/${id}`);
+        window.history.replaceState(null, "", `/p/${id}${handoff ? `?destination=exp&lang=en${experience ? `&experience=${encodeURIComponent(experience)}` : ""}` : ""}`);
         rememberLastPage(id);
       }}
       onSaved={() => {

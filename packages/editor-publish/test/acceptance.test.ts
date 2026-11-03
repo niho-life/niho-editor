@@ -54,6 +54,7 @@ async function sheet(world: World, dest: DestName): Promise<ReturnType<typeof sh
       dest: TARGETS[dest].dest,
       handle: handleOf(dest),
       related: settings.related,
+      category: settings.category,
     }), { category: settings.category, related: settings.related }),
   };
   return sheetPlan(input);
