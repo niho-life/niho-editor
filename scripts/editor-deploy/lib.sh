@@ -60,7 +60,7 @@ load_private_jobs_deploy_settings() {
   [[ "$PRIVATE_JOBS_MAINTENANCE" == true || "$PRIVATE_JOBS_MAINTENANCE" == false ]] || die "PRIVATE_JOBS_MAINTENANCE must be true or false"
   PRIVATE_JOBS_JOB=niho-editor-private-jobs
   PRIVATE_JOBS_SWEEP_JOB=niho-editor-private-jobs-sweep
-  PRIVATE_JOBS_SCHEDULER_SA=niho-editor-private-jobs-scheduler
+  PRIVATE_JOBS_SCHEDULER_SA=niho-editor-private-jobs-cron
   PRIVATE_JOBS_SCHEDULER_EMAIL="$PRIVATE_JOBS_SCHEDULER_SA@$GCP_PROJECT.iam.gserviceaccount.com"
   EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF="${EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF:-}"
   if [[ -n "$EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF" ]]; then

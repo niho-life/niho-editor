@@ -24,7 +24,7 @@ export CALLS="$test_dir/calls" GCLOUD="$test_dir/gcloud" DEPLOY_ENV="$test_dir/d
 bash "$here/private-jobs-infra.sh" > /dev/null
 rg -q 'run jobs add-iam-policy-binding niho-editor-private-jobs .*--role roles/run.jobsExecutor' "$CALLS"
 rg -q 'scheduler jobs create http niho-editor-private-jobs-sweep .*--message-body \{\}' "$CALLS"
-rg -q -- '--oauth-service-account-email niho-editor-private-jobs-scheduler@' "$CALLS"
+rg -q -- '--oauth-service-account-email niho-editor-private-jobs-cron@' "$CALLS"
 if rg -q 'secrets (versions|access)|storage |projects add-iam-policy-binding|--oidc|--overrides|scheduler jobs resume' "$CALLS"; then exit 1; fi
 EXISTS=true bash "$here/private-jobs-infra.sh" > /dev/null
 rg -q 'scheduler jobs update http niho-editor-private-jobs-sweep' "$CALLS"

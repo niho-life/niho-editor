@@ -289,6 +289,7 @@ for invalid in 'sample-private-jobs:latest' 'sample-private-jobs:0' 'sample-priv
   fi
 done
 
+check "cleanup identity fits the service-account ID limit" "$([[ ${#PRIVATE_JOBS_SCHEDULER_SA} -le 30 ]] && printf yes)" yes
 check "maintenance is off by default" "$PRIVATE_JOBS_MAINTENANCE" false
 check "maintenance env is absent by default" "$(private_jobs_env_vars)" ""
 check "maintenance env is explicit" "$(PRIVATE_JOBS_MAINTENANCE=true private_jobs_env_vars)" ",EDITOR_PRIVATE_JOBS_MAINTENANCE_ENABLED=true"
