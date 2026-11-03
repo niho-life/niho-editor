@@ -4,6 +4,7 @@ import { isShareToken, readSharedPage, type SharedPage } from "@niho/editor-stor
 import { sharedImagePath } from "@/image/image-paths";
 import { getPool } from "@/server/db";
 import { SharedBlocks } from "@/share/render-blocks";
+import "./shared-page.css";
 
 export const dynamic = "force-dynamic";
 

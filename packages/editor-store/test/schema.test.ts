@@ -123,6 +123,14 @@ describe("migration files", () => {
     assert.doesNotMatch(sql, /\bDROP\s+(TABLE|COLUMN)\b|\bDELETE\s+FROM\b|\bUPDATE\s+\w+\s+SET\b/i, "0002 must keep every existing row");
   });
 
+  it("adds tracked cover and lead history without pretending old versions recorded them", async () => {
+    const migration = (await readMigrations()).find((file) => file.name.endsWith("_page_cover_lead_history.sql"));
+    assert.ok(migration);
+    const sql = withoutComments(migration.sql);
+    assert.match(sql, /ALTER TABLE page_versions\s+ADD COLUMN cover uuid,\s+ADD COLUMN lead text,\s+ADD COLUMN metadata_tracked boolean NOT NULL DEFAULT false;/);
+    assert.doesNotMatch(sql, /\bUPDATE\b|\bDELETE\s+FROM\b|\bDROP\b/i);
+  });
+
   it("contains no records, secrets, credentials, real addresses, or token columns", async () => {
     for (const file of await readMigrations()) {
       const sql = file.sql;

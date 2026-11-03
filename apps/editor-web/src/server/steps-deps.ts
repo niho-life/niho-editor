@@ -87,7 +87,7 @@ export const stepsDeps: StepsApiDeps = {
     const pool = getPool();
     if (!pool) return null;
     if (inline?.pool !== pool) {
-      inline = { pool, queue: createInlineQueue({ store: pgStepRunStore(pool), recipes: (owner) => readOwnerRecipes(pool, owner), executor: stepExecutor() }) };
+      inline = { pool, queue: createInlineQueue({ store: pgStepRunStore(pool), executor: stepExecutor() }) };
     }
     return inline.queue;
   },
@@ -101,7 +101,6 @@ export const stepsWorkerDeps: StepsWorkerDeps = {
     const pool = getPool();
     return pool ? { ...pgStepRunStore(pool), ...pgStepSweepStore(pool) } : null;
   },
-  recipes: ownerRecipes,
   queue: (config) => cloudTasksQueue(config),
   executor: stepExecutor,
 };

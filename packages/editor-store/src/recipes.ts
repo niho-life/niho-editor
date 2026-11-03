@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { SETTINGS_ID_PATTERN, SETTINGS_LIMITS, isSettingsTerm, isSettingsText, type SettingsTerm } from "./settings.ts";
 import type { Database, OwnerId, Queryable } from "./types.ts";
 
@@ -81,7 +82,7 @@ export const RECIPE_LIMITS = Object.freeze({
   terms: SETTINGS_LIMITS.glossary,
   profileChars: 64,
   providerChars: 32,
-  samples: 20,
+  samples: 5,
   sampleNameChars: 200,
   sampleUrlChars: 2000,
 });
@@ -224,6 +225,96 @@ function toRecipe(row: RecipeRow): StoredRecipe {
   };
 }
 
+export type DuplicateRecipeResult =
+  | { status: "created"; recipe: StoredRecipe }
+  | { status: "not_found" }
+  | { status: "limit" }
+  | { status: "samples_missing" };
+
+function recipeCopyName(source: string, usedNames: readonly string[]): string {
+  const used = new Set(usedNames.map((name) => name.normalize("NFKC").trim()));
+  const base = `${source.trim()}のコピー`;
+  for (let suffix = 1; ; suffix += 1) {
+    const tail = suffix === 1 ? "" : ` ${suffix}`;
+    const prefix = Array.from(base).slice(0, Math.max(1, RECIPE_LIMITS.nameChars - Array.from(tail).length)).join("");
+    const candidate = `${prefix}${tail}`;
+    if (!used.has(candidate.normalize("NFKC").trim())) return candidate;
+  }
+}
+
+/** Duplicate a recipe and its private sample bodies atomically; review previews are intentionally not copied. */
+export async function duplicateRecipeWithSamples(db: Database, owner: OwnerId, recipeId: string): Promise<DuplicateRecipeResult> {
+  assertOwner(owner);
+  if (typeof recipeId !== "string" || !SETTINGS_ID_PATTERN.test(recipeId)) throw new TypeError("editor-store: invalid recipe id");
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`recipes:${owner}`]);
+    const sourceResult = await client.query<RecipeRow>(`SELECT ${COLUMNS} FROM recipes WHERE owner=$1 AND id=$2 FOR UPDATE`, [owner, recipeId]);
+    const source = sourceResult.rows[0] ? toRecipe(sourceResult.rows[0]) : null;
+    if (!source || source.steps.length === 0) {
+      await client.query("ROLLBACK");
+      return { status: "not_found" };
+    }
+    const count = await client.query<{ count: number }>("SELECT count(*)::int AS count FROM recipes WHERE owner=$1", [owner]);
+    if ((count.rows[0]?.count ?? 0) >= RECIPE_LIMITS.recipes) {
+      await client.query("ROLLBACK");
+      return { status: "limit" };
+    }
+    const names = await client.query<{ name: string }>("SELECT name FROM recipes WHERE owner=$1", [owner]);
+    const sampleBodies = await client.query<{ sample_id: string; body: string }>(
+      "SELECT sample_id,body FROM recipe_sample_bodies WHERE owner=$1 AND recipe_id=$2 AND sample_id=ANY($3::text[])",
+      [owner, recipeId, source.samples.map((sample) => sample.id)],
+    );
+    if (sampleBodies.rows.length !== source.samples.length) {
+      await client.query("ROLLBACK");
+      return { status: "samples_missing" };
+    }
+
+    const duplicateId = (prefix: string) => `${prefix}-${randomUUID().replaceAll("-", "")}`;
+    const sampleIdMap = new Map(source.samples.map((sample) => [sample.id, duplicateId("sample")] as const));
+    const steps = source.steps.map((step) => ({ ...step, id: duplicateId("s") }));
+    const samples = source.samples.map((sample) => ({ ...sample, id: sampleIdMap.get(sample.id)! }));
+    const duplicate: RecipeInput = {
+      id: duplicateId("r"),
+      name: recipeCopyName(source.name, names.rows.map((row) => row.name)),
+      guide: source.guide,
+      steps,
+      terms: source.terms,
+      samples,
+      origin: "own",
+      importedFrom: null,
+    };
+    assertStorable([duplicate]);
+    const sortOrder = await client.query<{ sort_order: number }>("SELECT COALESCE(max(sort_order),-1)+1 AS sort_order FROM recipes WHERE owner=$1", [owner]);
+    const inserted = await client.query<RecipeRow>(
+      `INSERT INTO recipes(owner,id,name,guide,steps,terms,samples,origin,sort_order,revision,imported_from)
+       VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,'own',$8,1,NULL)
+       RETURNING ${COLUMNS}`,
+      [owner, duplicate.id, duplicate.name, duplicate.guide, JSON.stringify(duplicate.steps), JSON.stringify(duplicate.terms), JSON.stringify(duplicate.samples), sortOrder.rows[0]?.sort_order ?? 0],
+    );
+    if (source.samples.length > 0) {
+      const copied = await client.query(
+        `INSERT INTO recipe_sample_bodies(owner,recipe_id,sample_id,body)
+         SELECT $1,$2,m.new_id,b.body
+           FROM unnest($3::text[],$4::text[]) AS m(old_id,new_id)
+           JOIN recipe_sample_bodies b ON b.owner=$1 AND b.recipe_id=$5 AND b.sample_id=m.old_id`,
+        [owner, duplicate.id, source.samples.map((sample) => sample.id), source.samples.map((sample) => sampleIdMap.get(sample.id)!), recipeId],
+      );
+      if (copied.rowCount !== source.samples.length) throw new Error("editor-store: recipe sample copy was incomplete");
+    }
+    await client.query("COMMIT");
+    const row = inserted.rows[0];
+    if (!row) throw new Error("editor-store: duplicated recipe was not returned");
+    return { status: "created", recipe: toRecipe(row) };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 const COLUMNS = "id, name, guide, steps, terms, samples, origin, sort_order, revision, imported_from";
 const ORDER = "ORDER BY sort_order, id";
 
@@ -274,7 +365,18 @@ export async function putRecipes(db: Database, owner: OwnerId, recipes: readonly
     // 同じ人の入れ替えを 1 本ずつにする。ロック無しだと、重なった 2 本が互いの追加を見ないまま DELETE を済ませ、
     // どちらの一覧とも違う「2 本の和」が残る（後から来た保存が前の保存を置き換える、にならない）
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`recipes:${owner}`]);
-    await client.query("DELETE FROM recipes WHERE owner = $1 AND NOT (id = ANY($2::text[]))", [owner, recipes.map((recipe) => recipe.id)]);
+    const params = insertParams(owner, recipes);
+    // A preview belongs to the exact recipe sample set that was reviewed. Adding or changing samples
+    // invalidates it too, even when every sample it referenced is still present.
+    await client.query(
+      `DELETE FROM recipe_sample_extractions AS extraction
+        USING recipes AS current
+        JOIN unnest($2::text[], $3::jsonb[]) AS incoming(id, samples) ON incoming.id = current.id
+       WHERE extraction.owner = $1 AND extraction.recipe_id = current.id
+         AND current.owner = $1 AND current.samples IS DISTINCT FROM incoming.samples`,
+      [owner, params[1], params[6]],
+    );
+    await client.query("DELETE FROM recipes WHERE owner = $1 AND NOT (id = ANY($2::text[]))", [owner, params[1]]);
     const result = await client.query<RecipeRow>(
       `${INSERT}
        ON CONFLICT (owner, id) DO UPDATE
@@ -300,7 +402,35 @@ export async function putRecipes(db: Database, owner: OwnerId, recipes: readonly
               ),
               updated_at = clock_timestamp()
        RETURNING ${COLUMNS}`,
-      insertParams(owner, recipes),
+      params,
+    );
+    // Sample bytes and extraction previews live outside the recipe JSON. Removing a sample from settings
+    // removes its body in this same transaction and invalidates previews that referenced it.
+    await client.query(
+      `DELETE FROM recipe_sample_bodies b
+        WHERE b.owner=$1 AND NOT EXISTS (
+          SELECT 1 FROM recipes r
+           WHERE r.owner=b.owner AND r.id=b.recipe_id
+             AND EXISTS (SELECT 1 FROM jsonb_array_elements(r.samples) sample WHERE sample->>'id'=b.sample_id)
+        )`,
+      [owner],
+    );
+    await client.query(
+      `DELETE FROM recipe_sample_extractions e
+        WHERE e.owner=$1 AND NOT EXISTS (
+          SELECT 1 FROM recipes r
+           WHERE r.owner=e.owner AND r.id=e.recipe_id
+             AND NOT EXISTS (
+               SELECT 1 FROM jsonb_array_elements_text(e.sample_ids) requested(sample_id)
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM jsonb_array_elements(r.samples) sample WHERE sample->>'id'=requested.sample_id
+                ) OR NOT EXISTS (
+                  SELECT 1 FROM recipe_sample_bodies body
+                   WHERE body.owner=e.owner AND body.recipe_id=e.recipe_id AND body.sample_id=requested.sample_id
+                )
+             )
+        )`,
+      [owner],
     );
     await client.query("COMMIT");
     return result.rows.map(toRecipe).sort((a, b) => a.sortOrder - b.sortOrder || (a.id < b.id ? -1 : 1));

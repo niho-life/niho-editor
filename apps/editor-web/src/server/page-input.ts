@@ -2,6 +2,7 @@ import { isLanguage } from "@niho/docs-core";
 import {
   PAGE_KINDS,
   PAGE_LIST_LIMIT,
+  PAGE_MAX_BYTES,
   isPageId,
   isPositiveInteger,
   type Block,
@@ -12,11 +13,11 @@ import {
 } from "@niho/editor-store";
 import { validateBlocks } from "../ast/blocks";
 
-import { MAX_TITLE_CHARS } from "../lib/page-limits";
+import { MAX_LEAD_CHARS, MAX_TITLE_CHARS } from "../lib/page-limits";
 
 export { MAX_TITLE_CHARS };
-/** 本文（blocks の JSON）の上限。要求の本文の上限（1 MiB）の内側に収まる値にする。 */
-export const MAX_BLOCKS_BYTES = 1000 * 1024;
+/** AST 検証の安全枠。30 MiB の合計判定とエラーは store で行う。 */
+export const MAX_BLOCKS_BYTES = PAGE_MAX_BYTES + 16 * 1024;
 /** 本文の入れ子の深さの上限（深すぎる JSON で DB・描画を詰まらせない）。 */
 export const MAX_BLOCK_DEPTH = 64;
 
@@ -50,6 +51,12 @@ function parseTitle(value: unknown): InputResult<string> {
   return { ok: true, value };
 }
 
+function parseLead(value: unknown): InputResult<string | null> {
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== "string" || hasNul(value) || Array.from(value).length > MAX_LEAD_CHARS) return { ok: false };
+  return { ok: true, value };
+}
+
 /**
  * 本文。大きさ・深さ・NUL を見たあと、限定 AST（src/ast/blocks.ts）として保存してよいかを検査する。
  * 返すのは入力そのものではなく、許す形だけで組み直した写し。
@@ -58,10 +65,10 @@ export function parseBlocks(value: unknown): InputResult<Block[]> {
   if (!Array.isArray(value)) return { ok: false };
   if (!depthWithin(value, MAX_BLOCK_DEPTH)) return { ok: false };
   const serialized = JSON.stringify(value);
-  if (new TextEncoder().encode(serialized).byteLength > MAX_BLOCKS_BYTES) return { ok: false };
   if (serialized.includes("\\u0000")) return { ok: false };
   const checked = validateBlocks(value);
-  return checked.ok ? { ok: true, value: checked.blocks } : { ok: false };
+  if (!checked.ok || new TextEncoder().encode(JSON.stringify(checked.blocks)).byteLength > MAX_BLOCKS_BYTES) return { ok: false };
+  return { ok: true, value: checked.blocks };
 }
 
 /**
@@ -104,14 +111,37 @@ function parseFields(body: unknown): InputResult<PagePatch> {
 
 /** 新しいページ。全て任意（`{}` で空のページ）。 */
 export function parseCreatePage(body: unknown): InputResult<CreatePageInput> {
-  return parseFields(body);
+  if (!isPlainObject(body)) return { ok: false };
+  const { lead, ...fields } = body;
+  const parsed = parseFields(fields);
+  if (!parsed.ok) return { ok: false };
+  const result: CreatePageInput = { ...parsed.value };
+  if (Object.prototype.hasOwnProperty.call(body, "lead")) {
+    const checked = parseLead(lead);
+    if (!checked.ok) return { ok: false };
+    result.lead = checked.value;
+  }
+  return { ok: true, value: result };
 }
 
 /** 部分更新。少なくとも 1 つは指定する。 */
 export function parsePagePatch(body: unknown): InputResult<PagePatch> {
-  const parsed = parseFields(body);
-  if (!parsed.ok || Object.keys(parsed.value).length === 0) return { ok: false };
-  return parsed;
+  if (!isPlainObject(body)) return { ok: false };
+  const { cover, lead, ...fields } = body;
+  const parsed = parseFields(fields);
+  if (!parsed.ok) return { ok: false };
+  const result: PagePatch = { ...parsed.value };
+  if (Object.prototype.hasOwnProperty.call(body, "cover")) {
+    if (cover !== null && (typeof cover !== "string" || !isPageId(cover))) return { ok: false };
+    result.cover = typeof cover === "string" ? cover.toLowerCase() : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "lead")) {
+    const checked = parseLead(lead);
+    if (!checked.ok) return { ok: false };
+    result.lead = checked.value;
+  }
+  if (Object.keys(result).length === 0) return { ok: false };
+  return { ok: true, value: result };
 }
 
 /** 一覧の query。limit は 1〜PAGE_LIST_LIMIT の整数、cursor は前の応答の next（形の検査は store。空は不可）。どちらも任意。 */

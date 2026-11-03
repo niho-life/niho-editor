@@ -73,6 +73,8 @@ function cleanAttributes(element: Element): void {
   const tag = element.tagName.toLowerCase();
   for (const attribute of Array.from(element.attributes)) {
     const name = attribute.name.toLowerCase();
+    if (name === "data-type" && ((tag === "ul" && attribute.value === "taskList") || (tag === "li" && attribute.value === "taskItem"))) continue;
+    if (name === "data-checked" && tag === "li" && (attribute.value === "true" || attribute.value === "false")) continue;
     if (name === "href" && tag === "a") continue;
     if (name === "start" && tag === "ol") continue;
     if (tag === "img" && IMAGE_ATTRIBUTES.has(name)) continue;
@@ -97,6 +99,18 @@ function renameTag(element: Element, tag: string): Element {
 export function normalizePastedHtml(html: string): string {
   // DOMParser の文書は不活性（script は動かず、画像も読み込まれない）
   const doc = new DOMParser().parseFromString(html, "text/html");
+  // ブラウザからのチェックリストは input を本文へ残さず、TaskItem の安全な状態属性へ写す。
+  for (const list of Array.from(doc.body.querySelectorAll("ul"))) {
+    const items = Array.from(list.children).filter((child) => child.tagName.toLowerCase() === "li");
+    if (items.length === 0 || !items.every((item) => item.querySelector('input[type="checkbox"]') || item.getAttribute("data-type") === "taskItem")) continue;
+    list.setAttribute("data-type", "taskList");
+    for (const item of items) {
+      const input = item.querySelector('input[type="checkbox"]');
+      item.setAttribute("data-type", "taskItem");
+      item.setAttribute("data-checked", input ? String((input as HTMLInputElement).checked) : String(item.getAttribute("data-checked") === "true"));
+      input?.remove();
+    }
+  }
   for (const element of Array.from(doc.body.querySelectorAll(DROP_WITH_CONTENT.join(",")))) {
     if (!isEditorImage(element)) element.remove();
   }

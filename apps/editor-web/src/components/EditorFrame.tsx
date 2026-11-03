@@ -12,7 +12,7 @@ import { movePageOrderRequest, recordPageOpenRequest } from "@/lib/folder-client
 import { listPagesRequest, movePageRequest } from "@/lib/pages-client";
 import { headerStatus } from "@/lib/save-status";
 import { useShortcuts } from "@/lib/shortcuts";
-import { arrangeSidebarItems, folderOptions, orderNeighbours, recentRows, reorderedPages, searchRows, withoutPageTree, type SidebarPublication } from "@/lib/sidebar-items";
+import { arrangeSidebarItems, folderOptions, orderNeighbours, reorderedPages, searchRows, withoutPageTree, type SidebarPublication } from "@/lib/sidebar-items";
 import { usePageHistory } from "@/lib/use-page-history";
 import { usePageMenu, type AttachedPage } from "@/lib/use-page-menu";
 import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
@@ -29,9 +29,6 @@ export type { AttachedPage };
 
 /** shell.css と同じ境目（これ以下は一覧・ページのどちらかを全画面で出す）。 */
 const NARROW_QUERY = "(max-width: 900px)";
-
-/** 「最近」に出す件数（サーバーの `RECENT_LIMIT` と同じ）。 */
-const RECENT_SHOWN = 10;
 
 const PAGE_PATH = /^\/p\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
@@ -243,9 +240,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const [closedFolders, setClosedFolders] = useState<ReadonlySet<string>>(() => new Set());
   // フォルダへ入れられなかったときの一言（情報パネルのフォルダの下）
   const [moveNote, setMoveNote] = useState<string | null>(null);
-  // 「最近」（サーバーが読んだ分を、この画面で開いたページで前に出す）
-  const [recent, setRecent] = useState<PageSummary[]>(initial.recent);
-  const [recentOpen, setRecentOpen] = useState(true);
   // 並べ替えが届かなかったときの一言と、送っているあいだ
   const [orderNote, setOrderNote] = useState<string | null>(null);
   const [ordering, setOrdering] = useState(false);
@@ -336,8 +330,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     () => ({
       pageOpened: (page, details = {}) => {
         setList((current) => ({ ...current, opened: page, details: { id: page.id, recordingSec: details.recordingSec ?? null } }));
-        // 「最近」はこの画面でも前に出す（サーバーにも記録する。届かなくても画面は止めない）
-        setRecent((current) => [page, ...current.filter((item) => item.id !== page.id)].slice(0, RECENT_SHOWN));
+        // 最後に開いたページをサーバーに記録する。届かなくても画面は止めない
         void recordPageOpenRequest(page.id).catch(() => undefined);
       },
       pageTitleChanged: (id, title) =>
@@ -478,7 +471,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     () => (searching ? searchRows(hits, now) : arrangeSidebarItems(list.pages, { now, collapsed: closedFolders })),
     [searching, hits, list.pages, now, closedFolders],
   );
-  const recentItems = useMemo(() => recentRows(recent, now), [recent, now]);
   const toggleFolder = useCallback(
     (id: string) =>
       setClosedFolders((current) => {
@@ -718,7 +710,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               currentId={currentId}
               onSelect={select}
               onToggleFolder={toggleFolder}
-              recent={searching || recentItems.length === 0 ? undefined : { items: recentItems, open: recentOpen, onToggle: () => setRecentOpen((open) => !open) }}
               onCollapse={collapse}
               newMenu={{ open: newMenuOpen, onToggle: () => setNewMenuOpen((open) => !open), onClose: () => setNewMenuOpen(false), onPick: pickNew }}
               search={{

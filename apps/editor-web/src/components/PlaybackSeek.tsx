@@ -14,27 +14,33 @@ const EVENTS = ["timeupdate", "seeked", "loadedmetadata", "durationchange", "emp
 export function PlaybackSeek({
   audio,
   recordingSec,
+  durationSec,
+  positionOf,
   onSeek,
 }: {
   /** 読むだけ（再生位置と長さを購読する）。 */
   audio: HTMLAudioElement | null;
   /** 録音の長さ（ブラウザが長さを知らないときに使う）。 */
   recordingSec: number | null;
+  /** 複数Partの全体時間。渡されたときは現在の`<audio>`単体の長さより優先する。 */
+  durationSec?: number | null;
+  /** 現在のPart内の位置を、録音全体の位置に変換する。 */
+  positionOf?: (audio: HTMLAudioElement) => number;
   /** スライダーで動かした位置（秒）。 */
   onSeek: (seconds: number) => void;
 }) {
   const [position, setPosition] = useState({ time: 0, media: Number.NaN });
   useEffect(() => {
     if (!audio) return undefined;
-    const read = () => setPosition({ time: audio.currentTime, media: audio.duration });
+    const read = () => setPosition({ time: positionOf?.(audio) ?? audio.currentTime, media: audio.duration });
     for (const type of EVENTS) audio.addEventListener(type, read);
     read();
     return () => {
       for (const type of EVENTS) audio.removeEventListener(type, read);
     };
-  }, [audio]);
+  }, [audio, positionOf]);
 
-  const duration = playbackDuration(position.media, recordingSec);
+  const duration = durationSec === undefined ? playbackDuration(position.media, recordingSec) : durationSec;
   const max = duration === null ? 0 : Math.max(1, Math.floor(duration));
   const time = Math.min(Math.floor(Number.isFinite(position.time) && position.time > 0 ? position.time : 0), max);
   const clock = playbackClock(time, duration);

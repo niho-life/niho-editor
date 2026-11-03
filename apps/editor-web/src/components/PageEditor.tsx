@@ -18,7 +18,8 @@ import { buildPageExtensions } from "@/editor/page-extensions";
 import { normalizePastedHtml } from "@/editor/paste";
 import { prepareAi, replaceForAi, type AiBridge, type AiBridgeDeps } from "@/lib/ai-bridge";
 import { createAutosave, type Autosave, type SaveState } from "@/lib/autosave";
-import { pageImages } from "@/lib/image-upload-client";
+import { pageImages, getImageMetadata } from "@/lib/image-upload-client";
+import { PAGE_MAX_BYTES } from "@/image/image-limits";
 import {
   NEW_PAGE_DRAFT_KEY,
   createDraftKeeper,
@@ -30,12 +31,13 @@ import {
   type PageDraft,
 } from "@/lib/drafts";
 import type { PageText } from "@/lib/attached-page";
-import { MAX_TITLE_CHARS } from "@/lib/page-limits";
+import { MAX_LEAD_CHARS, MAX_TITLE_CHARS } from "@/lib/page-limits";
 import { UNCREATED_REVISION, classifySaveFailure, createPageSaver, type PageSaver } from "@/lib/page-save";
 import type { RestoredPage } from "@/lib/page-actions-client";
-import { PageConflictError, type ConflictPage, type PageBody } from "@/lib/pages-client";
+import { PageConflictError, PageRequestError, type ConflictPage, type PageBody } from "@/lib/pages-client";
 import { SAVE_STATUS_TEXT, type SaveStatus } from "@/lib/save-status";
 import { isSaveShortcut } from "@/lib/shortcuts";
+import { imageAssetPath } from "@/image/image-paths";
 
 export { docFromBlocks };
 /** 右上の保存状態（`conflict` は競合の帯が出ていて、自動保存を止めている）。 */
@@ -50,6 +52,10 @@ export const LANG_NOT_SAVED = "言語を保存できませんでした";
 export type EditablePage = {
   title: string;
   blocks: unknown[];
+  /** 公開用カバー画像（ページの添付画像 id）。 */
+  cover?: string | null;
+  /** 公開用リード。 */
+  lead?: string | null;
   /** ページの種類（AI の候補を選ぶ。無ければメモ）。 */
   kind?: PageKind;
   /** ページの言語（読み込んだときの値）。省略は `DEFAULT_PAGE_LANG`。 */
@@ -88,6 +94,8 @@ export type PageEditorEvents = {
 export type PageEditorProps = {
   page: EditablePage;
   drafts?: DraftStorage | null;
+  /** 新規画面を開いたら、端末の下書きを復元してから空でも保存先を作る。 */
+  createOnOpen?: boolean;
   /** リンクで共有しているか（開いたときにサーバーが読んだ値。分からなければ null・省略）。「…」の「共有中」の印に使う。 */
   shared?: boolean | null;
 } & PageEditorEvents;
@@ -100,6 +108,28 @@ type ScreenProps = PageEditorProps & {
 };
 
 const noSubscription = () => () => undefined;
+
+const IMAGE_ASSET_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function imageAssetIds(blocks: unknown[], currentCover: string | null): string[] {
+  const ids = new Set<string>();
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value !== "object" || value === null) return;
+    const node = value as Record<string, unknown>;
+    if (node.type === "image" && typeof node.attrs === "object" && node.attrs !== null) {
+      const assetId = (node.attrs as Record<string, unknown>).assetId;
+      if (typeof assetId === "string" && IMAGE_ASSET_ID.test(assetId)) ids.add(assetId.toLowerCase());
+    }
+    Object.values(node).forEach(visit);
+  };
+  visit(blocks);
+  if (currentCover && IMAGE_ASSET_ID.test(currentCover)) ids.add(currentCover.toLowerCase());
+  return [...ids];
+}
 
 function statusOf(state: SaveState): SaveStatus {
   return state === "stopped" ? "conflict" : state;
@@ -126,8 +156,8 @@ export function PageEditor(props: PageEditorProps) {
     savedRef.current = props.onSaved;
   });
   const reopen = useCallback((restored: RestoredPage, lang: PageLang) => {
-    const { id, title, blocks, revision, updatedAt } = restored;
-    setReopened((current) => ({ count: (current?.count ?? 0) + 1, page: { id, title, blocks, revision, updatedAt, lang } }));
+    const { id, title, blocks, revision, updatedAt, cover, lead } = restored;
+    setReopened((current) => ({ count: (current?.count ?? 0) + 1, page: { id, title, blocks, revision, updatedAt, lang, cover, lead } }));
     // 戻した（サーバーの更新時刻が進んだ）。一覧の上へ動かす
     savedRef.current?.();
   }, []);
@@ -145,7 +175,7 @@ export function PageEditor(props: PageEditorProps) {
 }
 
 /**
- * ページの題名と本文。本文は TipTap で、作れるのは限定 AST（src/ast/blocks.ts）の範囲だけ（src/editor/page-extensions.ts）。
+ * ページの題名・公開情報と本文。本文は TipTap で、作れるのは限定 AST（src/ast/blocks.ts）の範囲だけ（src/editor/page-extensions.ts）。
  * blocks は TipTap の doc の content（ブロックの配列）をそのまま保存する。貼り付けた HTML は先に洗う（src/editor/paste.ts）。
  *
  * 保存（設計 §5.1・§12）:
@@ -173,8 +203,9 @@ export function PageEditor(props: PageEditorProps) {
  * AI の箱（src/components/AiBox.tsx）は、選んだ文字の上の「AI」（選んだ範囲）とページの上の「AI」（ページ全体）から開く。
  * 頼む前に未保存の入力を保存し終え、採用の結果は本文を差し替えて revision を進める（自動保存は起こさない。src/lib/ai-bridge.ts）。
  *
- * 言語（情報パネル。枠の `attachPage` の `setLang`）も同じ自動保存・下書きに載せる（別の PATCH を撃たない。revision・
- * 競合の判定・端末の下書きは題名・本文と同じ）。変えたら 1 秒を待たずに送り、届かなければサーバーが持っている言語に戻して
+ * 言語（情報パネル）、公開用のカバーとリードも同じ自動保存・下書きに載せる（別の PATCH を撃たない。revision・
+ * 競合の判定・端末の下書きは題名・本文と同じ）。カバーは本文に挿入済みのこのページの画像から選び、本文と共有して使う。
+ * 言語は変えたら 1 秒を待たずに送り、届かなければサーバーが持っている言語に戻して
  * 一言出す（戻した言語も同じ保存に載せる。届いたか分からない失敗のあとでも、サーバーを画面の言語に揃えるため）。
  * 「この内容で上書き」は、競合の相手と言語が違えば画面の言語も送る。
  */
@@ -184,8 +215,16 @@ function EditorScreen(props: ScreenProps) {
   const initialLang = page.lang ?? DEFAULT_PAGE_LANG;
   const [title, setTitle] = useState(page.title);
   const [lang, setLang] = useState<PageLang>(initialLang);
+  const [cover, setCover] = useState<string | null>(page.cover ?? null);
+  const [lead, setLead] = useState<string | null>(page.lead ?? null);
+  const [coverOptions, setCoverOptions] = useState(() => imageAssetIds(page.blocks, page.cover ?? null));
+  const [coverMetadata, setCoverMetadata] = useState<{ assetId: string; consent: boolean } | null>(null);
+  const coverConsent = coverMetadata?.assetId === cover ? coverMetadata.consent : null;
+  const [coverMetaBusy, setCoverMetaBusy] = useState(false);
+  const [coverError, setCoverError] = useState<string | null>(null);
   const [langNote, setLangNote] = useState<string | null>(null);
   const [state, setState] = useState<SaveState>("saved");
+  const [pageFull, setPageFull] = useState(false);
   // 保存先のページの id（新しいページは最初の保存で作ったときに決まる）
   const [pageId, setPageId] = useState<string | null>(page.id);
   const [unreadable, setUnreadable] = useState(false);
@@ -203,6 +242,8 @@ function EditorScreen(props: ScreenProps) {
   const initialRef = useRef(page);
   const titleRef = useRef(page.title);
   const langRef = useRef(initialLang);
+  const coverRef = useRef<string | null>(page.cover ?? null);
+  const leadRef = useRef<string | null>(page.lead ?? null);
   // 言語の変更の番号（後から別の言語を選んだら、前の変更の結果では戻さない）
   const langChangeRef = useRef(0);
   // 保存の部品が生きているか（画面を離れたあとに、言語の結果で状態を変えない）
@@ -236,6 +277,10 @@ function EditorScreen(props: ScreenProps) {
   // 箱が開き直さないよう同じものを渡し続ける（どの部品も呼んだ時点の ref を読む）
   const [aiBridge] = useState<AiBridge>(() => ({
     prepare: () => prepareAi(aiDeps),
+    saved: (revision) => {
+      const saver = saverRef.current;
+      return saver?.revision === revision ? { ...saver.content } : null;
+    },
     replace: (page, options) => replaceForAi(aiDeps, page, options),
   }));
   const openAi = (range: AiOpenRequest["range"]) => setAi((current) => ({ key: (current?.key ?? 0) + 1, range }));
@@ -250,7 +295,13 @@ function EditorScreen(props: ScreenProps) {
     const saver = createPageSaver({
       pageId: initial.id,
       revision: initial.revision ?? UNCREATED_REVISION,
-      content: { title: initial.title, blocks: initial.blocks, lang: initial.lang ?? DEFAULT_PAGE_LANG },
+      content: {
+        title: initial.title,
+        blocks: initial.blocks,
+        lang: initial.lang ?? DEFAULT_PAGE_LANG,
+        cover: initial.cover ?? null,
+        lead: initial.lead ?? null,
+      },
       onCreated: (created) => {
         setPageId(created.id);
         eventsRef.current.onCreated?.(created.id);
@@ -263,6 +314,7 @@ function EditorScreen(props: ScreenProps) {
       classify: classifySaveFailure,
       onState: (next, error) => {
         setState(next);
+        setPageFull(next === "error" && error instanceof PageRequestError && error.status === 413);
         if (next === "stopped" && error instanceof PageConflictError) setConflict(error.page);
       },
       onSaved: (idle) => {
@@ -285,6 +337,8 @@ function EditorScreen(props: ScreenProps) {
           title: titleRef.current,
           blocks: editorRef.current?.getJSON().content ?? initial.blocks,
           lang: langRef.current,
+          cover: coverRef.current,
+          lead: leadRef.current,
         }),
         onResult: (ok) => setDraftsKept(ok),
       });
@@ -343,7 +397,7 @@ function EditorScreen(props: ScreenProps) {
       unreadableRef.current = true;
       setUnreadable(true);
     },
-    editorProps: { attributes: { class: "doc", "aria-label": "本文" }, transformPastedHTML: normalizePastedHtml },
+    editorProps: { attributes: { class: "doc", role: "textbox", "aria-label": "本文", "aria-multiline": "true" }, transformPastedHTML: normalizePastedHtml },
     onUpdate: ({ editor: current }) => {
       if (unreadableRef.current) return;
       // 入力のたびに本文を JSON にしない（送る・端末に書く直前にだけ getJSON する）
@@ -389,7 +443,16 @@ function EditorScreen(props: ScreenProps) {
       }
       // 新しいページは、空のページ（作る前の revision）と比べる
       const openedLang = initial.lang ?? DEFAULT_PAGE_LANG;
-      const decision = decideRestore(result.draft, { title: initial.title, blocks: initial.blocks, revision: initial.revision ?? UNCREATED_REVISION, lang: openedLang });
+      const openedCover = initial.cover ?? null;
+      const openedLead = initial.lead ?? null;
+      const decision = decideRestore(result.draft, {
+        title: initial.title,
+        blocks: initial.blocks,
+        revision: initial.revision ?? UNCREATED_REVISION,
+        lang: openedLang,
+        cover: openedCover,
+        lead: openedLead,
+      });
       if (result.draft) keeper?.adopt(result.draft);
       if (decision.action === "discard") {
         keeper?.discard();
@@ -410,16 +473,35 @@ function EditorScreen(props: ScreenProps) {
         langRef.current = draftLang;
         setLang(draftLang);
         const langPatch = draftLang !== openedLang ? { lang: draftLang } : {};
+        const draftCover = draft.cover === undefined ? openedCover : draft.cover;
+        const draftLead = draft.lead === undefined ? openedLead : draft.lead;
+        coverRef.current = draftCover;
+        leadRef.current = draftLead;
+        setCover(draftCover);
+        setCoverMetadata(null);
+        setLead(draftLead);
+        const contentPatch = {
+          ...(draft.cover !== undefined && draftCover !== openedCover ? { cover: draftCover } : {}),
+          ...(draft.lead !== undefined && draftLead !== openedLead ? { lead: draftLead } : {}),
+        };
         const blocks = () => editor.getJSON().content ?? [];
         if (decision.action === "load" || initial.id === null) {
           // 届いていなかった下書きを保存し直す（新しいページは、比べるサーバーのページが無いので、下書きでページを作る）
-          autosave.change({ title: draft.title, blocks, ...langPatch });
+          autosave.change({ title: draft.title, blocks, ...langPatch, ...contentPatch });
         } else {
           // サーバーが先へ進んでいる: 自分の本文（下書き）を出したまま、自動保存を止めて帯を出す
           saver.rebase(draft.baseRevision);
           autosave.stop();
-          autosave.change({ title: draft.title, blocks, ...langPatch });
-          setConflict({ title: initial.title, blocks: initial.blocks, revision: initial.revision, updatedAt: initial.updatedAt, lang: openedLang });
+          autosave.change({ title: draft.title, blocks, ...langPatch, ...contentPatch });
+          setConflict({
+            title: initial.title,
+            blocks: initial.blocks,
+            revision: initial.revision,
+            updatedAt: initial.updatedAt,
+            lang: openedLang,
+            cover: openedCover,
+            lead: openedLead,
+          });
         }
       }
       finish();
@@ -430,8 +512,38 @@ function EditorScreen(props: ScreenProps) {
   }, [editor, storage, textListeners]);
 
   useEffect(() => {
+    let active = true;
+    const assetId = cover;
+    if (!assetId) {
+      return () => {
+        active = false;
+      };
+    }
+    void getImageMetadata(assetId).then(
+      (image) => {
+        if (active && coverRef.current === assetId) setCoverMetadata({ assetId, consent: image.consent });
+      },
+      () => {
+        if (active && coverRef.current === assetId) setCoverError("カバー画像の掲載情報を読み込めませんでした。");
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [cover]);
+
+  useEffect(() => {
     if (editor) editor.setEditable(ready && !unreadable, false);
   }, [editor, ready, unreadable]);
+
+  useEffect(() => {
+    if (!props.createOnOpen || page.id !== null || pageId !== null || !ready || !editor || unreadable) return;
+    const autosave = autosaveRef.current;
+    if (!autosave) return;
+    // 復元済みの下書きや、作成中の入力も既存の保存キューを通す。空のページも入力を待たずに作る。
+    if (!autosave.hasPending()) autosave.change({ title: titleRef.current, blocks: () => editor.getJSON().content ?? [] });
+    void autosave.flush();
+  }, [props.createOnOpen, page.id, pageId, ready, editor, unreadable]);
 
   // 枠のヘッダー（状態の丸と「…」）と情報パネルへ、このページを登録する。「…」の操作（共有・書き出し・履歴・複製・削除）は、この flush で
   // まだ届いていない変更を先に保存し、届かなければ止める。下書きを読み終えるまでと、まだ作っていないページは id を渡さない
@@ -506,10 +618,11 @@ function EditorScreen(props: ScreenProps) {
     const current = editorRef.current;
     if (!conflict || !saver || !autosave) return;
     saver.overwriteOnto(conflict);
-    // 題名と本文の全てを送る（題名だけの競合でも、見えている本文がそのまま保存される）。
-    // 言語は、相手の言語が分かっていて画面の言語と違うときだけ送る（画面に出している言語で上書きする）
+    // 今見えている題名・本文・公開情報で上書きする。言語は相手の値が分かり、画面と違うときだけ送る。
     autosave.change({
       title: titleRef.current,
+      cover: coverRef.current,
+      lead: leadRef.current,
       ...(conflict.lang !== undefined && conflict.lang !== langRef.current ? { lang: langRef.current } : {}),
       ...(current && !unreadableRef.current ? { blocks: () => current.getJSON().content ?? [] } : {}),
     });
@@ -563,13 +676,103 @@ function EditorScreen(props: ScreenProps) {
         }}
       />
       {titleClamped && <p role="status">題名は {MAX_TITLE_CHARS} 字までです。</p>}
+      <p style={{ fontSize: 13, lineHeight: 1.5, overflowWrap: "anywhere" }}>
+        1ページ{PAGE_MAX_BYTES / (1024 * 1024)} MiBまで（題名・リード・本文・本文/カバー画像・アップロード中の画像）。録音音声は別枠です。
+      </p>
+      {pageFull && (
+        <p role="alert" style={{ fontSize: 13, lineHeight: 1.5, overflowWrap: "anywhere", color: "var(--docs-warn-ink)" }}>
+          ページの{PAGE_MAX_BYTES / (1024 * 1024)} MiB上限を超えるため保存できませんでした。本文やカバーから不要な画像を外すか、アップロード中の画像を中止してください。直前の保存内容は残っています。
+        </p>
+      )}
       {unreadable && <p role="alert">本文を読み込めませんでした。この画面では本文を変更しません。</p>}
+      <section aria-label="公開情報" style={{ display: "grid", gap: 10, margin: "16px 0" }}>
+        <label style={{ display: "grid", gap: 5 }}>
+          公開用リード（{MAX_LEAD_CHARS}字まで）
+          <textarea
+            data-page-lead=""
+            value={lead ?? ""}
+            maxLength={MAX_LEAD_CHARS}
+            rows={3}
+            disabled={!ready || unreadable}
+            onChange={(event) => {
+              const next = event.currentTarget.value || null;
+              leadRef.current = next;
+              setLead(next);
+              autosaveRef.current?.change({ lead: next });
+              keeperRef.current?.touch();
+            }}
+          />
+        </label>
+        <label style={{ display: "grid", gap: 5 }}>
+          カバー画像
+          {/* The private same-origin image endpoint requires the viewer's session cookie. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          {cover && <img src={imageAssetPath(cover)} alt="カバー画像のプレビュー" style={{ width: "min(100%, 420px)", maxHeight: 220, objectFit: "cover", borderRadius: 8 }} />}
+          <select
+            data-page-cover=""
+            value={cover ?? ""}
+            disabled={!ready || unreadable}
+            onFocus={() => setCoverOptions(imageAssetIds(editorRef.current?.getJSON().content ?? page.blocks, coverRef.current))}
+            onChange={(event) => {
+              const next = event.currentTarget.value || null;
+              coverRef.current = next;
+              setCover(next);
+              setCoverMetadata(null);
+              setCoverError(null);
+              autosaveRef.current?.change({ cover: next });
+              keeperRef.current?.touch();
+            }}
+          >
+            <option value="">なし</option>
+            {coverOptions.map((assetId, index) => <option key={assetId} value={assetId}>本文の画像 {index + 1}</option>)}
+          </select>
+          {coverOptions.length === 0 && <span>カバーにする画像を先に本文へ挿入してください。</span>}
+        </label>
+        {cover && (
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={coverConsent === true}
+              disabled={coverMetaBusy || coverConsent === null || !ready}
+              onChange={(event) => {
+                const assetId = coverRef.current;
+                if (!assetId) return;
+                const previous = coverConsent === true;
+                const next = event.currentTarget.checked;
+                setCoverMetadata({ assetId, consent: next });
+                setCoverMetaBusy(true);
+                setCoverError(null);
+                void pageImages.saveMeta(assetId, { consent: next }).then((saved) => {
+                  if (coverRef.current !== assetId) return;
+                  if (!saved) {
+                    setCoverMetadata({ assetId, consent: previous });
+                    setCoverError("掲載許諾を保存できませんでした。");
+                    return;
+                  }
+                  // 資産の掲載メタデータの変更もページ revision に載せ、別端末の編集と競合を検出する。
+                  autosaveRef.current?.change({ cover: assetId });
+                  keeperRef.current?.touch();
+                }).finally(() => setCoverMetaBusy(false));
+              }}
+            />
+            この画像を公開先に掲載する許諾を確認しました
+          </label>
+        )}
+        {cover && <button type="button" disabled={!ready || unreadable} onClick={() => {
+          coverRef.current = null;
+          setCover(null);
+          setCoverMetadata(null);
+          autosaveRef.current?.change({ cover: null });
+          keeperRef.current?.touch();
+        }}>カバー画像を外す</button>}
+        {coverError && <p role="alert">{coverError}</p>}
+      </section>
       <div className="be">
         <EditorContent editor={editor} />
         {/* ヘッダーに常設の書式の帯（ShellTools）を出すため、本文の操作を枠へ渡す（#37 T9） */}
         <PageChrome editor={editor} onAi={() => editor && openAi(selectionRange(editor.state))} onTools={registerTools} />
       </div>
-      <AiLayer editor={editor} bridge={aiBridge} kind={page.kind ?? "note"} lang={page.lang ?? "ja"} request={ai} onClose={() => setAi(null)} />
+      <AiLayer editor={editor} bridge={aiBridge} title={title} kind={page.kind ?? "note"} lang={page.lang ?? "ja"} request={ai} onClose={() => setAi(null)} />
     </div>
   );
 }

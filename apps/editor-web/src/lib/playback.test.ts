@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { isPlayable, playbackClock, playbackDuration, playbackSrc, segmentAt, segmentStart, segmentTimeline } from "./playback";
+import { isPlayable, playbackClock, playbackDuration, playbackPartAt, playbackPartMessage, playbackParts, playbackSrc, playbackTimelineDuration, segmentAt, segmentStart, segmentTimeline } from "./playback";
+import type { AudioPartView } from "./audio-upload-client";
 
 const at = (start: number | null) => ({ start });
 const NOW = Date.parse("2030-01-10T00:00:00.000Z");
+const audioPart = (partIndex: number, extra: Partial<AudioPartView> = {}): AudioPartView => ({
+  partIndex,
+  status: "uploaded",
+  bytes: 10,
+  contentType: "audio/mp4",
+  durationSec: 600,
+  offsetSec: partIndex * 600,
+  sourceName: null,
+  expiresAt: "2030-02-10T00:00:00.000Z",
+  ...extra,
+});
 
 describe("segmentAt: いまの再生位置の段落（二分探索）", () => {
   const timeline = segmentTimeline([at(0), at(4), at(9), at(12)]);
@@ -82,7 +94,42 @@ describe("再生の小さな関数", () => {
   });
 
   it("playbackSrc は同じ origin の route", () => {
-    expect(playbackSrc("6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11")).toBe("/api/pages/6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11/recording/audio");
+    expect(playbackSrc("6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11")).toBe("/api/pages/6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11/recording/audio?part=0");
+    expect(playbackSrc("x/y", 2)).toBe("/api/pages/x%2Fy/recording/audio?part=2");
+  });
+
+  it("複数Partのoffsetを全体時間軸にし、穴・取り込み中・期限切れを区別する", () => {
+    const parts = playbackParts([
+      audioPart(0),
+      audioPart(2, { offsetSec: 1200, durationSec: 300 }),
+      audioPart(3, { status: "uploading", offsetSec: 1500, durationSec: 90 }),
+      audioPart(4, { offsetSec: 1590, durationSec: 40, expiresAt: "2030-01-09T00:00:00.000Z" }),
+    ], NOW, 1630);
+    expect(parts.map(({ partIndex, offsetSec, durationSec, state }) => [partIndex, offsetSec, durationSec, state])).toEqual([
+      [0, 0, 600, "ready"],
+      [1, 600, 600, "missing"],
+      [2, 1200, 300, "ready"],
+      [3, 1500, 90, "uploading"],
+      [4, 1590, 40, "expired"],
+    ]);
+    expect(playbackTimelineDuration(parts, null)).toBe(1630);
+    expect(playbackPartAt(parts, 599.99)?.partIndex).toBe(0);
+    expect(playbackPartAt(parts, 600)?.state).toBe("missing");
+    expect(playbackPartAt(parts, 1200)?.partIndex).toBe(2);
+    expect(playbackPartAt(parts, 1520)?.state).toBe("uploading");
+    expect(playbackPartAt(parts, 1600)?.state).toBe("expired");
+    expect(playbackPartMessage(playbackPartAt(parts, 600))).toContain("音声 2");
+    expect(playbackPartMessage(playbackPartAt(parts, 1520))).toContain("取り込み中");
+    expect(playbackPartMessage(playbackPartAt(parts, 1600))).toContain("期限切れ");
+  });
+
+  it("Part長が不明なら次のoffsetまたは録音全体の長さで範囲を埋める", () => {
+    const parts = playbackParts([
+      audioPart(0, { durationSec: null }),
+      audioPart(1, { offsetSec: 75, durationSec: null }),
+    ], NOW, 130);
+    expect(parts.map(({ offsetSec, durationSec }) => [offsetSec, durationSec])).toEqual([[0, 75], [75, 55]]);
+    expect(playbackTimelineDuration(parts, 130)).toBe(130);
   });
 
   it("playbackClock と playbackDuration", () => {

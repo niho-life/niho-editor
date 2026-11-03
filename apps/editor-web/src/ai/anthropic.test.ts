@@ -350,6 +350,32 @@ describe("createAnthropicClient.complete", () => {
   });
 });
 
+describe("createAnthropicClient.converse", () => {
+  it("sends optional adaptive thinking and effort fields only when the caller provides them", async () => {
+    const { fetch, calls } = fakeFetch(() => message("合成の答え"));
+    const client = createAnthropicClient({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: KEY }, fetch });
+    await client.converse({
+      system: "合成の規則",
+      messages: [{ role: "user", content: "合成の依頼" }],
+      maxTokens: 4_000,
+      thinking: { type: "adaptive" },
+      outputConfig: { effort: "low" },
+    });
+    expect(calls[0]!.body).toEqual({
+      model: "claude-sonnet-5-5",
+      max_tokens: 4_000,
+      system: "合成の規則",
+      messages: [{ role: "user", content: "合成の依頼" }],
+      thinking: { type: "adaptive" },
+      output_config: { effort: "low" },
+    });
+
+    await client.converse({ system: "s", messages: [{ role: "user", content: "u" }] });
+    expect(calls[1]!.body).not.toHaveProperty("thinking");
+    expect(calls[1]!.body).not.toHaveProperty("output_config");
+  });
+});
+
 describe("settings", () => {
   it("reads the timeout and the output limit, falling back to the defaults and clamping to the allowed range", () => {
     expect(timeoutMs({})).toBe(120_000);

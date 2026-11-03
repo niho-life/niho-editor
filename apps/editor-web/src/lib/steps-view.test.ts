@@ -108,7 +108,9 @@ describe("steps-view（手順の帯の見た目）", () => {
       state: "succeeded",
       steps: [step(0, { state: "succeeded", stepStatus: "done" }), step(1, { state: "succeeded", stepStatus: "stale" }), step(2, { state: "succeeded", stepStatus: "stale" })],
     });
-    expect(stepBandNote(stale)).toBe("上流のページが変わりました。「記事方針」から作り直すと印が消えます。");
+    expect(stepBandNote(stale)).toBe("元にした内容が変わりました。「記事方針」から作り直すと印が消えます。");
+    expect(stepBandNote({ ...stale, steps: stale.steps.map((item, index) => index === 1 ? { ...item, staleReasons: ["refs"] } : item) })).toContain("参考のページが変わりました。");
+    expect(stepBandSteps({ ...stale, steps: stale.steps.map((item, index) => index === 1 ? { ...item, staleReasons: ["refs"] } : item) })[1]?.notice).toBe("参考のページが変わりました。");
     expect(stepBandNote(run({ state: "succeeded", steps: [step(0, { state: "succeeded", stepStatus: "done" })] }))).toBe("すべての段階が済みました。");
   });
 
@@ -126,6 +128,7 @@ describe("steps-view（手順の帯の見た目）", () => {
       ["ai_timeout", "AI の答えを待てる時間を過ぎました。少し待ってもう一度お試しください。"],
       ["ai_network", "AI に届きませんでした。少し待ってもう一度お試しください。"],
       ["output_too_long", "長すぎて書き切れませんでした。この段階の指示で扱う範囲を分けて頼むと通ることがあります。"],
+      ["step_time_limit", "安全に保存できる時間を超えたため途中で止めました。書けた部分を確認して、段階を分けてもう一度お試しください。"],
       ["unknown_recipe", "この手順の定義が見つかりませんでした。設定の「手順」を確かめてください。"],
       ["unknown_step", "手順の段階が変わりました。はじめから作り直してください。"],
       ["input_missing", "もとになる本文が空でした。前の段階のページを書いてからやり直してください。"],
@@ -155,7 +158,7 @@ describe("steps-view（手順の帯の見た目）", () => {
 
   it("待てば直るものと、原因を直すものを分けている", () => {
     const retryable = ["usage_unavailable", "ai_rate_limit", "ai_overloaded", "ai_server", "ai_timeout", "ai_network", "lease_expired", "aborted", "internal"];
-    const notRetryable = ["ai_unavailable", "quota_exceeded", "invalid_output", "ai_auth", "ai_bad_request", "output_too_long"];
+    const notRetryable = ["ai_unavailable", "quota_exceeded", "invalid_output", "ai_auth", "ai_bad_request", "output_too_long", "step_time_limit"];
     for (const code of retryable) expect(stepFailure(code).retryable, code).toBe(true);
     for (const code of notRetryable) expect(stepFailure(code).retryable, code).toBe(false);
     // 待てば直るものは「少し待って」と言う

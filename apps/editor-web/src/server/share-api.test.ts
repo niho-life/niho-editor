@@ -275,6 +275,19 @@ describe("share API", () => {
 });
 
 describe("GET /api/pages/{id}/export.md", () => {
+  it("keeps new blocks and returns a reason when Markdown cannot represent a cell", async () => {
+    const task = { type: "taskList", content: [{ type: "taskItem", attrs: { checked: true }, content: [{ type: "paragraph", content: [{ type: "text", text: "完了" }] }] }] };
+    const mine = row("user-a", { blocks: [task] });
+    const { store } = memoryStore([mine]);
+    const response = await call(exportMarkdownRoute, "GET", "/export.md", mine.id, deps("user-a", store));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("- [x] 完了");
+
+    const invalid = row("user-a", { blocks: [{ type: "table", content: [{ type: "tableRow", content: [{ type: "tableHeader", attrs: { colspan: 2 }, content: [{ type: "paragraph" }] }] }] }] });
+    const rejected = await call(exportMarkdownRoute, "GET", "/export.md", invalid.id, deps("user-a", memoryStore([invalid]).store));
+    expect(rejected.status).toBe(422);
+    expect(await rejected.json()).toMatchObject({ error: "unsupported_markdown", reason: expect.stringMatching(/結合セル/) });
+  });
   it("answers the Markdown of the saved blocks as an attachment that is not cached or sniffed", async () => {
     const mine = row("user-a", {
       title: "合成の題名",

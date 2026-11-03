@@ -16,6 +16,7 @@ const added: SettingsRecipe = { id: "r-1", name: "座談会", guide: "お手本"
 /** 設定に保存した手順（プロファイルを持たない形）を読んだときの手順の定義。 */
 const addedDef: RecipeDef = {
   ...added,
+  revision: 1,
   steps: added.steps.map((step) => ({ ...step, profile: STANDARD_PROFILE_ID })),
   terms: [],
   samples: [],
@@ -70,6 +71,7 @@ describe("recipesOf", () => {
     // 設定の形にはプロファイルが無いので、同じ id の工程のプロファイル（既定の「軽量」）を引き継ぐ
     expect(recipes[1]).toEqual({
       ...override,
+      revision: 1,
       steps: [{ ...override.steps[0]!, profile: findRecipeIn(DEFAULT_RECIPES, "tpl-2")!.steps[0]!.profile }],
       terms: [],
       samples: [],

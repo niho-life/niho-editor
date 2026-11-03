@@ -1,6 +1,6 @@
 import type { EditorStore } from "@niho/editor-store";
 import type { AuthProvider, Session } from "../auth/types";
-import { exportMarkdown } from "../export/markdown";
+import { exportFullMarkdown, MarkdownExportError } from "../export/markdown";
 import {
   checkExportRequest,
   googleDocTitle,
@@ -181,7 +181,13 @@ export function exportPageRoute(request: Request, id: string, deps: GoogleDocsAp
     const page = await store.getPage(state.session.userId, id);
     if (!page) return notFoundResponse();
     // `:::note` を知らない読み手へ渡すので、箱は引用にする
-    const markdown = exportMarkdown(page.blocks, { boxes: "quote" });
+    let markdown: string;
+    try {
+      markdown = exportFullMarkdown(page.blocks, { boxes: "quote" });
+    } catch (error) {
+      if (error instanceof MarkdownExportError) return jsonResponse(422, { error: "unsupported_markdown", reason: error.message });
+      throw error;
+    }
     // 書き出せるブロックが無いページは、送る前に断る（API を呼ばない）
     if (markdown === "") return errorResponse("bad_request");
     // 題名はページの題名（API の上限で切る。断らない）

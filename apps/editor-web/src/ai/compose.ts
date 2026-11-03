@@ -1,5 +1,6 @@
-import { glossaryTable, type GlossaryEntry } from "@niho/docs-core";
+import { glossaryTable, type About, type GlossaryEntry } from "@niho/docs-core";
 import type { Block } from "@niho/editor-store";
+import type { PageEntity } from "@niho/editor-store";
 import { validateBlocks, type AstResult } from "../ast/blocks";
 import { wrapUntrusted, type AiPrompt } from "./prompt";
 import { aboutSection, referencesSection, type Reference } from "./references";
@@ -18,6 +19,8 @@ import { aboutSection, referencesSection, type Reference } from "./references";
 
 /** 1 つの段階に送る資料の上限（文字）。超えた分は切る（切ったことはプロンプトに書く）。 */
 export const MAX_COMPOSE_SOURCE_CHARS = 24_000;
+/** 親フォルダの背景本文の上限（文字）。source の予算には含めない。 */
+export const MAX_COMPOSE_BACKGROUND_CHARS = 8_000;
 /** お手本（文書ガイド）の上限（文字）。設定の上限（20,000）と同じ。 */
 export const MAX_COMPOSE_GUIDE_CHARS = 20_000;
 /** モデルが返すブロックの数の上限。 */
@@ -52,11 +55,14 @@ export type ComposeInput = {
   stepNumber: number;
   stepCount: number;
   sources: readonly ComposeSource[];
+  /** 親フォルダの背景本文。録音ページの原文とは別の資料。 */
+  background: string;
   lang: "ja" | "en";
   /** 固有名詞と誤りやすい表記（設定。#108）。 */
   glossary: readonly GlossaryEntry[];
+  entities?: readonly PageEntity[];
   /** 「あなたについて」（設定。空なら入れない）。 */
-  about?: string;
+  about?: About;
   /** 自動参考ページ（同じフォルダの直下のほかのページ。無ければ入れない）。 */
   references?: readonly Reference[];
 };
@@ -95,15 +101,44 @@ export const COMPOSE_RULES: readonly string[] = [
 ];
 
 /** 資料の 1 つ分（長すぎるものは先頭だけにして、切ったことを書く）。 */
-function sourceSection(source: ComposeSource, budget: number): { text: string; used: number } {
+function sourceSection(source: ComposeSource, budget: number): string {
   const { text, truncated } = clamp(source.text.trim(), budget);
   const head = truncated ? `### ${source.label}（長いので先頭だけ）` : `### ${source.label}`;
-  return { text: [head, wrapUntrusted(text)].join("\n"), used: countChars(text) };
+  return [head, wrapUntrusted(text)].join("\n");
+}
+
+/** 短い資料を先に満たし、残りを長い資料へ均等に配る。入力順はプロンプト側で保つ。 */
+function sourceBudgets(sources: readonly ComposeSource[]): number[] {
+  const lengths = sources.map((source) => countChars(source.text.trim()));
+  const budgets = lengths.map(() => 0);
+  const ordered = lengths.map((length, index) => ({ length, index })).filter(({ length }) => length > 0)
+    .sort((a, b) => a.length - b.length || a.index - b.index);
+  let remaining = MAX_COMPOSE_SOURCE_CHARS;
+  let cursor = 0;
+  while (cursor < ordered.length && remaining > 0) {
+    const fair = Math.floor(remaining / (ordered.length - cursor));
+    const shortest = ordered[cursor]!;
+    if (shortest.length > fair) break;
+    budgets[shortest.index] = shortest.length;
+    remaining -= shortest.length;
+    cursor += 1;
+  }
+  const pending = ordered.slice(cursor).sort((a, b) => a.index - b.index);
+  if (pending.length > 0) {
+    const fair = Math.floor(remaining / pending.length);
+    let extra = remaining % pending.length;
+    for (const { index } of pending) {
+      budgets[index] = fair + (extra > 0 ? 1 : 0);
+      if (extra > 0) extra -= 1;
+    }
+  }
+  return budgets;
 }
 
 /**
  * 段階の要求の文（純粋関数。形はテストで固定する）。資料は与えた順に入れ、合わせて MAX_COMPOSE_SOURCE_CHARS 文字まで
- * （超える資料は先頭だけにして、切ったことを書く）。空の資料は入れない。
+ * （超える資料は先頭だけにして、切ったことを書く）。短い資料は全体を入れ、長い資料にも入力順に関係なく予算を配る。
+ * 空の資料は入れない。
  */
 export function buildComposePrompt(input: ComposeInput): AiPrompt {
   const system = [
@@ -115,15 +150,16 @@ export function buildComposePrompt(input: ComposeInput): AiPrompt {
   const guide = clamp(input.guide.trim(), MAX_COMPOSE_GUIDE_CHARS).text;
   const glossary = glossaryTable(input.glossary);
   const sections: string[] = [];
-  let budget = MAX_COMPOSE_SOURCE_CHARS;
-  for (const source of input.sources) {
-    if (budget <= 0 || source.text.trim().length === 0) continue;
-    const section = sourceSection(source, budget);
-    sections.push(section.text);
-    budget -= section.used;
+  const budgets = sourceBudgets(input.sources);
+  for (const [index, source] of input.sources.entries()) {
+    if (source.text.trim().length === 0) continue;
+    sections.push(sourceSection(source, budgets[index]!));
   }
-  const about = aboutSection(input.about ?? "");
+  const about = aboutSection(input.about);
+  const entities = input.entities?.length ? input.entities.map(({ name, reading, role, note }) => [name, reading, role, note].join(" / ")).join("\n") : "";
   const references = referencesSection(input.references ?? []);
+  const background = input.background.trim();
+  const boundedBackground = clamp(background, MAX_COMPOSE_BACKGROUND_CHARS);
   const user = [
     "## 頼むこと",
     `手順「${input.recipeName}」の段階 ${input.stepNumber}/${input.stepCount}「${input.stepName}」の文書を作る。`,
@@ -134,7 +170,9 @@ export function buildComposePrompt(input: ComposeInput): AiPrompt {
     "",
     `出力の言語: ${input.lang}`,
     ...(glossary ? ["", "## 固有名詞と誤りやすい表記", glossary] : []),
+    ...(entities ? ["", "## 登場人物", wrapUntrusted(entities)] : []),
     ...(about ? ["", about] : []),
+    ...(background ? ["", `## 背景情報（親フォルダ）${boundedBackground.truncated ? "（長いので先頭だけ）" : ""}`, wrapUntrusted(boundedBackground.text)] : []),
     "",
     "## 資料",
     ...(sections.length > 0 ? sections : ["（資料なし）"]),

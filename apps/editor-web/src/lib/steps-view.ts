@@ -7,6 +7,7 @@
  */
 
 import type { ShellStep, ShellStepState } from "niho-docs-ui/shell";
+import { staleNoticeText } from "@niho/docs-core";
 import type { StepPageStatus, StepRecipeChoice, StepRun, StepRunStep } from "./steps-client";
 
 /**
@@ -27,8 +28,8 @@ export function stepStartLabel(recipe: StepRecipeChoice): string {
 }
 
 /** 「この録音から」の選び方（サーバーが答えた順。最初の 1 つが主ボタン）。 */
-export function stepStartChoices(recipes: readonly StepRecipeChoice[]): { id: string; label: string }[] {
-  return recipes.map((recipe) => ({ id: recipe.id, label: stepStartLabel(recipe) }));
+export function stepStartChoices(recipes: readonly StepRecipeChoice[]): { id: string; label: string; unusableReason?: string | null }[] {
+  return recipes.map((recipe) => ({ id: recipe.id, label: stepStartLabel(recipe), ...(recipe.unusableReason === undefined ? {} : { unusableReason: recipe.unusableReason }) }));
 }
 
 /** 手順の名前（一覧に無い id は id のまま出す。設定から消えた手順の run でも帯は出る）。 */
@@ -56,7 +57,11 @@ export function stepStateOf(step: StepRunStep): ShellStepState {
 
 /** 帯の段階（id はサブページの id。押すとそのページへ行く）。 */
 export function stepBandSteps(run: StepRun): ShellStep[] {
-  return run.steps.map((step) => ({ id: step.pageId, label: step.name, state: stepStateOf(step) }));
+  return run.steps.map((step) => {
+    const state = stepStateOf(step);
+    const notice = state === "stale" ? staleNoticeText(step.staleReasons ?? []) : null;
+    return { id: step.pageId, label: step.name, state, ...(notice ? { notice } : {}) };
+  });
 }
 
 /**
@@ -93,6 +98,7 @@ const FAILURES: Readonly<Record<string, StepFailure>> = {
   ai_bad_request: FIX("AI がこの指示を受け付けませんでした。手順の指示やお手本を短くすると直ることがあります。", "steps"),
   // 続きを使い切っても終わらなかった（T5 の続きは 8 回まで）。もう一度頼んでも同じ長さで切れるので、待っても直らない
   output_too_long: FIX("長すぎて書き切れませんでした。この段階の指示で扱う範囲を分けて頼むと通ることがあります。", "steps"),
+  step_time_limit: FIX("安全に保存できる時間を超えたため途中で止めました。書けた部分を確認して、段階を分けてもう一度お試しください。", "steps"),
   usage_unavailable: RETRY(`使用量を数えられませんでした。${LATER}`),
   ai_rate_limit: RETRY(`AI への問い合わせが混み合っています。${LATER}`),
   ai_overloaded: RETRY(`AI が混み合っています。${LATER}`),
@@ -101,6 +107,7 @@ const FAILURES: Readonly<Record<string, StepFailure>> = {
   ai_network: RETRY(`AI に届きませんでした。${LATER}`),
   // 手順・入力・実行の枠組み
   unknown_recipe: FIX("この手順の定義が見つかりませんでした。設定の「手順」を確かめてください。", "steps"),
+  invalid_snapshot: WAIT("保存された手順の記録を読めませんでした。サポートにご連絡ください。"),
   unknown_step: FIX("手順の段階が変わりました。はじめから作り直してください。", "steps"),
   input_missing: FIX("もとになる本文が空でした。前の段階のページを書いてからやり直してください。"),
   invalid_input: FIX("もとになる本文を読めませんでした。前の段階のページを確かめてください。"),
@@ -138,7 +145,7 @@ export function stepBandNote(run: StepRun): string {
     // 何が起きたかと、次にできることは、code ごとの文が持つ（code そのものは出さない）
     return `${quoted(failed.name)}が失敗しました。${stepFailure(failed.errorCode).message}`;
   }
-  if (stale) return `上流のページが変わりました。${quoted(stale.name)}から作り直すと印が消えます。`;
+  if (stale) return `${staleNoticeText(stale.staleReasons ?? []) ?? "元にした内容が変わりました。"}${quoted(stale.name)}から作り直すと印が消えます。`;
   if (run.state === "succeeded") return "すべての段階が済みました。";
   return "";
 }

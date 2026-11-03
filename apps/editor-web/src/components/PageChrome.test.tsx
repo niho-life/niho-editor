@@ -6,7 +6,7 @@ import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { validateBlocks } from "@/ast/blocks";
-import { addButtonVisible, BLOCK_CHOICES, type BlockChoiceId } from "@/editor/block-types";
+import { BLOCK_CHOICES, type BlockChoiceId } from "@/editor/block-types";
 import { buildPageExtensions } from "@/editor/page-extensions";
 import { PageChrome } from "niho-docs-ui/page/PageChrome";
 import { PageEditor } from "./PageEditor";
@@ -47,11 +47,14 @@ const MADE: Record<BlockChoiceId, JSONContent> = {
   h2: { type: "heading", attrs: { level: 2 } },
   h3: { type: "heading", attrs: { level: 3 } },
   bullet: { type: "bulletList", content: [{ type: "listItem", content: [paragraph()] }] },
+  task: { type: "taskList", content: [{ type: "taskItem", attrs: { checked: false }, content: [paragraph()] }] },
   ordered: { type: "orderedList", content: [{ type: "listItem", content: [paragraph()] }] },
   quote: { type: "blockquote", content: [paragraph()] },
   callout: { type: "callout", content: [paragraph()] },
   hr: { type: "horizontalRule" },
   image: paragraph(),
+  table: { type: "table", content: Array.from({ length: 3 }, (_, row) => ({ type: "tableRow", content: Array.from({ length: 3 }, () => ({ type: row === 0 ? "tableHeader" : "tableCell", attrs: { colspan: 1, rowspan: 1, colwidth: null, align: null }, content: [paragraph()] })) })) },
+  codeBlock: { type: "codeBlock" },
 };
 
 /** PageEditor と同じ並び（`.be` の中に本文と PageChrome）だけを描く。 */
@@ -213,6 +216,7 @@ describe("the format bar above the selected text", () => {
     expect(savedBlocks(editor)).toEqual([
       { type: "paragraph", content: [{ type: "text", text: "合成", marks: [{ type: "bold" }] }, { type: "text", text: "の本文です" }] },
     ]);
+    expect(editor.isActive("bold")).toBe(true);
     expect(labelled("太字")!.getAttribute("aria-pressed")).toBe("true");
 
     await click(labelled("斜体")!);
@@ -245,7 +249,7 @@ describe("the format bar above the selected text", () => {
       await select(editor, 2, 4);
       await click(labelled("行の種類")!);
       const lineMenu = menu("行の種類");
-      expect(itemNames(lineMenu)).toEqual(["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "囲み"]);
+      expect(itemNames(lineMenu)).toEqual(["テキスト", "見出し 2", "見出し 3", "箇条書き", "チェックリスト", "番号付き", "引用", "囲み"]);
       await click(menuItem(lineMenu, name));
       expect(menu("行の種類")).toBeNull();
       return savedBlocks(editor).slice(0, 1);
@@ -396,7 +400,7 @@ describe("the AI button of the format bar", () => {
 });
 
 describe("the 「/」 block list", () => {
-  const ALL = ["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "囲み", "区切り線", "画像"];
+  const ALL = ["テキスト", "見出し 2", "見出し 3", "箇条書き", "チェックリスト", "番号付き", "引用", "囲み", "区切り線", "画像", "表", "コードブロック"];
 
   it("opens on 「/」 in an empty line with the blocks this body can hold (no recording), keeping focus in the body", async () => {
     const editor = await renderHarness(doc(paragraph()));
@@ -436,7 +440,7 @@ describe("the 「/」 block list", () => {
       ["見出し", ["見出し 2", "見出し 3"]],
       ["inyou", ["引用"]],
       ["りすと", ["箇条書き"]],
-      ["list", ["箇条書き", "番号付き"]],
+      ["list", ["箇条書き", "チェックリスト", "番号付き"]],
       ["ばんごう", ["番号付き"]],
       ["---", ["区切り線"]],
       ["##", ["見出し 2"]],
@@ -457,8 +461,8 @@ describe("the 「/」 block list", () => {
     await cursorAt(editor, 1);
     await type(editor, "/");
     await press(editor.view.dom, "ArrowUp");
-    // ↑ は末尾へ回る（今の末尾は「画像」）
-    expect(menuItem(slashMenu(), "画像").className).toContain("es-mi--on");
+    // ↑ は末尾へ回る
+    expect(menuItem(slashMenu(), "コードブロック").className).toContain("es-mi--on");
     await press(editor.view.dom, "Escape");
     expect(slashMenu()).toBeNull();
     expect(savedBlocks(editor)).toEqual([paragraph("/")]);
@@ -585,40 +589,19 @@ describe("the 「/」 block list", () => {
   });
 });
 
-describe("the 「＋」 next to an empty paragraph", () => {
-  const addButton = () => chrome().querySelector<HTMLButtonElement>('button[aria-label="ブロックを追加"]');
-
-  it("is shown only for an empty paragraph directly in the body while the body has focus", async () => {
-    const editor = await renderHarness(doc(paragraph(), paragraph("本文"), { type: "heading", attrs: { level: 2 } }, { type: "bulletList", content: [{ type: "listItem", content: [paragraph()] }] }));
-    const at = (pos: number, focused = true, editable = true) =>
-      addButtonVisible(editor.state.apply(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, pos))), editable, focused);
-    expect(at(1)).toBe(true);
-    expect(at(1, false)).toBe(false);
-    expect(at(1, true, false)).toBe(false);
-    expect(at(4)).toBe(false); // 文字のある段落
-    expect(at(7)).toBe(false); // 空の見出し
-    expect(at(11)).toBe(false); // リストの中の空の段落
-
-    await cursorAt(editor, 4);
-    expect(addButton()).toBeNull();
+describe("the block list without an inline add button", () => {
+  it("keeps the inline add button hidden when an empty paragraph has focus", async () => {
+    const editor = await renderHarness(doc(paragraph(), paragraph("本文")));
     await cursorAt(editor, 1);
-    const button = addButton()!;
-    expect(button).not.toBeNull();
-    expect(button.closest(".es-root")).toBe(chrome());
-    expect(button.getAttribute("aria-haspopup")).toBe("menu");
-    expect(button.getAttribute("aria-expanded")).toBe("false");
-    // 入れ物ではなく、ボタンだけがタブで止まる
-    expect((button.parentElement as HTMLElement).tabIndex).toBe(-1);
-    expect(button.tabIndex).toBe(0);
+    expect(chrome().querySelector('button[aria-label="ブロックを追加"]')).toBeNull();
   });
 
   it("opens the same block list, focuses it, and turns the empty paragraph into the picked block", async () => {
     const editor = await renderHarness(doc(paragraph("前"), paragraph(), paragraph("後")));
     await cursorAt(editor, 4);
-    await click(addButton()!);
+    await press(editor.view.dom, "/", { ctrlKey: true });
     const list = menu("ブロックを足す")!;
     expect(itemNames(list)).toEqual(BLOCK_CHOICES.map((choice) => choice.label));
-    expect(addButton()!.getAttribute("aria-expanded")).toBe("true");
     expect(document.activeElement).toBe(menuItem(list, "テキスト"));
     await click(menuItem(list, "番号付き"));
     expect(menu("ブロックを足す")).toBeNull();
@@ -629,7 +612,7 @@ describe("the 「＋」 next to an empty paragraph", () => {
   it("closes on Esc back to the empty line in the body", async () => {
     const editor = await renderHarness(doc(paragraph()));
     await cursorAt(editor, 1);
-    await click(addButton()!);
+    await press(editor.view.dom, "/", { ctrlKey: true });
     await press(document.activeElement as HTMLElement, "Escape");
     expect(menu("ブロックを足す")).toBeNull();
     expect(document.activeElement).toBe(editor.view.dom);
@@ -644,7 +627,7 @@ describe("the 「＋」 next to an empty paragraph", () => {
         editor.commands.setContent(doc(paragraph(), paragraph("後")));
       });
       await cursorAt(editor, 1);
-      await click(addButton()!);
+      await press(editor.view.dom, "/", { ctrlKey: true });
       await click(menuItem(menu("ブロックを足す"), choice.label));
       // 空の段落だけが変わり、次の行はそのまま
       expect(savedBlocks(editor), choice.id).toEqual([MADE[choice.id], paragraph("後")]);
@@ -790,7 +773,7 @@ describe("PageEditor with the chrome", () => {
 
     const editor = bodyEditor();
     await cursorAt(editor, 1);
-    await click(chrome().querySelector<HTMLButtonElement>('button[aria-label="ブロックを追加"]')!);
+    await press(editor.view.dom, "/", { ctrlKey: true });
     await click(menuItem(menu("ブロックを足す"), "見出し 2"));
     await type(editor, "合成の見出し");
     await advance(1000);

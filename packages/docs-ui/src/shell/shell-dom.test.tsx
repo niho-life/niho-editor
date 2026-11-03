@@ -166,7 +166,7 @@ describe("道具の帯", () => {
 });
 
 describe("道具の帯のキーボード（WAI-ARIA の toolbar・roving tabindex。#43）", () => {
-  const ORDER = ["ブロックを足す", "テキスト、行の種類", "太字", "斜体", "リンク", "見出し", "箇条書き", "画像", "録音"];
+  const ORDER = ["ブロックを足す", "テキスト、行の種類", "太字", "斜体", "取り消し線", "インラインコード", "リンク", "見出し", "箇条書き", "画像", "録音"];
   /** 帯の前後にボタンを置き、Tab の出入りを見られるようにする。 */
   const around = (toolbar: React.ReactNode) =>
     mount(
@@ -182,7 +182,7 @@ describe("道具の帯のキーボード（WAI-ARIA の toolbar・roving tabinde
   it("Tab の停止点は帯の中で 1 つ（はじめは先頭）。前 → 帯 → 後 の 3 つで止まる", () => {
     const host = around(<ShellTools />);
     expect(buttonsOf(host).map((button) => nameOf(button))).toEqual(ORDER);
-    expect(buttonsOf(host).map((button) => button.tabIndex)).toEqual([0, -1, -1, -1, -1, -1, -1, -1, -1]);
+    expect(buttonsOf(host).map((button) => button.tabIndex)).toEqual([0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1]);
     expect(tabStops(host).map((el) => nameOf(el))).toEqual(["前", "ブロックを足す", "後"]);
   });
 
@@ -246,7 +246,7 @@ describe("道具の帯のキーボード（WAI-ARIA の toolbar・roving tabinde
     act(() => textType.click());
     expect(nameOf(textType)).toBe("見出し、行の種類");
     expect(textType.textContent).toBe("見出し ▾");
-    expect(buttonsOf(host).map((button) => button.tabIndex)).toEqual([-1, 0, -1, -1, -1, -1, -1, -1, -1]);
+    expect(buttonsOf(host).map((button) => button.tabIndex)).toEqual([-1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1]);
   });
 
   it("下端の帯（ShellMobileToolbar）も同じ動き", () => {

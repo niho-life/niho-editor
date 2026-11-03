@@ -6,7 +6,8 @@ import { ShellField, ShellKv, ShellKvs, ShellPills, ShellSection, ShellSettingsP
  * editor.niho.life の設定（Issue #108。モック v6 の V.settings を、Web で本当に出せる項目に合わせたもの）。
  * props 駆動の表示部品で、通信・保存・下書きの持ち方は呼ぶ側（apps/editor-web の SettingsView）が持つ。
  *
- * 変えられるのは AI の提案の言語・固有名詞・手順の 3 つ。文字起こしのエンジンと保存先は固定のため読み取りだけ。
+ * 変えられるのは AI の提案の言語・固有名詞・手順。手順には段階profile・固有名詞・お手本メタデータを含む。
+ * 文字起こしのエンジンと保存先は固定のため読み取りだけ。
  * 固有名詞と手順の編集は、この画面の中で開く（別のシートにしない。狭い画面でも並びが同じで、戻る先が画面のまま）。
  *
  * モック v6 のプロフィールの節は持たない（NIHO アカウントの値で、editor では変えられない。役割とつながりは #42）。
@@ -21,10 +22,35 @@ export const EDITOR_SETTINGS_NAV = [
 
 export type EditorSettingsAiLang = "same" | "ja" | "en";
 
+function uniqueStepName(base: string, steps: readonly Pick<EditorSettingsStep, "name">[]): string {
+  const key = (name: string) => name.normalize("NFKC").trim();
+  const used = new Set(steps.map((step) => key(step.name)));
+  if (!used.has(key(base))) return base;
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${base} ${suffix}`;
+    if (!used.has(key(candidate))) return candidate;
+  }
+}
+
+function duplicateStep(step: EditorSettingsStep, id: string, steps: readonly EditorSettingsStep[]): EditorSettingsStep {
+  return { ...step, id, name: uniqueStepName(`${step.name.trim()}のコピー`, steps) };
+}
+
+function moveStep(steps: readonly EditorSettingsStep[], from: number, to: number): EditorSettingsStep[] {
+  const next = [...steps];
+  if (from < 0 || from >= next.length) return next;
+  const [moved] = next.splice(from, 1);
+  if (!moved) return next;
+  next.splice(Math.max(0, Math.min(to, next.length)), 0, moved);
+  return next;
+}
+
 /** 文字起こしの方式。`fake` は開発・CI の偽物、`off` は使わない設定。 */
 export type EditorSettingsEngine = "deepgram" | "fake" | "gemini" | "off";
 
 export type EditorSettingsTerm = { term: string; reading: string; variants: string[]; note: string };
+
+export type EditorSettingsAbout = { name: string; text: string };
 
 /**
  * 編集している固有名詞の 1 行。`variants`（誤りやすい表記）は**打ったままの文字列**で、区切りの文字そのものも残る
@@ -32,7 +58,23 @@ export type EditorSettingsTerm = { term: string; reading: string; variants: stri
  * 配列に分けるのは保存のとき（呼ぶ側。editor-web は docs-core の `parseVariants`）。
  */
 export type EditorSettingsTermDraft = { term: string; reading: string; variants: string; note: string };
-export type EditorSettingsStep = { id: string; name: string; instruction: string };
+export type EditorSettingsStep = { id: string; name: string; instruction: string; profile: string };
+
+export type EditorSettingsSample = { id: string; name: string; chars: number; truncatedFrom?: number; sourceUrl?: string };
+
+export type EditorSettingsGuideExtraction = {
+  sampleIds: string[];
+  guide: string;
+  candidates: EditorSettingsTerm[];
+  createdAt?: string;
+};
+
+export type EditorSettingsRecipeValidation = {
+  recipeName: string | null;
+  stepNames: Record<string, string>;
+  instructions: Record<string, string>;
+  unusableReason: string | null;
+};
 
 export type EditorSettingsRecipe = {
   id: string;
@@ -40,10 +82,13 @@ export type EditorSettingsRecipe = {
   /** お手本（全部の段階に渡す文書ガイド）。 */
   guide: string;
   steps: EditorSettingsStep[];
+  terms: EditorSettingsTermDraft[];
+  samples: EditorSettingsSample[];
   /** 既定の 3 つのどれか。 */
   isDefault: boolean;
   /** 既定に手を入れている（既定に戻せる）。 */
   modified: boolean;
+  unusableReason?: string | null;
 };
 
 export type EditorSettingsUsage = {
@@ -86,12 +131,13 @@ export type EditorSettingsPageProps = {
   onCancelTerms: () => void;
   onSaveTerms: () => void;
 
-  /** 「あなたについて」（AI に毎回渡す、本人の説明と書き方の希望）。 */
+  /** 「あなたについて」。AI に毎回渡す任意の呼び名と本人の説明・書き方の希望。 */
+  aboutName: string;
   about: string;
   /** 編集している文（null のときは、まとめと「編集」だけを出す）。 */
-  aboutDraft: string | null;
+  aboutDraft: EditorSettingsAbout | null;
   onEditAbout: () => void;
-  onAboutDraft: (about: string) => void;
+  onAboutDraft: (about: EditorSettingsAbout) => void;
   onCancelAbout: () => void;
   onSaveAbout: () => void;
 
@@ -99,6 +145,7 @@ export type EditorSettingsPageProps = {
   recipes: EditorSettingsRecipe[];
   /** 編集している手順（null のときは一覧だけ）。 */
   recipeDraft: EditorSettingsRecipe | null;
+  recipeValidation: EditorSettingsRecipeValidation | null;
   onEditRecipe: (id: string) => void;
   onRecipeDraft: (recipe: EditorSettingsRecipe) => void;
   onCancelRecipe: () => void;
@@ -111,6 +158,23 @@ export type EditorSettingsPageProps = {
   onAddRecipe: () => void;
   /** 段階の id を作る（足した手順の「段階を追加」。呼ぶ側が乱数を持つ）。 */
   newStepId: () => string;
+  maxRecipeTerms?: number;
+
+  /** お手本文書の取り込みと、確認用の抽出案（本文自体は画面へ渡さない）。 */
+  sampleFile?: File | null;
+  sampleUrl?: string;
+  sampleBusy?: boolean;
+  sampleStatus?: string;
+  extraction?: EditorSettingsGuideExtraction | null;
+  selectedExtractionTerms?: string[];
+  onSampleFile?: (file: File | null) => void;
+  onSampleUrl?: (url: string) => void;
+  onImportSampleFile?: () => void;
+  onImportSampleUrl?: () => void;
+  onExtractGuide?: () => void;
+  onToggleExtractionTerm?: (key: string, selected: boolean) => void;
+  onApplyExtractedGuide?: () => void;
+  onApplyExtractedTerms?: () => void;
 
   /** 読めなかったときは null（`usageNote` に理由の一言）。 */
   usage: EditorSettingsUsage | null;
@@ -120,7 +184,7 @@ export type EditorSettingsPageProps = {
   storageUsage: EditorSettingsStorageUsage | null;
   storageUsageNote: string | null;
 
-  limits: { glossary: number; recipes: number; steps: number; aboutChars: number };
+  limits: { glossary: number; recipes: number; steps: number; aboutChars: number; aboutNameChars: number };
 };
 
 const STACK = { display: "grid", gap: 12 } as const;
@@ -186,7 +250,8 @@ export function EditorSettingsPage(props: EditorSettingsPageProps) {
   const { busy, glossary, termsDraft, recipes, recipeDraft, usage, transcription, storageUsage, limits } = props;
   // gallery は型で守られていないので、渡されなかったときも落ちないようにする（編集中なのは文字のときだけ）
   const about = props.about ?? "";
-  const aboutDraft = typeof props.aboutDraft === "string" ? props.aboutDraft : null;
+  const aboutName = props.aboutName ?? "";
+  const aboutDraft = props.aboutDraft && typeof props.aboutDraft === "object" ? props.aboutDraft : null;
   const busyProps = busy ? { "aria-disabled": true as const, style: BUSY } : {};
   const quiet = (label: string, text: string, onClick: () => void) => (
     <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-label={label} {...busyProps} onClick={() => !busy && onClick()}>
@@ -224,7 +289,14 @@ export function EditorSettingsPage(props: EditorSettingsPageProps) {
           <ShellKv label="あなたについて">
             {aboutDraft === null ? (
               <>
-                {about.trim() === "" ? <span style={EMPTY}>{EDITOR_SETTINGS_TEXT.empty}</span> : <span className="es-kvs-note">{summaryOf(about)}</span>}
+                {aboutName.trim() === "" && about.trim() === "" ? (
+                  <span style={EMPTY}>{EDITOR_SETTINGS_TEXT.empty}</span>
+                ) : (
+                  <span className="es-kvs-note">
+                    {aboutName.trim() && <span>呼び名: {summaryOf(aboutName)}</span>}
+                    {about.trim() && <span>{summaryOf(about)}</span>}
+                  </span>
+                )}
                 {quiet("あなたについてを編集", "編集", props.onEditAbout ?? (() => undefined))}
               </>
             ) : null}
@@ -251,7 +323,8 @@ export function EditorSettingsPage(props: EditorSettingsPageProps) {
         {aboutDraft !== null && (
           <AboutEditor
             value={aboutDraft}
-            max={limits.aboutChars ?? 2_000}
+            maxName={limits.aboutNameChars ?? 80}
+            maxText={limits.aboutChars ?? 2_000}
             busy={busy}
             onChange={props.onAboutDraft}
             onCancel={props.onCancelAbout}
@@ -271,6 +344,7 @@ export function EditorSettingsPage(props: EditorSettingsPageProps) {
             <ShellKv key={recipe.id} label={recipe.name}>
               <span>文字起こし › {recipe.steps.map((step) => step.name).join(" › ")}</span>
               {recipe.modified && <span className="es-tag-ok">手を入れています</span>}
+              {recipe.unusableReason && <span role="status">実行できません: {recipe.unusableReason}</span>}
               {recipeDraft?.id === recipe.id ? null : (
                 <>
                   {quiet(`${recipe.name}を編集`, "編集", () => props.onEditRecipe(recipe.id))}
@@ -288,8 +362,24 @@ export function EditorSettingsPage(props: EditorSettingsPageProps) {
             recipe={recipeDraft}
             fixedSteps={recipes.find((recipe) => recipe.id === recipeDraft.id)?.isDefault ?? false}
             maxSteps={limits.steps}
-            busy={busy}
+            maxTerms={props.maxRecipeTerms ?? limits.glossary}
+            busy={busy || (props.sampleBusy ?? false)}
+            validation={props.recipeValidation}
             newStepId={props.newStepId}
+            sampleFile={props.sampleFile ?? null}
+            sampleUrl={props.sampleUrl ?? ""}
+            sampleBusy={props.sampleBusy ?? false}
+            sampleStatus={props.sampleStatus ?? ""}
+            extraction={props.extraction ?? null}
+            selectedExtractionTerms={props.selectedExtractionTerms ?? []}
+            onSampleFile={props.onSampleFile ?? (() => undefined)}
+            onSampleUrl={props.onSampleUrl ?? (() => undefined)}
+            onImportSampleFile={props.onImportSampleFile ?? (() => undefined)}
+            onImportSampleUrl={props.onImportSampleUrl ?? (() => undefined)}
+            onExtractGuide={props.onExtractGuide ?? (() => undefined)}
+            onToggleExtractionTerm={props.onToggleExtractionTerm ?? (() => undefined)}
+            onApplyExtractedGuide={props.onApplyExtractedGuide ?? (() => undefined)}
+            onApplyExtractedTerms={props.onApplyExtractedTerms ?? (() => undefined)}
             onChange={props.onRecipeDraft}
             onCancel={props.onCancelRecipe}
             onSave={props.onSaveRecipe}
@@ -509,22 +599,28 @@ function summaryOf(text: string): string {
 /** 「あなたについて」の編集（AI に毎回渡す、本人の説明と書き方の希望）。 */
 function AboutEditor({
   value,
-  max,
+  maxName,
+  maxText,
   busy,
   onChange,
   onCancel,
   onSave,
 }: {
-  value: string;
-  max: number;
+  value: EditorSettingsAbout;
+  maxName: number;
+  maxText: number;
   busy: boolean;
-  onChange: (next: string) => void;
+  onChange: (next: EditorSettingsAbout) => void;
   onCancel: () => void;
   onSave: () => void;
 }) {
   const headingId = useId();
   const busyProps = busy ? { "aria-disabled": true as const, style: BUSY } : {};
-  const over = Array.from(value).length > max;
+  const nameChars = Array.from(value.name).length;
+  const textChars = Array.from(value.text).length;
+  const overName = nameChars > maxName;
+  const overText = textChars > maxText;
+  const over = overName || overText;
   return (
     <div style={STACK} role="group" aria-labelledby={headingId}>
       <h3 id={headingId} style={SUBHEAD}>
@@ -532,14 +628,20 @@ function AboutEditor({
       </h3>
       <p style={NOTE}>{EDITOR_SETTINGS_TEXT.aboutHelp}</p>
       <div className="es-form">
-        <ShellField label="あなたについて" value={value} onChange={onChange} multiline />
+        <ShellField label="呼び名（AI向け）" value={value.name} onChange={(name) => onChange({ ...value, name })} />
+        <ShellField label="パーソナライズ" value={value.text} onChange={(text) => onChange({ ...value, text })} multiline />
       </div>
       <p style={NOTE}>
-        {Array.from(value).length.toLocaleString("en-US")} / {max.toLocaleString("en-US")} 字
+        呼び名 {nameChars.toLocaleString("en-US")} / {maxName.toLocaleString("en-US")} 字・パーソナライズ {textChars.toLocaleString("en-US")} / {maxText.toLocaleString("en-US")} 字
       </p>
-      {over && (
+      {overName && (
         <p role="alert" style={NOTE}>
-          長すぎるので保存できません。{max.toLocaleString("en-US")} 字までにしてください。
+          呼び名が長すぎるので保存できません。{maxName.toLocaleString("en-US")} 字までにしてください。
+        </p>
+      )}
+      {overText && (
+        <p role="alert" style={NOTE}>
+          パーソナライズが長すぎるので保存できません。{maxText.toLocaleString("en-US")} 字までにしてください。
         </p>
       )}
       <div style={ROW}>
@@ -565,8 +667,24 @@ function RecipeEditor({
   recipe,
   fixedSteps,
   maxSteps,
+  maxTerms,
   busy,
+  validation,
   newStepId,
+  sampleFile,
+  sampleUrl,
+  sampleBusy,
+  sampleStatus,
+  extraction,
+  selectedExtractionTerms,
+  onSampleFile,
+  onSampleUrl,
+  onImportSampleFile,
+  onImportSampleUrl,
+  onExtractGuide,
+  onToggleExtractionTerm,
+  onApplyExtractedGuide,
+  onApplyExtractedTerms,
   onChange,
   onCancel,
   onSave,
@@ -574,30 +692,65 @@ function RecipeEditor({
   recipe: EditorSettingsRecipe;
   fixedSteps: boolean;
   maxSteps: number;
+  maxTerms: number;
   busy: boolean;
+  validation: EditorSettingsRecipeValidation | null;
   newStepId: () => string;
+  sampleFile: File | null;
+  sampleUrl: string;
+  sampleBusy: boolean;
+  sampleStatus: string;
+  extraction: EditorSettingsGuideExtraction | null;
+  selectedExtractionTerms: string[];
+  onSampleFile: (file: File | null) => void;
+  onSampleUrl: (url: string) => void;
+  onImportSampleFile: () => void;
+  onImportSampleUrl: () => void;
+  onExtractGuide: () => void;
+  onToggleExtractionTerm: (key: string, selected: boolean) => void;
+  onApplyExtractedGuide: () => void;
+  onApplyExtractedTerms: () => void;
   onChange: (next: EditorSettingsRecipe) => void;
   onCancel: () => void;
   onSave: () => void;
 }) {
   const headingId = useId();
+  const sampleFileInputId = useId();
+  const extractionGuideId = useId();
   const busyProps = busy ? { "aria-disabled": true as const, style: BUSY } : {};
   const at = (index: number, patch: Partial<EditorSettingsStep>) =>
     onChange({ ...recipe, steps: recipe.steps.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)) });
+  const profileLabels: Record<string, string> = { light: "軽量", standard: "標準", advanced: "高性能" };
+  const profileOptions = ["light", "standard", "advanced"] as const;
+  const updateTerm = (index: number, patch: Partial<EditorSettingsTermDraft>) =>
+    onChange({ ...recipe, terms: recipe.terms.map((term, i) => (i === index ? { ...term, ...patch } : term)) });
   return (
     <div style={STACK} role="group" aria-labelledby={headingId}>
       <h3 id={headingId} style={SUBHEAD}>
         {recipe.name}を編集
       </h3>
       <div className="es-form">
-        <ShellField label="手順の名前" value={recipe.name} onChange={(name) => onChange({ ...recipe, name })} />
+        <ShellField label="手順の名前" value={recipe.name} error={validation?.recipeName ?? undefined} onChange={(name) => onChange({ ...recipe, name })} />
         <ShellField label="お手本（全部の段階に渡す文書ガイド）" value={recipe.guide} multiline onChange={(guide) => onChange({ ...recipe, guide })} />
       </div>
       {recipe.steps.map((step, index) => (
         <div key={step.id} style={CARD}>
           <div className="es-form">
-            <ShellField label={`段階 ${index + 1} の名前`} value={step.name} onChange={(name) => at(index, { name })} />
-            <ShellField label={`段階 ${index + 1} の指示`} value={step.instruction} multiline onChange={(instruction) => at(index, { instruction })} />
+            <ShellField label={`段階 ${index + 1} の名前`} value={step.name} error={validation?.stepNames[step.id]} onChange={(name) => at(index, { name })} />
+            <ShellField label={`段階 ${index + 1} の指示`} value={step.instruction} multiline error={validation?.instructions[step.id]} onChange={(instruction) => at(index, { instruction })} />
+            <label className="es-field">
+              <span>段階 {index + 1} の処理の重さ</span>
+              <select className="es-input" value={profileOptions.includes(step.profile as (typeof profileOptions)[number]) ? step.profile : "standard"} onChange={(event) => at(index, { profile: event.target.value })}>
+                {profileOptions.map((profile) => <option key={profile} value={profile}>{profileLabels[profile]}</option>)}
+              </select>
+            </label>
+          </div>
+          <div style={ROW}>
+            <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-label={`「${step.name}」を上へ移動`} aria-disabled={index === 0 || busy || undefined} onClick={() => index > 0 && !busy && onChange({ ...recipe, steps: moveStep(recipe.steps, index, index - 1) })}>上へ</button>
+            <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-label={`「${step.name}」を下へ移動`} aria-disabled={index === recipe.steps.length - 1 || busy || undefined} onClick={() => index < recipe.steps.length - 1 && !busy && onChange({ ...recipe, steps: moveStep(recipe.steps, index, index + 1) })}>下へ</button>
+            {!fixedSteps && recipe.steps.length < maxSteps && (
+              <button type="button" className="es-btn es-btn--quiet es-btn--sm" onClick={() => onChange({ ...recipe, steps: [...recipe.steps, duplicateStep(step, newStepId(), recipe.steps)] })}>この段階を複製</button>
+            )}
           </div>
           {!fixedSteps && recipe.steps.length > 1 && (
             <div style={ROW}>
@@ -613,12 +766,87 @@ function RecipeEditor({
           )}
         </div>
       ))}
+      <section style={STACK} aria-label="手順ごとの固有名詞">
+        <h4 style={SUBHEAD}>この手順の固有名詞</h4>
+        <p style={NOTE}>アカウント共通の固有名詞に加えて、この手順だけで使う表記を登録できます。</p>
+        {recipe.terms.map((term, index) => (
+          <div key={`${index}:${term.term}`} style={CARD}>
+            <div className="es-form">
+              <ShellField label={`手順の固有名詞 ${index + 1} の表記`} value={term.term} onChange={(value) => updateTerm(index, { term: value })} />
+              <ShellField label={`手順の固有名詞 ${index + 1} のよみ`} value={term.reading} onChange={(value) => updateTerm(index, { reading: value })} />
+              <ShellField label={`手順の固有名詞 ${index + 1} の誤りやすい表記（「・」で区切る）`} value={term.variants} onChange={(value) => updateTerm(index, { variants: value })} />
+              <ShellField label={`手順の固有名詞 ${index + 1} の補足`} value={term.note} onChange={(value) => updateTerm(index, { note: value })} />
+            </div>
+            <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-label={`手順の固有名詞 ${index + 1} を削除`} onClick={() => onChange({ ...recipe, terms: recipe.terms.filter((_, i) => i !== index) })}>この行を削除</button>
+          </div>
+        ))}
+        {recipe.terms.length < maxTerms && <button type="button" className="es-btn es-btn--outline es-btn--sm" onClick={() => onChange({ ...recipe, terms: [...recipe.terms, { term: "", reading: "", variants: "", note: "" }] })}>固有名詞を追加</button>}
+      </section>
+      <section style={STACK} aria-label="お手本文書の情報">
+        <h4 style={SUBHEAD}>お手本文書</h4>
+        <p style={NOTE}>Markdown・テキスト・Word・PDFを取り込めます。本文はこの手順の利用者データとして保存し、抽出を頼んだときだけAIへ送ります。ページや公開内容には入りません。</p>
+        {recipe.samples.length === 0 ? <p style={EMPTY}>登録済みのお手本はありません。</p> : recipe.samples.map((sample, index) => (
+          <div key={sample.id} style={CARD}>
+            <ShellField label={`お手本 ${index + 1} の名前`} value={sample.name} onChange={(name) => onChange({ ...recipe, samples: recipe.samples.map((entry) => entry.id === sample.id ? { ...entry, name } : entry) })} />
+            <p style={NOTE}>{sample.chars.toLocaleString("ja-JP")} 字{sample.truncatedFrom !== undefined ? `・元の文書は ${sample.truncatedFrom.toLocaleString("ja-JP")} 字` : ""}{sample.sourceUrl ? "・URLから取り込み" : ""}</p>
+            <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-label={`お手本「${sample.name}」を削除`} aria-disabled={busy || undefined} onClick={() => !busy && onChange({ ...recipe, samples: recipe.samples.filter((entry) => entry.id !== sample.id) })}>このお手本を削除</button>
+          </div>
+        ))}
+        {recipe.samples.length < 5 && (
+          <div style={CARD}>
+            <label className="es-field" htmlFor={sampleFileInputId}>
+              <span>ファイルから取り込む</span>
+              <input id={sampleFileInputId} className="es-input" type="file" accept=".md,.txt,.docx,.pdf" onChange={(event) => onSampleFile(event.currentTarget.files?.[0] ?? null)} />
+            </label>
+            <button type="button" className="es-btn es-btn--outline es-btn--sm" aria-disabled={busy || !sampleFile || undefined} onClick={() => !busy && sampleFile && onImportSampleFile()}>
+              {sampleBusy ? "取り込んでいます…" : "選んだファイルを取り込む"}
+            </button>
+            <ShellField label="公開WebページのURL" value={sampleUrl} onChange={onSampleUrl} />
+            <button type="button" className="es-btn es-btn--outline es-btn--sm" aria-disabled={busy || !sampleUrl.trim() || undefined} onClick={() => !busy && sampleUrl.trim() && onImportSampleUrl()}>
+              URLから取り込む
+            </button>
+            <p style={NOTE}>ファイルとURLのどちらか一方を選びます。URLは公開Webページのみ対応し、ログインが必要なページは取り込めません。上限は8 MiB、本文は30,000字までです。</p>
+          </div>
+        )}
+        {sampleStatus && <p role="status" style={NOTE}>{sampleStatus}</p>}
+        {recipe.samples.length > 0 && (
+          <div style={CARD}>
+            <h4 style={SUBHEAD}>文書ガイドと固有名詞候補</h4>
+            <p style={NOTE}>お手本から抽出した案を確認し、必要なものだけ手順へ反映します。取り込みだけでは文書ガイドや固有名詞を変更しません。</p>
+            <button type="button" className="es-btn es-btn--outline es-btn--sm" aria-disabled={busy || sampleBusy || undefined} onClick={() => !busy && !sampleBusy && onExtractGuide()}>
+              {sampleBusy ? "抽出しています…" : "お手本から抽出する"}
+            </button>
+            {extraction && (
+              <div style={STACK}>
+                {extraction.createdAt && <p style={NOTE}>抽出案を保存しました: {new Date(extraction.createdAt).toLocaleString("ja-JP")}</p>}
+                <label className="es-field" htmlFor={extractionGuideId}>
+                  <span>抽出された文書ガイド（確認用）</span>
+                  <textarea id={extractionGuideId} className="es-input" rows={8} readOnly value={extraction.guide} />
+                </label>
+                <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-disabled={busy || undefined} onClick={() => !busy && onApplyExtractedGuide()}>文書ガイドに置き換える</button>
+                <div style={STACK} role="group" aria-label="固有名詞候補">
+                  <span style={SUBHEAD}>固有名詞候補</span>
+                  {extraction.candidates.length === 0 ? <p style={EMPTY}>新しい候補はありません。</p> : extraction.candidates.map((candidate, index) => {
+                    const key = `${candidate.term}:${index}`;
+                    const id = `${headingId}-candidate-${index}`;
+                    return <label key={key} htmlFor={id} style={ROW}>
+                      <input id={id} type="checkbox" checked={selectedExtractionTerms.includes(key)} onChange={(event) => onToggleExtractionTerm(key, event.currentTarget.checked)} />
+                      <span>{candidate.term}{candidate.reading ? `（${candidate.reading}）` : ""}</span>
+                    </label>;
+                  })}
+                  {extraction.candidates.length > 0 && <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-disabled={busy || selectedExtractionTerms.length === 0 || undefined} onClick={() => !busy && onApplyExtractedTerms()}>選んだ固有名詞を追加</button>}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
       <div style={ROW}>
         {!fixedSteps && recipe.steps.length < maxSteps && (
           <button
             type="button"
             className="es-btn es-btn--outline es-btn--sm"
-            onClick={() => onChange({ ...recipe, steps: [...recipe.steps, { id: newStepId(), name: "新しい段階", instruction: "" }] })}
+            onClick={() => onChange({ ...recipe, steps: [...recipe.steps, { id: newStepId(), name: "新しい段階", instruction: "", profile: "standard" }] })}
           >
             <Icon name="plus" />
             段階を追加
@@ -631,6 +859,7 @@ function RecipeEditor({
           保存
         </button>
       </div>
+      {validation?.unusableReason && <p role="status" style={NOTE}>この手順は実行できません: {validation.unusableReason}</p>}
       {fixedSteps && <p style={NOTE}>{EDITOR_SETTINGS_TEXT.fixedSteps}</p>}
     </div>
   );

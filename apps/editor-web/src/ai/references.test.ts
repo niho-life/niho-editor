@@ -11,15 +11,20 @@ const page = (title: string, text: string) => ({
 
 describe("「あなたについて」", () => {
   it("is wrapped as data and says it is not a source of facts", () => {
-    const section = aboutSection("  合成の自己紹介です。  ");
+    const section = aboutSection({ name: "合成の呼び名", text: "  合成の自己紹介です。  " });
     expect(section).toContain("## あなたについて");
     expect(section).toContain("事実の根拠にはしない");
-    expect(section).toContain("<untrusted_data>\n合成の自己紹介です。\n</untrusted_data>");
+    expect(section).toContain("<untrusted_data>\n呼び名: 合成の呼び名\n\n合成の自己紹介です。\n</untrusted_data>");
+  });
+
+  it("includes the name alone and keeps all user-supplied values inside the untrusted boundary", () => {
+    expect(aboutSection({ name: "  合成\n呼び名  ", text: "" })).toContain("<untrusted_data>\n呼び名: 合成 呼び名\n</untrusted_data>");
+    expect(aboutSection({ name: "", text: " " })).toBeNull();
   });
 
   it("is left out when it is empty", () => {
-    expect(aboutSection("")).toBeNull();
-    expect(aboutSection("   \n ")).toBeNull();
+    expect(aboutSection()).toBeNull();
+    expect(aboutSection({ name: "", text: "" })).toBeNull();
   });
 });
 

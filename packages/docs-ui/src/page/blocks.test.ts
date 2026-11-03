@@ -18,6 +18,18 @@ function reason(value: unknown): string {
 }
 
 describe("validateBlocks: what a page may contain", () => {
+  it("keeps table cells, checked state, code and marks without carrying HTML attributes", () => {
+    const blocks = [
+      { type: "taskList", content: [{ type: "taskItem", attrs: { checked: true }, content: [paragraph(text("完了"))] }] },
+      { type: "table", content: [{ type: "tableRow", content: [{ type: "tableHeader", attrs: { colspan: 1, rowspan: 1, colwidth: null, align: null }, content: [paragraph(text("列"))] }] }] },
+      { type: "codeBlock", attrs: { language: "ts" }, content: [text("const x = 1;")] },
+      paragraph(text("code", [{ type: "code" }]), text("old", [{ type: "strike" }])),
+    ];
+    expect(ok(blocks)).toEqual(blocks);
+    expect(reason([{ type: "taskList", content: [{ type: "taskItem", attrs: { checked: "yes" }, content: [paragraph()] }] }])).toMatch(/checked/);
+    expect(reason([{ type: "table", content: [{ type: "tableRow", content: [{ type: "tableCell", attrs: { onclick: "x" }, content: [paragraph()] }] }] }])).toMatch(/unknown attribute/);
+    expect(reason([{ type: "codeBlock", attrs: { language: "<script>" }, content: [text("x")] }])).toMatch(/invalid language/);
+  });
   it("accepts every block of the limited AST", () => {
     const blocks = [
       { type: "heading", attrs: { level: 2 }, content: [text("見出し")] },
@@ -69,8 +81,8 @@ describe("validateBlocks: what a page may not contain", () => {
     }
   });
 
-  it("rejects nodes outside the AST (script, style, iframe, raw html, code, tables, tasks, h1)", () => {
-    for (const type of ["script", "style", "iframe", "html", "rawHtml", "codeBlock", "table", "taskList", "markdownRaw", "doc", "text", "hardBreak", "listItem"]) {
+  it("rejects nodes outside the AST (script, style, iframe, raw html, h1)", () => {
+    for (const type of ["script", "style", "iframe", "html", "rawHtml", "markdownRaw", "doc", "text", "hardBreak", "listItem"]) {
       expect(validateBlocks([{ type }]).ok, type).toBe(false);
     }
     expect(validateBlocks([{ type: "heading", attrs: { level: 1 }, content: [text("題名")] }]).ok).toBe(false);
@@ -94,7 +106,7 @@ describe("validateBlocks: what a page may not contain", () => {
   });
 
   it("rejects unknown marks, duplicate marks, empty text and NUL", () => {
-    expect(validateBlocks([paragraph(text("x", [{ type: "code" }]))]).ok).toBe(false);
+    expect(ok([paragraph(text("x", [{ type: "code" }]), text("y", [{ type: "strike" }]))])).toEqual([paragraph(text("x", [{ type: "code" }]), text("y", [{ type: "strike" }]))]);
     expect(validateBlocks([paragraph(text("x", [{ type: "bold" }, { type: "bold" }]))]).ok).toBe(false);
     expect(validateBlocks([paragraph(text(""))]).ok).toBe(false);
     expect(validateBlocks([paragraph(text("a\u0000b"))]).ok).toBe(false);
@@ -131,7 +143,7 @@ describe("validateBlocks: what a page may not contain", () => {
 
   it("gives a reason that names the place (for logs, not for the response)", () => {
     expect(reason([{ type: "script" }])).toContain("blocks[0](script)");
-    expect(reason([paragraph(text("x", [{ type: "code" }]))])).toContain('unknown mark "code"');
+    expect(reason([paragraph(text("x", [{ type: "underline" }]))])).toContain('unknown mark "underline"');
   });
 });
 

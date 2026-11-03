@@ -43,7 +43,7 @@ function authAs(session: Session | null): AuthProvider {
 
 const SESSION: Session = { userId: ME, mode: "stub", profile: { name: "合成の書き手" } };
 
-type WorldOptions = { env?: Record<string, string | undefined>; fetch?: FetchLike; session?: Session | null; ports?: boolean; storage?: StorageMode };
+type WorldOptions = { env?: Record<string, string | undefined>; fetch?: FetchLike; session?: Session | null; ports?: boolean; storage?: StorageMode; finalStepNames?: readonly string[] };
 
 function world(options: WorldOptions = {}) {
   const store = new MemoryPublishStore();
@@ -56,7 +56,10 @@ function world(options: WorldOptions = {}) {
     auth: () => authAs(options.session === undefined ? SESSION : options.session),
     ports: (session) => {
       if (options.ports === false) return null;
-      const wired = wirePublishPorts(store, session, { env, fetch: options.fetch, clock });
+      const wired = wirePublishPorts(store, session, {
+        env, fetch: options.fetch, clock,
+        finalStepNames: options.finalStepNames ? async () => options.finalStepNames! : undefined,
+      });
       // 保存先は NIHO から読む（契約が出るまでは UNSET）。テストでは差し替える
       const mode = options.storage;
       const wiring = mode === undefined ? wired : { ...wired, publish: { ...wired.publish, storage: { read: async () => mode } } };
@@ -143,6 +146,19 @@ describe("公開のシート GET", () => {
       ["no-confirm", "body"],
     ]);
     expect(sheet.primary).toBeNull();
+  });
+
+  it("最終工程名のままの題名をシートでも再評価でも止め、公開データは書かない", async () => {
+    const { deps, store } = world({ finalStepNames: ["Morning walk"] });
+    const sheet = await sheetOf(await getSheet(deps, PAGE, "?handle=niho"));
+    expect(sheet.problems.map((problem) => problem.id)).toEqual(["step-title"]);
+    expect(sheet.primary).toBeNull();
+
+    const before = store.dump();
+    const response = await post(deps, to("niho"));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "not_ready", problems: [{ id: "step-title" }] });
+    expect(store.dump()).toBe(before);
   });
 
   it("選べない設定（NIHO の「体験ページに載せる」）は selectionError、使えない slug は slug.error", async () => {

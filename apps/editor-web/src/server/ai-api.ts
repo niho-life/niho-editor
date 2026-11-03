@@ -278,7 +278,7 @@ export function createAiProposal(request: Request, id: string, deps: AiApiDeps):
       glossary: settings.glossary,
       // 「書いた言語のまま」は本文の言語（buildRequest の既定）
       lang: settings.aiLang === "same" ? undefined : settings.aiLang,
-      about: settings.about,
+      about: { name: settings.aboutName, text: settings.about },
       references,
     });
     if (!plan.ok) return plan.error === "too_large" ? aiErrorResponse("too_large") : errorResponse("bad_request");
@@ -372,6 +372,7 @@ export function adoptAiProposal(request: Request, id: string, deps: AiApiDeps): 
     if (!version) return notFoundResponse();
     const result = await store.savePage(owner, id, { blocks: blocks.value }, { baseRevision });
     if (!result) return notFoundResponse();
+    if (result.status === "page_full") return errorResponse("page_full");
     if (result.status !== "saved") return conflictResponse(result.page);
     // 採用を会話に書く（版の番号で履歴から辿れる）。書けなくてもページの保存は済んでいるので 200 のまま
     let adopted: { messageId: string; version: number } | null = null;

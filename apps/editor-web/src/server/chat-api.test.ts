@@ -370,6 +370,25 @@ describe("POST /api/pages/{id}/ai/chat", () => {
     expect(chats.turns[0]!.items).toEqual([{ kind: "tool", tool: "write_page", page: "写真のページ", ok: false }]);
   });
 
+  it("reports the page size limit instead of a revision conflict when an AI write is too large", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("元の本文")] });
+    const originalSave = store.savePage;
+    store.savePage = async () => ({ status: "page_full" });
+    const ai = stubBackend([
+      turn({ toolCalls: [{ id: "t1", name: "write_page", input: { page_id: page.id, markdown: "長い画像付き本文" } }], stopReason: "tool_use" }),
+      turn({ text: "容量を超えたので保存できませんでした。" }),
+    ]);
+    const chats = memoryConversations(store);
+
+    await chat(page.id, { text: "本文を更新して" }, deps("user-a", store, { ai, conversations: chats }));
+
+    expect(store.rows.get(page.id)!.blocks).toEqual([p("元の本文")]);
+    expect(chats.turns[0]!.items).toEqual([{ kind: "tool", tool: "write_page", page: "合成のページ", ok: false }]);
+    expect(ai.calls).toBe(2);
+    store.savePage = originalSave;
+  });
+
   it("keeps one version per turn when the model writes the same page twice", async () => {
     const store = memoryStore();
     const page = store.add("user-a", { blocks: [p("もとの本文")] });
@@ -586,7 +605,7 @@ describe("POST /api/pages/{id}/ai/chat/turns (この Mac の CLI の結果)", ()
     input: "直して",
     reply: "直しました。",
     engine: "cli:claude-code",
-    writes: [{ pageId, markdown }],
+    writes: [{ pageId, markdown, baseRevision: 1 }],
   });
 
   it("writes through the same path: a version is left, the turn is recorded as device, and the model is never called", async () => {
@@ -627,6 +646,31 @@ describe("POST /api/pages/{id}/ai/chat/turns (この Mac の CLI の結果)", ()
     expect(store.rows.get(page.id)!.blocks).toEqual([p("もとの本文")]);
   });
 
+  it("refuses a CLI write made against an older page revision", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")] });
+    await store.savePage("user-a", page.id, { blocks: [p("別端末の保存")] }, { baseRevision: 1 });
+    const response = await deviceTurn(page.id, body(page.id), deps("user-a", store));
+    expect(response.status).toBe(409);
+    expect(store.rows.get(page.id)!.blocks).toEqual([p("別端末の保存")]);
+    expect(store.versions).toEqual([]);
+  });
+
+  it("keeps the save CAS when another write races after the device preflight", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")] });
+    const originalVersion = store.createVersion;
+    store.createVersion = async (owner, id, reason) => {
+      const version = await originalVersion(owner, id, reason);
+      await store.savePage(owner, id, { blocks: [p("競合した保存")] }, { baseRevision: 1 });
+      return version;
+    };
+    const response = await deviceTurn(page.id, body(page.id), deps("user-a", store));
+    expect(response.status).toBe(200);
+    expect((await response.json()).message).toMatchObject({ result: "stopped", resultCode: "revision_conflict" });
+    expect(store.rows.get(page.id)!.blocks).toEqual([p("競合した保存")]);
+  });
+
   it("checks every pageId against the workspace itself (it does not trust what the Mac sends)", async () => {
     const store = memoryStore();
     const folder = store.add("user-a", { title: "合成のフォルダ" });
@@ -659,6 +703,7 @@ describe("POST /api/pages/{id}/ai/chat/turns (この Mac の CLI の結果)", ()
       { ...body(page.id), engine: "CLI Claude Code" },
       { ...body(page.id), input: "" },
       { ...body(page.id), writes: [{ pageId: page.id }] },
+      { ...body(page.id), writes: [{ pageId: page.id, markdown: "合成", baseRevision: 0 }] },
       { ...body(page.id), writes: "nope" },
       { ...body(page.id), extra: 1 },
     ]) {
@@ -718,7 +763,7 @@ describe("会話に書けなくても、書いたページは返す", () => {
     try {
       const response = await deviceTurn(
         page.id,
-        { input: "直して", reply: "直しました。", engine: "cli:claude-code", writes: [{ pageId: page.id, markdown: "CLI が書いた本文" }] },
+        { input: "直して", reply: "直しました。", engine: "cli:claude-code", writes: [{ pageId: page.id, markdown: "CLI が書いた本文", baseRevision: 1 }] },
         deps("user-a", store, { conversations: broken }),
       );
       expect(response.status).toBe(200);

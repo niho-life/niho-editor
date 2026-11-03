@@ -38,12 +38,16 @@ export function OpenPage({
   summary,
   blocks,
   revision,
+  cover = null,
+  lead = null,
   shared = null,
   recordingSec = null,
 }: {
   summary: PageSummary;
   blocks: unknown[];
   revision: number;
+  cover?: string | null;
+  lead?: string | null;
   shared?: boolean | null;
   recordingSec?: number | null;
 }) {
@@ -70,6 +74,8 @@ export function OpenPage({
 
   const fresh = replaced?.id === id ? replaced : null;
   const current = fresh?.page;
+  const pageCover = current ? current.cover ?? null : cover;
+  const pageLead = current ? current.lead ?? null : lead;
   const editor = (
     <PageEditor
       key={fresh?.count ?? 0}
@@ -77,6 +83,8 @@ export function OpenPage({
         id,
         title: current?.title ?? summary.title,
         blocks: current?.blocks ?? blocks,
+        cover: pageCover,
+        lead: pageLead,
         revision: current?.revision ?? revision,
         updatedAt: current?.updatedAt ?? summary.updatedAt,
         kind: summary.kind,
@@ -124,7 +132,7 @@ export function NewPage() {
   return <NewPageEditor key={count} onCreated={(id) => (created.current = { count, id })} />;
 }
 
-/** 最初の保存でページを作り、URL を `/p/{id}` に替える（エディタは作り直さないので、変換中の文字とカーソルは残る）。 */
+/** 開いたら空でも保存してページを作り、URL を `/p/{id}` に替える（エディタは作り直さないので、変換中の文字とカーソルは残る）。 */
 function NewPageEditor(props: { onCreated: (id: string) => void }) {
   const frame = useEditorFrame();
   const createdRef = useRef<string | null>(null);
@@ -141,6 +149,7 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
   return (
     <PageEditor
       page={{ id: null, title: "", blocks: [], revision: null }}
+      createOnOpen
       // 作ったばかりのページは共有していない
       shared={false}
       onTitleChange={(value) => {

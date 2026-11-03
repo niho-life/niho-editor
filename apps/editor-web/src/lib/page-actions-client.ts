@@ -140,7 +140,7 @@ export async function listPageVersions(id: string): Promise<PageVersionRow[]> {
 }
 
 /** 版に戻したあとのページ（エディタを開き直すのに要る分）。 */
-export type RestoredPage = { id: string; title: string; blocks: unknown[]; revision: number; updatedAt: string };
+export type RestoredPage = { id: string; title: string; blocks: unknown[]; revision: number; updatedAt: string; cover: string | null; lead: string | null };
 
 /**
  * 「この版に戻す」（`POST /api/pages/{id}/versions/{n}/restore`、本文 `{ baseRevision }`）。戻したあとのページを返す。
@@ -162,11 +162,13 @@ export async function restorePageVersion(id: string, version: number, baseRevisi
   const data = (await response.json().catch(() => null)) as { page?: Record<string, unknown> } | null;
   const page = data?.page;
   if (typeof page !== "object" || page === null) throw new PageActionError(500);
-  const { title, blocks, revision, updatedAt } = page;
+  const { title, blocks, revision, updatedAt, cover, lead } = page;
   if (page.id !== id || typeof title !== "string" || !Array.isArray(blocks) || !isPositiveInteger(revision) || typeof updatedAt !== "string") {
     throw new PageActionError(500);
   }
-  return { id, title, blocks, revision, updatedAt };
+  if (cover !== undefined && cover !== null && typeof cover !== "string") throw new PageActionError(500);
+  if (lead !== undefined && lead !== null && typeof lead !== "string") throw new PageActionError(500);
+  return { id, title, blocks, revision, updatedAt, cover: (cover as string | null | undefined) ?? null, lead: (lead as string | null | undefined) ?? null };
 }
 
 /**

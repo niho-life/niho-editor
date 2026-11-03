@@ -27,20 +27,21 @@ import { ROBOTS_HEADER_VALUE, errorResponse, expectedOrigin, isSameOriginRequest
  * - 開始: 要求を検査し（種類・大きさ・1 ページの枚数の上限を超えたら保存の前に断る）、保存先のアップロードのセッションを作ってから、
  *   資産の行（kind = 'image'・状態 uploading・掲載許諾 false）を作る。ブラウザは返した ticket の url へ直接 PUT する
  *   （サーバーは画像を受け取らない）。
- * - 完了: 保存先にある object の大きさが申告どおりなら ready にする。
+ * - 完了: 保存先にある object の実寸を確認して ready にする。
  * - 中継: `GET /api/assets/{id}`（本人）と `GET /s/{token}/a/{id}`（共有リンク）が object の中身を流す。**署名付き URL は
  *   ブラウザへ渡さない**ので、CSP は `img-src 'self'` のままでよい（src/security/csp.ts は変えない）。
  *
  * 本人の・ゴミ箱でないページ（の画像）だけ、未認証 401、更新系は同じ origin からだけ（403）、別の人・存在しない・不正な id・
  * 削除済み・画像でない資産・まだ済んでいない画像は同じ 404。エラーの本文は短い code と理由だけ。
  * ticket の url・bucket 名・object の場所・token は、ログにもエラーの本文にも応答にも出さない。
- * sha256・content type・大きさはクライアントの申告（サーバーは中身を読まず、sha256 を検証しない）。大きさだけ完了で照らす。
+ * sha256・content type はクライアントの申告（サーバーは中身を読まず、sha256 を検証しない）。大きさは完了時の実寸。
  */
 
 /** 画像の API が使う store の操作（packages/editor-store の関数に Pool を渡したもの）。 */
 export type ImageStore = {
   startImageUpload: (owner: OwnerId, input: StartImageUploadInput) => Promise<StartImageUploadResult>;
   completeImageUpload: (owner: OwnerId, assetId: string, stored: { sizeBytes: number }) => Promise<CompleteImageUploadResult>;
+  cancelImageUpload: (owner: OwnerId, pageId: string, assetId: string) => Promise<boolean>;
   imageAsset: (owner: OwnerId, assetId: string) => Promise<ImageAsset | null>;
   updateImageMeta: (owner: OwnerId, assetId: string, patch: ImageMetaPatch) => Promise<ImageAsset | null>;
   countPageImages: (owner: OwnerId, pageId: string) => Promise<number | null>;
@@ -201,12 +202,10 @@ export function startImageRoute(request: Request, pageId: string, deps: ImageApi
     if (!checked.ok) return badRequest(checked.reason);
     const start = checked.value;
 
-    // 1 ページの枚数の上限（保存先のセッションを作る前に見る）。ページが無ければ、ここで同じ 404
+    // Early rejection keeps the storage ticket count low. The store repeats this check under the page lock.
     const images = await store.countPageImages(session.userId, pageId);
     if (images === null) return notFoundResponse();
     if (images >= IMAGE_PAGE_MAX_COUNT) {
-      // 上限に達していても、同じキー・同じ内容の再送は先に作った資産を返す（最後の 1 枚の応答が届かなかったとき、資産の id と
-      // ticket を取り戻せるように）。新しい資産は作らない（キーが無い・初めてのキーは断る）
       const existing = uploadKey === null ? null : await store.findImageUploadByKey(session.userId, { uploadKey, pageId, requestHash: imageRequestHash(pageId, start) });
       if (existing === null) return badRequest("too_many");
     }
@@ -227,6 +226,8 @@ export function startImageRoute(request: Request, pageId: string, deps: ImageApi
     });
     if (started === null) return notFoundResponse();
     if (started.status === "conflict") return imageError("idempotency_conflict");
+    if (started.status === "too_many") return badRequest("too_many");
+    if (started.status === "page_full") return errorResponse("page_full");
     if (started.status === "created") {
       return jsonResponse(201, { assetId: started.assetId, upload: uploadBody(ticket, start.sizeBytes) });
     }
@@ -241,8 +242,8 @@ export function startImageRoute(request: Request, pageId: string, deps: ImageApi
 }
 
 /**
- * POST /api/pages/{id}/images/{assetId}/complete — アップロードの完了。保存先の object の大きさが申告どおりなら ready にする。
- * 200 `{ image }`。済んでいればそのまま 200。object が無い・大きさが違うは 409 incomplete。
+ * POST /api/pages/{id}/images/{assetId}/complete — 保存先の実寸を確定して ready にする。
+ * 200 `{ image }`。済んでいればそのまま 200。object が無い・画像上限外は 409 incomplete。
  */
 export function completeImageRoute(request: Request, pageId: string, assetId: string, deps: ImageApiDeps): Promise<Response> {
   return guarded("POST /api/pages/[id]/images/[assetId]/complete", async () => {
@@ -264,7 +265,22 @@ export function completeImageRoute(request: Request, pageId: string, assetId: st
     const result = await store.completeImageUpload(session.userId, assetId, { sizeBytes: stored.sizeBytes });
     if (!result) return notFoundResponse();
     if (result.status === "size_mismatch") return imageError("incomplete", "size_mismatch");
+    if (result.status === "page_full") return errorResponse("page_full");
     return jsonResponse(200, { image: publicImage(result.asset) });
+  });
+}
+
+/** Stop an unfinished upload and release its reservation. A signed ticket may outlive this row;
+ * the storage object, if uploaded later, is not deleted by this API. */
+export function cancelImageRoute(request: Request, pageId: string, assetId: string, deps: ImageApiDeps): Promise<Response> {
+  return guarded("DELETE /api/pages/[id]/images/[assetId]", async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    if (!(await store.cancelImageUpload(session.userId, pageId, assetId))) return notFoundResponse();
+    return new Response(null, { status: 204, headers: { "Cache-Control": "private, no-store", "X-Robots-Tag": ROBOTS_HEADER_VALUE } });
   });
 }
 
@@ -317,6 +333,19 @@ export function updateImageRoute(request: Request, assetId: string, deps: ImageA
     const updated = await store.updateImageMeta(session.userId, assetId, checked.patch);
     if (!updated) return notFoundResponse();
     return jsonResponse(200, { image: publicImage(updated) });
+  });
+}
+
+/** GET /api/assets/{assetId}/meta — 本人の画像の掲載メタデータ（本文は別 endpoint）。 */
+export function imageMetadataRoute(request: Request, assetId: string, deps: ImageApiDeps): Promise<Response> {
+  return guarded("GET /api/assets/[assetId]/meta", async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    const image = await store.imageAsset(session.userId, assetId);
+    if (!image) return notFoundResponse();
+    return jsonResponse(200, { image: publicImage(image) });
   });
 }
 

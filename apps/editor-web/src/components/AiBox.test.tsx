@@ -9,6 +9,9 @@ import { presetsFor } from "@/ai/presets";
 import { AI_ADOPT_REFUSED_TEXT, AI_BLOCKED_TEXT, AI_ERROR_TEXT, AI_NOTICE_MS, AI_TEXT, aiAdoptedText, aiDoneText } from "./AiBox";
 import { PageEditor, type EditablePage } from "./PageEditor";
 
+const nativeMock = vi.hoisted(() => ({ shell: null as unknown }));
+vi.mock("niho-desktop-bridge/tauri-shell-transport", () => ({ detectShell: () => nativeMock.shell }));
+
 beforeAll(() => {
   // jsdom に無い描画の API（ProseMirror・浮かぶメニューの位置の計算が読む）
   const rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }) as DOMRect;
@@ -29,6 +32,7 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  nativeMock.shell = null;
 });
 
 const PAGE_ID = "00000000-0000-4000-8000-000000000001";
@@ -61,7 +65,7 @@ type Handler = (body: Record<string, unknown>, init: RequestInit) => Response | 
  * サーバーの代わり。保存（PATCH）は revision を 1 つ進める（`save` で差し替え）。提案・採用は渡した応答。
  * 既定の提案は PROPOSAL（baseRevision は送られてきた値）、既定の採用は採用したものを当てた本文で revision を進める。
  */
-function fakeServer(options: { proposal?: Handler; adoption?: Handler; save?: Handler; chats?: ChatHistory; chat?: Handler; undo?: Handler } = {}) {
+function fakeServer(options: { proposal?: Handler; adoption?: Handler; save?: Handler; chats?: ChatHistory; chat?: Handler; deviceTurn?: Handler; undo?: Handler } = {}) {
   const calls: Call[] = [];
   let revision = 1;
   // 会話（開いたときに読む履歴）。渡さなければ会話なし
@@ -91,6 +95,7 @@ function fakeServer(options: { proposal?: Handler; adoption?: Handler; save?: Ha
       if (!conversations.some((item) => item.id === id)) conversations = [{ id, updatedAt: UPDATED_AT, messages: 2, lastText: null }, ...conversations];
       return json(200, { proposal: { ...PROPOSAL, baseRevision: body.baseRevision }, usage: USAGE, conversation: { id, messageId: MESSAGE_ID } });
     }
+    if (url === `/api/pages/${PAGE_ID}/ai/chat/turns` && options.deviceTurn) return options.deviceTurn(body, init);
     if (url === `/api/pages/${PAGE_ID}/ai/chat`) {
       if (options.chat) return options.chat(body, init);
       revision += 1;
@@ -139,6 +144,7 @@ function fakeServer(options: { proposal?: Handler; adoption?: Handler; save?: Ha
     saves: () => calls.filter((call) => call.method === "PATCH"),
     chats: () => calls.filter((call) => call.url.includes("/ai/conversations")),
     turns: () => calls.filter((call) => call.url.endsWith("/ai/chat")),
+    deviceTurns: () => calls.filter((call) => call.url.endsWith("/ai/chat/turns")),
     undos: () => calls.filter((call) => call.url.endsWith("/undo")),
   };
 }
@@ -978,5 +984,116 @@ describe("the AI box: the chat edits the page itself", () => {
     expect(statusText()).toBe(AI_ERROR_TEXT.quota);
     expect(JSON.stringify(editor.getJSON())).toBe(before);
     expect(server.turns()).toHaveLength(1);
+  });
+});
+
+describe("the AI box: Mac CLI subscription", () => {
+  async function sendNativeChat(text: string) {
+    await openBox();
+    await advance(0);
+    setInputValue(input(), text);
+    await press(input(), "Enter");
+    await advance(0);
+  }
+
+  it("records a native Done through device turns and keeps undo available", async () => {
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    const aiTurn = vi.fn().mockResolvedValue({
+      finalEvent: { type: "Done", text: "短くしました", stop_reason: "EndTurn", session_id: "local-only",
+        usage: { input_tokens: 1, output_tokens: 1, cost_usd: null, model_used: null, cost_known: false }, duration_ms: 1, continuations: 0 },
+      page: { pageId: PAGE_ID, markdown: "変更後" }, pageRemoved: false, extraFiles: 0,
+    });
+    nativeMock.shell = {
+      aiEngines: vi.fn().mockResolvedValue([{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-6"], effort: true, resume: true }]),
+      aiTurn, aiStop: vi.fn().mockResolvedValue(true),
+    };
+    const server = fakeServer({ deviceTurn: (body) => {
+      expect(body).toMatchObject({ engine: "cli:codex", input: "短くして", reply: "短くしました",
+        writes: [{ pageId: PAGE_ID, markdown: "変更後", baseRevision: 1 }] });
+      expect(body).not.toHaveProperty("resumeSession");
+      return json(200, {
+        conversation: { id: CONVERSATION_ID, messageId: MESSAGE_ID },
+        message: { id: MESSAGE_ID, text: "短くしました", result: "done", resultCode: null,
+          items: [{ kind: "tool", tool: "write_page", page: "合成の題名", ok: true }],
+          changes: [{ pageId: PAGE_ID, title: "合成の題名", change: "edited", chars: 3, delta: -1, undoneAt: null }] },
+        page: { id: PAGE_ID, title: "合成の題名", blocks: CHAT_WRITTEN, revision: 2, updatedAt: UPDATED_AT },
+        usage: { nearLimit: false },
+      });
+    } });
+    const editor = await renderPage();
+    await openBox();
+    await advance(0);
+    expect((dialog()!.querySelector("#mac-ai-route") as HTMLSelectElement).value).toBe("cli:codex");
+    setInputValue(input(), "短くして");
+    await press(input(), "Enter");
+    await advance(0);
+    expect(aiTurn).toHaveBeenCalledTimes(1);
+    expect(server.deviceTurns()).toHaveLength(1);
+    expect(server.turns()).toHaveLength(0);
+    expect(editor.getJSON().content).toEqual(CHAT_WRITTEN);
+    expect(buttonIn(dialog()!.querySelector("[data-ai-changes]")!, "元に戻す")).toBeDefined();
+  });
+
+  it("keeps a recorded refusal visible instead of dropping the CLI turn", async () => {
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    nativeMock.shell = {
+      aiEngines: vi.fn().mockResolvedValue([{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-6"], effort: true, resume: true }]),
+      aiTurn: vi.fn().mockResolvedValue({ finalEvent: { type: "Done", text: "直しました", stop_reason: "EndTurn", session_id: "local-only",
+        usage: { input_tokens: 1, output_tokens: 1, cost_usd: null, model_used: null, cost_known: false }, duration_ms: 1, continuations: 0 },
+        page: { pageId: PAGE_ID, markdown: "変更後" }, pageRemoved: false, extraFiles: 0 }),
+      aiStop: vi.fn().mockResolvedValue(true),
+    };
+    const server = fakeServer({ deviceTurn: () => json(200, {
+      conversation: { id: CONVERSATION_ID, messageId: MESSAGE_ID },
+      message: { id: MESSAGE_ID, text: "直しました", result: "stopped", resultCode: "revision_conflict", items: [], changes: [] },
+      page: null,
+    }) });
+    await renderPage();
+    await sendNativeChat("短くして");
+    expect(server.deviceTurns()).toHaveLength(1);
+    expect(server.turns()).toHaveLength(0);
+    expect(dialog()!.querySelector("[data-ai-thread]")!.textContent).toContain("直しました");
+    expect(statusText()).toBe(AI_TEXT.conflict);
+    expect(dialog()!.querySelector("[data-ai-changes]")).toBeNull();
+  });
+
+  it("refreshes a saved page if conversation history could not be recorded", async () => {
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    nativeMock.shell = {
+      aiEngines: vi.fn().mockResolvedValue([{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-6"], effort: true, resume: true }]),
+      aiTurn: vi.fn().mockResolvedValue({ finalEvent: { type: "Done", text: "直しました", stop_reason: "EndTurn", session_id: "local-only",
+        usage: { input_tokens: 1, output_tokens: 1, cost_usd: null, model_used: null, cost_known: false }, duration_ms: 1, continuations: 0 },
+        page: { pageId: PAGE_ID, markdown: "変更後" }, pageRemoved: false, extraFiles: 0 }),
+      aiStop: vi.fn().mockResolvedValue(true),
+    };
+    const server = fakeServer({ deviceTurn: () => json(200, {
+      conversation: null,
+      message: null,
+      page: { id: PAGE_ID, title: "合成の題名", blocks: CHAT_WRITTEN, revision: 2, updatedAt: UPDATED_AT },
+    }) });
+    const editor = await renderPage();
+    await sendNativeChat("短くして");
+    expect(server.deviceTurns()).toHaveLength(1);
+    expect(editor.getJSON().content).toEqual(CHAT_WRITTEN);
+    expect(statusText()).toBe(AI_TEXT.nativeHistoryMissing);
+  });
+
+  it("allows an explicit server AI choice when CLI discovery fails", async () => {
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    nativeMock.shell = { aiEngines: vi.fn().mockRejectedValue(new Error("synthetic bridge failure")) };
+    const server = fakeServer();
+    await renderPage();
+    await openBox();
+    await advance(0);
+    const route = dialog()!.querySelector<HTMLSelectElement>("#mac-ai-route")!;
+    expect(route.disabled).toBe(false);
+    await act(async () => {
+      route.value = "server";
+      route.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    setInputValue(input(), "短くして");
+    await press(input(), "Enter");
+    expect(server.turns()).toHaveLength(1);
+    expect(server.deviceTurns()).toHaveLength(0);
   });
 });

@@ -57,7 +57,6 @@ function setup(options: { executor?: StepExecutor; queue?: TaskQueue; config?: C
     config: () => (options.config === undefined ? CONFIG : options.config),
     verify,
     steps,
-    recipes: () => async () => DEFAULT_RECIPES,
     queue: () => queue,
     executor: () => options.executor ?? fakeExecutor,
   };

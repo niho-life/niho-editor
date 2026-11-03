@@ -3,11 +3,14 @@ import {
   claimAttempt,
   commitAttempt,
   createRun,
+  updateRunRecipeSnapshot,
   failAttempt,
   heartbeatAttempt,
   listQueuedAttempts,
   listRun,
+  readPartialOutput,
   readStepInput,
+  readStepStaleReasons,
   refreshStale,
   requeueAttempt,
   sweepExpiredLeases,
@@ -19,11 +22,13 @@ import {
   type CreateRunResult,
   type FailInput,
   type FailResult,
+  type Block,
   type OwnerId,
   type StepClaim,
   type StepInput,
   type StepRecipe,
   type StepRunView,
+  type StepStaleReason,
   type StepRunsDb,
 } from "@niho/editor-store";
 
@@ -33,9 +38,12 @@ import {
  */
 export type StepRunStore = {
   createRun(owner: OwnerId, parentId: string, input: CreateRunInput): Promise<CreateRunResult>;
+  updateRunRecipeSnapshot(owner: OwnerId, parentId: string, runId: string, recipe: StepRecipe, expectedRevision: number): ReturnType<typeof updateRunRecipeSnapshot>;
   listRun(owner: OwnerId, parentId: string): Promise<{ run: StepRunView | null } | null>;
+  readPartialOutput(owner: OwnerId, parentId: string, runId: string, stepIndex: number): Promise<Block[] | null>;
   cancelRun(owner: OwnerId, parentId: string, runId: string): Promise<StepRunView | null>;
   refreshStale(owner: OwnerId, parentId: string, recipe: StepRecipe): Promise<number>;
+  readStaleReasons?(owner: OwnerId, parentId: string, recipe: StepRecipe): Promise<Record<number, StepStaleReason[]>>;
   claimAttempt(runId: string, stepIndex: number, options?: { leaseSeconds?: number }): Promise<ClaimResult>;
   heartbeatAttempt(ref: AttemptRef, options?: { leaseSeconds?: number }): Promise<boolean>;
   readStepInput(claim: StepClaim): Promise<StepInput | null>;
@@ -46,9 +54,12 @@ export type StepRunStore = {
 export function pgStepRunStore(db: StepRunsDb): StepRunStore {
   return {
     createRun: (owner, parentId, input) => createRun(db, owner, parentId, input),
+    updateRunRecipeSnapshot: (owner, parentId, runId, recipe, expectedRevision) => updateRunRecipeSnapshot(db, owner, parentId, runId, recipe, expectedRevision),
     listRun: (owner, parentId) => listRun(db, owner, parentId),
+    readPartialOutput: (owner, parentId, runId, stepIndex) => readPartialOutput(db, owner, parentId, runId, stepIndex),
     cancelRun: (owner, parentId, runId) => cancelRun(db, owner, parentId, runId),
     refreshStale: (owner, parentId, recipe) => refreshStale(db, owner, parentId, recipe),
+    readStaleReasons: (owner, parentId, recipe) => readStepStaleReasons(db, owner, parentId, recipe),
     claimAttempt: (runId, stepIndex, options) => claimAttempt(db, runId, stepIndex, options),
     heartbeatAttempt: (ref, options) => heartbeatAttempt(db, ref, options),
     readStepInput: (claim) => readStepInput(db, claim),

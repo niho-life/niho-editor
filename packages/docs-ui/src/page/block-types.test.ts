@@ -189,10 +189,13 @@ describe("the callout (#33)", () => {
 });
 
 describe("the block choices", () => {
-  it("never offer what this body cannot hold (heading 1, code, check, recording)", () => {
-    expect(BLOCK_CHOICES.map((choice) => choice.id)).toEqual(["paragraph", "h2", "h3", "bullet", "ordered", "quote", "callout", "hr", "image"]);
-    expect(filterBlockChoices("").map((choice) => choice.label)).toEqual(["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "囲み", "区切り線", "画像"]);
-    for (const query of ["録音", "code", "h1", "todo"]) expect(filterBlockChoices(query), query).toEqual([]);
+  it("offers the supported blocks, including checklists, tables, and code blocks", () => {
+    expect(BLOCK_CHOICES.map((choice) => choice.id)).toEqual(["paragraph", "h2", "h3", "bullet", "task", "ordered", "quote", "callout", "hr", "image", "table", "codeBlock"]);
+    expect(filterBlockChoices("").map((choice) => choice.label)).toEqual(["テキスト", "見出し 2", "見出し 3", "箇条書き", "チェックリスト", "番号付き", "引用", "囲み", "区切り線", "画像", "表", "コードブロック"]);
+    for (const query of ["録音", "h1"]) expect(filterBlockChoices(query), query).toEqual([]);
+    expect(filterBlockChoices("code").map((choice) => choice.id)).toEqual(["codeBlock"]);
+    expect(filterBlockChoices("todo").map((choice) => choice.id)).toEqual(["task"]);
+    expect(filterBlockChoices("表").map((choice) => choice.id)).toEqual(["table"]);
     // 画像は一覧にあり、日本語でも英語でも絞れる。行の種類ではない
     for (const query of ["画像", "image", "がぞう"]) expect(filterBlockChoices(query).map((choice) => choice.id), query).toEqual(["image"]);
     expect(LINE_TYPE_CHOICES.map((choice) => choice.id)).not.toContain("image");

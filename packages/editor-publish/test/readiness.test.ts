@@ -149,6 +149,24 @@ describe("evaluateReadiness: an owner's site (no requires)", () => {
   });
 });
 
+describe("工程の最終段階名を題名にしたページ", () => {
+  const facts = { relatedLive: true, finalStepNames: ["旧・記事本文", "記事本文"] };
+
+  it("通常の題名は通し、空欄は空欄の問題だけを返す", () => {
+    expect(ids(evaluate(SITE, { title: "海辺の朝" }, { facts }))).toEqual([]);
+    expect(ids(evaluate(SITE, { title: "   " }, { facts }))).toEqual(["title"]);
+  });
+
+  it.each([["exp", EXP], ["niho", NIHO], ["site", SITE]] as const)("%s: 完了時の段階名と同じ題名は止める", (_name, target) => {
+    expect(ids(evaluate(target, { title: "記事本文" }, { facts }))).toContain("step-title");
+  });
+
+  it("段階名を後から変更しても過去の最終段階名は通さず、独自の題名なら通す", () => {
+    expect(ids(evaluate(SITE, { title: "旧・記事本文" }, { facts }))).toEqual(["step-title"]);
+    expect(ids(evaluate(SITE, { title: "自分で付けた題名" }, { facts }))).toEqual([]);
+  });
+});
+
 describe("evaluateReadiness: conditions every destination needs", () => {
   it.each([["exp", EXP], ["niho", NIHO], ["site", SITE]] as const)("%s: an unknown node is a problem, never dropped", (_name, target) => {
     const result = evaluate(target, { content: bodyWith({ type: "codeBlock", content: [{ type: "text", text: "x" }] }) });

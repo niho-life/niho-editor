@@ -1,4 +1,4 @@
-import type { GlossaryEntry } from "@niho/docs-core";
+import type { About, GlossaryEntry } from "@niho/docs-core";
 import type { AiIntent } from "./presets";
 
 /**
@@ -16,7 +16,7 @@ export type AiRequest = {
   glossary: GlossaryEntry[];
   lang: "ja" | "en";
   /** 「あなたについて」（設定。空なら渡さない）。 */
-  about?: string;
+  about?: About;
   /** 自動参考ページ（同じフォルダの直下のほかのページ。無ければ空）。 */
   references?: AiReference[];
 };
