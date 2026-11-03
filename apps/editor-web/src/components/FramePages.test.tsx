@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type EditorProps = {
   page?: { id: string | null; title?: string; blocks?: unknown[]; revision?: number | null; lang?: string };
+  createOnOpen?: boolean;
   onCreated?: (id: string) => void;
   onLangChange?: (lang: "ja" | "en") => void;
 };
@@ -75,6 +76,7 @@ async function mount() {
 describe("NewPage: the creation redirect belongs to the draft that made the page", () => {
   it("replaces /p/new with /p/{id} while the draft that created the page is still on screen", async () => {
     await mount();
+    expect(editors.at(-1)!.createOnOpen).toBe(true);
     await act(async () => editors.at(-1)!.onCreated!("11111111-1111-4111-8111-111111111111"));
     expect(window.location.pathname).toBe("/p/11111111-1111-4111-8111-111111111111");
     expect(rememberLastPage).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");

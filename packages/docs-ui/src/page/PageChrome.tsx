@@ -14,18 +14,14 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import type { FloatingMenuPluginProps } from "@tiptap/extension-floating-menu";
 import { useEditorState, type Editor } from "@tiptap/react";
-import { FloatingMenu } from "@tiptap/react/menus";
 import { Icon, ShellBubbleMenu, ShellMenu, useMenuDismiss, type ShellMenuItem, type ShellToolAction } from "../shell";
 import {
   BLOCK_CHOICES,
   LINE_TYPE_CHOICES,
-  addButtonVisible,
   blankLineAfterCursor,
   fillBlankLine,
   insertBlankLine,
-  isEmptyParagraphAt,
   lineTypeOf,
   setLineType,
   type BlockChoice,
@@ -68,7 +64,6 @@ export type PageChromeTools = {
 
 /** ShellBubbleMenu の plugin key（../shell/bubble.tsx）。 */
 const FORMAT_BAR_KEY = "shellFormatBar";
-const ADD_BUTTON_KEY = "pageAddButton";
 /** 開いているメニューのボタンをもう一度押したら閉じたままにする（外のクリックで閉じた直後のクリック）。 */
 const TOGGLE_WINDOW_MS = 400;
 /** 浮かぶ部品と画面の端の間。 */
@@ -313,9 +308,6 @@ function LinkForm(props: { href: string; linked: boolean; onApply: (href: string
   );
 }
 
-const shouldShowAddButton: NonNullable<FloatingMenuPluginProps["shouldShow"]> = ({ editor, view, state }) =>
-  addButtonVisible(state, editor.isEditable, view.hasFocus());
-
 /**
  * 書式の帯（ShellBubbleMenu）を .es-root（root）の中に付けさせる。ShellBubbleMenu は付ける先（appendTo）を受けないので、
  * TipTap の menus が props の更新に使う meta（"updateOptions"）で渡す（docs-ui に appendTo が足されたら、これは要らない）。
@@ -370,20 +362,9 @@ function Chrome({ editor, onAi, onTools }: { editor: Editor; onAi?: () => void; 
   const [panel, setPanel] = useState<Panel | null>(null);
   const escaped = useRef(false);
   const lastDismiss = useRef<{ kind: Panel["kind"]; at: number } | null>(null);
-  const addButton = useRef<HTMLButtonElement | null>(null);
-  const addMenu = useRef<HTMLDivElement | null>(null);
 
   // 押されている状態（太字・斜体）は ShellBubbleMenu が描いたときの値を出す。選択の移動・コマンドのたびに描き直させる
   const inTable = useEditorState({ editor, selector: ({ editor: current }) => current.isActive("table") });
-
-  // 「＋」の入れ物は TipTap が tabIndex=0 にする。ボタンだけをタブで止まる場所にする
-  const [addButtonOptions] = useState<FloatingMenuPluginProps["options"]>(() => ({
-    placement: "left",
-    offset: 8,
-    onShow: () => {
-      if (addMenu.current) addMenu.current.tabIndex = -1;
-    },
-  }));
 
   /** 外のクリックで閉じた直後に、同じメニューを開くボタンが押されたか（＝閉じたいだけ）。 */
   const recentlyDismissed = (kind: Panel["kind"]) => {
@@ -427,15 +408,6 @@ function Chrome({ editor, onAi, onTools }: { editor: Editor; onAi?: () => void; 
     setPanel({ kind: "link", anchor: selectionAnchor(editor), range: { from, to }, href, linked });
   };
 
-  const openAdd = () => {
-    if (recentlyDismissed("add")) return;
-    const { $anchor } = editor.state.selection;
-    if ($anchor.depth !== 1 || !isEmptyParagraphAt(editor.state.doc, $anchor.before())) return;
-    const rect = addButton.current?.getBoundingClientRect();
-    escaped.current = false;
-    setPanel({ kind: "add", at: $anchor.before(), anchor: rect ? { left: rect.left, top: rect.top, bottom: rect.bottom } : selectionAnchor(editor) });
-  };
-
   /** いまの行が空ならその行を、文字があればその下に足す行を、選んだブロックにする（⌘/ と、常設の帯の「＋」）。 */
   const openBlockMenu = () => {
     const below = blankLineAfterCursor(editor.state);
@@ -447,7 +419,7 @@ function Chrome({ editor, onAi, onTools }: { editor: Editor; onAi?: () => void; 
     );
   };
 
-  // ⌘/（設計 §11）: 本文にフォーカスがあるとき、「＋」と同じブロックの一覧を開く。
+  // ⌘/（設計 §11）: 本文にフォーカスがあるとき、常設の帯と同じブロックの一覧を開く。
   // Esc で閉じると本文の元の位置へ戻る（何も足さない）
   useBlockMenuShortcut(() => {
     if (!editor.isEditable || !editor.view.hasFocus()) return false;
@@ -498,20 +470,6 @@ function Chrome({ editor, onAi, onTools }: { editor: Editor; onAi?: () => void; 
       {root && (
         <>
           <ShellBubbleMenu editor={editor} onTextType={openLineType} onLink={openLink} onAi={onAi} textType={currentLineTypeName(editor)} />
-          <FloatingMenu ref={addMenu} editor={editor} pluginKey={ADD_BUTTON_KEY} appendTo={root} shouldShow={shouldShowAddButton} options={addButtonOptions}>
-            <button
-              ref={addButton}
-              type="button"
-              className="es-ib es-ib--sm"
-              aria-label="ブロックを追加"
-              aria-haspopup="menu"
-              aria-expanded={panel?.kind === "add"}
-              onMouseDown={keepFocus}
-              onClick={openAdd}
-            >
-              <Icon name="plus" />
-            </button>
-          </FloatingMenu>
           {inTable && (
             <div className="es-tablebar" role="toolbar" aria-label="表の操作">
               <button type="button" onMouseDown={keepFocus} onClick={() => editor.chain().focus().addRowAfter().run()}>行を追加</button>
@@ -521,7 +479,7 @@ function Chrome({ editor, onAi, onTools }: { editor: Editor; onAi?: () => void; 
               <button type="button" onMouseDown={keepFocus} onClick={() => editor.chain().focus().deleteTable().run()}>表を削除</button>
             </div>
           )}
-          {/* 帯・＋の plugin の登録より後に動かすため、それらの後ろに置く */}
+          {/* 帯の plugin の登録より後に動かすため、その後ろに置く */}
           <FormatBarRoute editor={editor} root={root} />
         </>
       )}
@@ -585,12 +543,12 @@ function Chrome({ editor, onAi, onTools }: { editor: Editor; onAi?: () => void; 
  * niho-ui/styles/editor-tokens.css で、読むのは呼ぶ側（Mac・Web の画面））。
  * - 選んだ文字の上の書式の帯（ShellBubbleMenu）: 太字・斜体・見出し・箇条書きは帯が editor のコマンドへ、
  *   行の種類（ShellMenu）・リンク（帯の下の小さな入力）はここが持つ。AI は呼ぶ側の onAi（AI の箱を開く。src/components/AiBox.tsx）。
- * - 空の行の「/」（src/editor/slash-menu.ts）と、空の段落の左の「＋」のブロックの一覧。
+ * - 空の行の「/」（src/editor/slash-menu.ts）と、常設の帯・⌘/ から開くブロックの一覧。
  * 作れるのは限定 AST の範囲だけ（src/editor/block-types.ts）。常設の書式の帯（ShellTools）はヘッダーの側が持つ。
  *
  * shell.css のセレクタは `[data-docs-app-root][data-docs-shared-ui]` の中の `.es-root` の中だけに効く。本文を .es-root に入れると
  * 本文の見た目（リストの印・リンクの下線など）が shell の reset で変わるので、.es-root はこの部品の入れ物だけにし、
- * 浮かぶ部品（帯・＋・一覧・入力）はすべてこの中に付ける。`.be`（position: relative）の中に置く。
+ * 浮かぶ部品（帯・一覧・入力）はすべてこの中に付ける。`.be`（position: relative）の中に置く。
  */
 export function PageChrome({ editor, onAi, onTools }: { editor: Editor | null; onAi?: () => void; onTools?: (tools: PageChromeTools | null) => void }) {
   if (!editor) return null;
