@@ -159,7 +159,12 @@ export function createWorld(): World {
     facts,
     clock,
     service,
-    input: (dest, patch = {}) => ({ actorId: ACTOR, pageId: PAGE_ID, target: TARGETS[dest], settings: SETTINGS[dest], ...patch }),
+    input: (dest, patch = {}) => {
+      // NIHO face was retired. Older generic service cases used it as their default face;
+      // exercise the same mechanics through the only publishable face instead.
+      const active = dest === "niho" ? "exp" : dest;
+      return { actorId: ACTOR, pageId: PAGE_ID, target: TARGETS[active], settings: SETTINGS[active], ...patch };
+    },
     editDraft: (patch, pageId = PAGE_ID) => {
       const page = store.page(pageId);
       if (!page) throw new Error("no page");

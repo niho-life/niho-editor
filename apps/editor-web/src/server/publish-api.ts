@@ -1,5 +1,4 @@
 import {
-  FACE_DESTS,
   RANGES,
   UUID_PATTERN,
   isConnectionHandle,
@@ -12,6 +11,7 @@ import {
   ConnectionService,
   EXTRA_KEYS,
   FACE_LABELS,
+  PUBLISHABLE_FACE_DESTS,
   PublishService,
   collectFacts,
   destOf,
@@ -269,7 +269,7 @@ export async function loadPublishSheet(
           slug: query.slug ?? null,
         };
 
-  const handles = [...FACE_DESTS.filter((face) => roleAllows(roles, face)), ...sites];
+  const handles = [...PUBLISHABLE_FACE_DESTS.filter((face) => roleAllows(roles, face)), ...sites];
   const declarations: Record<string, unknown> = {};
   await Promise.all(
     [...new Set(handles)].map(async (entry) => {
@@ -312,7 +312,7 @@ export async function loadPublishSheet(
   });
 
   const suggested = slugFromTitle(page.title, page.id);
-  const destinations: PublishDestinationDto[] = plan.destinations.map((entry) => {
+  const destinations: PublishDestinationDto[] = plan.destinations.filter((entry) => entry.dest !== "niho").map((entry) => {
     const parsed = entry.available ? parseDestinationDeclaration(declarations[entry.handle]) : null;
     const declaration = parsed?.ok ? parsed.value : null;
     // 選んでいる発信先は、いま評価した URL（slug が使えなければ null。前の URL や提案を見せない）

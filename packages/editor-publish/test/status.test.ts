@@ -31,13 +31,14 @@ describe("deriveStatus (docs-ui ShellStatusState)", () => {
 });
 
 function selection(handle: string, patch: Partial<SheetSelection> = {}): SheetSelection {
-  const settings = handle === "exp" ? SETTINGS.exp : handle === "niho" ? SETTINGS.niho : SETTINGS.site;
-  return { handle, ...settings, slug: null, ...patch };
+  const active = handle === "niho" ? "exp" : handle;
+  const settings = active === "exp" ? SETTINGS.exp : SETTINGS.site;
+  return { handle: active, ...settings, slug: null, ...patch };
 }
 
 function plan(patch: Partial<SheetPlanInput> & { page?: Partial<DraftPage>; choices?: FactChoices } = {}) {
   const { page, choices, ...rest } = patch;
-  const sel = rest.selection === undefined ? selection("niho") : rest.selection;
+  const sel = rest.selection === undefined ? selection("exp") : rest.selection;
   const factChoices = choices ?? (sel ? { category: sel.category, related: sel.related } : { category: null, related: [] });
   const input: SheetPlanInput = {
     pageId: PAGE_ID,
@@ -56,8 +57,9 @@ function plan(patch: Partial<SheetPlanInput> & { page?: Partial<DraftPage>; choi
 }
 
 function live(handle: string, patch: Partial<SheetPublication> = {}): SheetPublication {
-  const settings = handle === "exp" ? SETTINGS.exp : handle === "niho" ? SETTINGS.niho : SETTINGS.site;
-  return { handle, slug: "a-morning-walk-along-the-coast", range: settings.range, extras: settings.extras, category: settings.category, related: settings.related, stoppedAt: null, fingerprint: DRAFT, ...patch };
+  const active = handle === "niho" ? "exp" : handle;
+  const settings = active === "exp" ? SETTINGS.exp : SETTINGS.site;
+  return { handle: active, slug: "a-morning-walk-along-the-coast", range: settings.range, extras: settings.extras, category: settings.category, related: settings.related, stoppedAt: null, fingerprint: DRAFT, ...patch };
 }
 
 describe("sheetPlan: destinations", () => {
@@ -72,7 +74,7 @@ describe("sheetPlan: destinations", () => {
 
   it("treats a missing declaration or one for another destination as unavailable", () => {
     const result = plan({ declarations: { exp: DECLARATIONS.niho, [SITE]: DECLARATIONS.site } });
-    expect(result.destinations.map((entry) => entry.reason)).toEqual(["unavailable", "unavailable", null]);
+    expect(result.destinations.map((entry) => entry.reason)).toEqual(["unavailable", "role", null]);
   });
 
   it("ignores site handles that are not connection handles", () => {
@@ -80,7 +82,7 @@ describe("sheetPlan: destinations", () => {
   });
 
   it("cannot publish to a destination that is not available", () => {
-    const result = plan({ roles: ["writer"] });
+    const result = plan({ roles: ["writer"], selection: { ...selection("exp"), handle: "niho" } });
     expect(result.selected).toMatchObject({ handle: "niho", available: false, reason: "role" });
     expect(result.primary).toBeNull();
   });
@@ -106,7 +108,7 @@ describe("sheetPlan: the primary button", () => {
     expect(result).toMatchObject({
       status: "private",
       primary: "publish",
-      url: "https://niho.example.com/article/a-morning-walk-along-the-coast",
+      url: "https://exp.example.com/guides/a-morning-walk-along-the-coast",
       slug: { value: "a-morning-walk-along-the-coast", editable: true, error: null },
       canStop: false,
       changesDestination: false,
@@ -153,13 +155,13 @@ describe("sheetPlan: the primary button", () => {
   });
 
   it("is publish (changing destination) when another destination is chosen for a live page", () => {
-    const result = plan({ publication: live("niho"), selection: selection("exp") });
+    const result = plan({ publication: { ...live("exp"), handle: "niho" }, selection: selection("exp") });
     expect(result).toMatchObject({ primary: "publish", changesDestination: true, slug: { editable: true }, url: "https://exp.example.com/guides/a-morning-walk-along-the-coast" });
   });
 
   it("is null for a range or an extra the destination does not offer", () => {
     expect(plan({ selection: selection(SITE, { range: "unlisted" }) })).toMatchObject({ selectionError: "range", primary: null });
-    expect(plan({ selection: selection("niho", { extras: { app: false, news: false, xp: true } }) })).toMatchObject({ selectionError: "extras", primary: null });
+    expect(plan({ selection: selection(SITE, { extras: { app: true, news: false, xp: false } }) })).toMatchObject({ selectionError: "extras", primary: null });
   });
 
   it("suggests -2 when the title's slug is taken, and refuses a taken or invalid slug", () => {

@@ -83,7 +83,7 @@ export function destOptionsOf(sheet: PublishSheetDto | null): { options: Publish
     connected: entry.available,
     ...(entry.available ? {} : { note: PUBLISH_MESSAGES.unavailable }),
   });
-  const options = list.filter((entry) => entry.dest !== "site" && entry.reason !== "role").map(optionOf);
+  const options = list.filter((entry) => entry.dest === "exp" && entry.reason !== "role").map(optionOf);
   const sites = list.filter((entry) => entry.dest === "site");
   const site = sites.find((entry) => entry.handle === sheet?.publication?.handle) ?? sites[0];
   options.push(site ? optionOf(site) : { id: "site", label: "自分のサイト", who: WHO.site, url: "", role: ROLE.site, connected: false });

@@ -105,11 +105,12 @@ const type = async (label: string, value: string) => {
 const status = () => container?.querySelector('[role="status"]')?.textContent;
 
 describe("DestinationsView", () => {
-  it("shows the faces by role and the connected sites, and opens a site's settings", async () => {
+  it("shows Experience and connected sites without the retired NIHO face, and opens a site's settings", async () => {
     const text = (await mount(dto({ sites: [site] }))).textContent ?? "";
     expect(text).toContain("NIHO Experience");
     expect(text).toContain("旅行者向け · 英語");
-    expect(text).toContain(EDITOR_DESTINATIONS_TEXT.noRole);
+    expect(text).not.toContain("鎌倉の人向け");
+    expect(text).not.toContain(EDITOR_DESTINATIONS_TEXT.noRole);
     expect(text).toContain("mika-sato.example/posts");
     await click("mika-sato.example の設定");
     expect(push).toHaveBeenCalledWith(`/destinations/${SITE_ID}`);

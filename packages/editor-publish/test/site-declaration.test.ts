@@ -5,6 +5,7 @@ import { BLOCK_TYPES, MARK_TYPES } from "@niho/editor-publish-contract";
 import { connectionSource, parseDestinationDeclaration, siteDeclarationOf, siteDeclarationSource } from "../src/index.js";
 import { MemoryDeclarations } from "../test-support/memory-store.js";
 import { ACTOR, HANDLE, OTHER_ACTOR, OTHER_HANDLE, PAGE_ID, createSiteWorld } from "./support/site-world.js";
+import { SETTINGS } from "./support/world.js";
 
 describe("siteDeclarationSource", () => {
   it("builds a declaration that parseDestinationDeclaration accepts: no conditions, live only, no extras, everything accepted", async () => {
@@ -85,14 +86,14 @@ describe("PublishService through the connection adapters", () => {
       .toEqual({ ok: false, reason: "forbidden_destination", detail: "extras" });
   });
 
-  it("faces still work through the same declaration source", async () => {
+  it("Experience still works through the same declaration source", async () => {
     const world = createSiteWorld();
     const result = await world.publisher.publish({
       actorId: ACTOR,
       pageId: PAGE_ID,
-      target: { dest: "niho" },
-      settings: { range: "live", extras: { app: true, news: true, xp: false }, category: "essay", related: [] },
+      target: { dest: "exp" },
+      settings: SETTINGS.exp,
     });
-    expect(result).toMatchObject({ ok: true, publication: { dest: "niho" } });
+    expect(result).toMatchObject({ ok: true, publication: { dest: "exp" } });
   });
 });

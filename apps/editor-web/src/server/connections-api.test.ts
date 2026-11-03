@@ -202,8 +202,6 @@ describe("GET /api/destinations", () => {
     const body = (await (await list(deps)).json()) as { destinations: DestinationsDto };
     expect(body.destinations.faces.map((face) => [face.handle, face.available, face.reason])).toEqual([
       ["exp", true, null],
-      // 鎌倉の人の役割が無いので niho は出せない（宣言も読まない）
-      ["niho", false, "role"],
     ]);
     expect(body.destinations.faces[0]).toMatchObject({ label: "NIHO Experience", host: "exp.example.com", path: "guides", published: 0 });
     expect(body.destinations.sites).toEqual([]);
@@ -245,7 +243,6 @@ describe("GET /api/destinations", () => {
     const mine = (await (await list(deps)).json()) as { destinations: DestinationsDto };
     expect(mine.destinations.faces.map((face) => [face.handle, face.published])).toEqual([
       ["exp", 0],
-      ["niho", 0],
     ]);
 
     // 本人が公開すると、自分の 1 件だけが数に入る（別のアカウントの 1 件は足されない）
@@ -274,7 +271,6 @@ describe("GET /api/destinations", () => {
     const body = (await (await list({ ...deps, auth: () => authAs("synthetic-owner-c") })).json()) as { destinations: DestinationsDto };
     expect(body.destinations.faces.map((face) => [face.handle, face.reason, face.published])).toEqual([
       ["exp", "role", 0],
-      ["niho", "role", 0],
     ]);
   });
 
