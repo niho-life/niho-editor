@@ -1,6 +1,6 @@
 # 公開境界とゼロトラスト契約
 
-2026-10-20 時点の公開方針。NIHO Docs と NIHO Photo の公開クライアントは、ソース・配布物・通信・API contract が攻撃者に知られ、改変できることを前提にする。公開は利用許諾を意味しない。
+2026-11-03 更新。NIHO Docs と NIHO Photo の公開クライアントは、ソース・配布物・通信・API contract が攻撃者に知られ、改変できることを前提にする。公開は利用許諾を意味しない。
 
 ## 公開するもの
 
@@ -44,22 +44,24 @@ private API は少なくとも次を強制する。
 
 公開 test は合成データだけを使う。versioned contract の test-only reference model は負例と期待 error を確認するもので、production API の実装でも server-side authorization の証明でもない。
 
-## Docs / Photo 共通 contract
+## 共通の認証・防御原則と製品別のデータ契約
 
-Docs / Photo 共通クラウド contract の正本と変更責任者は `niho-docs` の [`packages/niho-cloud-contract`](../../packages/niho-cloud-contract/) とする。初版は version `1`。型・操作・error code・adversarial test vector を同じ version の下で管理し、Photo 側の利用 PR はこの正本の commit SHA を固定する。
+現在の境界は [`product-cloud-boundaries-v1.md`](product-cloud-boundaries-v1.md) を正本とする。NIHO本人確認・毎要求の認可・短命capability・再送/失効・秘密の非表示は共通原則とするが、Editorのページ添付とPhotoの個人ライブラリは、一覧・所有権・保存API・容量・履歴を共有しない。同じNIHOアカウントでも製品をまたぐデータアクセス権は生まれない。
 
-contract の更新には次を必須にする。
+既存の共有リンク用contract v1の正本と変更責任者は、このリポジトリの [`packages/niho-cloud-contract`](../../packages/niho-cloud-contract/) とする。これは現在のEditor保存APIやPhoto本人クラウドv2の共通backendではない。既存consumer向けの型・操作・error code・adversarial test vectorを維持し、Photo側は正本のcommit SHAを固定する。
+
+既存共有リンクcontractを更新するときは次を必須にする。
 
 1. 正本側で versioned contract test を通す。
 2. Photo 側にも同じ SHA を取り込む PR を用意し、その CI を通す。
 3. 両方の PR に相互リンクを付け、両側の review を終えてから merge する。
 4. 互換性を壊す変更は新しい major version とし、旧版の利用期間と移行条件を明記する。
 
-contract は認証 context、resource owner / tenant / workspace、upload / download / share / revoke / list、capability の scope / expiry / 再利用条件、idempotency、content 検証、error 分類を含める。秘密、実データ、内部 topology、正確な abuse 閾値は含めない。現在の version 1 は [`cloud-contract-v1.md`](cloud-contract-v1.md) を参照する。
+既存v1は認証context、resource owner / tenant / workspace、upload / download / share / revoke / list、capabilityのscope / expiry / 再利用条件、idempotency、content検証、error分類を含める。秘密、実データ、内部topology、正確なabuse閾値は含めない。wire仕様は [`cloud-contract-v1.md`](cloud-contract-v1.md) を参照する。互換維持のためv1の `document | photo` やtenant/workspaceの形を本人用ライブラリへ読み替えず、製品別契約へのadapterはその製品の正本で検証する。
 
 ## editor.niho.life（NIHO editor）の API
 
-`apps/editor-web`（[設計](../architecture/editor-niho-life-design.md)、[配備](../ops/editor-deploy.md)）は、ページを書く Web と、その保存の API を持つ。Docs / Photo のクラウド contract とは別の面で、ここに範囲を決める。
+`apps/editor-web`（[設計](../architecture/editor-niho-life-design.md)、[配備](../ops/editor-deploy.md)）は、ページを書く Web と、その保存の API を持つ。既存の共有リンクcontract v1とは別の面で、ここに範囲を決める。
 
 **公開リポジトリに置くもの**
 - Web のクライアントと、`/api/pages`（一覧・作成・取得・保存）の実装。owner で絞った保存と読み戻しだけで、秘密・実データ・最終権限を含まない。
@@ -70,12 +72,12 @@ contract は認証 context、resource owner / tenant / workspace、upload / down
 **非公開に残すもの**
 - 本番の `DATABASE_URL`・DB の中身・資産バケットの中身・署名の資格情報（Secret Manager と実行 ID の権限）。
 - 配備の設定（プロジェクト ID・バケット名など、本番を特定する値）と本番配備の実行権限。公開 CI から本番へは配備しない（[editor-deploy.md §7](../ops/editor-deploy.md)）。
-- NIHO ログインの最終判定（セッションの検証・役割の読み取り）。`niho` モードの実装は非公開の niho-app の契約に従い、それまでは fail-closed（いつも未認証）。
+- NIHOログインの最終判定（セッションの検証・役割の読み取り）。公開側の認証consumerは非公開niho-appの接続契約に従い、要求ごとにNIHOへ本人と接続の有効性を確認する。役割・招待APIは別契約で、未確定のAPIへ独自adapterを作らない（[接続条件](../architecture/editor-role-integration.md)）。確認不能時はfail-closedとし、本番を開発用の固定ユーザーへ落とさない。
 - 公開 API の鍵・プレビュー用トークンの実値、実ユーザーのページ・音声・文字起こし。
 
 **サーバーが毎 request で強制すること**（クライアントを信用しない）
 - 全てのクエリを `owner` と `deleted_at IS NULL` で絞る。別の人のページ・存在しない id・UUID として不正な id は、本文もヘッダーも同じ 404 にして、存在を推測させない。
-- 本番は `EDITOR_AUTH_MODE=niho` でなければ起動しない（開発用の `stub` に落ちない）。未認証は 401。
+- 本番は明示的に許可された認証モードだけで起動し、開発用の `stub` に落ちない。設定の許可値は [`apps/editor-web/src/auth/config.ts`](../../apps/editor-web/src/auth/config.ts) を正本とする。NIHOアカウントの受入には `niho` を使い、未認証は401。
 - 認証を使わない画面は共有リンク `/s/{token}`（#34）だけ。256 bit の乱数の token が共有中・ゴミ箱でないページに一致したときだけ、最新の保存版の題名と本文を返す。形の違う・未共有・止めた・作り直す前の token は同じ 404。`Cache-Control: private, no-store`・`Referrer-Policy: no-referrer`。
 - 更新系は同一 origin の要求だけ受ける。本文は上限（1 MiB）と深さで拒む。エラーの本文は短い code だけで、内部構成を漏らさない。
 - アプリ用の DB ロールは DML だけで、スキーマの変更と migration の記録の書き換えはできない。
