@@ -1,3 +1,4 @@
+import type { About } from "@niho/docs-core";
 import type { ReferencePage } from "@niho/editor-store";
 import { blockText } from "./engine";
 import { wrapUntrusted } from "./prompt";
@@ -70,9 +71,12 @@ export function referencesSection(pages: readonly Reference[]): ReferenceSection
   return { text: ["## 参考（同じフォルダのほかのページ）", ...parts].join("\n"), pages: pages.length, chars };
 }
 
-/** 「あなたについて」の節（空なら null）。 */
-export function aboutSection(about: string): string | null {
-  const text = about.trim();
-  if (text.length === 0) return null;
-  return ["## あなたについて（書く人の説明と書き方の希望。事実の根拠にはしない）", wrapUntrusted(text)].join("\n");
+/** 「あなたについて」の節（空なら null）。呼び名も自由記述も信頼しない設定値として包む。 */
+export function aboutSection(about?: About): string | null {
+  if (!about) return null;
+  const name = about.name.replace(/\s+/gu, " ").trim();
+  const text = about.text.trim();
+  const fields = [name ? "呼び名: " + name : "", text].filter(Boolean);
+  if (fields.length === 0) return null;
+  return ["## あなたについて（書く人の説明と書き方の希望。事実の根拠にはしない）", wrapUntrusted(fields.join("\n\n"))].join("\n");
 }

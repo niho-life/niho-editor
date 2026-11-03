@@ -1,4 +1,4 @@
-import type { GlossaryEntry } from "@niho/docs-core";
+import { hasAbout, type About, type GlossaryEntry } from "@niho/docs-core";
 import type { Block, Page } from "@niho/editor-store";
 import { validateBlocks, type AstResult } from "../ast/blocks";
 import { diffWords, type DiffPart } from "./diff";
@@ -108,7 +108,7 @@ export type RequestPlan = { ok: true; requests: AiRequest[] } | { ok: false; err
 export type AiPreferences = {
   glossary?: readonly GlossaryEntry[];
   lang?: AiRequest["lang"];
-  about?: string;
+  about?: About;
   references?: readonly { title: string; text: string }[];
 };
 
@@ -150,7 +150,7 @@ export function buildRequest(
   let current: AiParagraph[] = [];
   let size = 0;
   // 「あなたについて」と参考は、分けた要求のどれにも同じものを付ける（どの要求も同じ文脈で書く）
-  const about = preferences.about?.trim() ?? "";
+  const about = preferences.about;
   const references = (preferences.references ?? []).map((reference) => ({ ...reference }));
   const flush = () => {
     if (current.length > 0) {
@@ -159,7 +159,7 @@ export function buildRequest(
         paragraphs: current,
         glossary,
         lang: preferences.lang ?? page.lang,
-        ...(about ? { about } : {}),
+        ...(about && hasAbout(about) ? { about: { ...about } } : {}),
         ...(references.length > 0 ? { references: references.map((reference) => ({ ...reference })) } : {}),
       });
     }

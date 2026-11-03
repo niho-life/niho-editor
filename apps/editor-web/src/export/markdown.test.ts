@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { exportMarkdown, markdownLinkHref } from "./markdown";
+import { exportFullMarkdown, exportMarkdown, MarkdownExportError, markdownLinkHref } from "./markdown";
+
+describe("full page Markdown export", () => {
+  it("keeps table, checklist state, code and strike in the downloaded page", () => {
+    const body = [
+      { type: "table", content: [{ type: "tableRow", content: [{ type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "項目" }] }] }] }, { type: "tableRow", content: [{ type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "値" }] }] }] }] },
+      { type: "taskList", content: [{ type: "taskItem", attrs: { checked: true }, content: [{ type: "paragraph", content: [{ type: "text", text: "完了" }] }] }] },
+      { type: "codeBlock", attrs: { language: "ts" }, content: [{ type: "text", text: "const x = 1;" }] },
+      { type: "paragraph", content: [{ type: "text", text: "旧", marks: [{ type: "strike" }] }] },
+    ];
+    const markdown = exportFullMarkdown(body);
+    expect(markdown).toContain("| 項目 |");
+    expect(markdown).toContain("- [x] 完了");
+    expect(markdown).toContain("```ts");
+    expect(markdown).toContain("~~旧~~");
+  });
+
+  it("rejects a merged table cell with an explicit reason", () => {
+    const body = [{ type: "table", content: [{ type: "tableRow", content: [{ type: "tableHeader", attrs: { colspan: 2 }, content: [{ type: "paragraph" }] }] }] }];
+    expect(() => exportFullMarkdown(body)).toThrow(MarkdownExportError);
+    expect(() => exportFullMarkdown(body)).toThrow(/結合セル/);
+  });
+});
 
 /*
  * ---- oracle ----

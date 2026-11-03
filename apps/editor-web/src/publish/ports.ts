@@ -14,6 +14,7 @@ import {
   type FactsSource,
   type PublishPorts,
   type RoleReader,
+  type ServerFacts,
   type StorageModeReader,
 } from "@niho/editor-publish";
 import type { Session } from "../auth/types";
@@ -52,6 +53,8 @@ export type PublishWiringOptions = {
   readonly drafts?: DraftFingerprints;
   /** 書き出し（#41）の写真の読み出し。省略すると写真を読めない（写真のあるページは書き出せない）。 */
   readonly assetBytes?: AssetBytes;
+  /** Historical final-stage titles for a page, used to reject an untouched generated title at publish time. */
+  readonly finalStepNames?: (actorId: string, pageId: string) => Promise<readonly string[]>;
 };
 
 export const systemClock: Clock = { now: () => new Date().toISOString() };
@@ -158,6 +161,12 @@ export function faceDeclarations(plan: DeclarationPlan, fetch?: FetchLike): Decl
 export function wirePublishPorts(store: ConnectionStore, session: Session, options: PublishWiringOptions = {}): PublishWiring {
   const config = publishConfig(options.env);
   const clock = options.clock ?? systemClock;
+  const facts: FactsSource = options.finalStepNames ? {
+    read: async (query) => ({
+      ...await UNKNOWN_FACTS.read(query),
+      finalStepNames: await options.finalStepNames!(query.actorId, query.pageId),
+    } satisfies ServerFacts),
+  } : UNKNOWN_FACTS;
   return {
     publish: {
       store,
@@ -166,7 +175,7 @@ export function wirePublishPorts(store: ConnectionStore, session: Session, optio
       connections: connectionSource(store),
       declarations: siteDeclarationSource(store, faceDeclarations(config.declarations, options.fetch)),
       authors: sessionAuthors(session),
-      facts: UNKNOWN_FACTS,
+      facts,
       assetUrls: assetUrlsOf(config.assetOrigin),
       clock,
     },

@@ -8,6 +8,10 @@ export type PageBody = {
   blocks?: unknown[];
   /** ページの言語（情報パネルで変えたときだけ送る）。 */
   lang?: PageLang;
+  /** 公開用カバー。null で外す。 */
+  cover?: string | null;
+  /** 公開用リード。null で外す。 */
+  lead?: string | null;
 };
 
 /** サーバーが受ける言語か。 */
@@ -40,6 +44,9 @@ export type ConflictPage = {
   updatedAt: string;
   /** 今のページの言語（応答に無い・読めないときは持たない。そのときは言語を比べない）。 */
   lang?: PageLang;
+  /** 古い応答では省略されることがある。 */
+  cover?: string | null;
+  lead?: string | null;
 };
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -63,13 +70,27 @@ function isRevision(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+
 /** 競合の応答（`{ error: "conflict", page }`）・AI の採用の応答（`{ page }`）のページ。形が違えば null。 */
 export function conflictPageOf(data: unknown): ConflictPage | null {
   const page = (data as { page?: Record<string, unknown> } | null)?.page;
   if (typeof page !== "object" || page === null) return null;
-  const { title, blocks, revision, updatedAt, lang } = page;
+  const { title, blocks, revision, updatedAt, lang, cover, lead } = page;
   if (typeof title !== "string" || !Array.isArray(blocks) || !isRevision(revision) || typeof updatedAt !== "string") return null;
-  return { title, blocks, revision, updatedAt, ...(isPageLang(lang) ? { lang } : {}) };
+  if (cover !== undefined && cover !== null && !isUuid(cover)) return null;
+  if (lead !== undefined && lead !== null && typeof lead !== "string") return null;
+  return {
+    title,
+    blocks,
+    revision,
+    updatedAt,
+    ...(isPageLang(lang) ? { lang } : {}),
+    ...(cover !== undefined ? { cover } : {}),
+    ...(lead !== undefined ? { lead } : {}),
+  };
 }
 
 function timeoutSignal(ms: number): AbortSignal | undefined {

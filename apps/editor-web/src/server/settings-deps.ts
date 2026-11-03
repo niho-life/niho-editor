@@ -1,5 +1,5 @@
 import "server-only";
-import { getEditorSettings, saveEditorSettings } from "@niho/editor-store";
+import { duplicateRecipeWithSamples, getEditorSettings, saveEditorSettings } from "@niho/editor-store";
 import { getAuthProvider } from "../auth";
 import { getPool } from "./db";
 import { ownerRecipes, saveOwnerRecipes } from "./recipe-source";
@@ -20,5 +20,13 @@ export const settingsDeps: SettingsApiDeps = {
       recipes: (owner) => ownerRecipes(pool, owner),
       saveRecipes: (owner, recipes) => saveOwnerRecipes(pool, owner, recipes),
     };
+  },
+  duplicateRecipe: async (owner, recipeId) => {
+    const pool = getPool();
+    if (!pool) return { status: "unavailable" };
+    await ownerRecipes(pool, owner);
+    const result = await duplicateRecipeWithSamples(pool, owner, recipeId);
+    if (result.status !== "created") return result;
+    return { status: "created", recipes: await ownerRecipes(pool, owner) };
   },
 };

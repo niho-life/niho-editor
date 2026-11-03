@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { EditorStore } from "@niho/editor-store";
+import { EditorStore, seedRecipes } from "@niho/editor-store";
 import { applyMigrations } from "@niho/editor-store/migrate";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -7,7 +7,7 @@ import type { AuthProvider } from "../auth/types";
 import { CLOUD_TASKS_ORIGIN, CloudTasksQueue, METADATA_TOKEN_URL, WORKER_RUN_PATH, type CloudTasksConfig } from "../steps/cloud-tasks";
 import { fakeExecutor } from "../steps/executor";
 import { taskName } from "../steps/queue";
-import { DEFAULT_RECIPES } from "../steps/recipes";
+import { DEFAULT_RECIPES, toRecipeInputs } from "../steps/recipes";
 import { pgStepRunStore, pgStepSweepStore } from "../steps/store";
 import type { OidcVerifyResult } from "./google-oidc";
 import { createStepRun, type StepsApiDeps } from "./steps-api";
@@ -86,6 +86,7 @@ describe.skipIf(databaseUrl === undefined)("Cloud Tasks worker with PostgreSQL",
     const client = await pool.connect();
     try {
       await applyMigrations(client);
+      await seedRecipes(client, OWNER, toRecipeInputs(DEFAULT_RECIPES));
     } finally {
       client.release();
     }
@@ -107,7 +108,6 @@ describe.skipIf(databaseUrl === undefined)("Cloud Tasks worker with PostgreSQL",
       config: () => CONFIG,
       verify,
       steps: () => ({ ...pgStepRunStore(pool), ...pgStepSweepStore(pool) }),
-      recipes: () => async () => DEFAULT_RECIPES,
       queue: () => queue,
       executor: () => fakeExecutor,
     };

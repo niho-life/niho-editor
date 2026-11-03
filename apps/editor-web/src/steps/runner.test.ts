@@ -15,8 +15,8 @@ async function setup(executor: StepExecutor = fakeExecutor, extra: Partial<Runne
   const queue = new MemoryTaskQueue();
   const parent = store.addPage(OWNER, { kind: "rec", blocks: transcript });
   const deps: RunnerDeps = { store, recipes: async () => DEFAULT_RECIPES, executor, queue, ...extra };
-  const start = async (fromStep = 0) => {
-    const result = await store.createRun(OWNER, parent, { recipe: tpl1, fromStep });
+  const start = async (fromStep = 0, recipe = tpl1) => {
+    const result = await store.createRun(OWNER, parent, { recipe, fromStep });
     if (result.status !== "created") throw new Error(result.status);
     await queue.enqueue({ name: taskName(result.run.id, fromStep, 0), runId: result.run.id, stepIndex: fromStep });
     return result.run;
@@ -34,6 +34,23 @@ async function setup(executor: StepExecutor = fakeExecutor, extra: Partial<Runne
 }
 
 describe("runAttempt", () => {
+  it("keeps the folder background separate and marks completed steps info-stale when it changes", async () => {
+    const seen: { source: unknown; background: unknown }[] = [];
+    const executor: StepExecutor = { run: async (input) => {
+      seen.push({ source: input.parentBlocks, background: input.backgroundBlocks });
+      return fakeExecutor.run(input);
+    } };
+    const { store, parent, start, drainAll } = await setup(executor);
+    const folder = store.addPage(OWNER, { blocks: [{ type: "paragraph", content: [{ type: "text", text: "合成の背景" }] }] });
+    store.pages.get(parent)!.parent = folder;
+    await start();
+    await drainAll();
+    expect(seen[0]).toEqual({ source: transcript, background: store.pages.get(folder)?.blocks });
+    store.pages.get(folder)!.blocks = [{ type: "paragraph", content: [{ type: "text", text: "変更した背景" }] }];
+    expect(await store.refreshStale(OWNER, parent, tpl1)).toBe(tpl1.steps.length);
+    expect((await store.readStaleReasons(OWNER, parent, tpl1))[2]).toEqual(["info"]);
+  });
+
   it("runs tpl-1 to the end and leaves its three sub-pages done", async () => {
     const { store, start, drainAll, view } = await setup();
     await start();
@@ -58,29 +75,24 @@ describe("runAttempt", () => {
     expect(JSON.stringify(store.pages.get(run!.steps[1]!.pageId)?.blocks)).toContain("[fake] 文字起こし修正");
   });
 
-  it("runs the 手順 of the person who owns the run, as the settings changed it (#108)", async () => {
+  it("runs the recipe captured at start even if the reader changes before the claim", async () => {
     const edited = recipesOf([{ id: "tpl-1", name: "記事制作", guide: "お手本を替えた", steps: tpl1.steps.map((step) => ({ ...step, name: `${step.name}（短め）` })) }]);
-    const seen: string[] = [];
     const { store, start, drainAll, view } = await setup(fakeExecutor, {
-      recipes: async (owner) => {
-        seen.push(owner);
-        return edited;
-      },
+      recipes: async () => { throw new Error("runner must not read current recipes"); },
     });
-    await start();
+    await start(0, edited[0]!);
     await drainAll();
     const run = await view();
     expect(run?.state).toBe("succeeded");
-    // 実行器は owner の手順を受け取る（偽物の結果に段階の名前が入る）
     expect(JSON.stringify(store.pages.get(run!.steps[0]!.pageId)?.blocks)).toContain("[fake] 文字起こし修正（短め）");
-    expect(new Set(seen)).toEqual(new Set([OWNER]));
   });
 
-  it("fails the step without retrying when the person no longer has that 手順", async () => {
-    const { start, queue, deps, view } = await setup(fakeExecutor, { recipes: async () => [] });
-    await start();
+  it("fails closed without retrying if the persisted snapshot is malformed", async () => {
+    const { store, start, queue, deps, view } = await setup(fakeExecutor);
+    const created = await start();
+    store.runs.get(created.id)!.recipeSnapshot = null as never;
     expect(await runAttempt(deps, queue.drain()[0]!)).toEqual({ status: "failed" });
-    expect((await view())?.steps[0]?.errorCode).toBe("unknown_recipe");
+    expect((await view())?.steps[0]?.errorCode).toBe("invalid_snapshot");
   });
 
   it("fails a middle step after three failures and keeps the upstream result", async () => {

@@ -1,4 +1,4 @@
-import type { MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, type MouseEvent as ReactMouseEvent } from "react";
 import type { Editor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 // editor.chain() の toggleBold などの型は、StarterKit の型から入る（これだけを読む検査でも型が揃うように）。
@@ -10,6 +10,8 @@ export type ShellSelectionActions = {
   onTextType?: () => void;
   onBold?: () => void;
   onItalic?: () => void;
+  onStrike?: () => void;
+  onCode?: () => void;
   onLink?: () => void;
   onHeading?: () => void;
   onList?: () => void;
@@ -24,7 +26,7 @@ function SelectionButtons({
   textType = "テキスト",
 }: {
   actions: ShellSelectionActions;
-  pressed?: { bold?: boolean; italic?: boolean };
+  pressed?: { bold?: boolean; italic?: boolean; strike?: boolean; code?: boolean };
   textType?: string;
 }) {
   return (
@@ -39,6 +41,12 @@ function SelectionButtons({
       </button>
       <button type="button" aria-label="斜体" aria-pressed={pressed?.italic} onMouseDown={keepFocus} onClick={actions.onItalic}>
         <i>I</i>
+      </button>
+      <button type="button" aria-label="取り消し線" aria-pressed={pressed?.strike} onMouseDown={keepFocus} onClick={actions.onStrike}>
+        <s>S</s>
+      </button>
+      <button type="button" aria-label="インラインコード" aria-pressed={pressed?.code} onMouseDown={keepFocus} onClick={actions.onCode}>
+        <code>&lt;/&gt;</code>
       </button>
       <button type="button" aria-label="リンク" onMouseDown={keepFocus} onClick={actions.onLink}>
         <Icon name="link" />
@@ -86,6 +94,17 @@ export type ShellBubbleMenuProps = {
  * 太字・斜体・見出し・箇条書きは editor のコマンドへ、行の種類・リンク・AI は props の関数へ渡す。
  */
 export function ShellBubbleMenu({ editor, onTextType, onLink, onAi, textType }: ShellBubbleMenuProps) {
+  useEffect(() => {
+    const update = () => {
+      const bar = editor.view.dom.closest(".be")?.querySelector(".es-selbar--live");
+      for (const [name, mark] of [["太字", "bold"], ["斜体", "italic"], ["取り消し線", "strike"], ["インラインコード", "code"]] as const) {
+        bar?.querySelector(`button[aria-label="${name}"]`)?.setAttribute("aria-pressed", String(editor.isActive(mark)));
+      }
+    };
+    editor.on("transaction", update);
+    update();
+    return () => { editor.off("transaction", update); };
+  }, [editor]);
   return (
     <BubbleMenu
       editor={editor}
@@ -97,13 +116,15 @@ export function ShellBubbleMenu({ editor, onTextType, onLink, onAi, textType }: 
     >
       <SelectionButtons
         textType={textType}
-        pressed={{ bold: editor.isActive("bold"), italic: editor.isActive("italic") }}
+        pressed={{ bold: editor.isActive("bold"), italic: editor.isActive("italic"), strike: editor.isActive("strike"), code: editor.isActive("code") }}
         actions={{
           onTextType,
           onLink,
           onAi,
           onBold: () => editor.chain().focus().toggleBold().run(),
           onItalic: () => editor.chain().focus().toggleItalic().run(),
+          onStrike: () => editor.chain().focus().toggleStrike().run(),
+          onCode: () => editor.chain().focus().toggleCode().run(),
           onHeading: () => editor.chain().focus().toggleHeading({ level: 2 }).run(),
           onList: () => editor.chain().focus().toggleBulletList().run(),
         }}

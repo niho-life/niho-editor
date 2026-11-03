@@ -95,16 +95,18 @@ export function ShellPills<T extends string>({ label, options, value, onChange }
 }
 
 /** ラベル付きの入力（1 行）。 */
-export function ShellField({ label, value, onChange, multiline }: { label: string; value: string; onChange?: (value: string) => void; multiline?: boolean }) {
+export function ShellField({ label, value, onChange, multiline, error }: { label: string; value: string; onChange?: (value: string) => void; multiline?: boolean; error?: string }) {
   const id = useId();
+  const errorId = `${id}-error`;
   return (
     <div className="es-field">
       <label htmlFor={id}>{label}</label>
       {multiline ? (
-        <textarea id={id} className="es-area" value={value} onChange={(event) => onChange?.(event.target.value)} />
+        <textarea id={id} className="es-area" value={value} aria-invalid={error ? true : undefined} aria-describedby={error ? errorId : undefined} onChange={(event) => onChange?.(event.target.value)} />
       ) : (
-        <input id={id} className="es-input" value={value} onChange={(event) => onChange?.(event.target.value)} />
+        <input id={id} className="es-input" value={value} aria-invalid={error ? true : undefined} aria-describedby={error ? errorId : undefined} onChange={(event) => onChange?.(event.target.value)} />
       )}
+      {error && <small id={errorId} className="es-danger">{error}</small>}
     </div>
   );
 }

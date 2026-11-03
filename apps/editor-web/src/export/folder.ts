@@ -1,7 +1,7 @@
 import { FOLDER_EXPORT_CONTEXT_TITLE, FOLDER_EXPORT_MAX_CHARS, FOLDER_EXPORT_MAX_TABS } from "@niho/docs-core";
 import { buildZip, type ZipEntry } from "@niho/editor-publish";
 import type { PageEntity, PageFields } from "@niho/editor-store";
-import { exportMarkdown } from "./markdown";
+import { exportFullMarkdown, MarkdownExportError } from "./markdown";
 
 /**
  * フォルダ単位の書き出し（#37。旧 NIHO docs の `folder-export-tree.ts` の木を、ページ＋サブページの木に作り替えたもの）。
@@ -38,7 +38,7 @@ export type FolderExportInput = {
   photos: ReadonlyMap<string, FolderExportPhoto>;
 };
 
-export type FolderExportFailure = { ok: false; reason: "empty" | "too_many" | "too_large" | "archive" };
+export type FolderExportFailure = { ok: false; reason: "empty" | "too_many" | "too_large" | "archive" | "unsupported_markdown"; detail?: string };
 export type FolderExportResult = { ok: true; bytes: Uint8Array; files: string[]; photos: number } | FolderExportFailure;
 
 /** 写真の拡張子（editor-publish の PHOTO_EXTENSIONS と同じ値。知らない種類は bin）。 */
@@ -119,7 +119,7 @@ function entityLine(entity: PageEntity): string {
  * 見出しを付けて並べる。どれも無ければ null（そのページを出さない）。
  */
 export function contextMarkdown(folder: FolderExportPage, fields: PageFields, photoPath: (assetId: string) => string | null): string | null {
-  const body = exportMarkdown(folder.blocks, { photoPath }).trim();
+  const body = exportFullMarkdown(folder.blocks, { photoPath }).trim();
   const parts: string[] = [];
   if (body !== "") parts.push(body);
   if (fields.entities.length > 0) parts.push(`## 登場人物\n${fields.entities.map(entityLine).join("\n")}`);
@@ -135,7 +135,7 @@ export function contextMarkdown(folder: FolderExportPage, fields: PageFields, ph
 
 /** ページ 1 枚の `.md`（題名を h1 にして本文を続ける。公開の書き出しと違い、front matter は付けない）。 */
 export function pageMarkdown(page: FolderExportPage, photoPath: (assetId: string) => string | null): string {
-  const body = exportMarkdown(page.blocks, { photoPath }).trim();
+  const body = exportFullMarkdown(page.blocks, { photoPath }).trim();
   const title = page.title.trim() === "" ? "無題" : page.title.trim();
   return body === "" ? `# ${title}\n` : `# ${title}\n\n${body}\n`;
 }
@@ -152,10 +152,15 @@ export function buildFolderExport(input: FolderExportInput): FolderExportResult 
     return photo ? photoArchivePath(photo) : null;
   };
   const files: { name: string; text: string }[] = [];
-  const context = contextMarkdown(folder, input.fields, photoPath);
-  if (context !== null) files.push({ name: `${FOLDER_EXPORT_CONTEXT_TITLE}.md`, text: context });
-  const names = uniqueFileNames([FOLDER_EXPORT_CONTEXT_TITLE, ...inside.map((page) => page.title)]).slice(1);
-  for (const [index, page] of inside.entries()) files.push({ name: names[index]!, text: pageMarkdown(page, photoPath) });
+  try {
+    const context = contextMarkdown(folder, input.fields, photoPath);
+    if (context !== null) files.push({ name: `${FOLDER_EXPORT_CONTEXT_TITLE}.md`, text: context });
+    const names = uniqueFileNames([FOLDER_EXPORT_CONTEXT_TITLE, ...inside.map((page) => page.title)]).slice(1);
+    for (const [index, page] of inside.entries()) files.push({ name: names[index]!, text: pageMarkdown(page, photoPath) });
+  } catch (error) {
+    if (error instanceof MarkdownExportError) return { ok: false, reason: "unsupported_markdown", detail: error.message };
+    throw error;
+  }
   if (files.length === 0) return { ok: false, reason: "empty" };
   if (files.length > FOLDER_EXPORT_MAX_TABS) return { ok: false, reason: "too_many" };
   const chars = files.reduce((total, file) => total + Array.from(file.text).length, 0);

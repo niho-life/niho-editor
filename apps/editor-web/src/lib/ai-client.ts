@@ -85,6 +85,8 @@ export type AiChatResult = {
   usage: { nearLimit: boolean };
 };
 
+export type DeviceChatWrite = { pageId: string; markdown: string; baseRevision: number };
+
 /** 作業の 1 行（道具の名前とページの名前）。 */
 export type AiChatItem = { kind: "narration"; text: string } | { kind: "tool"; tool: string; page: string | null; ok: boolean };
 
@@ -310,8 +312,7 @@ export async function getAiChat(pageId: string, conversationId: string, options:
  * AI チャットの 1 回の依頼（AI がページを直接書き換える。旧 NIHO docs と同じ動き）。
  * 書いた分は版として残るので、`undoAiChat` で元に戻せる。
  */
-export async function sendAiChat(pageId: string, body: { text: string; conversationId?: string }, options: { signal?: AbortSignal } = {}): Promise<AiChatResult> {
-  const data = await post(pagePath(pageId, "/ai/chat"), body, options.signal);
+function chatResultFrom(data: unknown): AiChatResult {
   if (!isRecord(data) || !isRecord(data.message)) throw new AiRequestError("failed");
   const message = data.message;
   const result = chatResultOf(message.result);
@@ -326,6 +327,30 @@ export async function sendAiChat(pageId: string, body: { text: string; conversat
     page: data.page === null || data.page === undefined ? null : conflictPageOf(data),
     usage: { nearLimit: isRecord(data.usage) && data.usage.nearLimit === true },
   };
+}
+
+export async function sendAiChat(pageId: string, body: { text: string; conversationId?: string }, options: { signal?: AbortSignal } = {}): Promise<AiChatResult> {
+  return chatResultFrom(await post(pagePath(pageId, "/ai/chat"), body, options.signal));
+}
+
+/** Mac CLI の完了結果を保存する。通信が途切れたら保存済みか不明なので、この関数は自動再送しない。 */
+export async function recordDeviceAiChat(pageId: string, body: { conversationId?: string; input: string; reply: string; engine: string; writes: DeviceChatWrite[] }): Promise<AiChatResult> {
+  const data = await post(pagePath(pageId, "/ai/chat/turns"), body);
+  // Device turns save the page before best-effort conversation history. Preserve a successful page response
+  // even when that history write failed, so the editor can refresh the changed page and tell the user.
+  if (isRecord(data) && data.message === null && data.conversation === null) {
+    return {
+      conversation: null,
+      reply: body.reply,
+      items: [],
+      result: "done",
+      resultCode: "history_unavailable",
+      changes: [],
+      page: data.page === null || data.page === undefined ? null : conflictPageOf(data),
+      usage: { nearLimit: false },
+    };
+  }
+  return chatResultFrom(data);
 }
 
 /** その依頼で書いた分を元に戻す（直したページは依頼の前へ、作ったページはゴミ箱へ）。 */

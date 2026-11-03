@@ -48,7 +48,7 @@ async function sheet(world: World, dest: DestName): Promise<ReturnType<typeof sh
     selection: { handle: handleOf(dest), ...settings, slug: null },
     publication: null,
     draftFingerprint: await draftFingerprint(page, ASSETS),
-    facts: collectFacts(page, ASSETS, { relatedLive: true }, { category: settings.category, related: settings.related }),
+    facts: collectFacts(page, ASSETS, await world.facts.read({ actorId: ACTOR, pageId: PAGE_ID }), { category: settings.category, related: settings.related }),
   };
   return sheetPlan(input);
 }
@@ -109,6 +109,25 @@ describe("条件がそろうまで公開ボタンが押せない", () => {
     expect(plan.primary).toBeNull();
     world.facts.set(ACTOR, { relatedLive: null });
     expect(await world.service.publish(world.input("exp"))).toMatchObject({ ok: false, reason: "not_ready", problems: [{ id: "related-live" }] });
+  });
+
+  it("keeps an unchanged final-stage title out of the sheet and refuses publish until it is edited", async () => {
+    const world = createWorld();
+    world.editDraft({ title: "記事本文" });
+    world.facts.set(ACTOR, { relatedLive: true, finalStepNames: ["旧・記事本文", "記事本文"] });
+
+    const blocked = await sheet(world, "niho");
+    expect(blocked.primary).toBeNull();
+    expect(blocked.problems.map((problem) => problem.id)).toEqual(["step-title"]);
+    const before = world.store.dump();
+    expect(await world.service.publish(world.input("niho"))).toMatchObject({ ok: false, reason: "not_ready", problems: [{ id: "step-title" }] });
+    expect(world.store.dump()).toBe(before);
+
+    world.editDraft({ title: "海辺の朝" });
+    const ready = await sheet(world, "niho");
+    expect(ready.primary).toBe("publish");
+    expect(ready.problems).toEqual([]);
+    expect((await world.service.publish(world.input("niho"))).ok).toBe(true);
   });
 
   it("a destination whose declaration is broken cannot be published to (fail closed)", async () => {

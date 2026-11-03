@@ -160,7 +160,9 @@ export function exportFolder(request: Request, id: string, deps: FolderApiDeps):
       }
     }
     const archive = buildFolderExport({ pages, fields: await fields.get(owner, folder.id), photos });
-    if (!archive.ok) return errorResponse(EXPORT_PROBLEMS[archive.reason]);
+    if (!archive.ok) return archive.reason === "unsupported_markdown"
+      ? jsonResponse(422, { error: "unsupported_markdown", reason: archive.detail })
+      : errorResponse(EXPORT_PROBLEMS[archive.reason]);
     return new Response(archive.bytes as unknown as BodyInit, {
       status: 200,
       headers: {

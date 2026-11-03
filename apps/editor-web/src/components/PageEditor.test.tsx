@@ -190,6 +190,52 @@ describe("niho-docs-ui on React 19", () => {
 });
 
 describe("PageEditor autosave", () => {
+  it("autosaves the public lead with the page revision and keeps it in the local draft", async () => {
+    const { bodies } = acceptingFetch();
+    const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
+    await renderEditor({ revision: 5, lead: "古い要約" }, { drafts });
+    const input = container!.querySelector<HTMLTextAreaElement>("[data-page-lead]")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "新しい要約");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await advance(300);
+    await settleIdb();
+    expect(await drafts.get(PAGE_ID)).toMatchObject({ lead: "新しい要約", baseRevision: 5 });
+    await waitForAutosave();
+    expect(bodies).toEqual([{ lead: "新しい要約", baseRevision: 5 }]);
+  });
+
+  it("uses a page image as the cover without uploading a second copy", async () => {
+    const assetId = "00000000-0000-4000-8000-000000000002";
+    const patches: Array<Record<string, unknown>> = [];
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+      urls.push(url);
+      if (url === `/api/assets/${assetId}/meta`) {
+        return json(200, { image: { assetId, pageId: PAGE_ID, status: "ready", bytes: 5, contentType: "image/png", alt: null, credit: null, consent: false } });
+      }
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      patches.push(body);
+      return json(200, { page: { id: PAGE_ID, revision: (body.baseRevision as number) + 1 } });
+    }));
+    await renderEditor({ revision: 5, blocks: [{ type: "image", attrs: { assetId } }] });
+    const select = container!.querySelector<HTMLSelectElement>("[data-page-cover]")!;
+    expect([...select.options].map((option) => option.value)).toEqual(["", assetId]);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, assetId);
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await waitForAutosave();
+    expect(patches).toHaveLength(1);
+    expect(patches[0]?.cover).toBe(assetId);
+    expect(patches[0]?.baseRevision).toBe(5);
+    const blocks = patches[0]?.blocks as Array<Record<string, unknown>>;
+    expect(blocks[0]).toMatchObject({ type: "image", attrs: { assetId } });
+    expect(urls.some((url) => url.endsWith("/images/start"))).toBe(false);
+    expect(container!.querySelector<HTMLImageElement>("img[alt='カバー画像のプレビュー']")?.getAttribute("src")).toContain(assetId);
+  });
+
   it("sends every autosave with the page's revision as baseRevision and advances it from each response", async () => {
     const { bodies } = acceptingFetch();
     await renderEditor({ revision: 5 });
@@ -303,6 +349,18 @@ describe("PageEditor autosave", () => {
     expect(status()?.textContent).toBe("保存済み");
   });
 
+  it("explains the 30 MiB scope and keeps the draft visible after a page-full response", async () => {
+    const fetchMock = vi.fn(async () => json(413, { error: "page_full" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await renderEditor({ revision: 2 });
+    expect(container!.textContent).toContain("題名・リード・本文・本文/カバー画像・アップロード中の画像");
+    expect(container!.textContent).toContain("録音音声は別枠");
+    await act(async () => typeTitle("容量を超える変更"));
+    await waitForAutosave();
+    expect(container!.querySelector('[role="alert"]')?.textContent).toContain("本文やカバーから不要な画像を外すか、アップロード中の画像を中止");
+    expect(container!.querySelector<HTMLTextAreaElement>("textarea.page-title")?.value).toBe("容量を超える変更");
+  });
+
   it("says the sign-in expired on a 401 and does not resend by itself", async () => {
     const fetchMock = vi.fn(async () => json(401, { error: "unauthorized" }));
     vi.stubGlobal("fetch", fetchMock);
@@ -408,7 +466,7 @@ describe("PageEditor conflict band", () => {
       button("この内容で上書き").click();
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(bodies[1]).toEqual({ title: "この画面", blocks: paragraph("この画面の本文"), baseRevision: 9, overwrite: true });
+    expect(bodies[1]).toEqual({ title: "この画面", blocks: paragraph("この画面の本文"), cover: null, lead: null, baseRevision: 9, overwrite: true });
     expect(container!.querySelector("[data-conflict-band]")).toBeNull();
     expect(status()?.textContent).toBe("保存済み");
 
@@ -570,7 +628,7 @@ describe("PageEditor drafts on this device (IndexedDB)", () => {
       button("この内容で上書き").click();
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(bodies).toEqual([{ title: "下書きの題", blocks: paragraph("下書きの本文追記"), baseRevision: 6, overwrite: true }]);
+    expect(bodies).toEqual([{ title: "下書きの題", blocks: paragraph("下書きの本文追記"), cover: null, lead: null, baseRevision: 6, overwrite: true }]);
     await settleIdb();
     expect(await drafts.get(PAGE_ID)).toBeNull();
     expect(container!.querySelector("[data-conflict-band]")).toBeNull();

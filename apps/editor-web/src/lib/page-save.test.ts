@@ -103,6 +103,20 @@ describe("classifySaveFailure", () => {
 });
 
 describe("createPageSaver", () => {
+  it("keeps cover and lead on partial saves, compares them on conflicts, and can clear both explicitly", async () => {
+    const request = vi.fn(async (_id: string, _body: PageBody, options: SaveRequestOptions) => options.baseRevision + 1);
+    const saver = createPageSaver({
+      pageId: PAGE_ID,
+      revision: 5,
+      content: { title: "題", blocks: [], cover: PAGE_ID, lead: "説明" },
+      request,
+    });
+    await saver.save({ title: "新しい題" }, NO_KEEPALIVE);
+    expect(saver.content).toEqual({ title: "新しい題", blocks: [], cover: PAGE_ID, lead: "説明" });
+    await saver.save({ cover: null, lead: null }, NO_KEEPALIVE);
+    expect(saver.content).toEqual({ title: "新しい題", blocks: [], cover: null, lead: null });
+  });
+
   it("sends the revision it has as baseRevision and advances it from each response", async () => {
     const server = fakeServer({ title: "", blocks: [], revision: 5 });
     const saver = createPageSaver({ pageId: PAGE_ID, revision: 5, content: { title: "", blocks: [] }, request: server.request });

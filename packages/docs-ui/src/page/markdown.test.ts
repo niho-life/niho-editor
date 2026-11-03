@@ -75,6 +75,49 @@ describe("限定 AST ↔ Markdown", () => {
     expect(roundTrip(blocks)).toEqual(blocks);
   });
 
+  it("表・チェック状態・コード書式が Markdown と往復する", () => {
+    const markdown = "| 項目 | 状態 |\n| --- | --- |\n| 本文 | ~~旧~~ `新` |\n\n- [x] 完了\n- [ ] 未完了\n\n```ts\nconst a = 1;\n```";
+    const parsed = markdownToBlocks(markdown);
+    expect(parsed.ok, parsed.ok ? "" : parsed.reason).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.blocks.map((block) => block.type)).toEqual(["table", "taskList", "codeBlock"]);
+    expect(JSON.stringify(parsed.blocks)).toContain('"checked":true');
+    expect(JSON.stringify(parsed.blocks)).toContain('"type":"strike"');
+    expect(JSON.stringify(parsed.blocks)).toContain('"type":"code"');
+    const written = blocksToMarkdown(parsed.blocks);
+    expect(written.ok, written.ok ? "" : written.reason).toBe(true);
+    if (!written.ok) return;
+    expect(markdownToBlocks(written.markdown)).toEqual(parsed);
+  });
+
+  it("表の配置と区切り文字、空のチェック項目を保つ", () => {
+    const source = "| 左 | 右 |\n| :--- | ---: |\n| A\\|B | x |\n\n- [ ]\n- [x] done";
+    const first = markdownToBlocks(source);
+    expect(first.ok, first.ok ? "" : first.reason).toBe(true);
+    if (!first.ok) return;
+    const written = blocksToMarkdown(first.blocks);
+    expect(written.ok, written.ok ? "" : written.reason).toBe(true);
+    if (!written.ok) return;
+    expect(written.markdown).toContain(":---");
+    expect(written.markdown).toContain("---:");
+    expect(markdownToBlocks(written.markdown)).toEqual(first);
+  });
+
+  it("内部にバックティックを含むインラインコードが往復する", () => {
+    for (const value of ["a`b", "`先頭", "末尾`", "a``b", "`囲み`"]) {
+      const blocks: Block[] = [{ type: "paragraph", content: [{ type: "text", text: value, marks: [{ type: "code" }] }] }];
+      expect(roundTrip(blocks), value).toEqual(blocks);
+    }
+  });
+
+  it("表のセルにあるインラインコードの縦線が往復する", () => {
+    const blocks: Block[] = [{ type: "table", content: [
+      { type: "tableRow", content: [{ type: "tableHeader", attrs: { colspan: 1, rowspan: 1, colwidth: null, align: null }, content: [{ type: "paragraph", content: [text("式")] }] }] },
+      { type: "tableRow", content: [{ type: "tableCell", attrs: { colspan: 1, rowspan: 1, colwidth: null, align: null }, content: [{ type: "paragraph", content: [{ type: "text", text: "a | b", marks: [{ type: "code" }] }] }] }] },
+    ] }];
+    expect(roundTrip(blocks)).toEqual(blocks);
+  });
+
   it("記号を含む本文が、往復で記号のまま残る（斜体・コードに化けない）", () => {
     for (const text of ["a * b * c", "小計 * 2 個", "値は `code` と書く", "a_b_c", "[かっこ] と ~~波~~", "# シャープ", "- ハイフン", "1. 数字"]) {
       const blocks: Block[] = [{ type: "paragraph", content: [{ type: "text", text }] }];
@@ -101,14 +144,10 @@ describe("限定 AST ↔ Markdown", () => {
 
   it("限定 AST の外の記法は、黙って捨てずに断る", () => {
     for (const markdown of [
-      "| a | b |\n| --- | --- |\n| 1 | 2 |",
-      "```ts\nconst a = 1;\n```",
-      "    const a = 1;",
-      "`code`",
       "![alt](niho-docs-asset:photo.jpg)",
       "# 見出し 1",
       "#### 見出し 4",
-      "- [ ] やること",
+      "| broken |\n| --- | --- |\n| too | many | cells |",
     ]) {
       const result = markdownToBlocks(markdown);
       expect(result.ok, markdown).toBe(false);
@@ -136,6 +175,6 @@ describe("限定 AST ↔ Markdown", () => {
   });
 
   it("保存できない blocks は断る", () => {
-    expect(blocksToMarkdown([{ type: "codeBlock", content: [text("a")] }]).ok).toBe(false);
+    expect(blocksToMarkdown([{ type: "table", content: [{ type: "tableRow", content: [{ type: "tableCell", content: [{ type: "paragraph", content: [text("見出しなし")] }] }] }] }]).ok).toBe(false);
   });
 });

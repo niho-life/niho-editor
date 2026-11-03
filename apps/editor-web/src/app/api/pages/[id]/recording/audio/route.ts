@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 type Context = { params: Promise<{ id: string }> };
 
-/** 録音の音声（本人だけ。保存先から読み出して流す。`Range` は範囲 1 つ）。 */
+/** 指定した音声Part（part省略時は0）を本人だけに中継する。`Range` は範囲 1 つ。 */
 export async function GET(request: Request, context: Context): Promise<Response> {
   const { id } = await context.params;
   return streamAudioRoute(request, id, audioStreamDeps);

@@ -55,6 +55,7 @@ const nextConfig: NextConfig = {
     "@niho/editor-store",
     "@niho/photo-cloud-library",
     "@niho/photo-library-contract",
+    "niho-desktop-bridge",
     "niho-docs-ui",
     "niho-photo-editing",
     "niho-photo-ui",

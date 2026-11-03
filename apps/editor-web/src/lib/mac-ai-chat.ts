@@ -1,0 +1,153 @@
+import { MODEL_OPTIONS } from "@niho/docs-core";
+import type { ShellBridge } from "niho-desktop-bridge/shell-bridge";
+import { isShellError, type ShellAiEngine, type ShellAiEngineName, type ShellAiEvent, type ShellAiTurn } from "niho-desktop-bridge/shell-contract";
+
+export const MAC_ENGINE_LABELS: Readonly<Record<ShellAiEngineName, string>> = {
+  "cli:claude-code": "Claude Code",
+  "cli:codex": "Codex CLI",
+  "cli:antigravity": "Antigravity CLI",
+};
+
+export const MAC_AI_ERROR_TEXT = {
+  unavailable: "この Mac に CLI がありません。導入してから状態を読み直してください。",
+  auth: "CLI のログインが必要です。CLI でログインしてから状態を読み直してください。",
+  busy: "この会話の CLI が動いています。終わってからもう一度お試しください。",
+  too_large: "このページは Mac の CLI に渡せる大きさを超えています。本文を短くしてください。",
+  unreadable: "このページの本文を CLI 用の文書にできません。画像などの添付を含むページは、この経路では編集できません。",
+  aborted: "中止しました。ページには反映していません。",
+  incomplete: "CLI が書き切れませんでした。ページには反映していません。",
+  page_removed: "CLI が文書を削除したため、ページには反映していません。",
+  extra_files: "CLI が別のファイルを作ったため、ページには反映していません。",
+  invalid_result: "CLI の結果を確認できませんでした。ページには反映していません。",
+  edited: "CLI の作業中にページが編集されました。結果は保存せず、もう一度頼んでください。",
+  failed: "CLI の依頼を終えられませんでした。ページには反映していません。",
+} as const;
+
+export type MacAiErrorCode = keyof typeof MAC_AI_ERROR_TEXT;
+
+export class MacAiError extends Error {
+  override readonly name = "MacAiError";
+  constructor(readonly code: MacAiErrorCode) {
+    super(`mac ai chat failed: ${code}`);
+  }
+}
+
+const PROVIDER_OF: Readonly<Record<ShellAiEngineName, keyof typeof MODEL_OPTIONS>> = {
+  "cli:claude-code": "claude",
+  "cli:codex": "gpt",
+  "cli:antigravity": "gemini",
+};
+
+const SAFE_MODEL = /^(?!-)[a-zA-Z0-9][a-zA-Z0-9._:-]{0,99}$/;
+
+/** CLI が一覧を返せないときだけ、docs-core にある同じ CLI の控えを使う。 */
+export function macEngineModels(engine: ShellAiEngine): string[] {
+  const provider = PROVIDER_OF[engine.engine];
+  if (!provider || !Array.isArray(engine.models)) return [];
+  const source = engine.models.length > 0 ? engine.models : MODEL_OPTIONS[provider].map((option) => option.id);
+  return [...new Set(source.filter((model) => SAFE_MODEL.test(model)))];
+}
+
+export function macEngineStatus(engine: ShellAiEngine): string {
+  if (!engine.installed) return "未導入";
+  if (!engine.authenticated) return engine.reason === "auth_required" ? "ログインが必要" : "ログイン状態を確認できません";
+  return macEngineModels(engine).length > 0 ? "利用できます" : "モデルを選べません";
+}
+
+export function macEngineReady(engine: ShellAiEngine): boolean {
+  return engine.installed && engine.authenticated && macEngineModels(engine).length > 0;
+}
+
+function errorFromShell(error: unknown): MacAiError {
+  if (isShellError(error)) {
+    if (error.code === "shell_ai_too_large") return new MacAiError("too_large");
+    if (error.code === "shell_ai_busy") return new MacAiError("busy");
+    if (error.code === "shell_ai_engine_unsupported") return new MacAiError("unavailable");
+  }
+  return new MacAiError("failed");
+}
+
+function progressText(event: ShellAiEvent): string | null {
+  switch (event.type) {
+    case "ThinkingDelta": return "CLI が考えています…";
+    case "TextDelta": return "CLI が返答を作っています…";
+    case "ToolUse": return "CLI がページを確認・編集しています…";
+    case "ToolResult": return event.ok ? "CLI がページを確認しました…" : "CLI がページの操作を確認しています…";
+    default: return null;
+  }
+}
+
+export type MacAiTurnOutput = {
+  reply: string;
+  sessionId: string | null;
+  writes: { pageId: string; markdown: string }[];
+};
+
+/** native の一時置き場でだけ動く。確定前の結果はサーバーへ送らない。 */
+export async function runMacAiTurn(input: {
+  shell: ShellBridge;
+  engine: ShellAiEngineName;
+  model: string;
+  page: { pageId: string; title: string; markdown: string };
+  selection: string | null;
+  instruction: string;
+  conversationId: string | null;
+  resumeSession: string | null;
+  signal: AbortSignal;
+  onProgress: (text: string) => void;
+}): Promise<MacAiTurnOutput> {
+  if (input.signal.aborted) throw new MacAiError("aborted");
+  if (new TextEncoder().encode(input.page.markdown).byteLength > 8 * 1024 * 1024 ||
+      (input.selection !== null && new TextEncoder().encode(input.selection).byteLength > 64 * 1024)) {
+    throw new MacAiError("too_large");
+  }
+  const turnId = crypto.randomUUID();
+  let retryStopOnEvent = false;
+  const stop = () => {
+    void input.shell.aiStop(turnId).then((stopped) => { retryStopOnEvent = !stopped; }).catch(() => { retryStopOnEvent = true; });
+  };
+  input.signal.addEventListener("abort", stop, { once: true });
+  let lastSeq = -1;
+  let turn: ShellAiTurn;
+  try {
+    turn = await input.shell.aiTurn(turnId, {
+      engine: input.engine,
+      model: input.model,
+      ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+      ...(input.resumeSession ? { resumeSession: input.resumeSession } : {}),
+      instruction: input.selection === null ? input.instruction : `${input.instruction}\n\n選択範囲を主な対象にしてください。選択範囲は context/selection.md にあります。`,
+      page: input.page,
+      ...(input.selection === null ? {} : { context: [{ name: "selection", title: "選択範囲", markdown: input.selection }] }),
+    }, (envelope) => {
+      if (!envelope || envelope.turnId !== turnId || !Number.isSafeInteger(envelope.seq) || envelope.seq <= lastSeq) return;
+      lastSeq = envelope.seq;
+      if (input.signal.aborted) {
+        if (retryStopOnEvent) stop();
+        return;
+      }
+      const message = progressText(envelope.event);
+      if (message) input.onProgress(message);
+    });
+  } catch (error) {
+    throw input.signal.aborted ? new MacAiError("aborted") : errorFromShell(error);
+  } finally {
+    input.signal.removeEventListener("abort", stop);
+  }
+  if (input.signal.aborted) throw new MacAiError("aborted");
+  if (!turn || typeof turn !== "object" || !turn.finalEvent || typeof turn.finalEvent !== "object") throw new MacAiError("invalid_result");
+  if (turn.finalEvent.type === "Error") throw new MacAiError("failed");
+  if (turn.finalEvent.type !== "Done" || typeof turn.finalEvent.text !== "string" ||
+      (turn.finalEvent.session_id !== null && typeof turn.finalEvent.session_id !== "string")) throw new MacAiError("invalid_result");
+  if (turn.finalEvent.stop_reason !== "EndTurn") throw new MacAiError(turn.finalEvent.stop_reason === "Stopped" ? "aborted" : turn.finalEvent.stop_reason === "MaxTokens" ? "incomplete" : "invalid_result");
+  if (typeof turn.pageRemoved !== "boolean") throw new MacAiError("invalid_result");
+  if (turn.pageRemoved) throw new MacAiError("page_removed");
+  if (!Number.isSafeInteger(turn.extraFiles) || turn.extraFiles !== 0) throw new MacAiError("extra_files");
+  if (turn.page !== null && (!turn.page || turn.page.pageId !== input.page.pageId || typeof turn.page.markdown !== "string")) {
+    throw new MacAiError("invalid_result");
+  }
+  return {
+    reply: turn.finalEvent.text,
+    sessionId: turn.finalEvent.session_id,
+    writes: turn.page ? [{ pageId: turn.page.pageId, markdown: turn.page.markdown }] : [],
+  };
+}

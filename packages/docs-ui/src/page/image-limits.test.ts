@@ -6,6 +6,7 @@ import {
   IMAGE_CREDIT_MAX_CHARS,
   IMAGE_MAX_BYTES,
   IMAGE_PAGE_MAX_COUNT,
+  PAGE_MAX_BYTES,
   imageRequestCanonical,
   isAllowedImageSize,
   isAllowedImageType,
@@ -18,6 +19,7 @@ const PAGE = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
 describe("the image limits", () => {
   it("are the documented values and types", () => {
     expect(IMAGE_MAX_BYTES).toBe(20 * 1024 * 1024);
+    expect(PAGE_MAX_BYTES).toBe(30 * 1024 * 1024);
     expect(IMAGE_PAGE_MAX_COUNT).toBe(100);
     expect(IMAGE_ALT_MAX_CHARS).toBe(1000);
     expect(IMAGE_CREDIT_MAX_CHARS).toBe(500);

@@ -167,6 +167,30 @@ describe("the image node", () => {
     expect(images()).toHaveLength(0);
   });
 
+  it("shows a cancel control while upload is pending and leaves the body unchanged after cancellation", async () => {
+    let finish: ((value: Awaited<ReturnType<PageImages["upload"]>>) => void) | undefined;
+    let signal: AbortSignal | undefined;
+    const port: PageImages = {
+      upload: async (_file, _pageId, received) => {
+        signal = received;
+        return new Promise((resolve) => { finish = resolve; });
+      },
+      saveMeta: async () => true,
+    };
+    const editor = await render({ images: port, pageId: () => PAGE });
+    expect(pasteFiles(editor, [pngFile()])).toBe(true);
+    await flush();
+    const cancel = container!.querySelector<HTMLButtonElement>("[data-image-uploading] button");
+    expect(cancel?.textContent).toBe("アップロードを中止");
+    await act(async () => cancel!.click());
+    expect(signal?.aborted).toBe(true);
+    finish!({ ok: false, problem: "failed" });
+    await flush();
+    expect(container!.querySelector("[data-image-uploading]")).toBeNull();
+    expect(problem()).toBeNull();
+    expect(savedBlocks(editor)).toEqual([{ type: "paragraph" }]);
+  });
+
   it("says to write something first when the page is not created yet, and does not upload", async () => {
     const { images: port, uploads } = stubImages();
     const editor = await render({ images: port, pageId: () => null });

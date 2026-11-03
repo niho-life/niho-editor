@@ -1,4 +1,4 @@
-import type { Block, OwnerId } from "@niho/editor-store";
+import type { Block, OwnerId, StepMaterials } from "@niho/editor-store";
 import type { RecipeDef } from "./recipes";
 
 export type StepExecutorInput = {
@@ -13,8 +13,12 @@ export type StepExecutorInput = {
   parentPageId?: string;
   /** 録音ページの本文。 */
   parentBlocks: Block[];
+  /** 親フォルダの背景本文。録音の原文とは別の入力。 */
+  backgroundBlocks: Block[];
   /** 前の段階のサブページの本文（段階 0 は null）。 */
   previousBlocks: Block[] | null;
+  /** 実行と前提計算が同じ時点で読んだ素材。 */
+  materials?: StepMaterials;
   /** lease を失った（取消・掃除）ときに止める合図。 */
   signal?: AbortSignal;
 };
@@ -33,7 +37,7 @@ export type StepExecutor = {
  * 段階の失敗。`code` は短い英小文字の code だけ（本文・プロンプト・内部の情報を入れない）。
  * `retryable` は一時的な失敗（時間切れ・5xx 相当）。入力の誤り（4xx 相当）は false ですぐ失敗にする。
  *
- * `partial` は書けたところまでの本文。**続きを使い切って書き切れなかったとき（`output_too_long`）だけ**入れる。
+ * `partial` は書けたところまでの本文。続きを使い切れないか、実行時間の安全枠を超えたときだけ入れる。
  * runner が最後の失敗のときだけ `step_attempts.partial_blocks` に残す（サブページの本文には書かない）。
  * 長い文字起こし修正はここに当たる段階なので、捨てると十数分かけた本文が丸ごと消える。
  */

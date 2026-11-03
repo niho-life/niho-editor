@@ -189,6 +189,39 @@ describe("書き出し", () => {
     expect(calls).toEqual([`export:${EXPORT_ID}:合成の題名:## 見出し\n\n> 囲みの中\n`]);
   });
 
+  it("新しい書式をGoogle Docsへ出し、表現できない表は理由を返す", async () => {
+    const row = pageRow("person", { blocks: [
+      { type: "table", content: [
+        { type: "tableRow", content: [
+          { type: "tableHeader", attrs: { colspan: 1, rowspan: 1, colwidth: null, align: null }, content: [{ type: "paragraph", content: [{ type: "text", text: "項目" }] }] },
+          { type: "tableHeader", attrs: { colspan: 1, rowspan: 1, colwidth: null, align: null }, content: [{ type: "paragraph", content: [{ type: "text", text: "状態" }] }] },
+        ] },
+        { type: "tableRow", content: [
+          { type: "tableCell", attrs: { colspan: 1, rowspan: 1, colwidth: null, align: null }, content: [{ type: "paragraph", content: [{ type: "text", text: "本文" }] }] },
+          { type: "tableCell", attrs: { colspan: 1, rowspan: 1, colwidth: null, align: null }, content: [{ type: "paragraph", content: [{ type: "text", text: "編集中" }] }] },
+        ] },
+      ] },
+      { type: "taskList", content: [{ type: "taskItem", attrs: { checked: true }, content: [{ type: "paragraph", content: [{ type: "text", text: "完了" }] }] }] },
+      { type: "codeBlock", attrs: { language: "ts" }, content: [{ type: "text", text: "const draft = true;" }] },
+    ] as unknown as Block[] });
+    const { gateway, calls } = fakeGateway();
+    const response = await exportPageRoute(request("POST", "/x", { exportId: EXPORT_ID }), row.id, deps({ store: memoryStore([row]), gateway }));
+    expect(response.status).toBe(200);
+    expect(calls[0]).toContain("| 項目 | 状態 |");
+    expect(calls[0]).toContain("- [x] 完了");
+    expect(calls[0]).toContain("```ts");
+
+    const invalid = pageRow("person", { blocks: [
+      { type: "table", content: [{ type: "tableRow", content: [
+        { type: "tableHeader", attrs: { colspan: 2, rowspan: 1, colwidth: null, align: null }, content: [{ type: "paragraph", content: [{ type: "text", text: "結合セル" }] }] },
+      ] }] },
+    ] as unknown as Block[] });
+    const failed = await exportPageRoute(request("POST", "/x", { exportId: EXPORT_ID }), invalid.id, deps({ store: memoryStore([invalid]), gateway }));
+    expect(failed.status).toBe(422);
+    expect(await failed.json()).toMatchObject({ error: "unsupported_markdown", reason: expect.stringMatching(/結合セル/) });
+    expect(calls).toHaveLength(1);
+  });
+
   it("受付の id 以外の本文は受け付けない", async () => {
     const row = pageRow("person");
     const d = deps({ store: memoryStore([row]) });

@@ -19,20 +19,29 @@ const SEQUENCE = Uint8Array.from({ length: 10 }, (_, index) => index);
 const BUCKET = "synthetic-test-bucket";
 const TOKEN = "synthetic-access-token-0123456789";
 
-type Row = { owner: string; pageId: string; deleted: boolean; info: AudioInfo | null };
+type Row = { owner: string; pageId: string; deleted: boolean; info: AudioInfo | null; partIndex?: number };
 
 function audio(status: AudioInfo["status"], expiresAt: string | null = FUTURE, bytes = SEQUENCE.byteLength, contentType = "audio/mp4"): AudioInfo {
   const assetId = randomUUID();
   return { assetId, objectPath: `audio/${assetId}`, status, bytes, contentType, sha256: "e".repeat(64), expiresAt };
 }
 
-/** メモリの中だけの合成の store（packages/editor-store の audioInfo と同じ約束: 本人の・ゴミ箱でないページの、音声のある録音だけ）。 */
+/** メモリの中だけの合成の store（本人の・ゴミ箱でないページのPartだけ）。 */
 function memoryStore(rows: Row[]): AudioStreamStore & { calls: number } {
   const store = {
     calls: 0,
-    audioInfo: async (owner: string, pageId: string) => {
+    listAudioParts: async (owner: string, pageId: string) => {
       store.calls += 1;
-      return rows.find((row) => row.owner === owner && row.pageId === pageId && !row.deleted)?.info ?? null;
+      return rows
+        .filter((row) => row.owner === owner && row.pageId === pageId && !row.deleted && row.info !== null)
+        .map((row) => ({
+          partIndex: row.partIndex ?? 0,
+          objectPath: row.info!.objectPath,
+          status: row.info!.status,
+          bytes: row.info!.bytes,
+          contentType: row.info!.contentType,
+          expiresAt: row.info!.expiresAt,
+        }));
     },
   };
   return store;
@@ -79,7 +88,7 @@ async function world() {
   await put(storage, theirs.info, SEQUENCE);
   const deleted = { owner: ME, pageId: randomUUID(), deleted: true, info: audio("uploaded") };
   await put(storage, deleted.info, SEQUENCE);
-  // 録音の無いページ・音声の無い録音（VTT）は audioInfo が null
+  // 録音の無いページ・音声の無い録音（VTT）はPartが空
   const noAudio = { owner: ME, pageId: randomUUID(), deleted: false, info: null };
   const uploading = { owner: ME, pageId: randomUUID(), deleted: false, info: audio("uploading") };
   await put(storage, uploading.info, SEQUENCE);
@@ -217,6 +226,41 @@ describe("GET /api/pages/{id}/recording/audio: the body and Range", () => {
     const d = deps(ME, memoryStore([webm, odd]), storage);
     expect((await get(webm.pageId, d)).headers.get("content-type")).toBe("audio/webm");
     expect((await get(odd.pageId, d)).headers.get("content-type")).toBe("application/octet-stream");
+  });
+
+  it("reads only the requested uploaded part, keeps owner/page scoping, and returns 404 for unavailable or malformed part indexes", async () => {
+    const storage = createFakeStorage();
+    const pageId = randomUUID();
+    const first = audio("uploaded", FUTURE, 10, "audio/mp4");
+    const second = audio("uploaded", FUTURE, 10, "audio/webm");
+    const expiredPart = audio("uploaded", PAST, 10, "audio/mp4");
+    const uploadingPart = audio("uploading", FUTURE, 10, "audio/mp4");
+    for (const info of [first, second, expiredPart, uploadingPart]) await put(storage, info, SEQUENCE);
+    const rows: Row[] = [
+      { owner: ME, pageId, deleted: false, info: first, partIndex: 0 },
+      { owner: ME, pageId, deleted: false, info: second, partIndex: 1 },
+      { owner: ME, pageId, deleted: false, info: expiredPart, partIndex: 2 },
+      { owner: ME, pageId, deleted: false, info: uploadingPart, partIndex: 3 },
+      { owner: THEM, pageId, deleted: false, info: audio("uploaded"), partIndex: 4 },
+    ];
+    const store = memoryStore(rows);
+    const read = vi.spyOn(storage, "readObject");
+    const d = deps(ME, store, storage);
+    const response = await get(pageId, d, {});
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("audio/mp4");
+    expect(read.mock.calls.at(-1)?.[0]).toBe(first.objectPath);
+    const secondRequest = new Request(`${ORIGIN}/api/pages/${pageId}/recording/audio?part=1`, { headers: { host: "editor.test" } });
+    const secondPart = await streamAudioRoute(secondRequest, pageId, d);
+    expect(secondPart.status).toBe(200);
+    expect(secondPart.headers.get("content-type")).toBe("audio/webm");
+    expect(read.mock.calls.at(-1)?.[0]).toBe(second.objectPath);
+
+    for (const query of ["part=2", "part=3", "part=4", "part=-1", "part=1.5", "part=01", "part=999"]) {
+      const rejected = await streamAudioRoute(new Request(`${ORIGIN}/api/pages/${pageId}/recording/audio?${query}`, { headers: { host: "editor.test" } }), pageId, d);
+      expect(rejected.status, query).toBe(404);
+    }
+    expect(read).toHaveBeenCalledTimes(2);
   });
 
   it("answers 200 with the whole audio when the storage ignored the range, and 416 when the storage cannot serve it", async () => {

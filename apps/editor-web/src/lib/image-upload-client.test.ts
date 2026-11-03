@@ -126,6 +126,7 @@ describe("image upload client", () => {
       [{ error: "bad_request", reason: "too_many" }, "too_many"],
       [{ error: "bad_request", reason: "content_type" }, "content_type"],
       [{ error: "bad_request", reason: "too_large" }, "too_large"],
+      [{ error: "page_full" }, "page_full"],
       [{ error: "not_found" }, "failed"],
       [{ error: "storage_failed" }, "failed"],
     ] as const) {
@@ -139,5 +140,44 @@ describe("image upload client", () => {
     });
     expect(await broken.upload(pngFile(), PAGE)).toEqual({ ok: false, problem: "failed" });
     expect(await broken.saveMeta(ASSET, { consent: true })).toBe(false);
+  });
+
+  it("cancels the reservation when PUT fails after start", async () => {
+    const calls: Array<[string, string | undefined]> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push([url, init?.method]);
+      if (url.endsWith("/images/start")) return new Response(JSON.stringify({ assetId: ASSET, upload: TICKET }), { status: 201 });
+      if (url === TICKET.url) return new Response(null, { status: 502 });
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      throw new Error("unexpected request");
+    });
+    const images = createPageImages({ fetch: fetchMock as unknown as typeof fetch });
+    expect(await images.upload(pngFile(), PAGE)).toEqual({ ok: false, problem: "failed" });
+    expect(calls.map(([url]) => url)).toEqual([
+      `/api/pages/${PAGE}/images/start`,
+      TICKET.url,
+      `/api/pages/${PAGE}/images/${ASSET}`,
+    ]);
+  });
+
+  it("releases the reservation when the user aborts the PUT", async () => {
+    const controller = new AbortController();
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith("/images/start")) return new Response(JSON.stringify({ assetId: ASSET, upload: TICKET }), { status: 201 });
+      if (url === TICKET.url) {
+        expect(init?.signal).toBe(controller.signal);
+        controller.abort();
+        throw new DOMException("cancelled", "AbortError");
+      }
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      throw new Error("unexpected request");
+    });
+    const images = createPageImages({ fetch: fetchMock as unknown as typeof fetch });
+    expect(await images.upload(pngFile(), PAGE, controller.signal)).toEqual({ ok: false, problem: "failed" });
+    expect(calls).toEqual([`/api/pages/${PAGE}/images/start`, TICKET.url, `/api/pages/${PAGE}/images/${ASSET}`]);
   });
 });

@@ -13,6 +13,8 @@ import type { AssetRecord, DraftPage, Notice, Problem } from "./types.js";
 /** Facts only the server knows. `null` means unknown, which never satisfies a condition. */
 export interface ServerFacts {
   readonly relatedLive: boolean | null;
+  /** Names this page was generated with as the final step across its run history. */
+  readonly finalStepNames?: readonly string[];
 }
 
 /** Sheet choices the conditions look at (stored on the publication, not on the page). */
@@ -40,6 +42,8 @@ export interface ReadinessFacts {
   readonly headings: number;
   /** Confirm markers in the body, title and lead. */
   readonly confirms: number;
+  /** The page title still equals a generated final-stage name. */
+  readonly titleIsFinalStepName: boolean;
   /** Problems found in the body regardless of destination (unknown nodes, images, limits). */
   readonly bodyProblems: readonly Problem[];
   readonly notices: readonly Notice[];
@@ -53,6 +57,7 @@ export interface Readiness {
 
 export const BUILTIN_PROBLEMS = {
   title: { id: "title", message: "題名を入れてください", fix: "body" },
+  stepTitle: { id: "step-title", message: "工程の段階名が題名のままです。文書の題名に変更してください", fix: "body" },
   body: { id: "body", message: "本文を書いてください", fix: "body" },
   tooLong: { id: "body-too-long", message: "本文が長すぎます", fix: "body" },
   figureMissing: { id: "figure-missing", message: "写真が見つかりません", fix: "body" },
@@ -193,6 +198,7 @@ export function collectFacts(
     markTypes: [...markTypes],
     headings,
     confirms,
+    titleIsFinalStepName: (serverFacts.finalStepNames ?? []).some((name) => cleanLine(name) === title),
     bodyProblems,
     notices: conversion.notices,
   };
@@ -224,6 +230,7 @@ function conditionMet(condition: Condition, facts: ReadinessFacts): boolean {
 export function evaluateReadiness(declaration: DestinationDeclaration, facts: ReadinessFacts): Readiness {
   const problems: Problem[] = [];
   if (facts.title === "") problems.push(BUILTIN_PROBLEMS.title);
+  else if (facts.titleIsFinalStepName) problems.push(BUILTIN_PROBLEMS.stepTitle);
   if (!facts.hasBody) problems.push(BUILTIN_PROBLEMS.body);
   problems.push(...facts.bodyProblems);
   for (const type of facts.blockTypes) {

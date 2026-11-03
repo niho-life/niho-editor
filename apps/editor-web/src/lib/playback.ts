@@ -3,12 +3,87 @@
  * 音声をつなぐのは use-recording-playback.ts、画面は components/RecordingTranscript.tsx と PlaybackSeek.tsx。
  */
 import type { RecordingAudio, RecordingSegment } from "@niho/editor-store";
+import type { AudioPartView } from "./audio-upload-client";
 import { formatClock } from "./recording-view";
 import { isAudioExpired } from "./transcription-view";
 
 /** 録音の音声を流す同じ origin の route（src/server/audio-stream-api.ts）。 */
-export function playbackSrc(pageId: string): string {
-  return `/api/pages/${encodeURIComponent(pageId)}/recording/audio`;
+export function playbackSrc(pageId: string, partIndex = 0): string {
+  return `/api/pages/${encodeURIComponent(pageId)}/recording/audio?part=${partIndex}`;
+}
+
+export type PlaybackPartState = "ready" | "uploading" | "expired" | "missing";
+
+/** 音声Partの全体時間軸上の範囲と再生可否。 */
+export type PlaybackPart = {
+  partIndex: number;
+  offsetSec: number;
+  durationSec: number | null;
+  state: PlaybackPartState;
+};
+
+function validDuration(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/**
+ * 保存済みPartをoffset順の時間軸へ展開する。削除済みなどで番号に穴がある場合もmissing区間として残し、
+ * シーク時に後続音声へ誤って飛ばないようにする。
+ */
+export function playbackParts(parts: readonly AudioPartView[], now: number, recordingSec: number | null = null): PlaybackPart[] {
+  const sorted = parts.filter((part) => Number.isSafeInteger(part.partIndex) && part.partIndex >= 0).slice().sort((a, b) => a.partIndex - b.partIndex);
+  const byIndex = new Map(sorted.map((part) => [part.partIndex, part]));
+  if (byIndex.size === 0) return [];
+  const maxIndex = Math.max(...byIndex.keys());
+  const output: PlaybackPart[] = [];
+  let previousEnd: number | null = 0;
+  for (let partIndex = 0; partIndex <= maxIndex; partIndex += 1) {
+    const part = byIndex.get(partIndex);
+    const nextPart = sorted.find((candidate) => candidate.partIndex > partIndex);
+    const knownOffset = part && Number.isFinite(part.offsetSec) && part.offsetSec >= 0 ? part.offsetSec : null;
+    const offsetSec: number = knownOffset ?? previousEnd ?? 0;
+    const declaredDuration = validDuration(part?.durationSec);
+    const nextOffset: number | null = nextPart && Number.isFinite(nextPart.offsetSec) && nextPart.offsetSec > offsetSec ? nextPart.offsetSec : null;
+    const fallbackEnd: number | null = nextOffset ?? (validDuration(recordingSec) !== null && recordingSec! > offsetSec ? recordingSec : null);
+    const durationSec: number | null = declaredDuration ?? (fallbackEnd === null ? null : fallbackEnd - offsetSec);
+    const state: PlaybackPartState = !part
+      ? "missing"
+      : part.status !== "uploaded"
+        ? "uploading"
+        : isAudioExpired(part, now)
+          ? "expired"
+          : "ready";
+    output.push({ partIndex, offsetSec, durationSec, state });
+    previousEnd = durationSec === null ? offsetSec : offsetSec + durationSec;
+  }
+  return output;
+}
+
+/** 既知のPart長から全体の長さを出す。入力にある録音長は不明区間を含めた下限として使う。 */
+export function playbackTimelineDuration(parts: readonly PlaybackPart[], recordingSec: number | null): number | null {
+  const ends = parts.flatMap((part) => (part.durationSec === null ? [] : [part.offsetSec + part.durationSec]));
+  const transcript = validDuration(recordingSec);
+  if (transcript !== null) ends.push(transcript);
+  return ends.length > 0 ? Math.max(...ends) : null;
+}
+
+/** 指定時刻を含むPart。欠落・取り込み中・期限切れも返し、呼び出し側が誤ってスキップしないようにする。 */
+export function playbackPartAt(parts: readonly PlaybackPart[], seconds: number): PlaybackPart | null {
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index]!;
+    if (seconds < part.offsetSec) continue;
+    if (part.durationSec === null || seconds < part.offsetSec + part.durationSec) return part;
+  }
+  return null;
+}
+
+export function playbackPartMessage(part: PlaybackPart | null): string {
+  if (!part) return "";
+  if (part.state === "missing") return `音声 ${part.partIndex + 1} が見つかりません。`;
+  if (part.state === "uploading") return `音声 ${part.partIndex + 1} は取り込み中のため再生できません。`;
+  if (part.state === "expired") return `音声 ${part.partIndex + 1} は期限切れのため再生できません。`;
+  return "";
 }
 
 /** 再生できる音声か（アップロード済みで、期限を過ぎていない）。音声の無い録音・アップロード途中・期限切れは false。 */

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { StepsRequestError, cancelStepRun, getSteps, isStepRunDone, startStepRun, type StepRecipeChoice, type StepRun } from "./steps-client";
+import { StepsRequestError, cancelStepRun, getStepPartialOutput, getSteps, isStepRunDone, startStepRun, type StepRecipeChoice, type StepRun } from "./steps-client";
 
 const PARENT = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
 
@@ -32,6 +32,19 @@ describe("steps-client", () => {
 
   it("手順が動いていなくても、その人の手順の一覧は受け取る（入口に出すもの）", async () => {
     expect(await getSteps(PARENT, fetchOnce(200, { run: null, recipes: RECIPES }))).toEqual({ run: null, recipes: RECIPES });
+  });
+
+  it("polling accepts only the partial-output availability flag, while explicit fetch reads blocks", async () => {
+    const flagged = { ...RUN, state: "failed" as const, steps: [{ ...RUN.steps[0]!, state: "failed" as const, hasPartialOutput: true }] };
+    expect((await getSteps(PARENT, fetchOnce(200, { run: flagged, recipes: RECIPES }))).run?.steps[0]?.hasPartialOutput).toBe(true);
+
+    const runId = "a7c6b2a1-2e53-48a6-9c43-61c48824f82b";
+    const fetchImpl = fetchOnce(200, { blocks: [{ type: "paragraph", content: [{ type: "text", text: "合成の途中" }] }] });
+    expect(await getStepPartialOutput(PARENT, runId, 0, fetchImpl)).toEqual([
+      { type: "paragraph", content: [{ type: "text", text: "合成の途中" }] },
+    ]);
+    expect(fetchImpl.mock.calls[0]![0]).toBe("/api/pages/" + PARENT + "/steps/runs/" + runId + "/steps/0/partial");
+    expect(fetchImpl.mock.calls[0]![1]).toEqual({ method: "GET", credentials: "same-origin", cache: "no-store" });
   });
 
   it("始めるときは recipe（と fromStep）だけを送る。Idempotency-Key は渡されたときだけ", async () => {
@@ -76,6 +89,7 @@ describe("steps-client", () => {
       { run: { ...RUN, steps: [{ ...RUN.steps[0], stepStatus: "weird" }] }, recipes: RECIPES },
       { run: { ...RUN, steps: [{ ...RUN.steps[0], state: "nope" }] }, recipes: RECIPES },
       { run: { ...RUN, steps: [{ ...RUN.steps[0], tries: 1.5 }] }, recipes: RECIPES },
+      { run: { ...RUN, steps: [{ ...RUN.steps[0], hasPartialOutput: "yes" }] }, recipes: RECIPES },
       { run: {}, recipes: RECIPES },
       // 手順の一覧が無い・形が違う
       { run: null },

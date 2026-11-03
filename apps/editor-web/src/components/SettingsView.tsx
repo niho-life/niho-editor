@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { EditorSettingsPatch, SettingsRecipe, SettingsTerm } from "@niho/editor-store";
-import { formatVariants, parseVariants } from "@niho/docs-core";
-import { EditorSettingsPage, type EditorSettingsRecipe, type EditorSettingsTermDraft } from "niho-docs-ui/shell";
-import { loadAiUsage, loadStorageUsage, saveSettings, type MediaStorageUsage, type SettingsDto, type UsageSummary } from "@/lib/settings-client";
+import type { SettingsTerm } from "@niho/editor-store";
+import { formatVariants, mergeExtractedTerms, parseVariants, uniqueFlowName } from "@niho/docs-core";
+import { EditorSettingsPage, type EditorSettingsAbout, type EditorSettingsGuideExtraction, type EditorSettingsRecipe, type EditorSettingsTermDraft } from "niho-docs-ui/shell";
+import { duplicateSettingsRecipe, extractGuide, importRecipeSample, loadAiUsage, loadGuideExtraction, loadSettings, loadStorageUsage, saveSettings, type GuideExtractionPreview, type MediaStorageUsage, type SettingsDto, type SettingsPatchInput, type SettingsRecipeInput, type UsageSummary } from "@/lib/settings-client";
 import type { SettingsFacts } from "@/settings/facts";
 import { SETTINGS_MESSAGES } from "@/settings/messages";
+import { validateRecipeDefinition } from "@/steps/recipe-validation";
 
 /**
  * 設定（`/settings`。Issue #108）。画面は docs-ui の `EditorSettingsPage`（モック v6 の V.settings）で、
@@ -23,12 +24,33 @@ function newId(prefix: string): string {
 }
 
 /** 効いている手順の並び（PATCH はこの形の全部を送る）。 */
-function effective(dto: SettingsDto): SettingsRecipe[] {
-  return dto.recipes.map(({ id, name, guide, steps }) => ({ id, name, guide, steps: steps.map((step) => ({ ...step })) }));
+function effective(dto: SettingsDto): SettingsRecipeInput[] {
+  return dto.recipes.map(({ id, name, guide, steps, terms, samples }) => ({
+    id, name, guide,
+    steps: steps.map((step) => ({ ...step })),
+    terms: terms.map((term) => ({ ...term, variants: [...term.variants] })),
+    samples: samples.map((sample) => ({ ...sample })),
+  }));
 }
 
-function withoutFlags(recipe: EditorSettingsRecipe): SettingsRecipe {
-  return { id: recipe.id, name: recipe.name, guide: recipe.guide, steps: recipe.steps.map((step) => ({ ...step })) };
+function recipeDraftOf(recipe: SettingsDto["recipes"][number]): EditorSettingsRecipe {
+  return {
+    ...recipe,
+    steps: recipe.steps.map((step) => ({ ...step })),
+    terms: recipe.terms.map((term) => ({ ...term, variants: formatVariants(term.variants) })),
+    samples: recipe.samples.map((sample) => ({ ...sample })),
+  };
+}
+
+function withoutFlags(recipe: EditorSettingsRecipe): SettingsRecipeInput {
+  return {
+    id: recipe.id,
+    name: recipe.name,
+    guide: recipe.guide,
+    steps: recipe.steps.map((step) => ({ ...step })),
+    terms: recipe.terms.map((term) => ({ ...term, variants: parseVariants(term.variants) })),
+    samples: recipe.samples.map((sample) => ({ ...sample })),
+  };
 }
 
 export type SettingsViewProps = { initial: SettingsDto; facts: SettingsFacts };
@@ -38,12 +60,20 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [termsDraft, setTermsDraft] = useState<EditorSettingsTermDraft[] | null>(null);
-  const [aboutDraft, setAboutDraft] = useState<string | null>(null);
+  const [aboutDraft, setAboutDraft] = useState<EditorSettingsAbout | null>(null);
   const [recipeDraft, setRecipeDraft] = useState<EditorSettingsRecipe | null>(null);
+  const [sampleFile, setSampleFile] = useState<File | null>(null);
+  const [sampleUrl, setSampleUrl] = useState("");
+  const [sampleBusy, setSampleBusy] = useState(false);
+  const [sampleStatus, setSampleStatus] = useState("");
+  const [extraction, setExtraction] = useState<GuideExtractionPreview | null>(null);
+  const [selectedExtractionTerms, setSelectedExtractionTerms] = useState<string[]>([]);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [usageNote, setUsageNote] = useState<string | null>(null);
   const [storageUsage, setStorageUsage] = useState<MediaStorageUsage | null>(null);
   const [storageUsageNote, setStorageUsageNote] = useState<string | null>(null);
+  const recipeValidation = recipeDraft ? validateRecipeDefinition(recipeDraft, settings.recipes) : null;
+  const sampleSetKey = recipeDraft?.samples.map((sample) => sample.id).join("|") ?? "";
 
   useEffect(() => {
     let alive = true;
@@ -62,8 +92,30 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
     };
   }, []);
 
+  useEffect(() => {
+    setExtraction(null);
+    setSelectedExtractionTerms([]);
+    if (!recipeDraft) return;
+    const currentSampleIds = new Set(recipeDraft.samples.map((sample) => sample.id));
+    let alive = true;
+    void loadGuideExtraction(recipeDraft.id).then((result) => {
+      if (!alive) return;
+      if (result.ok && result.extraction && result.extraction.sampleIds.every((id) => currentSampleIds.has(id))) {
+        setExtraction(result.extraction);
+        setSelectedExtractionTerms(result.extraction.candidates.map((candidate, index) => `${candidate.term}:${index}`));
+      }
+    });
+    return () => { alive = false; };
+  }, [recipeDraft?.id, sampleSetKey]);
+
+  useEffect(() => {
+    setSampleFile(null);
+    setSampleUrl("");
+    setSampleStatus("");
+  }, [recipeDraft?.id]);
+
   /** 渡した項目だけを送る。成功したら画面の値をサーバーの答えで置き換える。 */
-  const apply = async (patch: EditorSettingsPatch, after?: (saved: SettingsDto) => void): Promise<void> => {
+  const apply = async (patch: SettingsPatchInput, after?: (saved: SettingsDto) => void): Promise<void> => {
     if (busy) return;
     setBusy(true);
     setStatus(SETTINGS_MESSAGES.saving);
@@ -78,13 +130,13 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
     after?.(result.settings);
   };
 
-  const saveRecipes = (list: SettingsRecipe[], after?: (saved: SettingsDto) => void) => void apply({ recipes: list }, after);
+  const saveRecipes = (list: SettingsRecipeInput[], after?: (saved: SettingsDto) => void) => void apply({ recipes: list }, after);
   const recipeOf = (id: string) => settings.recipes.find((recipe) => recipe.id === id);
 
   return (
     <EditorSettingsPage
       status={status}
-      busy={busy}
+      busy={busy || sampleBusy}
       aiLang={settings.aiLang}
       onAiLang={(aiLang) => void apply({ aiLang })}
       glossary={settings.glossary}
@@ -98,20 +150,22 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
         const glossary: SettingsTerm[] = termsDraft.map((entry) => ({ ...entry, variants: parseVariants(entry.variants) }));
         void apply({ glossary }, () => setTermsDraft(null));
       }}
+      aboutName={settings.aboutName}
       about={settings.about}
       aboutDraft={aboutDraft}
-      onEditAbout={() => setAboutDraft(settings.about)}
+      onEditAbout={() => setAboutDraft({ name: settings.aboutName, text: settings.about })}
       onAboutDraft={setAboutDraft}
       onCancelAbout={() => setAboutDraft(null)}
       onSaveAbout={() => {
         if (aboutDraft === null) return;
-        void apply({ about: aboutDraft }, () => setAboutDraft(null));
+        void apply({ aboutName: aboutDraft.name, about: aboutDraft.text }, () => setAboutDraft(null));
       }}
-      recipes={settings.recipes}
+      recipes={settings.recipes.map(recipeDraftOf)}
       recipeDraft={recipeDraft}
+      recipeValidation={recipeValidation}
       onEditRecipe={(id) => {
         const recipe = recipeOf(id);
-        if (recipe) setRecipeDraft({ ...recipe, steps: recipe.steps.map((step) => ({ ...step })) });
+        if (recipe) setRecipeDraft(recipeDraftOf(recipe));
       }}
       onRecipeDraft={setRecipeDraft}
       onCancelRecipe={() => setRecipeDraft(null)}
@@ -124,23 +178,22 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
         );
       }}
       onDuplicateRecipe={(id) => {
-        const recipe = recipeOf(id);
-        if (!recipe) return;
-        const copy: SettingsRecipe = {
-          id: newId("r"),
-          name: `${recipe.name}のコピー`,
-          guide: recipe.guide,
-          // 既定の手順の写しは、段階の id を新しくする（既定の id はその手順のものとして残す）
-          steps: recipe.steps.map((step) => ({ ...step, id: recipe.isDefault ? newId("s") : step.id })),
-        };
-        saveRecipes([...effective(settings), copy]);
+        if (busy || sampleBusy || !recipeOf(id)) return;
+        setBusy(true);
+        setStatus(SETTINGS_MESSAGES.saving);
+        void duplicateSettingsRecipe(id).then((result) => {
+          setBusy(false);
+          if (!result.ok) { setStatus(result.message); return; }
+          setSettings(result.settings);
+          setStatus(SETTINGS_MESSAGES.saved);
+        });
       }}
       onResetRecipe={(id) => {
         const recipe = recipeOf(id);
         if (!recipe?.defaults) return;
         // 一覧から外すのではなく、既定の定義（応答の `defaults`）で置き換えて送る
         // （PATCH は既定の 3 つが揃っていることを求める。サーバーは既定と同じ中身の写しを保存しないので、これで既定に戻る）
-        const reset: SettingsRecipe = { id, ...recipe.defaults, steps: recipe.defaults.steps.map((step) => ({ ...step })) };
+        const reset: SettingsRecipeInput = { id, ...recipe.defaults, steps: recipe.defaults.steps.map((step) => ({ ...step })), terms: recipe.defaults.terms.map((term) => ({ ...term, variants: [...term.variants] })), samples: recipe.defaults.samples.map((sample) => ({ ...sample })) };
         saveRecipes(
           effective(settings).map((entry) => (entry.id === id ? reset : entry)),
           () => setRecipeDraft((draft) => (draft?.id === id ? null : draft)),
@@ -153,13 +206,85 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
         );
       }}
       onAddRecipe={() => {
-        const added: SettingsRecipe = { id: newId("r"), name: "新しい手順", guide: "", steps: [{ id: newId("s"), name: "まとめ", instruction: "" }] };
+        const added: SettingsRecipeInput = { id: newId("r"), name: uniqueFlowName("新しい手順", settings.recipes), guide: "", steps: [{ id: newId("s"), name: "まとめ", instruction: "", profile: "standard" }], terms: [], samples: [] };
         saveRecipes([...effective(settings), added], (saved) => {
           const stored = saved.recipes.find((recipe) => recipe.id === added.id);
-          if (stored) setRecipeDraft({ ...stored, steps: stored.steps.map((step) => ({ ...step })) });
+          if (stored) setRecipeDraft(recipeDraftOf(stored));
         });
       }}
       newStepId={() => newId("s")}
+      maxRecipeTerms={settings.limits.glossary}
+      sampleFile={sampleFile}
+      sampleUrl={sampleUrl}
+      sampleBusy={sampleBusy}
+      sampleStatus={sampleStatus}
+      extraction={extraction as EditorSettingsGuideExtraction | null}
+      selectedExtractionTerms={selectedExtractionTerms}
+      onSampleFile={setSampleFile}
+      onSampleUrl={setSampleUrl}
+      onImportSampleFile={() => {
+        if (!recipeDraft || !sampleFile || sampleBusy) return;
+        const recipeId = recipeDraft.id;
+        setSampleBusy(true);
+        setSampleStatus("お手本文書を取り込んでいます…");
+        void importRecipeSample(recipeId, { file: sampleFile }).then(async (result) => {
+          setSampleBusy(false);
+          if (!result.ok) { setSampleStatus(result.message); return; }
+          setRecipeDraft((current) => current?.id === recipeId ? { ...current, samples: [...current.samples, result.sample] } : current);
+          setSampleFile(null);
+          setSampleStatus("お手本文書を追加しました。保存するとこの手順に反映されます。");
+          const refreshed = await loadSettings();
+          if (refreshed.ok) setSettings(refreshed.settings);
+          else setSettings((current) => ({ ...current, recipes: current.recipes.map((recipe) => recipe.id === recipeId ? { ...recipe, samples: [...recipe.samples, result.sample] } : recipe) }));
+        });
+      }}
+      onImportSampleUrl={() => {
+        if (!recipeDraft || !sampleUrl.trim() || sampleBusy) return;
+        const recipeId = recipeDraft.id;
+        setSampleBusy(true);
+        setSampleStatus("URLからお手本文書を取り込んでいます…");
+        void importRecipeSample(recipeId, { url: sampleUrl.trim() }).then(async (result) => {
+          setSampleBusy(false);
+          if (!result.ok) { setSampleStatus(result.message); return; }
+          setRecipeDraft((current) => current?.id === recipeId ? { ...current, samples: [...current.samples, result.sample] } : current);
+          setSampleUrl("");
+          setSampleStatus("お手本文書を追加しました。保存するとこの手順に反映されます。");
+          const refreshed = await loadSettings();
+          if (refreshed.ok) setSettings(refreshed.settings);
+          else setSettings((current) => ({ ...current, recipes: current.recipes.map((recipe) => recipe.id === recipeId ? { ...recipe, samples: [...recipe.samples, result.sample] } : recipe) }));
+        });
+      }}
+      onExtractGuide={() => {
+        if (!recipeDraft || sampleBusy) return;
+        const recipeId = recipeDraft.id;
+        setSampleBusy(true);
+        setSampleStatus("文書ガイドと固有名詞候補を抽出しています…");
+        void extractGuide(recipeId).then((result) => {
+          setSampleBusy(false);
+          if (!result.ok) { setSampleStatus(result.message); return; }
+          setExtraction(result.extraction);
+          setSelectedExtractionTerms(result.extraction.candidates.map((candidate, index) => `${candidate.term}:${index}`));
+          setSampleStatus("抽出案を保存しました。内容を確認して反映してください。");
+        });
+      }}
+      onToggleExtractionTerm={(key, selected) => setSelectedExtractionTerms((current) => selected ? [...new Set([...current, key])] : current.filter((entry) => entry !== key))}
+      onApplyExtractedGuide={() => {
+        if (!recipeDraft || !extraction) return;
+        setRecipeDraft({ ...recipeDraft, guide: extraction.guide });
+        setSampleStatus("文書ガイド案を下書きに反映しました。手順の保存で確定します。");
+      }}
+      onApplyExtractedTerms={() => {
+        if (!recipeDraft || !extraction) return;
+        const selected = extraction.candidates.filter((candidate, index) => selectedExtractionTerms.includes(`${candidate.term}:${index}`));
+        const existing: SettingsTerm[] = [
+          ...settings.glossary.map((term) => ({ ...term, variants: [...term.variants] })),
+          ...recipeDraft.terms.map((term) => ({ ...term, variants: parseVariants(term.variants) })),
+        ];
+        const merged = mergeExtractedTerms(existing, selected);
+        const additions = merged.terms.slice(existing.length, existing.length + Math.max(0, settings.limits.glossary - recipeDraft.terms.length));
+        setRecipeDraft({ ...recipeDraft, terms: [...recipeDraft.terms, ...additions.map((term) => ({ ...term, variants: formatVariants(term.variants) }))] });
+        setSampleStatus(additions.length ? `固有名詞候補を${additions.length}件、下書きに追加しました。手順の保存で確定します。` : "選んだ候補は既存の固有名詞と重複しています。");
+      }}
       usage={usage}
       usageNote={usageNote}
       storageUsage={storageUsage}

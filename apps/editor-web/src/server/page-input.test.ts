@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_BLOCK_DEPTH,
+  MAX_BLOCKS_BYTES,
   MAX_TITLE_CHARS,
   parseBlocks,
   parseCreatePage,
@@ -19,6 +20,8 @@ describe("parseCreatePage", () => {
       ok: true,
       value: { kind: "article", title: "題名", lang: "en", blocks: [paragraph("本文")] },
     });
+    expect(parseCreatePage({ lead: "公開用の要約" })).toEqual({ ok: true, value: { lead: "公開用の要約" } });
+    expect(parseCreatePage({ lead: null })).toEqual({ ok: true, value: { lead: null } });
   });
 
   it("rejects bodies that are not objects, unknown keys, and out-of-range values", () => {
@@ -27,6 +30,8 @@ describe("parseCreatePage", () => {
     }
     expect(parseCreatePage({ title: "あ".repeat(MAX_TITLE_CHARS) }).ok).toBe(true);
     expect(parseCreatePage({ title: "あ".repeat(MAX_TITLE_CHARS + 1) }).ok).toBe(false);
+    expect(parseCreatePage({ lead: "あ".repeat(161) }).ok).toBe(false);
+    expect(parseCreatePage({ cover: "00000000-0000-4000-8000-000000000001" }).ok).toBe(false);
   });
 });
 
@@ -34,6 +39,15 @@ describe("parsePagePatch", () => {
   it("needs at least one field", () => {
     expect(parsePagePatch({})).toEqual({ ok: false });
     expect(parsePagePatch({ title: "" })).toEqual({ ok: true, value: { title: "" } });
+    expect(parsePagePatch({ cover: null })).toEqual({ ok: true, value: { cover: null } });
+    expect(parsePagePatch({ cover: "00000000-0000-4000-8000-000000000001", lead: "要約" })).toEqual({
+      ok: true,
+      value: { cover: "00000000-0000-4000-8000-000000000001", lead: "要約" },
+    });
+    expect(parsePagePatch({ lead: null })).toEqual({ ok: true, value: { lead: null } });
+    expect(parsePagePatch({ cover: "bad" }).ok).toBe(false);
+    expect(parsePagePatch({ lead: "あ".repeat(161) }).ok).toBe(false);
+    expect(parsePagePatch({ lead: "a\u0000b" }).ok).toBe(false);
   });
 });
 
@@ -99,6 +113,6 @@ describe("parseBlocks", () => {
     let deep: Record<string, unknown> = { type: "paragraph" };
     for (let index = 0; index < MAX_BLOCK_DEPTH + 2; index++) deep = { type: "blockquote", content: [deep] };
     expect(parseBlocks([deep]).ok).toBe(false);
-    expect(parseBlocks([paragraph("x".repeat(1024 * 1024))]).ok).toBe(false);
+    expect(parseBlocks([paragraph("x".repeat(MAX_BLOCKS_BYTES))]).ok).toBe(false);
   });
 });

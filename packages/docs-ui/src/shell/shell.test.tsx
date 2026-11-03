@@ -224,7 +224,7 @@ describe("ShellHeader", () => {
     const html = renderToStaticMarkup(<ShellTools />);
     const labels = [...html.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1]);
     // 「行の種類」は見えている文字（いまの行の種類）から始める（WCAG 2.5.3。#43）
-    expect(labels).toEqual(["書式とブロック", "ブロックを足す", "テキスト、行の種類", "太字", "斜体", "リンク", "見出し", "箇条書き", "画像", "録音"]);
+    expect(labels).toEqual(["書式とブロック", "ブロックを足す", "テキスト、行の種類", "太字", "斜体", "取り消し線", "インラインコード", "リンク", "見出し", "箇条書き", "画像", "録音"]);
     expect(html).toContain('role="toolbar"');
     // 行の種類が変わると、見える文字と名前の両方が変わる
     const heading = renderToStaticMarkup(<ShellTools textType="見出し" />);

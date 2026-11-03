@@ -171,6 +171,45 @@
   border: 0;
   padding: 0;
 }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .doc .tableWrapper {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .doc table {
+  width: max-content;
+  min-width: 100%;
+  table-layout: fixed;
+  margin: 0 0 12px;
+}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .doc :is(th, td) {
+  min-width: 96px;
+  max-width: 240px;
+  border: 1px solid var(--docs-line-firm);
+  padding: 6px 9px;
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .doc th { background: var(--docs-inset); }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-tablebar {
+  display: flex;
+  gap: 4px;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 5px 0;
+}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-tablebar button {
+  flex: none;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--docs-line-firm);
+  border-radius: 6px;
+  background: var(--niho-card);
+  color: var(--niho-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-tablebar button:focus-visible { outline: 2px solid var(--niho-dark); }
 
 /* チェックボックス（TipTap の TaskItem の node view: ul[data-type=taskList] > li[data-checked] > label > input ＋ div） */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .doc ul[data-type="taskList"] {

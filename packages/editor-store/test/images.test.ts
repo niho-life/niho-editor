@@ -87,7 +87,7 @@ describe("images without a database", () => {
 
   it("refuses an empty owner instead of reading rows of nobody", async () => {
     for (const owner of ["", "x".repeat(257)]) {
-      await assert.rejects(() => startImageUpload(db, owner, startInput()), TypeError);
+      await assert.rejects(() => startImageUpload(pool, owner, startInput()), TypeError);
       await assert.rejects(() => imageAsset(db, owner, ASSET), TypeError);
       await assert.rejects(() => completeImageUpload(pool, owner, ASSET, { sizeBytes: 1 }), TypeError);
       await assert.rejects(() => updateImageMeta(db, owner, ASSET, { consent: true }), TypeError);
@@ -104,13 +104,14 @@ describe("images without a database", () => {
       [{ contentType: "x".repeat(256) }, "content_type"],
       [{ bytes: 0 }, "bytes"],
       [{ bytes: 1.5 }, "bytes"],
+      [{ bytes: 20 * 1024 * 1024 + 1 }, "bytes"],
       [{ sha256: "x" }, "sha256"],
       [{ uploadKey: "x" }, "upload_key"],
       [{ requestHash: "x" }, "request_hash"],
     ];
     for (const [extra, problem] of cases) {
       await assert.rejects(
-        () => startImageUpload(db, "stub-user", startInput(extra)),
+        () => startImageUpload(pool, "stub-user", startInput(extra)),
         (error: unknown) => error instanceof InvalidImageError && error.problem === problem,
         problem,
       );

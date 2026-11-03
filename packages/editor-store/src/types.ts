@@ -77,6 +77,7 @@ export type CreatePageInput = {
   title?: string;
   lang?: PageLang;
   blocks?: Block[];
+  lead?: string | null;
 };
 
 /** 部分更新。指定したものだけを変える。 */
@@ -85,6 +86,10 @@ export type PagePatch = {
   title?: string;
   lang?: PageLang;
   blocks?: Block[];
+  /** 公開用カバー。本人のこのページに属する ready 画像だけを指定でき、null で外す。 */
+  cover?: string | null;
+  /** 公開用リード（160 字まで）。null で外す。 */
+  lead?: string | null;
 };
 
 /** 保存のしかた。`baseRevision` が今の revision と違えば何も書かずに競合を返す。 */
@@ -110,7 +115,7 @@ export type OrderMove = "up" | "down";
 export type MoveOrderResult = "moved" | "edge";
 
 /** 保存の結果（該当するページが無いときは null）。競合のときは何も書かず、今のページを返す。 */
-export type SaveResult = { status: "saved"; page: Page } | { status: "conflict"; page: Page };
+export type SaveResult = { status: "saved"; page: Page } | { status: "conflict"; page: Page } | { status: "page_full" };
 
 /** 版を残す理由。設計 §5.1。 */
 export const VERSION_REASONS = ["autosave", "ai", "publish", "overwrite", "restore"] as const;
@@ -144,7 +149,8 @@ export type RestoreOptions = {
 export type RestoreResult =
   | { status: "restored"; page: Page }
   | { status: "conflict"; page: Page }
-  | { status: "unrestorable" };
+  | { status: "unrestorable" }
+  | { status: "page_full" };
 
 /** ゴミ箱へ入れた結果（該当するページが無いときは null）。公開中のページは入れない。 */
 export type DeleteResult = "deleted" | "published";

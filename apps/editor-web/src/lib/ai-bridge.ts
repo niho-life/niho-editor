@@ -23,6 +23,8 @@ export type AiTarget = { ok: true; pageId: string; revision: number } | { ok: fa
 export type AiBridge = {
   /** 未保存の入力を保存し終えてから、頼む先のページと revision。 */
   prepare: () => Promise<AiTarget>;
+  /** prepare 後の保存済み本文。revision が一致しないときは null。 */
+  saved: (revision: number) => { title: string; blocks: unknown[] } | null;
   /** 返ってきたページを画面に載せる。`saved` は採用でサーバーに保存された（一覧の時刻を進める）。載せたら true。 */
   replace: (page: AiPage, options: { saved: boolean }) => Promise<boolean>;
 };
@@ -69,7 +71,7 @@ export async function replaceForAi(deps: AiBridgeDeps, page: AiPage, options: { 
   // 応答のページが、今の保存済みの revision より古い（遅れて届いた 409 のページなど）。載せると保存し終えた入力が消え、revision も戻る
   if (page.revision < saver.revision) return false;
   if (!replaceBlocks(editor, page.blocks)) return false;
-  saver.rebase(page.revision, { title: page.title, blocks: page.blocks });
+  saver.rebase(page.revision, { ...saver.content, title: page.title, blocks: page.blocks });
   if (page.title !== deps.currentTitle()) deps.showTitle(page.title);
   return true;
 }

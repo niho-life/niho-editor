@@ -2,10 +2,14 @@
 
 import "niho-ui/styles/editor-tokens.css";
 import "niho-docs-ui/styles/shell.css";
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import type { Transaction } from "@tiptap/pm/state";
 import type { Editor } from "@tiptap/react";
 import type { PageKind, PageLang } from "@niho/editor-store";
+import { isShellWindow, type ShellBridge } from "niho-desktop-bridge/shell-bridge";
+import type { ShellAiEngine, ShellAiEngineName } from "niho-desktop-bridge/shell-contract";
+import { validateBlocks } from "niho-docs-ui/page/blocks";
+import { blocksToMarkdown } from "niho-docs-ui/page/markdown";
 import { Icon, ShellProposal, type ShellProposalBlock } from "niho-docs-ui/shell";
 import { MAX_CHAT_INPUT_CHARS } from "@/ai/chat-limits";
 import { intentLabel as intentTextOf, presetsFor, type AiIntent } from "@/ai/presets";
@@ -18,6 +22,7 @@ import {
   getAiChat,
   listAiChats,
   proposeAiRequest,
+  recordDeviceAiChat,
   sendAiChat,
   undoAiChat,
   type AiChatMessage,
@@ -26,6 +31,7 @@ import {
   type ProposalChange,
   type ProposalInsert,
 } from "@/lib/ai-client";
+import { MAC_AI_ERROR_TEXT, MAC_ENGINE_LABELS, MacAiError, macEngineModels, macEngineReady, macEngineStatus, runMacAiTurn } from "@/lib/mac-ai-chat";
 import { useEditorFrame } from "./EditorFrame";
 
 /** 箱を開く要求（`range` が null はページ全体）。`key` が変わると箱を開き直す（別の範囲で開いた）。 */
@@ -42,6 +48,11 @@ export const AI_TEXT = {
   thread: "これまでのやりとり",
   fresh: "新しい会話にする",
   working: "直しています…",
+  saving: "CLI の結果をページと会話に保存しています…",
+  saveUnknown: "保存結果を確認できませんでした。ページを再読み込みしてから、会話と版を確かめてください。",
+  nativeRefused: "CLI の変更を保存できませんでした。ページを読み直してからお試しください。",
+  nativeHistoryMissing: "ページは更新しましたが、会話履歴を保存できませんでした。ページを再読み込みして状態を確かめてください。",
+  nativeReplyMissing: "CLI の返答を会話履歴に保存できませんでした。ページを確認してから、もう一度依頼してください。",
   undoing: "戻しています…",
   undone: "元に戻しました",
   undoKept: "このページは、そのあと直されているので戻しませんでした",
@@ -116,7 +127,9 @@ const GUTTER = 16;
 type Choice = "accept" | "keep";
 type Item = { id: string; at: number; order: number; change?: ProposalChange; insert?: ProposalInsert };
 type Result = { pageId: string; proposal: Proposal; items: Item[]; choices: Record<string, Choice>; messageId: string | null };
-type Busy = "thinking" | "adopting" | "working" | "undoing" | null;
+type Busy = "thinking" | "adopting" | "working" | "saving" | "undoing" | null;
+type MacState = { mode: "loading" | "error" } | { mode: "ready"; shell: ShellBridge; engines: ShellAiEngine[] };
+type MacRoute = "" | "server" | ShellAiEngineName;
 
 /** 変更と差し込みを本文の並び（変更の後ろにその位置の差し込み。−1 は先頭）にする。 */
 function itemsOf(proposal: Proposal): Item[] {
@@ -236,6 +249,7 @@ function usePlacement(narrow: boolean): RefObject<HTMLDivElement | null> {
 export function AiLayer(props: {
   editor: Editor | null;
   bridge: AiBridge;
+  title: string;
   kind: PageKind;
   lang: PageLang;
   request: AiOpenRequest | null;
@@ -262,6 +276,7 @@ export function AiLayer(props: {
           key={request.key}
           editor={editor}
           bridge={props.bridge}
+          title={props.title}
           kind={props.kind}
           lang={props.lang}
           range={request.range}
@@ -290,6 +305,7 @@ export function AiLayer(props: {
 function AiBox(props: {
   editor: Editor;
   bridge: AiBridge;
+  title: string;
   kind: PageKind;
   lang: PageLang;
   range: SelectionRange | null;
@@ -310,6 +326,10 @@ function AiBox(props: {
   const [pageId, setPageId] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [thread, setThread] = useState<AiChatMessage[]>([]);
+  const [macState, setMacState] = useState<MacState>({ mode: "loading" });
+  const [macRoute, setMacRoute] = useState<MacRoute>("");
+  const [macModel, setMacModel] = useState("");
+  const [resumeSession, setResumeSession] = useState<{ engine: ShellAiEngineName; conversationId: string; id: string } | null>(null);
 
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
@@ -322,6 +342,47 @@ function AiBox(props: {
   const editedRef = useRef(false);
   const shownRef = useRef(false);
   const busyRef = useRef<Busy>(null);
+  const chatFlightRef = useRef(false);
+  const macAliveRef = useRef(true);
+
+  const readMacEngines = useCallback(async () => {
+    const { detectShell } = await import("niho-desktop-bridge/tauri-shell-transport");
+    const shell = detectShell();
+    if (!shell) throw new Error("shell unavailable");
+    return { shell, engines: await shell.aiEngines() };
+  }, []);
+
+  useEffect(() => {
+    macAliveRef.current = true;
+    if (typeof window !== "undefined" && isShellWindow(window)) {
+      void readMacEngines().then(({ shell, engines }) => {
+        if (!macAliveRef.current) return;
+        setMacState({ mode: "ready", shell, engines });
+        setMacRoute((current) => current === "server" ? current :
+          (engines.find((engine) => engine.engine === current && macEngineReady(engine)) ?? engines.find(macEngineReady))?.engine ?? "");
+      }).catch(() => {
+        if (macAliveRef.current) setMacState({ mode: "error" });
+      });
+    }
+    return () => { macAliveRef.current = false; };
+  }, [readMacEngines]);
+
+  const refreshMacEngines = useCallback(async () => {
+    setMacState({ mode: "loading" });
+    try {
+      const { shell, engines } = await readMacEngines();
+      if (!macAliveRef.current) return;
+      setMacState({ mode: "ready", shell, engines });
+      setMacRoute((current) => current === "server" ? current :
+        (engines.find((engine) => engine.engine === current && macEngineReady(engine)) ?? engines.find(macEngineReady))?.engine ?? "");
+    } catch {
+      if (macAliveRef.current) setMacState({ mode: "error" });
+    }
+  }, [readMacEngines]);
+
+  const selectedMacEngine = macState.mode === "ready" ? macState.engines.find((engine) => engine.engine === macRoute) : undefined;
+  const selectedMacModels = selectedMacEngine ? macEngineModels(selectedMacEngine) : [];
+  const activeMacModel = selectedMacModels.includes(macModel) ? macModel : selectedMacModels[0] ?? "";
 
   useEffect(() => {
     shownRef.current = result !== null;
@@ -421,6 +482,10 @@ function AiBox(props: {
       await bridge.replace(error.page, { saved: false });
       return;
     }
+    if (error instanceof MacAiError) {
+      setMessage(MAC_AI_ERROR_TEXT[error.code]);
+      return;
+    }
     const code = error instanceof AiRequestError ? error.code : "failed";
     if (code === "aiUnavailable") {
       setResult(null);
@@ -488,7 +553,8 @@ function AiBox(props: {
    * 書いた分は版として残る（この箱から「元に戻す」で戻せる）。
    */
   const sendChat = async (value: string) => {
-    if (busy || blocked || preparing) return;
+    if (busy || blocked || preparing || chatFlightRef.current) return;
+    chatFlightRef.current = true;
     const controller = new AbortController();
     controllerRef.current = controller;
     setBusy("working");
@@ -503,9 +569,74 @@ function AiBox(props: {
         setBlocked(target.reason);
         return;
       }
-      const answer = await sendAiChat(target.pageId, { text: value, ...(conversationId ? { conversationId } : {}) }, { signal: controller.signal });
+      const native = typeof window !== "undefined" && isShellWindow(window);
+      let answer;
+      let nextResume: { engine: ShellAiEngineName; conversationId: string; id: string } | null = null;
+      if (native && macRoute !== "server") {
+        if (macState.mode !== "ready" || !macRoute) throw new MacAiError("unavailable");
+        const engine = macState.engines.find((item) => item.engine === macRoute);
+        if (!engine?.installed) throw new MacAiError("unavailable");
+        if (!engine.authenticated) throw new MacAiError("auth");
+        if (!macEngineReady(engine) || !macEngineModels(engine).includes(activeMacModel)) throw new MacAiError("unavailable");
+        const saved = bridge.saved(target.revision);
+        const checked = saved && validateBlocks(saved.blocks);
+        if (!saved || !checked || !checked.ok) throw new MacAiError("unreadable");
+        const markdown = blocksToMarkdown(checked.blocks);
+        if (!markdown.ok) throw new MacAiError("unreadable");
+        const range = rangeRef.current;
+        const selection = range && range.to > range.from && range.from >= 0 && range.to <= editor.state.doc.content.size
+          ? editor.state.doc.textBetween(range.from, range.to, "\n") : null;
+        editedRef.current = false;
+        const output = await runMacAiTurn({
+          shell: macState.shell,
+          engine: macRoute,
+          model: activeMacModel,
+          page: { pageId: target.pageId, title: saved.title, markdown: markdown.markdown },
+          selection,
+          instruction: value,
+          conversationId,
+          resumeSession: resumeSession?.engine === macRoute && resumeSession.conversationId === conversationId ? resumeSession.id : null,
+          signal: controller.signal,
+          onProgress: setMessage,
+        });
+        if (editedRef.current) throw new MacAiError("edited");
+        // invoke が成功し、Done が検証できたときだけクラウドへ記録する。ここから先は中止・自動再試行しない。
+        controllerRef.current = null;
+        setBusy("saving");
+        setMessage(AI_TEXT.saving);
+        try {
+          answer = await recordDeviceAiChat(target.pageId, {
+            ...(conversationId ? { conversationId } : {}),
+            input: value,
+            reply: output.reply,
+            engine: macRoute,
+            writes: output.writes.map((write) => ({ ...write, baseRevision: target.revision })),
+          });
+        } catch (error) {
+          if (!(error instanceof AiConflictError)) {
+            setMessage(AI_TEXT.saveUnknown);
+            return;
+          }
+          throw error;
+        }
+        if (!answer.conversation) {
+          // 会話記録が失敗しても API は保存済みページを返す。古いローカル本文を残さない。
+          if (answer.page) await bridge.replace(answer.page, { saved: true });
+          setConversationId(null);
+          setResumeSession(null);
+          setThread([]);
+          setMessage(answer.page ? AI_TEXT.nativeHistoryMissing : AI_TEXT.nativeReplyMissing);
+          return;
+        }
+        if (output.sessionId && answer.result === "done" && answer.resultCode === null) {
+          nextResume = { engine: macRoute, conversationId: answer.conversation.id, id: output.sessionId };
+        }
+      } else {
+        answer = await sendAiChat(target.pageId, { text: value, ...(conversationId ? { conversationId } : {}) }, { signal: controller.signal });
+      }
       setNearLimit(answer.usage.nearLimit);
       if (answer.conversation) setConversationId(answer.conversation.id);
+      if (native && macRoute !== "server") setResumeSession(nextResume);
       setThread((current) => {
         const seq = (current.at(-1)?.seq ?? 0) + 1;
         return [
@@ -528,12 +659,15 @@ function AiBox(props: {
       setText("");
       // 書き換えられたページを画面に載せる（自動保存は起こさない）
       if (answer.page) await bridge.replace(answer.page, { saved: true });
-      setMessage(answer.result === "failed" ? AI_TEXT.chatFailed : answer.result === "stopped" ? AI_TEXT.stopped : answer.reply || AI_TEXT.done);
+      setMessage(answer.resultCode === "revision_conflict" ? AI_TEXT.conflict :
+        native && macRoute !== "server" && answer.resultCode === "write_refused" ? AI_TEXT.nativeRefused :
+        answer.result === "failed" ? AI_TEXT.chatFailed : answer.result === "stopped" ? AI_TEXT.stopped : answer.reply || AI_TEXT.done);
     } catch (error) {
       await fail(error, "propose");
     } finally {
       if (controllerRef.current === controller) controllerRef.current = null;
       setBusy(null);
+      chatFlightRef.current = false;
     }
   };
 
@@ -605,7 +739,7 @@ function AiBox(props: {
 
   const close = () => {
     // 反映の最中は閉じない（保存の結果を画面に載せるまで待つ）
-    if (busy === "adopting") return;
+    if (busy === "adopting" || busy === "saving") return;
     onClose();
   };
 
@@ -618,6 +752,8 @@ function AiBox(props: {
 
   const presets = presetsFor(props.kind, props.lang);
   const disabled = preparing || blocked !== null || busy !== null;
+  const native = typeof window !== "undefined" && isShellWindow(window);
+  const chatDisabled = disabled || (native && macRoute !== "server" && (!selectedMacEngine || !macEngineReady(selectedMacEngine) || !selectedMacModels.includes(activeMacModel)));
   const accepted = result ? result.items.filter((item) => result.choices[item.id] === "accept").length : 0;
   const decided = result ? Object.keys(result.choices).length : 0;
   const status = blocked ? AI_BLOCKED_TEXT[blocked] : (message ?? "");
@@ -638,7 +774,7 @@ function AiBox(props: {
           {props.range ? "選んだ範囲" : "ページ全体"}
         </span>
         <span className="es-sp" />
-        <button type="button" className="es-btn es-btn--quiet es-btn--sm" disabled={busy === "adopting"} onClick={close}>
+        <button type="button" className="es-btn es-btn--quiet es-btn--sm" disabled={busy === "adopting" || busy === "saving"} onClick={close}>
           閉じる
         </button>
       </div>
@@ -701,6 +837,7 @@ function AiBox(props: {
                   // 画面からも会話からも離れる（サーバーの会話は残る。次に頼むと新しい会話になる）
                   setConversationId(null);
                   setThread([]);
+                  setResumeSession(null);
                 }}
               >
                 {AI_TEXT.fresh}
@@ -717,7 +854,7 @@ function AiBox(props: {
               {AI_TEXT.nearLimit}
             </p>
           )}
-          {busy === "thinking" && (
+          {(busy === "thinking" || busy === "working") && (
             <div className="es-acts">
               <button ref={stopRef} type="button" className="es-btn es-btn--outline es-btn--sm" onClick={() => controllerRef.current?.abort()}>
                 中止
@@ -740,8 +877,41 @@ function AiBox(props: {
             />
           ) : (
             <>
+              {native && (
+                <div className="es-sh-note" data-ai-mac-route="" style={{ display: "grid", gap: 6, minWidth: 0, marginBottom: 12 }}>
+                  <label htmlFor="mac-ai-route">自由入力チャットの実行先</label>
+                  <select id="mac-ai-route" value={macRoute} disabled={disabled} style={{ width: "100%", minWidth: 0 }} onChange={(event) => {
+                    setMacRoute(event.target.value as MacRoute);
+                    setResumeSession(null);
+                  }}>
+                    <option value="">CLI を選択してください</option>
+                    {macState.mode === "ready" && macState.engines.map((engine) => (
+                      <option key={engine.engine} value={engine.engine} disabled={!macEngineReady(engine)}>
+                        {MAC_ENGINE_LABELS[engine.engine]}（{macEngineStatus(engine)}）
+                      </option>
+                    ))}
+                    <option value="server">サーバー AI（API 課金）</option>
+                  </select>
+                  {macRoute !== "server" && selectedMacEngine && (
+                    <label style={{ display: "grid", gap: 4, minWidth: 0 }}>
+                      モデル
+                      <select aria-label="CLI のモデル" value={activeMacModel} disabled={disabled} style={{ width: "100%", minWidth: 0 }} onChange={(event) => setMacModel(event.target.value)}>
+                        {selectedMacModels.map((model) => <option key={model} value={model}>{model}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  {macState.mode === "loading" && <span>Mac の CLI を確認しています…</span>}
+                  {macState.mode === "error" && <span>Mac の CLI 状態を読み取れませんでした。</span>}
+                  {macState.mode === "ready" && macState.engines.length === 0 && <span>利用できる CLI がありません。導入・ログインを確認してください。</span>}
+                  {macState.mode === "ready" && macState.engines.length > 0 && macRoute !== "server" && !selectedMacEngine && <span>利用できる CLI がありません。導入・ログインを確認してください。</span>}
+                  {macState.mode === "ready" && macState.engines.some((engine) => !macEngineReady(engine)) && (
+                    <span>{macState.engines.filter((engine) => !macEngineReady(engine)).map((engine) => `${MAC_ENGINE_LABELS[engine.engine]}: ${macEngineStatus(engine)}`).join(" / ")}</span>
+                  )}
+                  <button type="button" className="es-btn es-btn--quiet es-btn--sm" disabled={disabled} onClick={() => { setMacState({ mode: "loading" }); void refreshMacEngines(); }}>CLI の状態を読み直す</button>
+                </div>
+              )}
               {presets.length > 0 && (
-                <div className="es-acts" role="group" aria-label="候補">
+                <div className="es-acts" role="group" aria-label={native ? "候補（サーバー AI）" : "候補"}>
                   {presets.map((preset) => (
                     <button key={preset.id} type="button" className="es-btn es-btn--outline es-btn--sm" disabled={disabled} onClick={() => void ask({ preset: preset.id })}>
                       {preset.label}
@@ -757,7 +927,7 @@ function AiBox(props: {
                   enterKeyHint="send"
                   maxLength={MAX_CHAT_INPUT_CHARS}
                   value={text}
-                  disabled={disabled}
+                  disabled={chatDisabled}
                   onChange={(event) => setText(event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key !== "Enter" || isComposingKey(event)) return;
@@ -765,7 +935,7 @@ function AiBox(props: {
                     sendText();
                   }}
                 />
-                <button type="button" className="es-btn es-btn--primary es-btn--sm" disabled={disabled || text.trim().length === 0} onClick={sendText}>
+                <button type="button" className="es-btn es-btn--primary es-btn--sm" disabled={chatDisabled || text.trim().length === 0} onClick={sendText}>
                   送る
                 </button>
               </div>

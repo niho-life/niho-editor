@@ -1,29 +1,30 @@
 import { MAX_CONTINUATIONS, estimateTokenCostUsd, joinContinuation } from "@niho/docs-core";
 import {
   DEFAULT_EDITOR_SETTINGS,
+  stepBlocksText,
+  stepReferenceText,
   monthKeyJst,
   type AiUsageDelta,
   type AiUsageSource,
   type AiUsageTotals,
-  type Block,
   type EditorSettings,
   type OwnerId,
   type ReferencePage,
 } from "@niho/editor-store";
-import { AnthropicError, maxTokensLimit, type AnthropicErrorKind } from "../ai/anthropic";
+import { AnthropicError, maxTokensLimit, timeoutMs, type AnthropicErrorKind } from "../ai/anthropic";
 import { buildComposePrompt, composeBlocks, composeMaxTokens, parseComposeOutput, partialComposeBlocks, type ComposeInput, type ComposeSource } from "../ai/compose";
 import type { AiComposeBackend } from "../ai/config";
-import { blockText } from "../ai/engine";
 import type { AiUsageReport } from "../ai/model";
 import { referencesFrom } from "../ai/references";
 import { StepError, type StepExecutor, type StepExecutorInput, type StepExecutorOutput } from "./executor";
+import { stepGenerationOptions } from "./profile";
 
 /**
  * 本物の段階の実行器（Issue #37 の実行器・#38 の AI を包んだもの）。偽物（executor.ts の fakeExecutor）の差し替え先で、
  * 配線は src/server/steps-deps.ts の 1 か所。
  *
  * 1 段階 = モデルの 1 往復（ai/compose.ts のプロンプト → AnthropicClient → 検証 → 本文のブロック）。
- * 資料は段階 0 なら録音ページの本文、それ以降は前の段階の結果。
+ * 資料は録音ページの本文、上流の全結果、親フォルダの背景、同じフォルダの参考ページ。
  *
  * - 月の上限は提案（server/ai-api.ts）と同じ意味で効く: 呼ぶ前に今月の使用額を見て、上限以上なら
  *   モデルを呼ばずに `quota_exceeded` で失敗する（再試行しない）。使った分は失敗しても記録する。
@@ -48,8 +49,14 @@ export type AiStepExecutorDeps = {
   /** 自動参考ページ（同じフォルダの直下のほかのページ）。渡さない・読めないときは参考なし。 */
   references?: () => ((owner: OwnerId, pageId: string) => Promise<ReferencePage[] | null>) | null;
   now?: () => Date;
+  /** Monotonic clock and total budget are injectable for deterministic deadline tests. */
+  monotonicNowMs?: () => number;
+  stepBudgetMs?: number;
   env?: Readonly<Record<string, string | undefined>>;
 };
+
+/** Cloud Tasks は最大 30 分。6 分を保存・終了処理用に残して、AI 呼び出しは 24 分で打ち切る。 */
+export const MAX_STEP_GENERATION_MS = 24 * 60 * 1000;
 
 /** 上流の失敗の種類から段階の失敗の code（`^[a-z0-9_]{1,64}$`）。 */
 const ERROR_CODES: Record<AnthropicErrorKind, string> = {
@@ -79,15 +86,15 @@ function overLimit(totals: AiUsageTotals, limitUsd: number | null): boolean {
   return limitUsd !== null && totals.costMicroUsd >= Math.round(limitUsd * 1e6);
 }
 
-/** 資料（段階 0 は録音ページの本文、それ以降は前の段階の結果）。空の行は入れない。 */
+/** 原文と上流の全結果。親フォルダの背景は独立した info section に渡す。 */
 function sourcesOf(input: StepExecutorInput): ComposeSource[] {
-  const text = (blocks: readonly Block[]) =>
-    blocks
-      .map((block) => blockText(block).trim())
-      .filter((line) => line.length > 0)
-      .join("\n\n");
-  if (input.stepIndex === 0) return [{ label: "録音ページの本文", text: text(input.parentBlocks) }];
-  return [{ label: "前の段階の結果", text: text(input.previousBlocks ?? []) }];
+  return [
+    { label: "録音ページの本文", text: stepBlocksText(input.parentBlocks) },
+    ...input.recipe.steps.slice(0, input.stepIndex).map((step, index) => ({
+      label: `工程 ${index + 1} の結果`,
+      text: stepBlocksText(input.materials?.upstream.find((item) => item.id === step.id)?.blocks ?? (index === input.stepIndex - 1 ? input.previousBlocks ?? [] : [])),
+    })),
+  ];
 }
 
 /**
@@ -97,6 +104,9 @@ function sourcesOf(input: StepExecutorInput): ComposeSource[] {
 export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
   return {
     async run(input: StepExecutorInput): Promise<StepExecutorOutput> {
+      const monotonicNowMs = deps.monotonicNowMs ?? (() => performance.now());
+      const startedAt = monotonicNowMs();
+      const stepBudgetMs = deps.stepBudgetMs ?? MAX_STEP_GENERATION_MS;
       input.signal?.throwIfAborted();
       const step = input.recipe.steps[input.stepIndex];
       if (!step) throw new StepError("unknown_step", false);
@@ -111,9 +121,11 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
       const limitUsd = deps.limitUsd();
       if (overLimit(await usage.get(owner, month), limitUsd)) throw new StepError("quota_exceeded", false);
 
-      const settings = (await deps.settings?.()?.(owner)) ?? DEFAULT_EDITOR_SETTINGS;
+      const settings = input.materials?.settings ?? (await deps.settings?.()?.(owner)) ?? DEFAULT_EDITOR_SETTINGS;
       // 参考は、作っているサブページと同じフォルダの直下のページ（親＝録音ページの兄弟）。読めなければ参考なし
-      const references = referencesFrom((await deps.references?.()?.(owner, input.parentPageId ?? "")) ?? []);
+      const references = input.materials
+        ? input.materials.refs.map((ref) => stepReferenceText(ref.blocks).trim()).filter(Boolean).map((text, index) => ({ title: `参考 ${index + 1}`, text }))
+        : referencesFrom((await deps.references?.()?.(owner, input.parentPageId ?? "")) ?? []).map((ref, index) => ({ ...ref, title: `参考 ${index + 1}` }));
       const composeInput: ComposeInput = {
         recipeName: input.recipe.name,
         guide: input.recipe.guide,
@@ -122,15 +134,18 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
         stepNumber: input.stepIndex + 1,
         stepCount: input.recipe.steps.length,
         sources: sourcesOf(input),
+        background: stepBlocksText(input.backgroundBlocks),
         // 「書いた言語のまま」は日本語（段階の資料は録音の文字起こしで、設計 §7.2 の手順はどれも日本語）
         lang: settings.aiLang === "en" ? "en" : "ja",
-        glossary: settings.glossary,
-        about: settings.about,
+        glossary: [...settings.glossary, ...(input.materials?.fields.terms ?? []), ...(input.recipe.terms ?? [])],
+        entities: input.materials?.fields.entities ?? [],
+        about: { name: settings.aboutName, text: settings.about },
         references,
       };
       const prompt = buildComposePrompt(composeInput);
 
-      const maxTokens = composeMaxTokens(composeInput, maxTokensLimit(deps.env ?? process.env));
+      const env = deps.env ?? process.env;
+      const generation = stepGenerationOptions(backend.model, step.profile, composeMaxTokens(composeInput, maxTokensLimit(env)), maxTokensLimit(env));
       // 出力の上限で切れたら、同じ答えの続きを書かせて繋ぐ（旧アプリの「続き」。docs-core の規則と結合をそのまま使う）
       let text = "";
       let report: AiUsageReport | null = null;
@@ -143,9 +158,21 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
         const messages: unknown[] =
           round === 0 ? [{ role: "user", content: prompt.user }] : [{ role: "user", content: prompt.user }, { role: "assistant", content: text }];
         if (round > 0 && overLimit(await usage.get(owner, month), limitUsd)) throw new StepError("quota_exceeded", false);
+        // 呼び出しの最大時間を丸ごと予約し、Cloud Tasks の期限前に runner が結果を保存できるようにする。
+        if (monotonicNowMs() - startedAt + timeoutMs(env) > stepBudgetMs) {
+          const partial = partialComposeBlocks(text);
+          throw new StepError("step_time_limit", false, partial.length > 0 ? partial : undefined);
+        }
         let turn;
         try {
-          turn = await backend.client.converse({ system: prompt.system, messages, maxTokens, ...(input.signal ? { signal: input.signal } : {}) });
+          turn = await backend.client.converse({
+            system: prompt.system,
+            messages,
+            maxTokens: generation.maxTokens,
+            ...(generation.thinking ? { thinking: generation.thinking } : {}),
+            ...(generation.outputConfig ? { outputConfig: generation.outputConfig } : {}),
+            ...(input.signal ? { signal: input.signal } : {}),
+          });
         } catch (error) {
           // 応答が届いたのに使えなかった分も課金されているので記録する
           if (error instanceof AnthropicError && error.usage) await usage.record(owner, month, usageDelta(backend, error.usage));

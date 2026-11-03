@@ -29,6 +29,7 @@ import {
   type TrashedPage,
   type VersionReason,
 } from "./types.ts";
+import { PAGE_MAX_BYTES, pageImageCharges, pageSizeBytes } from "./page-size.ts";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -208,8 +209,8 @@ function rulesFor(reason: VersionReason): { skipEmpty: boolean; skipSame: boolea
 type SnapshotRules = {
   skipEmpty: boolean;
   skipSame: boolean;
-  /** 保存しようとしている本文（JSON）。今の本文と JSON として等しければ残さない。 */
-  unlessSameAs?: string;
+  /** 保存しようとしている本文と公開情報。現在と全て同じなら履歴を増やさない。 */
+  unlessSameAs?: { blocks: string; cover: string | null; lead: string | null };
   /** 最新の版からこの時間が経っていなければ残さない。 */
   minIntervalMs?: number;
 };
@@ -235,11 +236,15 @@ export class EditorStore {
 
   async createPage(owner: OwnerId, input: CreatePageInput = {}): Promise<Page> {
     assertOwner(owner);
+    if (input.lead !== undefined && input.lead !== null && (typeof input.lead !== "string" || Array.from(input.lead).length > 160 || input.lead.includes("\u0000"))) {
+      throw new TypeError("editor-store: lead must be at most 160 characters or null");
+    }
+    if (pageSizeBytes(input.title ?? "", input.blocks ?? [], [], null, input.lead ?? null) > PAGE_MAX_BYTES) throw new RangeError("editor-store: page is too large");
     const result = await this.#db.query<PageRow>(
-      `INSERT INTO pages (owner, kind, title, lang, blocks)
-       VALUES ($1, COALESCE($2, 'note'), COALESCE($3, ''), COALESCE($4, 'ja'), COALESCE($5::jsonb, '[]'::jsonb))
+      `INSERT INTO pages (owner, kind, title, lang, blocks, lead)
+       VALUES ($1, COALESCE($2, 'note'), COALESCE($3, ''), COALESCE($4, 'ja'), COALESCE($5::jsonb, '[]'::jsonb), $6)
        RETURNING ${PAGE_COLUMNS}`,
-      [owner, input.kind ?? null, input.title ?? null, input.lang ?? null, input.blocks === undefined ? null : JSON.stringify(input.blocks)],
+      [owner, input.kind ?? null, input.title ?? null, input.lang ?? null, input.blocks === undefined ? null : JSON.stringify(input.blocks), input.lead ?? null],
     );
     const row = result.rows[0];
     if (!row) throw new Error("editor-store: insert returned no row");
@@ -322,19 +327,42 @@ export class EditorStore {
     assertOwner(owner);
     assertBaseRevision(options.baseRevision);
     if (!isPageId(id)) return null;
+    const hasCover = Object.prototype.hasOwnProperty.call(patch, "cover");
+    const hasLead = Object.prototype.hasOwnProperty.call(patch, "lead");
+    if (hasCover && patch.cover !== null && (typeof patch.cover !== "string" || !isPageId(patch.cover))) throw new TypeError("editor-store: cover must be a UUID or null");
+    if (hasLead && patch.lead !== null && (typeof patch.lead !== "string" || Array.from(patch.lead).length > 160 || patch.lead.includes("\u0000"))) {
+      throw new TypeError("editor-store: lead must be at most 160 characters or null");
+    }
     const blocksJson = patch.blocks === undefined ? null : JSON.stringify(patch.blocks);
     return this.#orNull(() =>
       this.#transaction(async (client): Promise<SaveResult | null> => {
         const current = await lockPage(client, owner, id);
         if (!current) return null;
         if (current.revision !== options.baseRevision) return { status: "conflict", page: toPage(current) };
+        const candidateTitle = patch.title ?? current.title;
+        const candidateBlocks = patch.blocks ?? current.blocks;
+        const candidateCover = hasCover ? patch.cover! : current.cover;
+        const candidateLead = hasLead ? patch.lead! : current.lead;
+        const metadataChanged = candidateCover !== current.cover || candidateLead !== current.lead;
+        if (candidateCover !== null) {
+          const cover = await client.query(
+            "SELECT 1 FROM assets WHERE owner = $1 AND page_id = $2 AND id = $3 AND kind = 'image' AND upload_status = 'ready'",
+            [owner, id, candidateCover],
+          );
+          if (cover.rows.length === 0) return null;
+        }
+        const charges = await pageImageCharges(client, owner, id);
+        if (pageSizeBytes(candidateTitle, candidateBlocks, charges, candidateCover, candidateLead) > PAGE_MAX_BYTES) {
+          return { status: "page_full" };
+        }
         if (options.overwrite === true) {
-          await this.#snapshot(client, owner, id, "overwrite", rulesFor("overwrite"));
-        } else if (blocksJson !== null) {
+          await this.#snapshot(client, owner, id, "overwrite", { ...rulesFor("overwrite"), skipEmpty: !metadataChanged });
+        } else if (blocksJson !== null || hasCover || hasLead) {
           await this.#snapshot(client, owner, id, "autosave", {
             ...rulesFor("autosave"),
-            unlessSameAs: blocksJson,
-            minIntervalMs: this.#autosaveVersionIntervalMs,
+            skipEmpty: !metadataChanged,
+            unlessSameAs: { blocks: JSON.stringify(candidateBlocks), cover: candidateCover, lead: candidateLead },
+            ...(metadataChanged ? {} : { minIntervalMs: this.#autosaveVersionIntervalMs }),
           });
         }
         const result = await client.query<PageRow>(
@@ -343,11 +371,13 @@ export class EditorStore {
                   title = COALESCE($4, title),
                   lang = COALESCE($5, lang),
                   blocks = COALESCE($6::jsonb, blocks),
+                  cover = CASE WHEN $7::boolean THEN $8::uuid ELSE cover END,
+                  lead = CASE WHEN $9::boolean THEN $10::text ELSE lead END,
                   revision = revision + 1,
                   updated_at = GREATEST(clock_timestamp(), updated_at)
             WHERE owner = $1 AND deleted_at IS NULL AND id = $2
             RETURNING ${PAGE_COLUMNS}`,
-          [owner, id, patch.kind ?? null, patch.title ?? null, patch.lang ?? null, blocksJson],
+          [owner, id, patch.kind ?? null, patch.title ?? null, patch.lang ?? null, blocksJson, hasCover, patch.cover ?? null, hasLead, patch.lead ?? null],
         );
         const row = result.rows[0];
         if (!row) throw new Error("editor-store: locked page vanished during save");
@@ -602,8 +632,8 @@ export class EditorStore {
       this.#transaction(async (client): Promise<RestoreResult | null> => {
         const current = await lockPage(client, owner, id);
         if (!current) return null;
-        const target = await client.query<{ blocks: unknown }>(
-          "SELECT blocks FROM page_versions WHERE page_id = $1 AND version = $2",
+        const target = await client.query<{ blocks: unknown; cover: string | null; lead: string | null; metadata_tracked: boolean }>(
+          "SELECT blocks, cover, lead, metadata_tracked FROM page_versions WHERE page_id = $1 AND version = $2",
           [id, version],
         );
         const stored = target.rows[0];
@@ -611,15 +641,29 @@ export class EditorStore {
         if (current.revision !== options.baseRevision) return { status: "conflict", page: toPage(current) };
         const accepted = options.accept(stored.blocks);
         if (accepted === null) return { status: "unrestorable" };
-        await this.#snapshot(client, owner, id, "restore", rulesFor("restore"));
+        const restoredCover = stored.metadata_tracked ? stored.cover : current.cover;
+        const restoredLead = stored.metadata_tracked ? stored.lead : current.lead;
+        if (restoredCover !== null) {
+          const cover = await client.query(
+            "SELECT 1 FROM assets WHERE owner = $1 AND page_id = $2 AND id = $3 AND kind = 'image' AND upload_status = 'ready'",
+            [owner, id, restoredCover],
+          );
+          if (cover.rows.length === 0) return { status: "unrestorable" };
+        }
+        const charges = await pageImageCharges(client, owner, id);
+        if (pageSizeBytes(current.title, accepted, charges, restoredCover, restoredLead) > PAGE_MAX_BYTES) return { status: "page_full" };
+        const metadataChanged = restoredCover !== current.cover || restoredLead !== current.lead;
+        await this.#snapshot(client, owner, id, "restore", { ...rulesFor("restore"), skipEmpty: !metadataChanged });
         const result = await client.query<PageRow>(
           `UPDATE pages
               SET blocks = $3::jsonb,
+                  cover = $4::uuid,
+                  lead = $5::text,
                   revision = revision + 1,
                   updated_at = GREATEST(clock_timestamp(), updated_at)
             WHERE owner = $1 AND deleted_at IS NULL AND id = $2
             RETURNING ${PAGE_COLUMNS}`,
-          [owner, id, JSON.stringify(accepted)],
+          [owner, id, JSON.stringify(accepted), restoredCover, restoredLead],
         );
         const row = result.rows[0];
         if (!row) throw new Error("editor-store: locked page vanished during restore");
@@ -801,19 +845,32 @@ export class EditorStore {
   async #snapshot(client: Queryable, owner: OwnerId, id: string, reason: VersionReason, rules: SnapshotRules): Promise<PageVersionSummary | null> {
     const inserted = await client.query<VersionRow>(
       `WITH latest AS (
-         SELECT version, blocks, created_at FROM page_versions WHERE page_id = $2 ORDER BY version DESC LIMIT 1
+         SELECT version, blocks, cover, lead, metadata_tracked, created_at FROM page_versions WHERE page_id = $2 ORDER BY version DESC LIMIT 1
        )
-       INSERT INTO page_versions (page_id, version, blocks, reason)
-       SELECT p.id, COALESCE((SELECT version FROM latest), 0) + 1, p.blocks, $3
+       INSERT INTO page_versions (page_id, version, blocks, reason, cover, lead, metadata_tracked)
+       SELECT p.id, COALESCE((SELECT version FROM latest), 0) + 1, p.blocks, $3, p.cover, p.lead, true
          FROM pages p
         WHERE p.owner = $1 AND p.deleted_at IS NULL AND p.id = $2
-          AND ($4::jsonb IS NULL OR p.blocks IS DISTINCT FROM $4::jsonb)
+          AND (NOT $4::boolean OR p.blocks IS DISTINCT FROM $8::jsonb OR p.cover IS DISTINCT FROM $9::uuid OR p.lead IS DISTINCT FROM $10::text)
           AND (NOT $5::boolean OR jsonb_array_length(p.blocks) > 0)
-          AND (NOT $6::boolean OR NOT EXISTS (SELECT 1 FROM latest l WHERE l.blocks = p.blocks))
+          AND (NOT $6::boolean OR NOT EXISTS (
+                SELECT 1 FROM latest l WHERE l.metadata_tracked AND l.blocks = p.blocks
+                  AND l.cover IS NOT DISTINCT FROM p.cover AND l.lead IS NOT DISTINCT FROM p.lead))
           AND ($7::float8 IS NULL OR NOT EXISTS (
                 SELECT 1 FROM latest l WHERE l.created_at > clock_timestamp() - $7::float8 * interval '1 millisecond'))
        RETURNING version, reason, created_at, jsonb_array_length(blocks) AS block_count`,
-      [owner, id, reason, rules.unlessSameAs ?? null, rules.skipEmpty, rules.skipSame, rules.minIntervalMs ?? null],
+      [
+        owner,
+        id,
+        reason,
+        rules.unlessSameAs !== undefined,
+        rules.skipEmpty,
+        rules.skipSame,
+        rules.minIntervalMs ?? null,
+        rules.unlessSameAs?.blocks ?? null,
+        rules.unlessSameAs?.cover ?? null,
+        rules.unlessSameAs?.lead ?? null,
+      ],
     );
     const row = inserted.rows[0];
     if (!row) return null;

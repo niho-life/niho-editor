@@ -67,7 +67,7 @@ describe("SharedBlocks", () => {
     expect(html).not.toMatch(/javascript:|data:|vbscript:|evil\.example|user:pass/i);
   });
 
-  it("applies bold, italic, and link together and ignores every other mark", () => {
+  it("applies bold, italic, code, strike and link and ignores unknown marks", () => {
     const html = render([
       paragraph(
         text("全部", [{ type: "bold" }, { type: "italic" }, link("https://example.com/")]),
@@ -78,11 +78,11 @@ describe("SharedBlocks", () => {
       ),
     ]);
     expect(html).toBe(
-      `<p><a href="https://example.com/" rel="${SHARED_LINK_REL}"><strong><em>全部</em></strong></a><strong>太</strong><em>斜</em>コード壊れた</p>`,
+      `<p><a href="https://example.com/" rel="${SHARED_LINK_REL}"><strong><em>全部</em></strong></a><strong>太</strong><em>斜</em><code><s>コード</s></code>壊れた</p>`,
     );
   });
 
-  it("renders the children of unknown nodes without throwing, and skips images", () => {
+  it("renders tables and code and skips images", () => {
     const html = render([
       { type: "table", content: [{ type: "tableRow", content: [{ type: "tableCell", content: [paragraph(text("表の中"))] }] }] },
       { type: "image", attrs: { src: "https://example.com/a.png", alt: "写真" } },
@@ -95,8 +95,30 @@ describe("SharedBlocks", () => {
       [paragraph(text("配列"))],
       { content: [text("型なし")] },
     ]);
-    expect(html).toBe("<p>表の中</p>const a = 1;型なし");
+    expect(html).toBe('<div class="shared-table" role="region" aria-label="本文の表" tabindex="0"><table><tbody><tr><td><p>表の中</p></td></tr></tbody></table></div><pre><code>const a = 1;</code></pre>型なし');
     expect(html).not.toMatch(/img|example\.com|写真/);
+  });
+
+  it("shows checklist state in text and escapes table and code contents", () => {
+    const html = render([
+      { type: "taskList", content: [{ type: "taskItem", attrs: { checked: true }, content: [paragraph(text("完了"))] }, { type: "taskItem", attrs: { checked: false }, content: [paragraph(text("未完了"))] }] },
+      { type: "table", content: [{ type: "tableRow", content: [{ type: "tableHeader", content: [paragraph(text("<script>"))] }] }] },
+      { type: "codeBlock", content: [text("<img src=x>")] },
+    ]);
+    expect(html).toContain('aria-label="完了"');
+    expect(html).toContain('aria-label="未完了"');
+    expect(html).toContain("<th scope=\"col\"><p>&lt;script&gt;</p></th>");
+    expect(html).toContain("<pre><code>&lt;img src=x&gt;</code></pre>");
+    expect(html).not.toContain("<script>");
+  });
+
+  it("preserves table spans and column alignment in the shared view", () => {
+    const html = render([{ type: "table", content: [
+      { type: "tableRow", content: [{ type: "tableHeader", attrs: { colspan: 2, align: "center" }, content: [paragraph(text("見出し"))] }] },
+      { type: "tableRow", content: [{ type: "tableCell", attrs: { rowspan: 2, align: "right" }, content: [paragraph(text("値"))] }] },
+    ] }]);
+    expect(html).toContain('<th scope="col" colSpan="2" style="text-align:center"><p>見出し</p></th>');
+    expect(html).toContain('<td rowSpan="2" style="text-align:right"><p>値</p></td>');
   });
 
   it("renders a callout as aside[data-callout], with its blocks inside (#33)", () => {

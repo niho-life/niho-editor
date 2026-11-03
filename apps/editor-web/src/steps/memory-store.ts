@@ -2,15 +2,25 @@ import { randomUUID } from "node:crypto";
 import {
   DEFAULT_LEASE_SECONDS,
   MAX_TRIES,
-  computeBasis,
+  computeStepBasis,
+  parseStepBasis,
+  stepStaleReasons,
+  DEFAULT_EDITOR_SETTINGS,
   isPageId,
-  stepPageId,
+  stepPageIdForStep,
   type AttemptState,
   type Block,
   type PageKind,
   type RunState,
   type StepRunView,
   type StepStatus,
+  type StepBasis,
+  type StepStaleReason,
+  type StepMaterials,
+  type PageFields,
+  type EditorSettings,
+  snapshotOf,
+  type RecipeSnapshot,
 } from "@niho/editor-store";
 import type { StepRunStore } from "./store";
 
@@ -36,7 +46,7 @@ type MemoryAttempt = {
   leaseUntil: number | null;
   errorCode: string | null;
   partialBlocks: Block[] | null;
-  inputBasis: string | null;
+  inputBasis: StepBasis | string | null;
   finishedAt: number | null;
 };
 
@@ -45,6 +55,8 @@ type MemoryRun = {
   owner: string;
   parent: string;
   recipe: string;
+  recipeSnapshot: RecipeSnapshot;
+  recipeRevision: number;
   fromStep: number;
   state: RunState;
   key: string | null;
@@ -61,6 +73,8 @@ const ACTIVE: readonly RunState[] = ["queued", "running"];
 export class MemoryStepRunStore implements StepRunStore {
   readonly pages = new Map<string, MemoryPage>();
   readonly runs = new Map<string, MemoryRun>();
+  readonly fields = new Map<string, PageFields>();
+  readonly settings = new Map<string, EditorSettings>();
   #seq = 0;
   #clock = 0;
 
@@ -87,10 +101,34 @@ export class MemoryStepRunStore implements StepRunStore {
     if (page) page.stepStatus = status;
   }
 
+  #pageIds(owner: string, parentId: string, recipe: { id: string; steps: readonly { id: string }[] }, run?: MemoryRun): string[] {
+    const latest = run ?? [...this.runs.values()]
+      .filter((candidate) => candidate.owner === owner && candidate.parent === parentId && candidate.recipe === recipe.id)
+      .sort((left, right) => right.seq - left.seq)[0];
+    const prior = new Map((latest?.attempts ?? []).map((attempt) => [attempt.stepId, attempt.pageId] as const));
+    return recipe.steps.map((step) => prior.get(step.id) ?? stepPageIdForStep(parentId, recipe.id, step.id));
+  }
+
+  #materials(owner: string, parentId: string, recipe: { id: string; steps: readonly { id: string }[] }, index: number, pageIds = this.#pageIds(owner, parentId, recipe), upstreamPageIds?: readonly { id: string; pageId: string }[]): StepMaterials | null {
+    const parent = this.#page(owner, parentId);
+    if (!parent) return null;
+    const upstream = upstreamPageIds ?? recipe.steps.slice(0, index).map((step, prior) => ({ id: step.id, pageId: pageIds[prior]! }));
+    return {
+      parentBlocks: parent.blocks,
+      backgroundBlocks: this.#page(owner, parent.parent)?.blocks ?? [],
+      upstream: upstream.map((item) => ({ id: item.id, blocks: this.#page(owner, item.pageId)?.blocks ?? [] })),
+      refs: [...this.pages.values()].filter((page) => page.owner === owner && !page.deleted && parent.parent !== null && page.parent === parent.parent && page.id !== parentId).map((page) => ({ id: page.id, blocks: page.blocks })),
+      fields: this.fields.get(parent.parent ?? "") ?? { entities: [], terms: [] },
+      settings: this.settings.get(owner) ?? DEFAULT_EDITOR_SETTINGS,
+    };
+  }
+
   #view(run: MemoryRun): StepRunView {
     return {
       id: run.id,
       recipe: run.recipe,
+      recipeSnapshot: run.recipeSnapshot,
+      recipeRevision: run.recipeRevision,
       state: run.state,
       fromStep: run.fromStep,
       steps: run.attempts.map((attempt) => ({
@@ -101,6 +139,9 @@ export class MemoryStepRunStore implements StepRunStore {
         stepStatus: this.#page(run.owner, attempt.pageId)?.stepStatus ?? null,
         tries: attempt.tries,
         errorCode: attempt.errorCode,
+        ...(run.state === "failed" && attempt.state === "failed" && attempt.partialBlocks && attempt.partialBlocks.length > 0 && this.#page(run.owner, attempt.pageId)
+          ? { hasPartialOutput: true }
+          : {}),
       })),
     };
   }
@@ -109,6 +150,20 @@ export class MemoryStepRunStore implements StepRunStore {
   partialOf(runId: string, stepIndex: number): Block[] | null {
     return this.#attempt(runId, stepIndex)?.attempt.partialBlocks ?? null;
   }
+
+  readPartialOutput: StepRunStore["readPartialOutput"] = async (owner, parentId, runId, stepIndex) => {
+    const run = this.runs.get(runId);
+    const parent = this.#page(owner, parentId);
+    if (!run || !parent || run.owner !== owner || run.parent !== parentId || run.state !== "failed") return null;
+    const latest = [...this.runs.values()]
+      .filter((candidate) => candidate.owner === owner && candidate.parent === parentId)
+      .sort((left, right) => right.seq - left.seq)[0];
+    if (latest?.id !== runId) return null;
+    const attempt = run.attempts[stepIndex];
+    if (!attempt || attempt.state !== "failed" || !attempt.partialBlocks || attempt.partialBlocks.length === 0) return null;
+    if (!this.#page(owner, attempt.pageId)) return null;
+    return [...attempt.partialBlocks];
+  };
 
   #attempt(runId: string, stepIndex: number): { run: MemoryRun; attempt: MemoryAttempt } | null {
     const run = this.runs.get(runId);
@@ -131,7 +186,7 @@ export class MemoryStepRunStore implements StepRunStore {
   createRun: StepRunStore["createRun"] = async (owner, parentId, input) => {
     const { recipe } = input;
     const fromStep = input.fromStep ?? 0;
-    if (!Number.isInteger(fromStep) || fromStep < 0 || fromStep >= recipe.steps.length) throw new RangeError("fromStep is out of range");
+    if (!Number.isInteger(fromStep) || fromStep < 0) throw new RangeError("fromStep is out of range");
     if (!isPageId(parentId)) return { status: "not_found" };
     const parent = this.#page(owner, parentId);
     if (!parent || parent.kind !== "rec") return { status: "not_found" };
@@ -141,9 +196,17 @@ export class MemoryStepRunStore implements StepRunStore {
     if ([...this.runs.values()].some((run) => run.owner === owner && run.parent === parentId && ACTIVE.includes(run.state))) {
       return { status: "run_in_progress" };
     }
-    const pageIds = recipe.steps.map((_, index) => stepPageId(parentId, recipe.id, index));
+    const prior = [...this.runs.values()].filter((run) => run.owner === owner && run.parent === parentId && run.recipe === recipe.id).sort((a, b) => b.seq - a.seq)[0];
+    const recipeSnapshot = prior?.recipeSnapshot ?? snapshotOf({
+      id: recipe.id, name: recipe.name ?? recipe.id, guide: recipe.guide ?? "",
+      steps: recipe.steps.map((step) => ({ id: step.id, name: step.name, instruction: step.instruction, profile: step.profile ?? "standard" })),
+      terms: recipe.terms ?? [], samples: recipe.samples ?? [],
+    });
+    if (fromStep >= recipeSnapshot.steps.length) return { status: "invalid_from_step" };
+    const previousPageByStep = new Map((prior?.attempts ?? []).map((attempt) => [attempt.stepId, attempt.pageId] as const));
+    const pageIds = recipeSnapshot.steps.map((step) => previousPageByStep.get(step.id) ?? stepPageIdForStep(parentId, recipe.id, step.id));
     if (pageIds.slice(0, fromStep).some((id) => this.#page(owner, id)?.stepStatus !== "done")) return { status: "invalid_from_step" };
-    for (const [index, step] of recipe.steps.entries()) {
+    for (const [index, step] of recipeSnapshot.steps.entries()) {
       if (index < fromStep) continue;
       const id = pageIds[index]!;
       const existing = this.pages.get(id);
@@ -159,11 +222,13 @@ export class MemoryStepRunStore implements StepRunStore {
       owner,
       parent: parentId,
       recipe: recipe.id,
+      recipeSnapshot,
+      recipeRevision: prior?.recipeRevision ?? recipe.revision ?? 1,
       fromStep,
       state: "queued",
       key,
       seq: ++this.#seq,
-      attempts: recipe.steps.map((step, index) => ({
+      attempts: recipeSnapshot.steps.map((step, index) => ({
         stepIndex: index,
         stepId: step.id,
         pageId: pageIds[index]!,
@@ -179,6 +244,19 @@ export class MemoryStepRunStore implements StepRunStore {
     };
     this.runs.set(run.id, run);
     return { status: "created", run: this.#view(run) };
+  };
+
+  updateRunRecipeSnapshot: StepRunStore["updateRunRecipeSnapshot"] = async (owner, parentId, runId, recipe, expectedRevision) => {
+    const latest = [...this.runs.values()].filter((run) => run.owner === owner && run.parent === parentId && run.recipe === recipe.id).sort((a, b) => b.seq - a.seq)[0];
+    if (!latest || latest.id !== runId) return { status: "not_found" };
+    if (ACTIVE.includes(latest.state) || latest.recipeRevision !== expectedRevision) return { status: "conflict" };
+    latest.recipeSnapshot = snapshotOf({
+      id: recipe.id, name: recipe.name ?? recipe.id, guide: recipe.guide ?? "",
+      steps: recipe.steps.map((step) => ({ id: step.id, name: step.name, instruction: step.instruction, profile: step.profile ?? "standard" })),
+      terms: recipe.terms ?? [], samples: recipe.samples ?? [],
+    });
+    latest.recipeRevision = recipe.revision ?? 1;
+    return { status: "updated", run: this.#view(latest) };
   };
 
   listRun: StepRunStore["listRun"] = async (owner, parentId) => {
@@ -208,26 +286,36 @@ export class MemoryStepRunStore implements StepRunStore {
   refreshStale: StepRunStore["refreshStale"] = async (owner, parentId, recipe) => {
     const parent = isPageId(parentId) ? this.#page(owner, parentId) : null;
     if (!parent) return 0;
-    const recorded = new Map<number, { basis: string; at: number }>();
+    const latest = [...this.runs.values()]
+      .filter((run) => run.owner === owner && run.parent === parentId && run.recipe === recipe.id)
+      .sort((a, b) => b.seq - a.seq)[0];
+    const latestAttempts = [...(latest?.attempts ?? [])].sort((a, b) => a.stepIndex - b.stepIndex);
+    const latestStepIds = latestAttempts.map((attempt) => attempt.stepId);
+    const structuralMismatch = latestStepIds.length !== recipe.steps.length ||
+      latestStepIds.some((stepId, index) => stepId !== recipe.steps[index]?.id);
+    const pageIds = this.#pageIds(owner, parentId, recipe, latest);
+    const recorded = new Map<string, { basis: StepBasis | string; at: number }>();
     for (const run of this.runs.values()) {
       if (run.owner !== owner || run.parent !== parentId || run.recipe !== recipe.id) continue;
       for (const attempt of run.attempts) {
-        const previous = recorded.get(attempt.stepIndex);
+        const previous = recorded.get(attempt.stepId);
         if (attempt.state === "succeeded" && attempt.inputBasis && (!previous || (attempt.finishedAt ?? 0) > previous.at)) {
-          recorded.set(attempt.stepIndex, { basis: attempt.inputBasis, at: attempt.finishedAt ?? 0 });
+          recorded.set(attempt.stepId, { basis: attempt.inputBasis, at: attempt.finishedAt ?? 0 });
         }
       }
     }
     let changed = 0;
     let upstreamFresh = true;
-    for (const [index, step] of recipe.steps.entries()) {
-      const page = this.#page(owner, stepPageId(parentId, recipe.id, index));
+    for (const [index] of recipe.steps.entries()) {
+      const page = this.#page(owner, pageIds[index]!);
       if (!page || (page.stepStatus !== "done" && page.stepStatus !== "stale")) {
         upstreamFresh = false;
         continue;
       }
-      const previous = index === 0 ? parent.blocks : this.#page(owner, stepPageId(parentId, recipe.id, index - 1))?.blocks;
-      const fresh: boolean = upstreamFresh && previous !== undefined && recorded.get(index)?.basis === computeBasis(previous, step.instruction);
+      const upstreamPageIds = recipe.steps.slice(0, index).map((step, prior) => ({ id: step.id, pageId: pageIds[prior]! }));
+      const materials = this.#materials(owner, parentId, recipe, index, pageIds, upstreamPageIds);
+      const reasons = materials ? stepStaleReasons(parseStepBasis(recorded.get(recipe.steps[index]!.id)?.basis), computeStepBasis(recipe, index, materials)) : [];
+      const fresh: boolean = !structuralMismatch && upstreamFresh && reasons.length === 0;
       upstreamFresh = fresh;
       const want: StepStatus = fresh ? "done" : "stale";
       if (page.stepStatus !== want) {
@@ -236,6 +324,30 @@ export class MemoryStepRunStore implements StepRunStore {
       }
     }
     return changed;
+  };
+
+  readStaleReasons: NonNullable<StepRunStore["readStaleReasons"]> = async (owner, parentId, recipe) => {
+    const recorded = new Map<string, { basis: StepBasis | string; at: number }>();
+    for (const run of this.runs.values()) {
+      if (run.owner !== owner || run.parent !== parentId || run.recipe !== recipe.id) continue;
+      for (const attempt of run.attempts) {
+        const previous = recorded.get(attempt.stepId);
+        if (attempt.state === "succeeded" && attempt.inputBasis && (!previous || (attempt.finishedAt ?? 0) > previous.at)) {
+          recorded.set(attempt.stepId, { basis: attempt.inputBasis, at: attempt.finishedAt ?? 0 });
+        }
+      }
+    }
+    const result: Record<number, StepStaleReason[]> = {};
+    const pageIds = this.#pageIds(owner, parentId, recipe);
+    let inherited: StepStaleReason[] = [];
+    for (const [index] of recipe.steps.entries()) {
+      const upstreamPageIds = recipe.steps.slice(0, index).map((step, prior) => ({ id: step.id, pageId: pageIds[prior]! }));
+      const materials = this.#materials(owner, parentId, recipe, index, pageIds, upstreamPageIds);
+      const own = materials ? stepStaleReasons(parseStepBasis(recorded.get(recipe.steps[index]!.id)?.basis), computeStepBasis(recipe, index, materials)) : [];
+      inherited = [...new Set([...inherited, ...own])];
+      result[index] = inherited;
+    }
+    return result;
   };
 
   claimAttempt: StepRunStore["claimAttempt"] = async (runId, stepIndex, options = {}) => {
@@ -263,9 +375,11 @@ export class MemoryStepRunStore implements StepRunStore {
         owner: run.owner,
         parentId: run.parent,
         recipe: run.recipe,
+        recipeSnapshot: run.recipeSnapshot,
         stepId: attempt.stepId,
         pageId: attempt.pageId,
         previousPageId: previous?.pageId ?? null,
+        upstreamPageIds: run.attempts.slice(0, stepIndex).map((prior) => ({ id: prior.stepId, pageId: prior.pageId })),
       },
     };
   };
@@ -278,11 +392,10 @@ export class MemoryStepRunStore implements StepRunStore {
   };
 
   readStepInput: StepRunStore["readStepInput"] = async (claim) => {
-    const parent = this.#page(claim.owner, claim.parentId);
-    if (!parent) return null;
-    if (claim.previousPageId === null) return { parentBlocks: parent.blocks, previousBlocks: null };
-    const previous = this.#page(claim.owner, claim.previousPageId);
-    return previous ? { parentBlocks: parent.blocks, previousBlocks: previous.blocks } : null;
+    if (!claim.recipeSnapshot) return null;
+    const materials = this.#materials(claim.owner, claim.parentId, claim.recipeSnapshot, claim.stepIndex, undefined, claim.upstreamPageIds);
+    if (!materials) return null;
+    return { ...materials, previousBlocks: claim.previousPageId === null ? null : this.#page(claim.owner, claim.previousPageId)?.blocks ?? [] };
   };
 
   commitAttempt: StepRunStore["commitAttempt"] = async (input) => {

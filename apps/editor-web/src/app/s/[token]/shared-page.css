@@ -1,0 +1,12 @@
+main:has(> .shared-table) { max-width: 100%; }
+.shared-table { max-width: 100%; overflow-x: auto; margin: 1rem 0; }
+.shared-table table { border-collapse: collapse; min-width: 100%; width: max-content; }
+.shared-table :is(th, td) { border: 1px solid color-mix(in srgb, currentColor 35%, transparent); padding: .4rem .6rem; min-width: 6rem; max-width: 16rem; overflow-wrap: anywhere; vertical-align: top; }
+.shared-table th { background: color-mix(in srgb, CanvasText 5%, Canvas); text-align: left; }
+.shared-table :is(th, td) p { margin: 0; }
+main ul[data-type="taskList"] { list-style: none; padding-left: 0; }
+main ul[data-type="taskList"] > li { display: flex; gap: .5rem; align-items: start; }
+main ul[data-type="taskList"] > li > span { flex: none; font-size: 1.1rem; line-height: 1.4; }
+main ul[data-type="taskList"] > li > p { margin: 0; }
+main pre { max-width: 100%; overflow-x: auto; padding: .75rem; background: color-mix(in srgb, CanvasText 5%, Canvas); }
+main :not(pre) > code { overflow-wrap: anywhere; }

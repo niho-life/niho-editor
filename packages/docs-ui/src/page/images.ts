@@ -6,14 +6,14 @@
 export type ImageMeta = { alt: string | null; credit: string | null; consent: boolean };
 
 /** 断る理由（画面に出す文は image-node.ts が持つ）。 */
-export type ImageProblem = "no_page" | "content_type" | "too_large" | "too_many" | "failed";
+export type ImageProblem = "no_page" | "content_type" | "too_large" | "too_many" | "page_full" | "failed";
 
 export type PageImageUploadResult = { ok: true; assetId: string; meta: ImageMeta } | { ok: false; problem: ImageProblem };
 
 /** エディタ（image-node.ts）が使う口。テストでは差し替える。 */
 export type PageImages = {
   /** ファイルを保存先に入れ、資産の id を返す。上限を超えるものは送らずに断る。 */
-  upload: (file: File, pageId: string) => Promise<PageImageUploadResult>;
+  upload: (file: File, pageId: string, signal?: AbortSignal) => Promise<PageImageUploadResult>;
   /** alt・クレジット・掲載許諾を保存する（資産の行が正本。本文の attrs は別に自動保存される）。 */
   saveMeta: (assetId: string, patch: Partial<ImageMeta>) => Promise<boolean>;
 };

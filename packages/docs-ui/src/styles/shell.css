@@ -317,6 +317,11 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-stepband-ttl{display:flex;align-items:center;gap:6px;margin:0 0 5px;font-size:12.5px;font-weight:600;color:var(--ed-ink-sub)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-stepband-ttl svg{width:14px;height:14px;flex:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-stepband-note{margin:5px 0 0;font-size:12px;line-height:1.5;color:var(--ed-ink-mute);min-height:1.5em}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-stepband-partial{margin:8px 0 14px;padding:0 12px;border:1px solid var(--ed-line-2);border-radius:12px;background:var(--ed-canvas)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-stepband-partial summary{min-height:44px;padding:10px 0;display:flex;align-items:center;font-size:13px;font-weight:600;color:var(--ed-ink-sub);cursor:pointer}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-stepband-partial summary:focus-visible{outline:2px solid var(--ed-accent-ink);outline-offset:2px;border-radius:4px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-stepband-partial p{font-size:13px;line-height:1.5}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-stepband-partial pre{max-height:30rem;overflow:auto;margin:0 0 12px;padding:10px;border:1px solid var(--ed-line-2);border-radius:8px;background:var(--ed-white);font:inherit;font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-steps--band{display:flex;flex-wrap:wrap;gap:3px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-steps--band>li{min-width:0;max-width:100%}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-steps--band .es-step{width:auto;gap:7px;padding:6px 10px;max-width:100%}

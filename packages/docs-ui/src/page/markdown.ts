@@ -13,17 +13,11 @@ import { buildMarkdownExtensions } from "./markdown-extensions";
  * 同じエディタを Mac に載せるために、ここで往復させる。**変換できないものは黙って捨てず、必ず断る**
  * （設計 §12・移行の対応表 §4「変換できない要素は取り込まずに報告する」）。
  *
- * - 読む: 表・コード・画像・HTML など限定 AST の外の記法があれば `{ ok: false }`。見出し 1・4 以下も断る（本文は 2・3 だけ）。
+ * - 読む: 対応外の記法は `{ ok: false }`。見出し 1・4 以下も断る（本文は 2・3 だけ）。
  * - 書く: 限定 AST の中だけを書き出す。画像（資産の id を持つ）は Markdown に置き場が無いので断る（#45 の相談の項目）。
  * - 囲み（`callout`）は Markdown に対応する記法が無いので、引用の中の `[!note]` の行で表す。旧い画面で開いても
  *   引用として読めるだけで、本文は欠けない。
  */
-
-/**
- * やることのリスト（`- [ ] …`）。CommonMark には無い記法で、旧い画面（editor/markdown.ts）だけが扱う。
- * CommonMark として読むと `[ ] ` が文字になり、保存で `\[ \] ` に化けて旧い画面のチェックが壊れるので、読む前に断る。
- */
-const TASK_ITEM = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[[ xX]\][ \t]/m;
 
 /** 囲みの目印（引用の最初の段落）。 */
 const CALLOUT_MARKER = "[!note]";
@@ -65,6 +59,60 @@ function calloutRule(state: StateCore): void {
   }
 }
 
+/** GFM のチェック項目を専用 node にする。混在したリストは意味を失うので断る。 */
+function taskListRule(state: StateCore): void {
+  const all = state.tokens;
+  for (let start = 0; start < all.length; start++) {
+    if (all[start]?.type !== "bullet_list_open") continue;
+    let depth = 0;
+    const items: Array<{ open: Token; inline: Token; checked: boolean }> = [];
+    let end = start + 1;
+    for (; end < all.length; end++) {
+      const token = all[end]!;
+      if (token.type === "bullet_list_open") depth++;
+      if (token.type === "bullet_list_close") {
+        if (depth === 0) break;
+        depth--;
+      }
+      if (depth !== 0 || token.type !== "list_item_open") continue;
+      const inline = all.slice(end + 1).find((candidate) => candidate.type === "inline");
+      if (!inline) continue;
+      const match = /^\[([ xX])\](?:[ \t]+|$)/.exec(inline.content);
+      if (match) items.push({ open: token, inline, checked: match[1]!.toLowerCase() === "x" });
+    }
+    if (items.length === 0) continue;
+    const total = all.slice(start + 1, end).filter((token) => token.type === "list_item_open" && token.level === all[start]!.level + 1).length;
+    if (items.length !== total) throw new Error("チェック項目と通常の箇条書きは同じリストに混在できません");
+    all[start]!.type = "task_list_open";
+    all[end]!.type = "task_list_close";
+    for (const item of items) {
+      item.open.type = "task_item_open";
+      item.open.attrSet("checked", String(item.checked));
+      const close = all.findIndex((token, index) => index > all.indexOf(item.open) && token.type === "list_item_close" && token.level === item.open.level);
+      if (close >= 0) all[close]!.type = "task_item_close";
+      const prefix = /^\[([ xX])\](?:[ \t]+|$)/.exec(item.inline.content)![0];
+      item.inline.content = item.inline.content.slice(prefix.length);
+      const first = item.inline.children?.[0];
+      if (first?.type === "text") first.content = first.content.slice(prefix.length);
+    }
+  }
+}
+
+/** table のセルは TipTap schema 上で段落を一つ持つ。Markdown の inline token を段落で包む。 */
+function tableCellsRule(state: StateCore): void {
+  const all = state.tokens;
+  for (let index = all.length - 1; index >= 0; index--) {
+    const token = all[index]!;
+    if (token.type !== "th_open" && token.type !== "td_open") continue;
+    const inline = all[index + 1];
+    if (inline?.type !== "inline") continue;
+    const open = new state.Token("paragraph_open", "p", 1);
+    const close = new state.Token("paragraph_close", "p", -1);
+    all.splice(index + 1, 0, open);
+    all.splice(index + 3, 0, close);
+  }
+}
+
 /**
  * 限定 AST と同じ範囲だけの schema（エディタと同じ素から作る。画像は Markdown に置き場が無いので入れない）。
  * 画面の部品（React）に触れないので、サーバーからも読める。
@@ -84,6 +132,18 @@ const tokens: Record<string, ParseSpec> = {
     },
   },
   list_item: { block: "listItem" },
+  task_list: { block: "taskList" },
+  task_item: { block: "taskItem", getAttrs: (token) => ({ checked: token.attrGet("checked") === "true" }) },
+  table: { block: "table" },
+  thead: { ignore: true },
+  tbody: { ignore: true },
+  tr: { block: "tableRow" },
+  th: { block: "tableHeader", getAttrs: (token) => ({ align: /text-align:\s*(left|right|center)/.exec(token.attrGet("style") ?? "")?.[1] ?? null }) },
+  td: { block: "tableCell", getAttrs: (token) => ({ align: /text-align:\s*(left|right|center)/.exec(token.attrGet("style") ?? "")?.[1] ?? null }) },
+  fence: { block: "codeBlock", getAttrs: (token) => ({ language: token.info.trim() }) },
+  code_block: { block: "codeBlock" },
+  code_inline: { mark: "code" },
+  s: { mark: "strike" },
   heading: { block: "heading", getAttrs: (token) => ({ level: Number(token.tag.slice(1)) }) },
   hr: { node: "horizontalRule" },
   hardbreak: { node: "hardBreak" },
@@ -92,17 +152,43 @@ const tokens: Record<string, ParseSpec> = {
   link: { mark: "link", getAttrs: (token) => ({ href: token.attrGet("href") ?? "" }) },
 };
 
-// CommonMark ＋表・取り消し線。HTML は文字として扱い、実行しない。表と取り消し線は限定 AST の外だが、
-// **読まないと文字として取り込んでしまい、保存で記法が壊れる**ので、読んで（知らない token として）断る。
+// HTML は文字として扱い実行しない。表・打消し線は token として読む。
 const markdownIt = MarkdownIt("commonmark", { html: false }).enable(["table", "strikethrough"]);
 markdownIt.core.ruler.push("niho_page_callout", (state) => {
   calloutRule(state);
+  taskListRule(state);
+  tableCellsRule(state);
   return true;
 });
 const parser = new MarkdownParser(pageMarkdownSchema, markdownIt, tokens);
 
+/** markdown-it が列数の違う行を切り捨てる前に拒否する。 */
+function malformedTable(markdown: string): boolean {
+  const lines = markdown.split(/\r?\n/);
+  let fenced = false;
+  const columns = (line: string) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).length;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!.trim();
+    if (/^(`{3,}|~{3,})/.test(line)) { fenced = !fenced; continue; }
+    if (fenced || !/^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$/.test(line)) continue;
+    const width = columns(line);
+    if (!lines[index - 1] || columns(lines[index - 1]!) !== width) return true;
+    for (let row = index + 1; row < lines.length && lines[row]!.trim(); row++) {
+      if (columns(lines[row]!) !== width) return true;
+    }
+  }
+  return false;
+}
+
 function inlineMark(open: string) {
   return { open, close: open, mixable: true, expelEnclosingWhitespace: true };
+}
+
+/** インラインコード中の最長 backtick より長い囲みを使う。内部に backtick があれば両端に空白も置く。 */
+function codeDelimiter(node: ProseMirrorNode, side: "open" | "close"): string {
+  const longest = Math.max(0, ...(node.text?.match(/`+/g) ?? []).map((run) => run.length));
+  const ticks = "`".repeat(longest + 1);
+  return longest === 0 ? ticks : side === "open" ? `${ticks} ` : ` ${ticks}`;
 }
 
 const serializer = new MarkdownSerializer(
@@ -129,6 +215,44 @@ const serializer = new MarkdownSerializer(
     },
     listItem(state: MarkdownSerializerState, node: ProseMirrorNode) {
       state.renderContent(node);
+    },
+    taskList(state: MarkdownSerializerState, node: ProseMirrorNode) {
+      state.renderList(node, "  ", (index) => node.child(index).attrs.checked ? "- [x] " : "- [ ] ");
+    },
+    taskItem(state: MarkdownSerializerState, node: ProseMirrorNode) {
+      state.renderContent(node);
+    },
+    table(state: MarkdownSerializerState, node: ProseMirrorNode) {
+      const width = node.firstChild?.childCount ?? 0;
+      if (width === 0 || node.firstChild?.firstChild?.type.name !== "tableHeader") throw new Error("Markdown の表には見出し行が必要です");
+      node.forEach((row, _offset, rowIndex) => {
+        if (row.childCount !== width) throw new Error("列数が異なる表は Markdown にできません");
+        state.write("| ");
+        row.forEach((cell, _cellOffset, column) => {
+          const headerAlign = node.firstChild?.child(column).attrs.align ?? null;
+          if ((rowIndex === 0 ? cell.type.name !== "tableHeader" : cell.type.name !== "tableCell") || cell.attrs.colspan !== 1 || cell.attrs.rowspan !== 1 || cell.attrs.colwidth !== null || cell.attrs.align !== headerAlign || cell.childCount !== 1 || cell.firstChild?.type.name !== "paragraph" || cell.firstChild.content.toJSON()?.some((part: { type: string }) => part.type === "hardBreak")) {
+            throw new Error("結合セル・列幅・行ごとに異なる配置・複数段落・改行を含む表は Markdown にできません");
+          }
+          const cellDoc = pageMarkdownSchema.node("doc", null, [cell.firstChild]);
+          state.write(serializer.serialize(cellDoc).trimEnd().replace(/(?<!\\)\|/g, "\\|"));
+          state.write(" | ");
+        });
+        state.write("\n");
+        if (rowIndex === 0) state.write(`| ${Array.from({ length: width }, (_, column) => {
+          const align = row.child(column).attrs.align;
+          return align === "center" ? ":---:" : align === "right" ? "---:" : align === "left" ? ":---" : "---";
+        }).join(" | ")} |\n`);
+      });
+      state.closeBlock(node);
+    },
+    tableRow() {},
+    tableCell() {},
+    tableHeader() {},
+    codeBlock(state: MarkdownSerializerState, node: ProseMirrorNode) {
+      const content = node.textContent;
+      const fence = "`".repeat(Math.max(3, ...(content.match(/`+/g) ?? []).map((run) => run.length + 1)));
+      state.write(`${fence}${node.attrs.language ?? ""}\n${content}${content.endsWith("\n") ? "" : "\n"}${fence}`);
+      state.closeBlock(node);
     },
     blockquote(state: MarkdownSerializerState, node: ProseMirrorNode) {
       state.wrapBlock("> ", null, node, () => state.renderContent(node));
@@ -161,6 +285,12 @@ const serializer = new MarkdownSerializer(
   {
     bold: inlineMark("**"),
     italic: inlineMark("*"),
+    strike: inlineMark("~~"),
+    code: {
+      open: (_state, _mark, parent, index) => codeDelimiter(parent.child(index), "open"),
+      close: (_state, _mark, parent, index) => codeDelimiter(parent.child(index - 1), "close"),
+      escape: false,
+    },
     link: {
       open: "[",
       close(state: MarkdownSerializerState, mark) {
@@ -174,12 +304,12 @@ export type MarkdownToBlocks = { ok: true; blocks: Block[] } | { ok: false; reas
 export type BlocksToMarkdown = { ok: true; markdown: string } | { ok: false; reason: string };
 
 /**
- * Markdown を限定 AST の blocks にする。限定 AST の外の記法（表・コード・画像・HTML・見出し 1 と 4 以下）があれば断る。
+ * Markdown を限定 AST の blocks にする。対応外の記法（画像・見出し 1 と 4 以下など）があれば断る。
  * 空の本文は空の配列（エディタは空の段落 1 つを置く）。
  */
 export function markdownToBlocks(markdown: string): MarkdownToBlocks {
   if (markdown.trim().length === 0) return { ok: true, blocks: [] };
-  if (TASK_ITEM.test(markdown)) return { ok: false, reason: "やることのリストは、この本文のエディタでは開けません" };
+  if (malformedTable(markdown)) return { ok: false, reason: "表の列数が揃っていません" };
   let doc: ProseMirrorNode | null;
   try {
     doc = parser.parse(markdown);
