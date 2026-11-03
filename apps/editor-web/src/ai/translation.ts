@@ -65,7 +65,9 @@ export function planManagedTranslation(page: TranslationPageSnapshot): Translati
   const visit = (node: unknown, path: string, inCode: boolean): void => {
     const value = record(node);
     if (!value || typeof value.type !== "string") return;
-    const code = inCode || value.type === "codeBlock";
+    const inlineCode = Array.isArray(value.marks) && value.marks.some((mark) => record(mark)?.type === "code");
+    const code = inCode || value.type === "codeBlock" || inlineCode;
+    if (inlineCode) omissions.add("インラインコード");
     if (value.type === "codeBlock") omissions.add("コードブロック");
     if (value.type === "recording") hasRecording = true;
     if (value.type === "horizontalRule") omissions.add("区切り線");
@@ -104,7 +106,7 @@ function onlyKeys(value: Record<string, unknown>, keys: readonly string[]): bool
 function fieldLimit(path: string): number {
   if (path === "title") return TRANSLATION_MAX_TITLE_CODEPOINTS;
   if (path === "lead") return TRANSLATION_MAX_LEAD_CODEPOINTS;
-  if (path.endsWith(".attrs.alt") || path.endsWith(".attrs.caption")) return TRANSLATION_MAX_IMAGE_TEXT_CODEPOINTS;
+  if (path.endsWith(".attrs.alt") || path.endsWith(".attrs.caption") || /^assets\[[0-9a-f-]+\]\.alt$/.test(path)) return TRANSLATION_MAX_IMAGE_TEXT_CODEPOINTS;
   return TRANSLATION_MAX_CODEPOINTS;
 }
 

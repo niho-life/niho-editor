@@ -64,6 +64,25 @@ describe("managed translation field contract", () => {
     expect(candidate!.cover).toBe(IMAGE);
   });
 
+  it("keeps inline code out of the provider prompt and preserves its text and marks", () => {
+    const code = { type: "text", text: "秘密ではない合成コード()", marks: [{ type: "code" }] };
+    const source = { ...page(), blocks: [{ type: "paragraph", content: [{ type: "text", text: "合成の文章" }, code] }] };
+    const planned = planManagedTranslation(source);
+    if (!planned.ok) throw new Error("expected a plan");
+    expect(planned.plan.omissions).toContain("インラインコード");
+    expect(buildManagedTranslationPrompt(planned.plan.fields).user).not.toContain(code.text);
+    expect(planned.plan.fields.some((field) => field.path === "blocks[0].content[1].text")).toBe(false);
+    const candidate = applyManagedTranslation(source, planned.plan.fields.map((field) => ({ ...field, text: "Synthetic translation" })));
+    expect(candidate?.blocks[0]).toEqual({ type: "paragraph", content: [{ type: "text", text: "Synthetic translation" }, code] });
+  });
+
+  it("enforces the 1000-codepoint image alt limit for asset metadata before a candidate is ready", () => {
+    const source = [{ path: `assets[${IMAGE}].alt`, text: "合成の画像" }];
+    const output = (text: string) => ({ translations: [{ path: source[0]!.path, text }] });
+    expect(parseManagedTranslationOutput(output("🌊".repeat(1000)), source).ok).toBe(true);
+    expect(parseManagedTranslationOutput(output("🌊".repeat(1001)), source)).toEqual({ ok: false, reason: "invalid_text" });
+  });
+
   it("rejects missing, duplicate and unknown paths and any changed CONFIRM marker", () => {
     const planned = planManagedTranslation(page());
     if (!planned.ok) throw new Error("expected a plan");

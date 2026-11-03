@@ -36,6 +36,23 @@ const jaState = {
   provider: { destination: "Anthropic API", metered: true },
 };
 
+const enState = {
+  page: { id: TARGET, lang: "en" as const, revision: 4 },
+  relation: {
+    relationId: "00000000-0000-4000-8000-000000000005",
+    sourcePageId: SOURCE,
+    targetPageId: TARGET,
+    sourceRevision: 8,
+    targetRevision: 4,
+    reviewedSourceRevision: 7,
+    reviewedTargetRevision: 4,
+    sourceMissing: false,
+    detached: false,
+  },
+  proposal: null,
+  provider: { destination: "Anthropic API", metered: true },
+};
+
 const ready = {
   id: PROPOSAL,
   status: "ready",
@@ -49,11 +66,11 @@ const ready = {
   candidateFields: [{ path: "title", text: "Synthetic title" }, { path: "blocks[0].content[0].text", text: "Synthetic body" }],
 };
 
-async function mount(lang: "ja" | "en", saveFirst = vi.fn(async () => true)) {
+async function mount(lang: "ja" | "en", saveFirst = vi.fn(async () => true), currentRevision: () => number | null = () => lang === "ja" ? 7 : 4) {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  await act(async () => root!.render(<PageTranslation pageId={lang === "ja" ? PAGE : TARGET} lang={lang} saveFirst={saveFirst} />));
+  await act(async () => root!.render(<PageTranslation pageId={lang === "ja" ? PAGE : TARGET} lang={lang} saveFirst={saveFirst} savedRevision={lang === "ja" ? 7 : 4} currentRevision={currentRevision} />));
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
   return saveFirst;
 }
@@ -133,6 +150,63 @@ describe("PageTranslation", () => {
     const review = requests.find((entry) => entry.method === "POST");
     expect(review?.path).toMatch(/\/review$/);
     expect(review?.body).toEqual({ sourceRevision: 8, targetRevision: 4 });
+  });
+
+  it.each(["source", "target"])("does not review a stale tab after another tab changes the %s revision", async (changed) => {
+    let reads = 0;
+    const posts: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_path: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        posts.push(JSON.parse(String(init.body)));
+        return json(200, { status: "reviewed" });
+      }
+      reads++;
+      return json(200, reads === 1 ? enState : {
+        ...enState,
+        page: { ...enState.page, revision: changed === "target" ? 5 : 4 },
+        relation: { ...enState.relation, sourceRevision: changed === "source" ? 9 : 8, targetRevision: changed === "target" ? 5 : 4 },
+      });
+    }));
+    const saveFirst = await mount("en");
+    await act(async () => button("翻訳の状態を確認").click());
+    await act(async () => button("原文と英語版を確認しました").click());
+    expect(saveFirst).toHaveBeenCalledTimes(1);
+    expect(posts).toEqual([]);
+    expect(container!.textContent).toContain("ページを再読み込みし、表示された本文をもう一度確認してください");
+  });
+
+  it("uses this editor's saved revision after flushing a local edit", async () => {
+    const posts: unknown[] = [];
+    let revision = 4;
+    vi.stubGlobal("fetch", vi.fn(async (_path: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        posts.push(JSON.parse(String(init.body)));
+        return json(200, { status: "reviewed" });
+      }
+      return json(200, { ...enState, page: { ...enState.page, revision }, relation: { ...enState.relation, targetRevision: revision } });
+    }));
+    await mount("en", vi.fn(async () => { revision = 5; return true; }), () => revision);
+    await act(async () => button("翻訳の状態を確認").click());
+    await act(async () => button("原文と英語版を確認しました").click());
+    expect(posts).toEqual([{ sourceRevision: 8, targetRevision: 5 }]);
+  });
+
+  it("reloads review state after an English edit is saved and offers review again", async () => {
+    let revision = 4;
+    const fetcher = vi.fn(async () => json(200, {
+      ...enState,
+      page: { ...enState.page, revision },
+      relation: { ...enState.relation, targetRevision: revision, reviewedSourceRevision: 8 },
+    }));
+    vi.stubGlobal("fetch", fetcher);
+    const saveFirst = await mount("en");
+    await act(async () => button("翻訳の状態を確認").click());
+    expect(container!.textContent).toContain("現在の日本語原文と英語版を確認済みです");
+    revision = 5;
+    await act(async () => root!.render(<PageTranslation pageId={TARGET} lang="en" saveFirst={saveFirst} savedRevision={revision} currentRevision={() => revision} />));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(container!.textContent).not.toContain("現在の日本語原文と英語版を確認済みです");
+    expect(button("原文と英語版を確認しました").disabled).toBe(false);
   });
 
   it("keeps a missing-source target blocked until explicit detach confirmation", async () => {

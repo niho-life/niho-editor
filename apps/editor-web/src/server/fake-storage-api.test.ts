@@ -42,7 +42,7 @@ describe("dev fake storage route", () => {
     const response = await fakeStoragePutRoute(put(token, new Uint8Array([1, 2, 3])), token, deps);
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
-    expect(await storage.stat(PATH)).toEqual({ sizeBytes: 3, contentType: "audio/mp4" });
+    expect(await storage.stat(PATH)).toEqual({ sizeBytes: 3, contentType: "audio/mp4", generation: "1" });
     expect((await fakeStoragePutRoute(put(token, new Uint8Array([1])), token, deps)).status, "a used ticket").toBe(404);
     const again = await ticketToken(storage);
     const exists = await fakeStoragePutRoute(put(again, new Uint8Array([1])), again, deps);
@@ -67,7 +67,7 @@ describe("dev fake storage route", () => {
     const final = await fakeStoragePutRoute(put(token, new Uint8Array([3]), { "content-range": "bytes 2-2/3" }), token, deps);
     expect(final.status).toBe(200);
     expect((await fakeStoragePutRoute(status(token), token, deps)).status).toBe(200);
-    expect(await storage.stat(PATH)).toEqual({ sizeBytes: 3, contentType: "audio/mp4" });
+    expect(await storage.stat(PATH)).toEqual({ sizeBytes: 3, contentType: "audio/mp4", generation: "1" });
   });
 
   it("answers 404 in production and whenever storage is not fake, without storing anything", async () => {

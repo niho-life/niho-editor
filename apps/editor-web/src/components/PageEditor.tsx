@@ -226,6 +226,7 @@ function EditorScreen(props: ScreenProps) {
   const [pageFull, setPageFull] = useState(false);
   // 保存先のページの id（新しいページは最初の保存で作ったときに決まる）
   const [pageId, setPageId] = useState<string | null>(page.id);
+  const [savedRevision, setSavedRevision] = useState<number | null>(page.revision);
   const [unreadable, setUnreadable] = useState(false);
   const [titleClamped, setTitleClamped] = useState(false);
   const [conflict, setConflict] = useState<ConflictPage | null>(null);
@@ -270,7 +271,10 @@ function EditorScreen(props: ScreenProps) {
       setTitle(value);
       eventsRef.current.onTitleChange?.(value);
     },
-    onSaved: () => eventsRef.current.onSaved?.(),
+    onSaved: () => {
+      setSavedRevision(saverRef.current?.revision ?? null);
+      eventsRef.current.onSaved?.();
+    },
   };
   // 箱が開き直さないよう同じものを渡し続ける（どの部品も呼んだ時点の ref を読む）
   const [aiBridge] = useState<AiBridge>(() => ({
@@ -314,6 +318,7 @@ function EditorScreen(props: ScreenProps) {
         if (next === "stopped" && error instanceof PageConflictError) setConflict(error.page);
       },
       onSaved: (idle) => {
+        setSavedRevision(saver.revision);
         setConflict(null);
         // 新しいページを作った → 以後の下書きはそのページの id に書く（作る前の枠の下書きは消す。まだ届いていない変更は持っていく）
         if (saver.pageId !== null) keeper?.rekey(saver.pageId, !idle);
@@ -698,9 +703,9 @@ function EditorScreen(props: ScreenProps) {
         keeperRef.current?.touch();
       }}>カバー画像を外す</button>}
       {coverError && <p role="alert">{coverError}</p>}
-      {pageId && <PageTranslation pageId={pageId} lang={lang} saveFirst={flush} />}
+      {pageId && <PageTranslation pageId={pageId} lang={lang} saveFirst={flush} savedRevision={savedRevision} currentRevision={revision} />}
     </section>
-  ), [lead, cover, ready, unreadable, coverOptions, coverConsent, coverMetaBusy, coverError, page.blocks, pageId, lang, flush, compositionStarted, compositionEnded]);
+  ), [lead, cover, ready, unreadable, coverOptions, coverConsent, coverMetaBusy, coverError, page.blocks, pageId, lang, flush, savedRevision, revision, compositionStarted, compositionEnded]);
 
   const status = statusOf(state);
   useEffect(

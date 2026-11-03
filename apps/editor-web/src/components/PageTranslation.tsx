@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PageLang } from "@niho/editor-store";
 import {
@@ -18,6 +18,8 @@ type Props = {
   pageId: string;
   lang: PageLang;
   saveFirst: () => Promise<boolean>;
+  savedRevision: number | null;
+  currentRevision: () => number | null;
 };
 
 const PANEL_STYLE = {
@@ -51,6 +53,7 @@ function messageOf(error: unknown): string {
     translation_no_fields: "翻訳できる文字がありません。",
     translation_asset_unavailable: "画像の保存状態が変わったため実行できません。保存を確認してやり直してください。",
     translation_conflict: "原文または英語版が先に更新されました。両方を残したまま停止しました。読み直して確認してください。",
+    translation_review_conflict: "原文または英語版が別の画面で更新されました。ページを再読み込みし、表示された本文をもう一度確認してください。",
     translation_not_ready: "候補が期限切れか、まだ準備できていません。",
     translation_copy_failed: "画像の独立コピーを完了できませんでした。原本と英語版は変更していません。もう一度採用できます。",
     translation_source_missing: "日本語の原文が見つかりません。",
@@ -85,7 +88,7 @@ function Comparisons(props: { source: readonly TranslationFieldDto[]; candidate:
   );
 }
 
-export function PageTranslation({ pageId, lang, saveFirst }: Props) {
+export function PageTranslation({ pageId, lang, saveFirst, savedRevision, currentRevision }: Props) {
   const router = useRouter();
   const [state, setState] = useState<TranslationStateDto | null>(null);
   const [loading, setLoading] = useState(false);
@@ -105,6 +108,13 @@ export function PageTranslation({ pageId, lang, saveFirst }: Props) {
     }
   }, [pageId]);
 
+  const previousRevision = useRef(savedRevision);
+  useEffect(() => {
+    const changed = previousRevision.current !== savedRevision;
+    previousRevision.current = savedRevision;
+    if (changed && lang === "en") void reload();
+  }, [savedRevision, lang, reload]);
+
   const relation = state?.relation ?? null;
   const proposal = state?.proposal ?? null;
   const isTarget = relation?.targetPageId === pageId;
@@ -112,7 +122,8 @@ export function PageTranslation({ pageId, lang, saveFirst }: Props) {
     && !relation.detached
     && !relation.sourceMissing
     && relation.sourceRevision === relation.reviewedSourceRevision
-    && relation.targetRevision === relation.reviewedTargetRevision;
+    && relation.targetRevision === relation.reviewedTargetRevision
+    && relation.targetRevision === savedRevision;
   const candidateReady = proposal?.status === "ready" && proposal.sourceFields && proposal.candidateFields;
   const targetHref = relation ? `/p/${relation.targetPageId}` : proposal?.status === "adopted" ? `/p/${proposal.targetPageId}` : null;
   const omissions = useMemo(() => proposal?.omissions ?? [], [proposal?.omissions]);
@@ -156,9 +167,17 @@ export function PageTranslation({ pageId, lang, saveFirst }: Props) {
     setError(null);
     try {
       if (!(await saveFirst())) throw new Error("save");
+      // Fix the expected revisions before reading server state. A clean stale tab
+      // must not review newer content that this editor has never displayed.
+      const sourceRevision = relation?.sourceRevision;
+      const targetRevision = currentRevision();
       const current = await loadTranslation(pageId);
       if (!current.relation?.sourceRevision) throw new TranslationRequestError(409, "translation_source_missing");
-      await reviewTranslation(pageId, current.relation.sourceRevision, current.relation.targetRevision);
+      if (!sourceRevision || targetRevision === null || current.relation.sourceRevision !== sourceRevision
+        || current.relation.targetRevision !== targetRevision) {
+        throw new TranslationRequestError(409, "translation_review_conflict");
+      }
+      await reviewTranslation(pageId, sourceRevision, targetRevision);
       await reload();
     } catch (failure) {
       setError(failure instanceof Error && failure.message === "save" ? "先に英語版の保存を完了してください。" : messageOf(failure));

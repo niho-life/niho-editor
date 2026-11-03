@@ -22,11 +22,11 @@ FAKE
 chmod +x "$test_dir/gcloud"
 export CALLS="$test_dir/calls" GCLOUD="$test_dir/gcloud" DEPLOY_ENV="$test_dir/deploy.env"
 bash "$here/private-jobs-infra.sh" > /dev/null
-rg -q 'run jobs add-iam-policy-binding niho-editor-private-jobs .*--role roles/run.jobsExecutor' "$CALLS"
-rg -q 'scheduler jobs create http niho-editor-private-jobs-sweep .*--message-body \{\}' "$CALLS"
-rg -q -- '--oauth-service-account-email niho-editor-private-jobs-cron@' "$CALLS"
-if rg -q 'secrets (versions|access)|storage |projects add-iam-policy-binding|--oidc|--overrides|scheduler jobs resume' "$CALLS"; then exit 1; fi
+grep -Eq 'run jobs add-iam-policy-binding niho-editor-private-jobs .*--role roles/run.jobsExecutor' "$CALLS"
+grep -Eq 'scheduler jobs create http niho-editor-private-jobs-sweep .*--message-body \{\}' "$CALLS"
+grep -Eq -- '--oauth-service-account-email niho-editor-private-jobs-cron@' "$CALLS"
+if grep -Eq 'secrets (versions|access)|storage |projects add-iam-policy-binding|--oidc|--overrides|scheduler jobs resume' "$CALLS"; then exit 1; fi
 EXISTS=true bash "$here/private-jobs-infra.sh" > /dev/null
-rg -q 'scheduler jobs update http niho-editor-private-jobs-sweep' "$CALLS"
+grep -Eq 'scheduler jobs update http niho-editor-private-jobs-sweep' "$CALLS"
 if BAD_JOB=true bash "$here/private-jobs-infra.sh" > /dev/null 2>&1; then exit 1; fi
 printf 'private jobs infra: synthetic checks passed\n'

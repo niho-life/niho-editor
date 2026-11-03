@@ -189,7 +189,7 @@ describe("managed translation store", { skip: databaseUrl === undefined }, () =>
 
     assert.equal(await pages.deletePage(OWNER, source.id), "deleted");
     assert.equal(await managedTranslationReviewProblem(pool, OWNER, targetPageId), "source_missing");
-    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() - interval '2 days' WHERE owner = $1 AND id = $2", [OWNER, source.id]);
+    await pool.query("UPDATE pages SET created_at = created_at - interval '2 days', updated_at = updated_at - interval '2 days', deleted_at = deleted_at - interval '2 days' WHERE owner = $1 AND id = $2", [OWNER, source.id]);
     const purged = await pages.purgeTrash({ olderThanDays: 1 });
     assert.deepEqual(purged.assetPaths, [`image/${sourceAssetId}`]);
     assert.ok(!purged.assetPaths.includes(`image/${targetAssetId}`), "source GC cannot reach the independent target object");
@@ -234,14 +234,16 @@ describe("managed translation store", { skip: databaseUrl === undefined }, () =>
     });
     assert.ok(interrupted && interrupted !== "conflict" && interrupted.created);
     await pages.deletePage(OWNER, interruptedSource.id);
-    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() - interval '2 days' WHERE owner = $1 AND id = $2", [OWNER, interruptedSource.id]);
+    await pool.query("UPDATE pages SET created_at = created_at - interval '2 days', updated_at = updated_at - interval '2 days', deleted_at = deleted_at - interval '2 days' WHERE owner = $1 AND id = $2", [OWNER, interruptedSource.id]);
     await pages.purgeTrash({ olderThanDays: 1 });
     assert.deepEqual(await purgeExpiredTranslationProposals(pool, OWNER), [`image/${interruptedTargetAssetId}`], "a copy whose object/DB acknowledgement was interrupted remains recoverable");
 
     const foreignSource = await pages.createPage(OTHER, { title: "Foreign synthetic source", lang: "ja" });
+    // Use an unlinked target so uniqueness cannot mask the owner-boundary check.
+    const unlinkedTarget = await pages.createPage(OWNER, { title: "Unlinked synthetic target", lang: "en" });
     await assert.rejects(
-      pool.query("INSERT INTO page_translation_relations (owner, source_page_id, target_page_id) VALUES ($1, $2, $3)", [OTHER, foreignSource.id, targetPageId]),
-      /invalid managed translation target/,
+      pool.query("INSERT INTO page_translation_relations (owner, source_page_id, target_page_id) VALUES ($1, $2, $3)", [OTHER, foreignSource.id, unlinkedTarget.id]),
+      /invalid managed translation target|page_translation_relations_owner_target_page_id_fkey/,
     );
   });
 });
