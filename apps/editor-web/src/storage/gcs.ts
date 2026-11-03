@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   StorageError,
   isByteRange,
@@ -177,7 +178,7 @@ export function createGcsStorage(options: GcsStorageOptions): ObjectStorage {
     return `Bearer ${token}`;
   };
 
-  type CopyMetadata = { sizeBytes: number; contentType: string | null; generation: string; copiedFromGeneration: string | null };
+  type CopyMetadata = { sizeBytes: number; contentType: string | null; generation: string; copiedFromGeneration: string | null; copiedFromObjectHash: string | null };
   const copyMetadata = async (objectPath: string): Promise<CopyMetadata | null> => {
     const url = `${GCS_JSON_BASE}${bucket}/o/${encodeURIComponent(objectPath)}?fields=size%2CcontentType%2Cgeneration%2Cmetadata`;
     const response = await send(doFetch, url, { method: "GET", headers: { Authorization: await authorization() } }, timeoutMs);
@@ -197,7 +198,10 @@ export function createGcsStorage(options: GcsStorageOptions): ObjectStorage {
     const copied = typeof metadata === "object" && metadata !== null && !Array.isArray(metadata)
       ? (metadata as { nihoSourceGeneration?: unknown }).nihoSourceGeneration
       : null;
-    return { sizeBytes, contentType: typeof contentType === "string" ? contentType : null, generation, copiedFromGeneration: typeof copied === "string" ? copied : null };
+    const sourceHash = typeof metadata === "object" && metadata !== null && !Array.isArray(metadata)
+      ? (metadata as { nihoSourceObjectHash?: unknown }).nihoSourceObjectHash : null;
+    return { sizeBytes, contentType: typeof contentType === "string" ? contentType : null, generation,
+      copiedFromGeneration: typeof copied === "string" ? copied : null, copiedFromObjectHash: typeof sourceHash === "string" ? sourceHash : null };
   };
 
   return {
@@ -266,6 +270,7 @@ export function createGcsStorage(options: GcsStorageOptions): ObjectStorage {
       const source = await copyMetadata(input.sourceObjectPath);
       if (!source) throw new StorageError("rejected");
       const sourceGeneration = input.sourceGeneration;
+      const sourceObjectHash = createHash("sha256").update(input.sourceObjectPath).digest("hex");
       if (source.generation !== sourceGeneration) throw new StorageError("rejected");
       const base = `${GCS_JSON_BASE}${bucket}/o/${encodeURIComponent(input.sourceObjectPath)}/rewriteTo/b/${bucket}/o/${encodeURIComponent(input.targetObjectPath)}`;
       let rewriteToken: string | null = null;
@@ -275,12 +280,12 @@ export function createGcsStorage(options: GcsStorageOptions): ObjectStorage {
         const response = await send(doFetch, `${base}?${query.toString()}`, {
           method: "POST",
           headers: { Authorization: await authorization(), "Content-Type": "application/json" },
-          body: JSON.stringify({ contentType: source.contentType, metadata: { nihoSourceGeneration: sourceGeneration } }),
+          body: JSON.stringify({ contentType: source.contentType, metadata: { nihoSourceGeneration: sourceGeneration, nihoSourceObjectHash: sourceObjectHash } }),
         }, timeoutMs);
         if (response.status === 412) {
           await discard(response);
           const existing = await copyMetadata(input.targetObjectPath);
-          if (!existing || existing.sizeBytes !== source.sizeBytes || existing.contentType !== source.contentType || existing.copiedFromGeneration !== sourceGeneration) throw new StorageError("rejected");
+          if (!existing || existing.sizeBytes !== source.sizeBytes || existing.contentType !== source.contentType || existing.copiedFromGeneration !== sourceGeneration || existing.copiedFromObjectHash !== sourceObjectHash) throw new StorageError("rejected");
           return { sourceGeneration, sizeBytes: source.sizeBytes, contentType: source.contentType };
         }
         if (!response.ok) {
@@ -298,7 +303,9 @@ export function createGcsStorage(options: GcsStorageOptions): ObjectStorage {
           const marker = typeof saved.metadata === "object" && saved.metadata !== null
             ? (saved.metadata as { nihoSourceGeneration?: unknown }).nihoSourceGeneration
             : null;
-          if (sizeBytes !== source.sizeBytes || (typeof saved.contentType === "string" ? saved.contentType : null) !== source.contentType || marker !== sourceGeneration) throw new StorageError("unavailable");
+          const objectMarker = typeof saved.metadata === "object" && saved.metadata !== null
+            ? (saved.metadata as { nihoSourceObjectHash?: unknown }).nihoSourceObjectHash : null;
+          if (objectMarker !== sourceObjectHash || sizeBytes !== source.sizeBytes || (typeof saved.contentType === "string" ? saved.contentType : null) !== source.contentType || marker !== sourceGeneration) throw new StorageError("unavailable");
           return { sourceGeneration, sizeBytes, contentType: source.contentType };
         }
         if (typeof result.rewriteToken !== "string" || result.rewriteToken.length < 1 || result.rewriteToken.length > 2048 || /[\u0000-\u001f\u007f]/.test(result.rewriteToken)) throw new StorageError("unavailable");

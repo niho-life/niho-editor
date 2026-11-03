@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GCS_SESSION_TTL_MS, METADATA_TOKEN_URL, createGcsStorage, createMetadataTokenProvider } from "./gcs";
 import { StorageError } from "./types";
@@ -207,13 +208,13 @@ describe("GCS storage: generation-pinned copy", () => {
     size: "3",
     contentType: "image/png",
     generation: path === "source" ? "17" : "18",
-    metadata: path === "target" ? { nihoSourceGeneration: "17" } : {},
+    metadata: path === "target" ? { nihoSourceGeneration: "17", nihoSourceObjectHash: createHash("sha256").update(SOURCE).digest("hex") } : {},
   }), { status: 200 });
 
   it("pins the source generation and requires destination generation zero", async () => {
     const rewritten = new Response(JSON.stringify({
       done: true,
-      resource: { size: "3", contentType: "image/png", metadata: { nihoSourceGeneration: "17" } },
+      resource: { size: "3", contentType: "image/png", metadata: { nihoSourceGeneration: "17", nihoSourceObjectHash: createHash("sha256").update(SOURCE).digest("hex") } },
     }), { status: 200 });
     const { fetch, calls } = fakeFetch(metadata(), rewritten);
     const storage = createGcsStorage({ bucket: BUCKET, fetch, accessToken: async () => TOKEN });
@@ -227,7 +228,7 @@ describe("GCS storage: generation-pinned copy", () => {
     expect(url.searchParams.get("ifSourceGenerationMatch")).toBe("17");
     expect(url.searchParams.get("ifGenerationMatch")).toBe("0");
     expect(rewrite.init.redirect).toBe("error");
-    expect(JSON.parse(String(rewrite.init.body))).toEqual({ contentType: "image/png", metadata: { nihoSourceGeneration: "17" } });
+    expect(JSON.parse(String(rewrite.init.body))).toEqual({ contentType: "image/png", metadata: { nihoSourceGeneration: "17", nihoSourceObjectHash: createHash("sha256").update(SOURCE).digest("hex") } });
   });
 
   it("treats a 412 as an idempotent retry only when destination metadata matches", async () => {
@@ -237,6 +238,14 @@ describe("GCS storage: generation-pinned copy", () => {
 
     const mismatch = createGcsStorage({ bucket: BUCKET, fetch: fakeFetch(metadata(), new Response(null, { status: 412 }), metadata()).fetch, accessToken: async () => TOKEN });
     await expect(mismatch.copyObject!({ sourceObjectPath: SOURCE, targetObjectPath: TARGET, sourceGeneration: "17" })).rejects.toMatchObject({ code: "rejected" });
+  });
+
+  it("does not accept another source object with the same generation and size", async () => {
+    const wrong = new Response(JSON.stringify({ size: "3", contentType: "image/png", generation: "18", metadata: {
+      nihoSourceGeneration: "17", nihoSourceObjectHash: createHash("sha256").update("image/another-source").digest("hex"),
+    } }), { status: 200 });
+    const storage = createGcsStorage({ bucket: BUCKET, fetch: fakeFetch(metadata(), new Response(null, { status: 412 }), wrong).fetch, accessToken: async () => TOKEN });
+    await expect(storage.copyObject!({ sourceObjectPath: SOURCE, targetObjectPath: TARGET, sourceGeneration: "17" })).rejects.toMatchObject({ code: "rejected" });
   });
 
   it("refuses a changed source generation before starting rewrite", async () => {

@@ -289,5 +289,15 @@ for invalid in 'sample-private-jobs:latest' 'sample-private-jobs:0' 'sample-priv
   fi
 done
 
+check "maintenance is off by default" "$PRIVATE_JOBS_MAINTENANCE" false
+check "maintenance env is absent by default" "$(private_jobs_env_vars)" ""
+check "maintenance env is explicit" "$(PRIVATE_JOBS_MAINTENANCE=true private_jobs_env_vars)" ",EDITOR_PRIVATE_JOBS_MAINTENANCE_ENABLED=true"
+if (PRIVATE_JOBS_MAINTENANCE=false EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF=sample-private-jobs:7 load_private_jobs_deploy_settings) 2>/dev/null; then
+  check "a keyring without cleanup is refused" accepted rejected
+else
+  check "a keyring without cleanup is refused" rejected rejected
+fi
+
 [[ $failed -eq 0 ]] || { printf 'lib-test: failed\n' >&2; exit 1; }
+bash "$dir/private-jobs-infra.test.sh"
 printf 'lib-test: all passed\n'

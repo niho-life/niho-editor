@@ -3,7 +3,7 @@ import { imageObjectPath } from "./images.ts";
 import { isPageId } from "./store.ts";
 import type { Block, Database, OwnerId, PageKind, Queryable } from "./types.ts";
 
-export const TRANSLATION_PROPOSAL_TTL_HOURS = 24;
+export const TRANSLATION_PROPOSAL_TTL_HOURS = 23 + 50 / 60;
 export const TRANSLATION_LEASE_MINUTES = 15;
 
 export type TranslationEnvelope = {

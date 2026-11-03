@@ -31,7 +31,7 @@ export const FAKE_TICKET_TTL_MS = 60 * 60 * 1000;
 export const FAKE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 type Session = { objectPath: string; contentType: string; sizeBytes: number; expiresAtMs: number };
-type FakeObject = { bytes: Uint8Array; contentType: string | null; generation: string; copiedFromGeneration?: string };
+type FakeObject = { bytes: Uint8Array; contentType: string | null; generation: string; copiedFromGeneration?: string; copiedFromObjectPath?: string };
 
 export type FakeStorageState = {
   sessions: Map<string, Session>;
@@ -99,13 +99,14 @@ export function createFakeStorage(options: { state?: FakeStorageState; now?: () 
       const generation = input.sourceGeneration;
       const existing = state.objects.get(input.targetObjectPath);
       if (existing) {
-        if (existing.copiedFromGeneration !== generation || existing.bytes.byteLength !== source.bytes.byteLength || existing.contentType !== source.contentType) throw new StorageError("rejected");
+        if (existing.copiedFromGeneration !== generation || existing.copiedFromObjectPath !== input.sourceObjectPath || existing.bytes.byteLength !== source.bytes.byteLength || existing.contentType !== source.contentType) throw new StorageError("rejected");
       } else {
         state.objects.set(input.targetObjectPath, {
           bytes: source.bytes.slice(),
           contentType: source.contentType,
           generation: String(state.nextGeneration++),
           copiedFromGeneration: generation,
+          copiedFromObjectPath: input.sourceObjectPath,
         });
       }
       return { sourceGeneration: generation, sizeBytes: source.bytes.byteLength, contentType: source.contentType };

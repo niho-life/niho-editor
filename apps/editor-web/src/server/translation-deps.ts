@@ -45,7 +45,8 @@ export const translationDeps: TranslationApiDeps = {
     };
   },
   storage: () => getStorage(),
-  cipher: () => createPrivateJobPayloadCipher({ EDITOR_PRIVATE_JOBS_KEY_RING: process.env.EDITOR_PRIVATE_JOBS_KEY_RING }),
+  cipher: () => process.env.EDITOR_PRIVATE_JOBS_MAINTENANCE_ENABLED === "true"
+    ? createPrivateJobPayloadCipher({ EDITOR_PRIVATE_JOBS_KEY_RING: process.env.EDITOR_PRIVATE_JOBS_KEY_RING }) : null,
   compose: () => resolveAiCompose(process.env),
   usage: () => {
     const pool = getPool();

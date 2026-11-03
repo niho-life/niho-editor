@@ -56,8 +56,15 @@ load_article_deploy_settings() {
 
 # Private job snapshots use a fixed Secret version; the owner supplies the keyring separately.
 load_private_jobs_deploy_settings() {
+  PRIVATE_JOBS_MAINTENANCE="${PRIVATE_JOBS_MAINTENANCE:-false}"
+  [[ "$PRIVATE_JOBS_MAINTENANCE" == true || "$PRIVATE_JOBS_MAINTENANCE" == false ]] || die "PRIVATE_JOBS_MAINTENANCE must be true or false"
+  PRIVATE_JOBS_JOB=niho-editor-private-jobs
+  PRIVATE_JOBS_SWEEP_JOB=niho-editor-private-jobs-sweep
+  PRIVATE_JOBS_SCHEDULER_SA=niho-editor-private-jobs-scheduler
+  PRIVATE_JOBS_SCHEDULER_EMAIL="$PRIVATE_JOBS_SCHEDULER_SA@$GCP_PROJECT.iam.gserviceaccount.com"
   EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF="${EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF:-}"
   if [[ -n "$EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF" ]]; then
+    [[ "$PRIVATE_JOBS_MAINTENANCE" == true ]] || die "private job keyring requires PRIVATE_JOBS_MAINTENANCE=true"
     [[ "$EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF" =~ ^[A-Za-z0-9_-]+:[1-9][0-9]*$ ]] \
       || die "EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF must be secret-name:numeric-version"
   fi
@@ -327,4 +334,25 @@ service_request_timeout() {
   fi
   if (( seconds > CLOUD_RUN_TIMEOUT_MAX_SEC )); then seconds=$CLOUD_RUN_TIMEOUT_MAX_SEC; fi
   printf '%s' "$seconds"
+}
+
+private_jobs_scheduler_uri() {
+  printf 'https://run.googleapis.com/v2/projects/%s/locations/%s/jobs/%s:run' "$GCP_PROJECT" "$GCP_REGION" "$PRIVATE_JOBS_JOB"
+}
+private_jobs_infra_ready() {
+  private_jobs_job_safe || return 1
+  local state uri email scope
+  IFS=$'\t' read -r state uri email scope < <(gcp scheduler jobs describe "$PRIVATE_JOBS_SWEEP_JOB" --location "$GCP_REGION" \
+    --format='value(state,httpTarget.uri,httpTarget.oauthToken.serviceAccountEmail,httpTarget.oauthToken.scope)' 2>/dev/null)
+  [[ "$state" == ENABLED && "$uri" == "$(private_jobs_scheduler_uri)" && "$email" == "$PRIVATE_JOBS_SCHEDULER_EMAIL" && "$scope" == https://www.googleapis.com/auth/cloud-platform ]]
+}
+private_jobs_env_vars() {
+  [[ "$PRIVATE_JOBS_MAINTENANCE" == true ]] || return 0
+  printf '%sEDITOR_PRIVATE_JOBS_MAINTENANCE_ENABLED=true' "$ENV_SEP"
+}
+
+private_jobs_job_safe() {
+  gcp run jobs describe "$PRIVATE_JOBS_JOB" --region "$GCP_REGION" \
+    --format='json(spec.template.spec.template.spec.containers[0].command,spec.template.spec.template.spec.containers[0].args)' \
+    | python3 -c 'import json,sys; v=json.load(sys.stdin); c=v["spec"]["template"]["spec"]["template"]["spec"]["containers"]; sys.exit(0 if len(c)==1 and c[0].get("command")==["node"] and c[0].get("args")==["packages/editor-store/src/purge-cli.ts","--private-jobs-only"] else 1)'
 }

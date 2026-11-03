@@ -44,3 +44,7 @@ Experienceの初期面は英語guidesのまま。日本語URLを捏造してhref
 ## 一時候補の機密と鍵
 
 新しく保持する翻訳proposalの原文/指示/候補title/lead/text/altはDBへ平文複製しない。既存の通常pageの保存方式は変えない。新private-job-payload portをAES-256-GCM、random 96bit IV、owner/proposal/purpose/expiryをAADに束縛して作り、非機密metadataだけ別列に置く。runtimeはowner投入Secretの`EDITOR_PRIVATE_JOBS_KEY_RING` JSON `{active:"v1",keys:{v1:"base64-of-32-bytes"}}`を読み、key id/個数/bytes/formatを厳密検証する。設定なしは生成/候補採用を閉じ、既存英語ページや通常編集へ影響させない。実鍵の生成/投入/読出は禁止、合成test keyのみ。鍵を既存Photo/Firebase/会員tokenから流用しない。proposal内容は採用/期限24h後に消し、owner purgeにも含める。sourceの正本pageは通常の保持に従う。keyring rotationは24h以内の旧候補が残る間だけ旧keyを維持する。Google Docs batchでもこのportをpurpose分離して使う予定。
+
+## 定期削除の接続
+
+候補の有効期間を23時間50分とし、5分おきの専用private-jobs jobが期限切れpayloadを消す。正常稼働時に24時間以内へ収め、無操作のままの永続化を防ぐ。APIも期限切れを拒否する。暗号鍵が設定されてもmaintenanceフラグが無ければ生成を閉じる。jobはapp DB資格だけで、固定の`--private-jobs-only`以外へ切替できず、通常ページ/ゴミ箱/objectを削除しない。Scheduler identityは対象jobのexecute権限だけを持ち、鍵/DBや引数overrideへ届かない。構成と障害時の復旧は運用手順を参照。
