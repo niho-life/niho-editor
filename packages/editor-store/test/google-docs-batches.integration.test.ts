@@ -140,10 +140,12 @@ describe("Google Docs durable batches", { skip: databaseUrl === undefined }, () 
     assert.ok(receipt?.receiptOnly);
     assert.equal(receipt.envelope, null);
     assert.equal(receipt.exportId, claim.exportId, "receipt recovery keeps the same export id");
-    assert.equal(await completeGoogleDocsBatchItem(pool, receipt, "1AbCdEfGhIjKlMnOpQrStUvWxYz"), true);
+    const documentId = `A${"b".repeat(255)}`;
+    assert.equal(await completeGoogleDocsBatchItem(pool, receipt, documentId), true);
     const done = await getGoogleDocsBatch(pool, OWNER, prepared.job.id);
     assert.equal(done?.job.status, "cancelled");
     assert.equal(done?.items[0]?.status, "completed");
+    assert.equal(done?.items[0]?.documentId, documentId, "the maximum 256-character document id is stored");
   });
 
   it("expiryとowner/page消去がsnapshot/outboxをpurgeし、既存Google文書情報だけは削除要求しない", async () => {

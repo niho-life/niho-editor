@@ -72,7 +72,12 @@ CREATE TABLE google_docs_batch_items (
     status IN ('prepared', 'queued', 'running', 'pending', 'completed', 'failed', 'cancelled', 'expired')
   ),
   sent_at timestamptz,
-  document_id text CHECK (document_id IS NULL OR document_id ~ '^[A-Za-z0-9_-]{10,256}$'),
+  document_id text CHECK (
+    document_id IS NULL OR (
+      length(document_id) BETWEEN 10 AND 256
+      AND document_id ~ '^[A-Za-z0-9_-]+$'
+    )
+  ),
   retryable boolean NOT NULL DEFAULT false,
   error_code text CHECK (error_code IS NULL OR error_code ~ '^[a-z][a-z0-9_]{0,63}$'),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
