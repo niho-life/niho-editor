@@ -11,6 +11,7 @@ import { COPIED_NOTE_MS } from "./ShareSheet";
 import { EditorFrame, useEditorFrame, type AttachedPage, type FrameInitial } from "./EditorFrame";
 import { COUNT_DELAY_MS } from "./InfoPanel";
 import { LANG_NOT_SAVED, PageEditor } from "./PageEditor";
+import { NewPage } from "./FramePages";
 
 // 公開のシートの読み込み（#39）は PagePublish.test.tsx で本物の fetch の形で確かめる。ここでは、ページを開くたびに出る読み込みが
 // fetch の呼び出しの順や回数（複製・削除・書き出しの検査）を乱さないよう、読めなかったことにする
@@ -122,6 +123,26 @@ function chunkResponse(pages: PageSummary[], next: string | null): Response {
 }
 
 describe("EditorFrame", () => {
+  it("空の新規ページでも、入力せずに公開と右側の設定を使える", async () => {
+    nav.pathname = "/p/new";
+    window.history.replaceState(null, "", "/p/new");
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ page: { id: PAGE_ID, revision: 1 } }), { status: 201, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetcher);
+    await mount({}, <NewPage />);
+    // Next は replaceState のあと usePathname を更新する。ここでは navigation のモックを追従させる。
+    nav.pathname = window.location.pathname;
+    await rerender(<NewPage />);
+    expect(container!.querySelector<HTMLTextAreaElement>("textarea.page-title")?.value).toBe("");
+    expect(container!.querySelector(".ProseMirror")?.textContent).toBe("");
+    expect(window.location.pathname).toBe(`/p/${PAGE_ID}`);
+    expect(buttonByText("公開")).toBeDefined();
+    await click('button[aria-label="このページの設定と AI"]');
+    expect(buttonByText("日本語", container!.querySelector(".es-rail")!)?.getAttribute("aria-pressed")).toBe("true");
+    expect(container!.querySelector(".es-rail")?.textContent).toContain("文字数0");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]).toMatchObject(["/api/pages", { method: "POST" }]);
+  });
+
   it("opens NIHO photo from app navigation", async () => {
     await mount();
     expect(container!.querySelector(".es-sb-appnav")?.textContent).toContain("写真");
@@ -2131,43 +2152,19 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
   };
   const railButton = (label: string) => [...container!.querySelectorAll<HTMLButtonElement>(".es-rail button")].find((button) => (button.getAttribute("aria-label") ?? button.textContent)?.includes(label));
 
-  it("「最近」は木の上に出て、開閉でき、ページを開くとサーバーに記録して前に出る", async () => {
+  it("「最近」を隠し、ページの木と最後に開いたページの記録を残す", async () => {
     const calls: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        calls.push(`${init?.method ?? "GET"} ${url}`);
-        return new Response(null, { status: 204 });
-      }),
-    );
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      return new Response(null, { status: 204 });
+    }));
     nav.pathname = `/p/${OTHER}`;
     await mount({ pages: [page(FOLDER, "鎌倉の記事"), page(OTHER, "別のページ")], recent: [page(FOLDER, "鎌倉の記事")] }, <p>本文</p>);
-    expect(recentRows()).toEqual(["鎌倉の記事"]);
-
-    // 開閉（開いているのが既定）
-    const head = container!.querySelector<HTMLButtonElement>(".es-sb-grouphd")!;
-    expect(head.getAttribute("aria-expanded")).toBe("true");
-    await act(async () => head.click());
-    expect(recentRows()).toEqual([]);
-    await act(async () => container!.querySelector<HTMLButtonElement>(".es-sb-grouphd")!.click());
-
-    // ページを開くと記録し、「最近」の先頭に出る
+    expect(recentRows()).toBeNull();
+    expect(rows()).toEqual(["鎌倉の記事", "別のページ"]);
     await rerender(<OpenedPage summary={page(OTHER, "別のページ")} />);
     await until(() => calls.some((call) => call.includes("/open")));
     expect(calls.filter((call) => call.includes("/open"))).toEqual([`POST /api/pages/${OTHER}/open`]);
-    expect(recentRows()).toEqual(["別のページ", "鎌倉の記事"]);
-  });
-
-  it("「最近」は検索しているあいだ出さない", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ hits: [] }), { status: 200, headers: { "content-type": "application/json" } })));
-    await mount({ pages: [page(FOLDER, "鎌倉の記事")], recent: [page(FOLDER, "鎌倉の記事")] });
-    expect(recentRows()).toEqual(["鎌倉の記事"]);
-    await click('button[aria-label="探す"]');
-    await act(async () => {
-      const input = container!.querySelector<HTMLInputElement>('[role="search"] input')!;
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "鎌倉");
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
     expect(recentRows()).toBeNull();
   });
 

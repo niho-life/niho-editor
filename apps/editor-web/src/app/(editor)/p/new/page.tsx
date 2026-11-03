@@ -7,7 +7,7 @@ import { resolveTranscriptionEngines } from "@/transcription/config";
 
 export const dynamic = "force-dynamic";
 
-/** 新しいページ（題名か本文を入力した時点で作り、`/p/{id}` になる）。`?from=recording` は録音の開始の画面。 */
+/** 新しいページ（開いた時点で空の下書きを作り、`/p/{id}` になる）。`?from=recording` は録音の開始の画面。 */
 export default async function NewPageView(props: { searchParams: Promise<{ from?: string | string[] }> }) {
   const { from } = await props.searchParams;
   const recording = from === "recording";

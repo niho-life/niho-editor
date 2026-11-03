@@ -88,6 +88,8 @@ export type PageEditorEvents = {
 export type PageEditorProps = {
   page: EditablePage;
   drafts?: DraftStorage | null;
+  /** 新規画面を開いたら、端末の下書きを復元してから空でも保存先を作る。 */
+  createOnOpen?: boolean;
   /** リンクで共有しているか（開いたときにサーバーが読んだ値。分からなければ null・省略）。「…」の「共有中」の印に使う。 */
   shared?: boolean | null;
 } & PageEditorEvents;
@@ -343,7 +345,7 @@ function EditorScreen(props: ScreenProps) {
       unreadableRef.current = true;
       setUnreadable(true);
     },
-    editorProps: { attributes: { class: "doc", "aria-label": "本文" }, transformPastedHTML: normalizePastedHtml },
+    editorProps: { attributes: { class: "doc", role: "textbox", "aria-label": "本文", "aria-multiline": "true" }, transformPastedHTML: normalizePastedHtml },
     onUpdate: ({ editor: current }) => {
       if (unreadableRef.current) return;
       // 入力のたびに本文を JSON にしない（送る・端末に書く直前にだけ getJSON する）
@@ -432,6 +434,15 @@ function EditorScreen(props: ScreenProps) {
   useEffect(() => {
     if (editor) editor.setEditable(ready && !unreadable, false);
   }, [editor, ready, unreadable]);
+
+  useEffect(() => {
+    if (!props.createOnOpen || page.id !== null || pageId !== null || !ready || !editor || unreadable) return;
+    const autosave = autosaveRef.current;
+    if (!autosave) return;
+    // 復元済みの下書きや、作成中の入力も既存の保存キューを通す。空のページも入力を待たずに作る。
+    if (!autosave.hasPending()) autosave.change({ title: titleRef.current, blocks: () => editor.getJSON().content ?? [] });
+    void autosave.flush();
+  }, [props.createOnOpen, page.id, pageId, ready, editor, unreadable]);
 
   // 枠のヘッダー（状態の丸と「…」）と情報パネルへ、このページを登録する。「…」の操作（共有・書き出し・履歴・複製・削除）は、この flush で
   // まだ届いていない変更を先に保存し、届かなければ止める。下書きを読み終えるまでと、まだ作っていないページは id を渡さない

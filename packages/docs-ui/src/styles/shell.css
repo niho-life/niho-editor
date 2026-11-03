@@ -17,7 +17,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root button,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root input,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root textarea{font:inherit;color:inherit}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root button{cursor:pointer;background:none;border:0;padding:0;text-align:inherit}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root a:where(:not(.ProseMirror *)){color:inherit;text-decoration:none}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root :focus-visible{outline:2px solid var(--ed-accent-ink);outline-offset:2px;border-radius:6px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root :focus-visible:where(:not([contenteditable="true"])){outline:2px solid var(--ed-accent-ink);outline-offset:2px;border-radius:6px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root ::placeholder{color:var(--ed-ink-mute);opacity:1}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root [hidden]{display:none!important}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root code{font:12px var(--ed-font-mono);color:var(--ed-ink-mute)}
