@@ -276,7 +276,7 @@ export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelPr
       }
     })();
     return () => {
-      ++generationRef.current;
+      generationRef.current = generation + 1;
       controller.abort();
       controllerRef.current?.abort();
       sessionControllerRef.current?.abort();
@@ -460,6 +460,7 @@ export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelPr
     const generation = generationRef.current;
     const controller = new AbortController();
     controllerRef.current = controller;
+    closeMenus();
     setBusy("working");
     setStatus(AI_TEXT.working);
     try {
@@ -488,6 +489,7 @@ export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelPr
       setThread((current) => appendTurn(current, value, answer));
       setText("");
       if (answer.page) await context.bridge.replace(answer.page, { saved: true });
+      if (generation !== generationRef.current) return;
       setStatus(answer.resultCode === "revision_conflict" ? "ページが更新されました。もう一度お試しください" :
         native && macRoute !== "server" && answer.resultCode === "write_refused" ? AI_TEXT.nativeRefused :
           answer.result === "failed" ? AI_TEXT.chatFailed : answer.result === "stopped" ? AI_TEXT.stopped : "");
@@ -513,6 +515,7 @@ export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelPr
     const controller = new AbortController();
     controllerRef.current = controller;
     flightRef.current = true;
+    closeMenus();
     setBusy("compact");
     setStatus("ここまでの会話を要約しています…");
     try {
@@ -529,6 +532,7 @@ export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelPr
       setNearLimit(answer.usage.nearLimit);
       if (native && macRoute !== "server" && !answer.conversation) {
         if (answer.page) await context.bridge.replace(answer.page, { saved: true });
+        if (generation !== generationRef.current) return;
         setText(keptDraft);
         setStatus(answer.page ? AI_TEXT.nativeHistoryMissing : AI_TEXT.nativeReplyMissing);
         return;
@@ -536,6 +540,7 @@ export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelPr
       if (answer.page || answer.changes.length > 0) {
         setThread((current) => appendTurn(current, COMPACT_PROMPT, answer));
         if (answer.page) await context.bridge.replace(answer.page, { saved: true });
+        if (generation !== generationRef.current) return;
         setText(keptDraft);
         setStatus("本文の変更を伴ったため、会話は軽量化しませんでした。変更内容を確認し、必要なら元に戻してください。");
         return;
@@ -590,6 +595,7 @@ export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelPr
       const answer = await undoAiChat(target.pageId, messageId, { signal: controller.signal });
       if (generation !== generationRef.current) return;
       if (answer.page) await context.bridge.replace(answer.page, { saved: true });
+      if (generation !== generationRef.current) return;
       setThread((current) => current.map((item) => item.id === messageId
         ? { ...item, changes: item.changes.map((change) => answer.undone.includes(change.pageId) ? { ...change, undoneAt: new Date().toISOString() } : change) }
         : item));
@@ -637,6 +643,7 @@ export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelPr
     const controller = new AbortController();
     controllerRef.current = controller;
     flightRef.current = true;
+    closeMenus();
     setBusy("step");
     setStatus(`「${selectedStep.label}」を開始しています…`);
     try {
@@ -713,11 +720,11 @@ export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelPr
 
   const unavailable = !pageId || !context;
   const routeDisabled = native && macRoute !== "server" && (!selectedMacEngine || !macEngineReady(selectedMacEngine) || !selectedMacModels.includes(activeMacModel));
-  const sendDisabled = unavailable || sessionLoading || busy !== null || routeDisabled || (!selectedStep && text.trim().length === 0);
+  const sendDisabled = unavailable || sessionLoading || busy !== null || (!selectedStep && routeDisabled) || (!selectedStep && text.trim().length === 0);
 
   return (
     <section className="es-cd es-cd--open es-cd--fill es-ai-panel" aria-label="AIと作る" onKeyDown={(event) => {
-      if (event.key === "Escape") closeMenus();
+      if (event.key === "Escape" && !composing(event)) closeMenus();
     }}>
       <h2 className="es-ai-head">
         <span>AIと作る</span>
@@ -798,6 +805,7 @@ export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelPr
             maxLength={MAX_CHAT_INPUT_CHARS}
             value={text}
             disabled={unavailable}
+            readOnly={busy !== null || sessionLoading}
             onChange={(event) => onInput(event.currentTarget.value, event.currentTarget.selectionStart)}
             onKeyDown={onKeyDown}
           />

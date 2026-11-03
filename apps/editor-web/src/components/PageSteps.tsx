@@ -153,9 +153,11 @@ export function PageSteps({
   const ownerGeneration = useRef(0);
   const [loadedRoot, setLoadedRoot] = useState<string | null>(null);
   useEffect(() => {
-    ++ownerGeneration.current;
+    const generation = ++ownerGeneration.current;
     busyRef.current = false;
-    return () => { ++ownerGeneration.current; };
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the pending request belongs to the previous page
+    setBusy(false);
+    return () => { ownerGeneration.current = generation + 1; };
   }, [rootId, pageId]);
   // 読み直しの合図（始めた・やり直した直後にもう一度読む）
   const [tick, setTick] = useState(0);
