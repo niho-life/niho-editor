@@ -111,6 +111,15 @@ fn shell_commands() -> BTreeSet<String> {
     "shell_ai_engines",
     "shell_ai_turn",
     "shell_ai_stop",
+    "shell_gemini_audio_begin",
+    "shell_gemini_audio_chunk",
+    "shell_gemini_audio_finish",
+    "shell_gemini_prepare",
+    "shell_gemini_transcribe_part",
+    "shell_gemini_checkpoint_read",
+    "shell_gemini_checkpoint_write",
+    "shell_gemini_stop",
+    "shell_gemini_discard",
   ]
   .into_iter()
   .map(String::from)
@@ -144,6 +153,8 @@ fn the_remote_editor_capability_reaches_only_the_shell_commands() {
     "run_chat_turn",
     "stop_turn",
     "provider_status",
+    "prepare_audio",
+    "transcribe_audio_part",
     "save_api_key",
     "personal_open",
     "cloud_state",
