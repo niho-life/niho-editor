@@ -148,6 +148,17 @@ function isCandidate(value: unknown): value is RecordingCandidateSummary {
     Array.isArray(preview) && preview.every((text) => typeof text === "string") && typeof createdAt === "string" && typeof updatedAt === "string";
 }
 
+function candidateSummariesOf(value: unknown): RecordingCandidateSummary[] | null {
+  if (!Array.isArray(value)) return null;
+  const byId = new Map<string, RecordingCandidateSummary>();
+  for (const candidate of value) {
+    if (!isCandidate(candidate)) continue;
+    const previous = byId.get(candidate.id);
+    if (!previous || candidate.revision > previous.revision) byId.set(candidate.id, candidate);
+  }
+  return [...byId.values()];
+}
+
 function positiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 }
@@ -165,7 +176,8 @@ function snapshotOf(data: unknown): RecordingSnapshot | null {
   if (!isRecord(data) || !isRecording(data.recording) || !isSpeakers(data.speakers)) return null;
   const snapshot: RecordingSnapshot = { recording: data.recording, speakers: data.speakers };
   if (Array.isArray(data.audios)) snapshot.audios = data.audios.filter(isAudioPart);
-  if (Array.isArray(data.candidates)) snapshot.candidates = data.candidates.filter(isCandidate);
+  const candidates = candidateSummariesOf(data.candidates);
+  if (candidates) snapshot.candidates = candidates;
   if (Array.isArray(data.engines)) snapshot.engines = data.engines.filter((engine): engine is string => typeof engine === "string");
   if (data.defaultEngine === null || typeof data.defaultEngine === "string") snapshot.defaultEngine = data.defaultEngine;
   return snapshot;
@@ -279,7 +291,7 @@ function candidateOrThrow(data: unknown): RecordingCandidateFull {
 
 function candidatesOf(data: unknown): RecordingCandidateSummary[] {
   const list = isRecord(data) ? data.candidates : null;
-  return Array.isArray(list) ? list.filter(isCandidate) : [];
+  return candidateSummariesOf(list) ?? [];
 }
 
 /** 案 1 つ（本文つき。見比べるときに読む）。 */
