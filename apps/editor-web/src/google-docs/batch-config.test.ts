@@ -36,8 +36,15 @@ describe("Google Docs durable batch config", () => {
       expect(() => resolveGoogleDocsBatchConfig(env), key).toThrow(GoogleDocsBatchConfigError);
     }
     expect(() => resolveGoogleDocsBatchConfig({ ...complete, EDITOR_GOOGLE_DOCS_NIHO_SERVICE_AUDIENCE: "http://niho.example.test/internal" })).toThrow(GoogleDocsBatchConfigError);
-    expect(() => resolveGoogleDocsBatchConfig({ ...complete, EDITOR_GOOGLE_DOCS_NIHO_SERVICE_AUDIENCE: "https://other.example.test/api/internal/editor-docs-drive" })).toThrow(GoogleDocsBatchConfigError);
     expect(() => resolveGoogleDocsBatchConfig({ ...complete, EDITOR_GOOGLE_DOCS_NIHO_SERVICE_AUDIENCE: "https://niho.example.test/api/internal/other" })).toThrow(GoogleDocsBatchConfigError);
+  });
+
+  it("NIHOの固定audienceはAPI origin aliasと別hostでも同じinternal pathなら使う", () => {
+    const audience = "https://api.niho.example.test/api/internal/editor-docs-drive";
+    expect(resolveGoogleDocsBatchConfig({ ...complete, EDITOR_GOOGLE_DOCS_NIHO_SERVICE_AUDIENCE: audience })).toMatchObject({
+      mode: "cloud-tasks",
+      nihoAudience: audience,
+    });
   });
 
   it("未知modeを黙ってoffにせず、errorへ設定値を出さない", () => {

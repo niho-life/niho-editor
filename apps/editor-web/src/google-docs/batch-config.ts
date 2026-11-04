@@ -28,8 +28,9 @@ function audience(value: string | undefined, apiBase: string): string | null {
   try { url = new URL(value); } catch { return null; }
   if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || value !== url.href.replace(/\/$/, "")) return null;
   const expected = new URL(apiBase);
-  expected.pathname = `${expected.pathname.replace(/\/+$/, "")}/internal/editor-docs-drive`;
-  return value === expected.toString() ? value : null;
+  const expectedPath = `${expected.pathname.replace(/\/+$/, "")}/internal/editor-docs-drive`;
+  // The NIHO API base can use a public alias while its OIDC verifier pins the canonical API audience.
+  return url.pathname === expectedPath ? value : null;
 }
 
 export function resolveGoogleDocsBatchConfig(env: GoogleDocsBatchEnv): GoogleDocsBatchConfig {
