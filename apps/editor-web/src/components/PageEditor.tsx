@@ -33,7 +33,7 @@ import { MAX_LEAD_CHARS, MAX_TITLE_CHARS } from "@/lib/page-limits";
 import { UNCREATED_REVISION, classifySaveFailure, createPageSaver, type PageSaver } from "@/lib/page-save";
 import type { RestoredPage } from "@/lib/page-actions-client";
 import { PageConflictError, PageRequestError, type ConflictPage, type PageBody } from "@/lib/pages-client";
-import { SAVE_STATUS_TEXT, type SaveStatus } from "@/lib/save-status";
+import type { SaveStatus } from "@/lib/save-status";
 import { isSaveShortcut } from "@/lib/shortcuts";
 import { imageAssetPath } from "@/image/image-paths";
 import { PageTranslation } from "@/components/PageTranslation";
@@ -45,7 +45,7 @@ export type { SaveStatus };
 /** 言語を指定しないページの言語（新しいページの既定。サーバーの既定と同じ）。 */
 export const DEFAULT_PAGE_LANG: PageLang = "ja";
 
-/** 言語を保存できず、前の言語に戻したときの一言（情報パネルの言語の下）。 */
+/** 言語を保存できず、前の言語に戻したときの一言（公開のシートの言語の下）。 */
 export const LANG_NOT_SAVED = "言語を保存できませんでした";
 
 export type EditablePage = {
@@ -86,7 +86,7 @@ export type PageEditorEvents = {
    * 渡す関数は、全てサーバーにあれば true、保存できなければ（オフライン・失敗・競合・変換中）false。
    */
   registerSaveNow?: (saveNow: () => Promise<boolean>) => () => void;
-  /** 情報パネルで変えた言語がサーバーに届いた（届いた言語。一覧の言語を替える）。 */
+  /** 公開のシートで変えた言語がサーバーに届いた（届いた言語。一覧の言語を替える）。 */
   onLangChange?: (lang: PageLang) => void;
 };
 
@@ -202,7 +202,7 @@ export function PageEditor(props: PageEditorProps) {
  * AI は右レールの常設パネル（src/components/AiBox.tsx）に出す。PageEditor は editor と安定した保存 bridge だけを枠へ登録する。
  * 頼む前に未保存の入力を保存し終え、結果は本文を差し替えて revision を進める（自動保存は起こさない。src/lib/ai-bridge.ts）。
  *
- * 言語（情報パネル）、公開用のカバーとリードも同じ自動保存・下書きに載せる（別の PATCH を撃たない。revision・
+ * 言語（公開のシート）、公開用のカバーとリードも同じ自動保存・下書きに載せる（別の PATCH を撃たない。revision・
  * 競合の判定・端末の下書きは題名・本文と同じ）。カバーは本文に挿入済みのこのページの画像から選び、本文と共有して使う。
  * 言語は変えたら 1 秒を待たずに送り、届かなければサーバーが持っている言語に戻して
  * 一言出す（戻した言語も同じ保存に載せる。届いたか分からない失敗のあとでも、サーバーを画面の言語に揃えるため）。
@@ -546,7 +546,7 @@ function EditorScreen(props: ScreenProps) {
     void autosave.flush();
   }, [props.createOnOpen, page.id, pageId, ready, editor, unreadable]);
 
-  // 枠のヘッダー（状態の丸と「…」）と情報パネルへ、このページを登録する。「…」の操作（共有・書き出し・履歴・複製・削除）は、この flush で
+  // 枠のヘッダー（状態の丸と「…」）と公開のシート・右下の文字数へ、このページを登録する。「…」の操作（共有・書き出し・履歴・複製・削除）は、この flush で
   // まだ届いていない変更を先に保存し、届かなければ止める。下書きを読み終えるまでと、まだ作っていないページは id を渡さない
   // （「…」を出さない。読み終える前に操作すると、あとから載せる下書きが操作に入らないため）。画面を離れたら外す。
   // 版に戻すときは revision（今の本文がもとにしている revision）を送り、戻したら reopen でこの画面ごと開き直す
@@ -558,7 +558,7 @@ function EditorScreen(props: ScreenProps) {
   // 版に戻して開き直すとき、言語は今の画面のものを持っていく（版に戻しても言語は変わらない）
   const reopenHere = useCallback((restored: RestoredPage) => reopen(restored, langRef.current), [reopen]);
 
-  // 情報パネルの言語。題名・本文と同じ自動保存に載せて今送り、届かなければサーバーが持っている言語に戻す
+  // 公開のシートの言語。題名・本文と同じ自動保存に載せて今送り、届かなければサーバーが持っている言語に戻す
   const changeLang = useCallback(
     (next: PageLang) => {
       const autosave = autosaveRef.current;
@@ -593,7 +593,7 @@ function EditorScreen(props: ScreenProps) {
     [],
   );
 
-  // 本文の文字（情報パネルの文字数。開いているあいだだけ読む）
+  // 本文の文字（右下の文字数。開いているあいだだけ読む）
   const text = useMemo<PageText>(
     () => ({
       read: () => editorRef.current?.getText({ blockSeparator: "\n" }) ?? "",
@@ -607,7 +607,7 @@ function EditorScreen(props: ScreenProps) {
     [textListeners],
   );
 
-  // 本文と右のページ設定は別の DOM ツリーなので、それぞれで IME の状態を同じ保存処理へ伝える。
+  // 本文と公開のシートは別の DOM ツリーなので、それぞれで IME の状態を同じ保存処理へ伝える。
   const compositionStarted = useCallback(() => {
     composingRef.current = true;
   }, []);
@@ -616,13 +616,18 @@ function EditorScreen(props: ScreenProps) {
     keeperRef.current?.compositionEnded();
   }, []);
 
-  // 保存と下書きの持ち主はエディタのまま、入力欄だけを右のページ設定へ渡す。
+  // 保存と下書きの持ち主はエディタのまま、入力欄だけを公開のシート（「公開」を押したときだけ出る）へ渡す。
+  // 説明文は置かない（英語版の説明は ⓘ のシートの中だけ）。
+  const leadCount = Array.from(lead ?? "").length;
   const publicationFields = useMemo(() => (
-    <section aria-label="公開情報（任意）" style={{ display: "grid", gap: 10, minWidth: 0 }} onCompositionStart={compositionStarted} onCompositionEnd={compositionEnded}>
-      <h3>公開情報（任意）</h3>
-      <p>リードとカバー画像は、未設定でも公開できます。</p>
-      <label style={{ display: "grid", gap: 5 }}>
-        公開用リード（{MAX_LEAD_CHARS}字まで）
+    <section aria-label="記事の情報" style={{ display: "grid", gap: 14, minWidth: 0 }} onCompositionStart={compositionStarted} onCompositionEnd={compositionEnded}>
+      <label>
+        <span className="es-pf-hd">
+          リード
+          <span className="es-pf-cnt" aria-hidden="true">
+            {leadCount} / {MAX_LEAD_CHARS}
+          </span>
+        </span>
         <textarea
           className="es-area"
           data-page-lead=""
@@ -639,7 +644,7 @@ function EditorScreen(props: ScreenProps) {
           }}
         />
       </label>
-      <label style={{ display: "grid", gap: 5 }}>
+      <label>
         カバー画像
         {/* The private same-origin image endpoint requires the viewer's session cookie. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -648,7 +653,7 @@ function EditorScreen(props: ScreenProps) {
           className="es-input"
           data-page-cover=""
           value={cover ?? ""}
-          disabled={!ready || unreadable}
+          disabled={!ready || unreadable || (coverOptions.length === 0 && !cover)}
           onFocus={() => setCoverOptions(imageAssetIds(editorRef.current?.getJSON().content ?? page.blocks, coverRef.current))}
           onChange={(event) => {
             const next = event.currentTarget.value || null;
@@ -663,7 +668,6 @@ function EditorScreen(props: ScreenProps) {
           <option value="">なし</option>
           {coverOptions.map((assetId, index) => <option key={assetId} value={assetId}>本文の画像 {index + 1}</option>)}
         </select>
-        {coverOptions.length === 0 && <span>カバーにする画像を先に本文へ挿入してください。</span>}
       </label>
       {cover && (
         <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -695,17 +699,35 @@ function EditorScreen(props: ScreenProps) {
           この画像を公開先に掲載する許諾を確認しました
         </label>
       )}
-      {cover && <button type="button" disabled={!ready || unreadable} onClick={() => {
+      {cover && <button type="button" className="es-btn es-btn--quiet es-btn--sm" style={{ justifySelf: "start" }} disabled={!ready || unreadable} onClick={() => {
         coverRef.current = null;
         setCover(null);
         setCoverMetadata(null);
         autosaveRef.current?.change({ cover: null });
         keeperRef.current?.touch();
       }}>カバー画像を外す</button>}
-      {coverError && <p role="alert">{coverError}</p>}
+      {coverError && <p role="alert" className="es-upnote">{coverError}</p>}
+      <div className="es-pf" data-page-lang="" tabIndex={-1} role="group" aria-label="言語">
+        <span className="es-pf-row">
+          <span className="es-pf-lbl" aria-hidden="true">言語</span>
+          <span className="es-pills">
+            <button type="button" className={lang === "ja" ? "es-on" : undefined} aria-pressed={lang === "ja"} onClick={() => changeLang("ja")}>
+              日本語
+            </button>
+            <button type="button" className={lang === "en" ? "es-on" : undefined} aria-pressed={lang === "en"} onClick={() => changeLang("en")}>
+              English
+            </button>
+          </span>
+        </span>
+        {langNote && (
+          <p role="alert" className="es-upnote">
+            {langNote}
+          </p>
+        )}
+      </div>
       {pageId && <PageTranslation pageId={pageId} lang={lang} saveFirst={flush} savedRevision={savedRevision} currentRevision={revision} />}
     </section>
-  ), [lead, cover, ready, unreadable, coverOptions, coverConsent, coverMetaBusy, coverError, page.blocks, pageId, lang, flush, savedRevision, revision, compositionStarted, compositionEnded]);
+  ), [lead, leadCount, cover, ready, unreadable, coverOptions, coverConsent, coverMetaBusy, coverError, page.blocks, pageId, lang, changeLang, langNote, flush, savedRevision, revision, compositionStarted, compositionEnded]);
 
   const status = statusOf(state);
   useEffect(
@@ -760,13 +782,12 @@ function EditorScreen(props: ScreenProps) {
       ref={setRoot}
       data-docs-app-root=""
       data-docs-shared-ui=""
+      // 保存の状態（見える文字は失敗のときだけ、枠のヘッダーに出す。読み上げはヘッダーの状態の丸の live region が持つ）
+      data-save-state={status}
+      data-drafts={hasStorage && draftsKept ? "kept" : "none"}
       onCompositionStart={compositionStarted}
       onCompositionEnd={compositionEnded}
     >
-      {/* 見える文字だけ。読み上げはヘッダーの状態の丸（aria-live）が持つので、ここは live region にしない（二重に読み上げない） */}
-      <p data-save-state={status} data-drafts={hasStorage && draftsKept ? "kept" : "none"}>
-        {SAVE_STATUS_TEXT[status]}
-      </p>
       {conflict && <ConflictBand page={conflict} overwriting={state === "saving"} container={root} onCopy={copyBody} onOverwrite={overwrite} />}
       <PageTitle
         value={title}
@@ -785,16 +806,14 @@ function EditorScreen(props: ScreenProps) {
         }}
       />
       {titleClamped && <p role="status">題名は {MAX_TITLE_CHARS} 字までです。</p>}
-      <p style={{ fontSize: 13, lineHeight: 1.5, overflowWrap: "anywhere" }}>
-        1ページ{PAGE_MAX_BYTES / (1024 * 1024)} MiBまで（題名・リード・本文・本文/カバー画像・アップロード中の画像）。録音音声は別枠です。
-      </p>
       {pageFull && (
         <p role="alert" style={{ fontSize: 13, lineHeight: 1.5, overflowWrap: "anywhere", color: "var(--docs-warn-ink)" }}>
           ページの{PAGE_MAX_BYTES / (1024 * 1024)} MiB上限を超えるため保存できませんでした。本文やカバーから不要な画像を外すか、アップロード中の画像を中止してください。直前の保存内容は残っています。
         </p>
       )}
       {unreadable && <p role="alert">本文を読み込めませんでした。この画面では本文を変更しません。</p>}
-      <div className="be">
+      {/* be--flush: 旧 NIHO docs の「＋ ⋮⋮」用の左の余白を使わない（題名と本文の左端を揃える） */}
+      <div className="be be--flush">
         <EditorContent editor={editor} />
         {/* ヘッダーに常設の書式の帯（ShellTools）を出すため、本文の操作を枠へ渡す（#37 T9） */}
         <PageChrome editor={editor} onTools={registerTools} />

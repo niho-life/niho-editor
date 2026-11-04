@@ -26,6 +26,8 @@ export type EditorShellProps = {
   overlay?: ReactNode;
   /** ページの中央（ShellPage や RecordingStart）。 */
   children: ReactNode;
+  /** 本文の列の右下に小さく置くもの（文字数とページの情報。ShellPageInfo）。渡さなければ出さない。 */
+  corner?: ReactNode;
 };
 
 /**
@@ -35,7 +37,7 @@ export type EditorShellProps = {
  * 最初のフォーカス先は「本文へ移動」（skip link。普段は見えず、フォーカスで現れる）。押すと本文（main）へフォーカスを移す。
  * URL の # は変えない（呼ぶ側の hash の route を壊さない）。
  */
-export function EditorShell({ sidebar, header, rail, toolbar, sidebarOpen, railOpen, overlay, children }: EditorShellProps) {
+export function EditorShell({ sidebar, header, rail, toolbar, sidebarOpen, railOpen, overlay, children, corner }: EditorShellProps) {
   const view: ShellView = sidebarOpen ? "list" : railOpen && rail ? "rail" : "page";
   const main = useRef<HTMLElement | null>(null);
   const skip = (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -68,6 +70,7 @@ export function EditorShell({ sidebar, header, rail, toolbar, sidebarOpen, railO
                   {rail}
                 </div>
               ) : null}
+              {corner ? <div className="es-corner">{corner}</div> : null}
             </div>
             {toolbar}
           </div>

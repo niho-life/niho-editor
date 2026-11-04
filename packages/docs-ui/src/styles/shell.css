@@ -64,6 +64,19 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dbody{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-rail="open"] .es-dbody{grid-template-columns:minmax(0,1fr) 340px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-rail-presence{display:contents}
+/* 本文の列の右下（文字数とページの情報）。レールを開いているときはレールの左に寄せる */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dbody{position:relative}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-corner{position:absolute;right:14px;bottom:12px;z-index:12}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-rail="open"] .es-corner{right:354px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-countwrap{position:relative}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-count{display:block;font-size:12px;line-height:1.4;color:var(--ed-ink-mute);padding:4px 9px;border-radius:999px;background:var(--ed-canvas);white-space:nowrap}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-count:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-count[aria-expanded="true"]{background:var(--ed-sand);color:var(--ed-ink-sub)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-count-pop{position:absolute;right:0;bottom:calc(100% + 8px);width:min(300px,calc(100vw - 28px));padding:14px 16px;background:var(--ed-white);border:1px solid var(--ed-line-2);border-radius:14px;box-shadow:0 14px 40px rgba(0,0,0,.12)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-count-pop:focus{outline:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-count-pop>.es-info{float:right;margin:-4px -6px 0 8px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-info{width:22px;height:22px;border-radius:50%;display:inline-grid;place-items:center;color:var(--ed-ink-mute);flex:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-info:hover{background:var(--ed-sand-2);color:var(--ed-ink-sub)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-info .es-ico{width:14px;height:14px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas{min-width:0;min-height:0;overflow:auto;padding:8px 48px 120px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas-in{max-width:680px;margin:auto}
 /* 本文へ移動（skip link）。普段は切り抜いて見せず（場所と大きさは保つので、はみ出しにならない）、フォーカスで現れる。移動先の main（tabindex=-1）には枠を出さない */
@@ -80,6 +93,20 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-newbtn .es-ico{width:17px;height:17px;stroke-width:2.2}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-find{display:flex;align-items:center;gap:8px;flex:1;min-width:0;height:32px;padding:0 4px 0 10px;border-radius:9px;background:var(--ed-white);border:1px solid var(--ed-line-2);color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-find input{flex:1;min-width:0;border:0;outline:none;font-size:13px;background:none;color:var(--ed-ink)}
+/* 上段の行ボタン（検索・新しいページ）。右端のショートカットは飾り（aria-hidden） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-acts{display:grid;gap:2px;padding:0 10px 6px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-acts .es-newwrap{display:block}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-act{display:flex;align-items:center;gap:9px;width:100%;height:30px;padding:0 8px;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--ed-ink-sub);text-align:left}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-act:hover{background:var(--ed-sand-2);color:var(--ed-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-act .es-ico{width:16px;height:16px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-act kbd{margin-left:auto;font-family:var(--ed-font-sans);font-size:12px;font-weight:500;color:var(--ed-ink-mute)}
+/* ドラッグ: 動かしている行は沈め、落とす位置に印（into は面と枠、before / after は線） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di--dragging{background:var(--ed-sand);color:var(--ed-ink-mute);border-radius:10px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow.es-di--drop-into{background:var(--ed-accent-soft);box-shadow:inset 0 0 0 2px var(--ed-leaf);border-radius:10px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow.es-di--drop-before,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow.es-di--drop-after{position:relative}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow.es-di--drop-before::before,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow.es-di--drop-after::after{content:"";position:absolute;left:6px;right:6px;height:2px;border-radius:1px;background:var(--ed-deep);pointer-events:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow.es-di--drop-before::before{top:-1px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow.es-di--drop-after::after{bottom:-1px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-list{flex:1;min-height:0;overflow:auto;padding:2px 8px 10px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;width:100%;padding:8px 10px;border-radius:10px;position:relative;text-align:left}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di--one{padding:9px 10px}
@@ -386,7 +413,6 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-head{height:42px;flex:none;display:flex;align-items:center;gap:4px;padding:0 10px 0 16px;font-size:13px;font-weight:600}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-body{position:relative;flex:1;min-height:0;padding:0;display:flex;flex-direction:column;overflow:hidden}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-thread{flex:1;min-height:72px;overflow:auto;padding:10px 13px 14px;display:flex;flex-direction:column;gap:14px;scrollbar-width:thin}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-empty{margin:auto;color:var(--ed-ink-mute);font-size:12.5px;text-align:center}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message{flex:none;min-width:0;font-size:12.5px;line-height:1.75;overflow-wrap:anywhere;white-space:pre-wrap}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message--user{align-self:flex-end;max-width:94%;padding:8px 11px;border:1px solid var(--ed-line-2);border-radius:12px 12px 3px 12px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message--assistant{padding:0 3px}
@@ -442,6 +468,17 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-sec{padding:16px 22px;border-top:1px solid var(--ed-line)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-body>.es-sh-sec:first-child{border-top:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-sec h3{font-size:12px;font-weight:600;color:var(--ed-ink-mute);margin-bottom:8px}
+/* 公開のシートの中の記事の情報（リード・カバー画像・言語・英語版）。欄ごとにラベルを持ち、節の見出しは持たない */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-fields{display:grid;gap:14px;min-width:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-fields label{display:grid;gap:6px;min-width:0;font-size:12px;font-weight:600;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pf{display:grid;gap:6px;min-width:0;font-size:13px;color:var(--ed-ink-sub);overflow-wrap:anywhere}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pf a{color:var(--ed-accent-ink);font-weight:600}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pf-hd{display:flex;align-items:center;gap:8px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pf-cnt{margin-left:auto;font-size:12px;font-weight:500;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pf-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;min-width:0;font-size:13.5px;font-weight:400;color:var(--ed-ink-sub)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pf-row>.es-pf-lbl{width:76px;flex:none;font-size:12px;font-weight:600;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pf-row>.es-pf-act{margin-left:auto}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root span.es-pf-act{display:inline-flex;align-items:center;gap:6px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:14px 22px 18px;border-top:1px solid var(--ed-line);background:var(--ed-white);flex:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-foot--center{border-top:0;justify-content:center}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-note{flex:1 1 12em;min-width:0;font-size:12px;overflow-wrap:anywhere}
@@ -643,6 +680,8 @@
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-rail="open"] .es-mtb{display:none}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-rail="open"] .es-dbody{grid-template-columns:minmax(0,1fr)}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="rail"] .es-canvas{visibility:hidden}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-rail="open"] .es-corner{right:14px}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="rail"] .es-corner,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="list"] .es-corner{display:none}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="list"] .es-skip,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="rail"] .es-skip{display:none}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-rail{position:absolute;left:0;right:0;bottom:0;top:var(--es-header);z-index:46;border-left:0}
   /* レールのシート（ShellRail に onClose を渡したとき）。下からの背の高いシートで、中のレールは残りの高さを使う（#43） */

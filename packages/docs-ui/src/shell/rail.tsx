@@ -35,7 +35,7 @@ export type ShellRailProps = {
  * 右のレール。節は横の罫線で区切るだけ。上の節（手順・ページ設定）は押すと開閉し、下の「AIと作る」が残りの高さを使う
  * （最低 220px。開いている節は中でスクロールする）。
  */
-export function ShellRail({ children, label = "このページの設定と AI", onClose }: ShellRailProps) {
+export function ShellRail({ children, label = "AIと作る", onClose }: ShellRailProps) {
   const narrow = useSyncExternalStore(subscribeNarrow, isNarrow, isNarrowOnServer);
   const view = useContext(ShellViewContext);
   // 900px 未満で一覧が全画面のあいだ（view=list）は、レールを含むページ全体が隠れている。見えないダイアログで外を inert にしない

@@ -260,10 +260,10 @@ describe("レールのシート（900px 未満。#43）", () => {
     const host = mount(<RailOpener />);
     open(host);
     const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
-    expect(dialog.getAttribute("aria-label")).toBe("このページの設定と AI");
+    expect(dialog.getAttribute("aria-label")).toBe("AIと作る");
     expect(dialog.getAttribute("aria-modal")).toBe("true");
     expect(dialog.classList.contains("es-sheet--rail")).toBe(true);
-    expect(dialog.querySelector("h2")?.textContent).toBe("このページの設定と AI");
+    expect(dialog.querySelector("h2")?.textContent).toBe("AIと作る");
     // aria-controls の先（#es-rail）はシートの中。aside（landmark）は重ねない
     expect(dialog.querySelector("#es-rail")).not.toBeNull();
     expect(host.querySelector("aside.es-rail")).toBeNull();
@@ -348,7 +348,7 @@ describe("レールのシート（900px 未満。#43）", () => {
     const wide = mount(<RailOpener />);
     open(wide);
     expect(wide.querySelector('[role="dialog"]')).toBeNull();
-    expect(wide.querySelector('aside.es-rail[aria-label="このページの設定と AI"]')).not.toBeNull();
+    expect(wide.querySelector('aside.es-rail[aria-label="AIと作る"]')).not.toBeNull();
 
     narrow = true;
     const legacy = mount(<RailOpener withClose={false} />);

@@ -10,7 +10,7 @@ export function shellStatus(pub: ShellPublication | null): { state: ShellStatusS
 }
 
 /**
- * ヘッダーの公開ボタン。発信先が決まっているか記事なら主ボタン、それ以外の「公開」は静かな縁だけのボタン。
+ * ヘッダーの公開ボタン。発信先が決まっているか記事なら主ボタン、それ以外の「公開」は面も縁も持たない静かなボタン（ジャーナリングが主で、公開は一部）。
  * 公開中は静かな「公開中 ▾」、更新ありは「更新を公開」。
  */
 export function shellPublishButton(input: {
@@ -22,7 +22,7 @@ export function shellPublishButton(input: {
   const { pub } = input;
   if (!pub || pub.range === "stopped") {
     const loud = Boolean(input.planned) || Boolean(input.isArticle);
-    return { label: "公開", tone: loud ? "primary" : "outline", menu: false };
+    return { label: "公開", tone: loud ? "primary" : "quiet", menu: false };
   }
   if (pub.updated) return { label: "更新を公開", tone: "primary", menu: false };
   return { label: "公開中", tone: "quiet", menu: true };

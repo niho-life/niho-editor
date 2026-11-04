@@ -23,14 +23,29 @@ import { PUBLISH_MESSAGES, slugMessage } from "@/publish/messages";
  *
  * - 選ぶ（発信先・範囲・あわせて・URL）たびにシートのデータを読み直す（URL は打ち終わるのを少し待つ）。
  * - シートを開く前と、公開・更新を送る前に、エディタの保存待ちを送り終える（最後の入力を公開版に入れる）。保存できなければ送らない。
- * - 「直す」: シートを閉じてその欄へフォーカスを移す。リード・カバー写真は右のページ設定を開く。
- *   言語は右のページ設定、カテゴリ・関連する体験はシート内の欄へ移す。
+ * - 「直す」: 題名・本文はシートを閉じてその欄へフォーカスを移す。リード・カバー画像・言語・カテゴリ・関連する体験は、
+ *   シートを閉じずにシート内の欄へ移す（記事の情報は `fields` としてシートの中に出す）。
  * - 「発信先を追加」「接続する」は発信先の設定（`/destinations`。#41）へ移る。
  * - 本人のサイトの行は docs-ui では発信先の種類ごとに 1 つなので、公開しているサイト（無ければ最初に接続したサイト）だけを出す。
  */
 
-/** 「直す」で移る欄（editor の画面にあるもの）。 */
-export type PublishFixField = "title" | "body" | "cover" | "lead" | "lang";
+/** 「直す」でシートを閉じて移る欄（本文の列にあるもの）。 */
+export type PublishFixField = "title" | "body";
+
+/** 「直す」でシートを閉じずに移る、シートの中の欄。 */
+type SheetFixField = "category" | "related" | "cover" | "lead" | "lang";
+
+const SHEET_FIELD_SELECTOR: Readonly<Record<SheetFixField, string>> = {
+  category: '[data-publish-field="category"]',
+  related: '[data-publish-field="related"]',
+  cover: "[data-page-cover]",
+  lead: "[data-page-lead]",
+  lang: "[data-page-lang]",
+};
+
+function sheetField(field: SheetFixField): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[role="dialog"] ${SHEET_FIELD_SELECTOR[field]}`);
+}
 
 const WHO: Readonly<Record<ShellDest, string>> = { exp: "旅行者向け · 英語", niho: "鎌倉の人向け", site: "本人のサイト" };
 const ROLE: Readonly<Record<ShellDest, string>> = { exp: "ライター", niho: "NIHO アカウント", site: "接続済み" };
@@ -112,12 +127,7 @@ function stopDetailOf(sheet: PublishSheetDto | null): string {
 /** 「直す」: 開いているページの題名か本文へフォーカスを移す。 */
 export function focusPageField(field: PublishFixField): void {
   const main = document.getElementById("es-main");
-  const target =
-    field === "title"
-      ? main?.querySelector<HTMLElement>("textarea.page-title")
-      : field === "body"
-        ? main?.querySelector<HTMLElement>('.doc[contenteditable="true"]')
-        : document.querySelector<HTMLElement>(field === "cover" ? "[data-page-cover]" : field === "lead" ? "[data-page-lead]" : "[data-page-lang]");
+  const target = field === "title" ? main?.querySelector<HTMLElement>("textarea.page-title") : main?.querySelector<HTMLElement>('.doc[contenteditable="true"]');
   if (!target) return;
   target.focus();
   target.scrollIntoView?.({ block: "nearest" });
@@ -185,15 +195,15 @@ export function usePagePublish(input: {
   onNavigate: (path: string) => void;
   /** エディタの保存待ちを今すぐ送り、届き終わるのを待つ。全て保存できたら true。 */
   saveFirst: () => Promise<boolean>;
-  /** 「直す」の欄が右のページ設定にあるとき、シートを閉じるのと同時に開く。 */
-  revealField?: (field: PublishFixField) => void;
+  /** 記事の情報（リード・カバー画像・言語・英語版。保存はエディタ）。シートの「範囲」の前に出す。 */
+  fields?: ReactNode;
 }): PagePublishUi {
   const { pageId, isArticle } = input;
   const [state, setState] = useState<State>(() => initialState(pageId));
   const [experienceOptions, setExperienceOptions] = useState<ExperienceOptionsState>(EMPTY_EXPERIENCE_OPTIONS);
   const experienceOptionsRequested = useRef(false);
   const experienceOptionsSequence = useRef(0);
-  const pendingSheetFix = useRef<"category" | "related" | null>(null);
+  const pendingSheetFix = useRef<SheetFixField | null>(null);
   const current = state.pageId === pageId ? state : initialState(pageId);
   if (state.pageId !== pageId) setState(current);
 
@@ -237,12 +247,12 @@ export function usePagePublish(input: {
   useEffect(() => {
     const field = pendingSheetFix.current;
     if (current.view.kind !== "publish" || field === null) return;
-    const target = document.querySelector<HTMLElement>(`[data-publish-field="${field}"]`);
+    const target = sheetField(field);
     if (!target) return;
     pendingSheetFix.current = null;
     target.focus();
     target.scrollIntoView?.({ block: "nearest" });
-  }, [current.view.kind, experienceOptions]);
+  }, [current.view.kind, experienceOptions, input.fields]);
   const seq = useRef(0);
   // ページを替えるたびに進める。保存を待っているあいだにページを替えたら、前のページの読み込みを始めない
   const pageEpoch = useRef(0);
@@ -325,8 +335,7 @@ export function usePagePublish(input: {
     if (current.view.kind !== "closed" || pendingFix.current === null) return;
     const field = pendingFix.current;
     pendingFix.current = null;
-    // The sheet restores focus while it unmounts. Move to the revealed page
-    // field after that cleanup and after the rail has rendered.
+    // The sheet restores focus while it unmounts. Move to the page field after that cleanup.
     queueMicrotask(() => focusPageField(field));
   }, [current.view.kind]);
 
@@ -420,32 +429,29 @@ export function usePagePublish(input: {
   const fix = (key: string) => {
     const problem = sheet?.problems[Number(key)];
     if (!problem) return;
-    if (problem.fix === "category" || problem.fix === "related") {
-      const target = document.querySelector<HTMLElement>(`[data-publish-field="${problem.fix}"]`);
+    const inSheet: SheetFixField | null =
+      problem.id === "title" || problem.id === "step-title"
+        ? null
+        : problem.fix === "category" || problem.fix === "related" || problem.fix === "cover" || problem.fix === "lead" || problem.fix === "lang"
+          ? problem.fix
+          : null;
+    if (inSheet !== null) {
+      // シートは閉じない。欄がまだ無ければ（カテゴリ・候補の読み込み中・ページの読み込み中）、出てきたときに移る
+      const target = sheetField(inSheet);
       if (target) {
         target.focus();
         target.scrollIntoView?.({ block: "nearest" });
       } else {
-        // Options may still be loading. Focus as soon as the authoritative
-        // category/candidate response makes the field available.
-        pendingSheetFix.current = problem.fix;
+        pendingSheetFix.current = inSheet;
       }
       return;
     }
-    const field: PublishFixField | null =
-      problem.id === "title" || problem.id === "step-title"
-        ? "title"
-        : problem.fix === "body" || problem.fix === "cover" || problem.fix === "lead"
-          ? problem.fix
-          : problem.fix === "lang"
-            ? "lang"
-          : null;
+    const field: PublishFixField | null = problem.id === "title" || problem.id === "step-title" ? "title" : problem.fix === "body" ? "body" : null;
     if (field === null) {
       patch(pageId, { error: PUBLISH_MESSAGES.noField });
       return;
     }
     pendingFix.current = field;
-    events.current.revealField?.(field);
     close();
   };
 
@@ -504,6 +510,7 @@ export function usePagePublish(input: {
       onClose: close,
       action: actionOf(sheet),
       submitDisabled: loading || busy || !sheet || sheet.primary === null,
+      fields: input.fields,
       error: error ?? selectionError ?? loadError,
       experience: selection?.handle === "exp" ? {
         ...experienceOptions,

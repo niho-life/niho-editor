@@ -115,7 +115,7 @@ function defaultServer(options: {
   return { calls, fetcher };
 }
 
-async function render(pageId: string | null = PAGE_1, ai: AttachedAi | null = context(pageId ?? PAGE_1), steps: AttachedAiSteps | null = null, overflow = vi.fn()) {
+async function render(pageId: string | null = PAGE_1, ai: AttachedAi | null = context(pageId ?? PAGE_1), steps: AttachedAiSteps | null = null) {
   if (!container) {
     container = document.createElement("div");
     container.setAttribute("data-docs-app-root", "");
@@ -124,9 +124,8 @@ async function render(pageId: string | null = PAGE_1, ai: AttachedAi | null = co
     root = createRoot(container);
   }
   await act(async () => {
-    root!.render(<div className="es-root"><AiPanel pageId={pageId} context={ai} steps={steps} onHistoryOverflow={overflow} /></div>);
+    root!.render(<div className="es-root"><AiPanel pageId={pageId} context={ai} steps={steps} /></div>);
   });
-  return { overflow };
 }
 
 async function until(check: () => boolean, rounds = 30) {
@@ -518,15 +517,10 @@ describe("AiPanel", () => {
     expect(ai.bridge.prepare).toHaveBeenCalledOnce();
   });
 
-  it("notifies the frame once when history exceeds the visible region", async () => {
-    defaultServer({ list: json(200, { conversations: [summary(CHAT_1)] }) });
-    const overflow = vi.fn();
-    await render(PAGE_1, context(), null, overflow);
-    await until(() => logText().includes(CHAT_1));
-    const log = container!.querySelector<HTMLElement>(".es-ai-thread")!;
-    Object.defineProperty(log, "clientHeight", { configurable: true, value: 100 });
-    Object.defineProperty(log, "scrollHeight", { configurable: true, value: 240 });
-    await act(async () => { resizeCallbacks.forEach((callback) => callback([], {} as ResizeObserver)); });
-    expect(overflow).toHaveBeenCalledTimes(1);
+  it("shows no prompt text while the conversation is empty (the composer is the only cue)", async () => {
+    defaultServer();
+    await render(PAGE_1, context());
+    expect(container!.querySelector(".es-ai-empty")).toBeNull();
+    expect(container!.textContent).not.toContain("何をつくりますか");
   });
 });

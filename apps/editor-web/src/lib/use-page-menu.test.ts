@@ -16,6 +16,23 @@ describe("「…」の項目", () => {
     expect(google!.icon).toBe(markdown!.icon);
   });
 
+  it("ページに応じて足す: フォルダを書き出し（.zip）は書き出しの後、移動…・フォルダの背景…・ページの情報は削除の前", () => {
+    expect(pageMenuItems(null, { folder: true, move: true, pageInfo: true }).map((item) => item.label)).toEqual([
+      "リンクで共有",
+      "書き出し",
+      "Google ドキュメントへ",
+      "フォルダを書き出し",
+      "履歴",
+      "複製",
+      "移動…",
+      "フォルダの背景…",
+      "ページの情報",
+      "削除",
+    ]);
+    expect(pageMenuItems(null, { folder: true }).find((item) => item.id === "export-folder")?.hint).toBe(".zip");
+    expect(pageMenuItems(null, { pageInfo: true }).map((item) => item.id)).toEqual(["share", "export", "export-google-docs-batch", "history", "duplicate", "page-info", "delete"]);
+  });
+
   it("共有中が分かっているときだけ補足を出す", () => {
     const hintOf = (shared: boolean | null) => pageMenuItems(shared).find((item) => item.id === "share")?.hint;
     expect(hintOf(true)).toBe("共有中");

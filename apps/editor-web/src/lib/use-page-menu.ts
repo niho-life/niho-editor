@@ -16,22 +16,57 @@ export type { AttachedPage, PageOwner };
 
 /** 単ページと子孫を同じ durable batch 面から選ぶ。 */
 const GOOGLE_DOCS_BATCH_ITEM = "export-google-docs-batch";
-/** 情報パネルの「フォルダを書き出す」（フォルダ＋その中のページの zip）。「…」には出さない。 */
-const FOLDER_EXPORT_ITEM = "export-folder";
+/** 「フォルダを書き出し（.zip）」（フォルダ＋その中のページの zip）。フォルダのときだけ出す。 */
+export const FOLDER_EXPORT_ITEM = "export-folder";
+/** 「移動…」（フォルダへ入れる・出す、並び。左の一覧のドラッグのキーボード・スマホの代替）。 */
+export const MOVE_ITEM = "move";
+/** 「フォルダの背景…」（登場人物・固有名詞）。フォルダのときだけ出す。 */
+export const FOLDER_FIELDS_ITEM = "folder-fields";
+/** 「ページの情報」（本文の列の右下のポップオーバーを開く）。 */
+export const PAGE_INFO_ITEM = "page-info";
+
+/** 枠が受け持つ項目（ページの操作ではなく、シートやポップオーバーを開く）。 */
+export type PageMenuLocalItem = typeof MOVE_ITEM | typeof FOLDER_FIELDS_ITEM | typeof PAGE_INFO_ITEM;
+
+/** 「…」に足す項目（ページによって出し分ける）。 */
+export type PageMenuExtras = {
+  /** フォルダ（子を持つ上の段のページ）か。「フォルダを書き出し」「フォルダの背景…」を出す。 */
+  folder?: boolean;
+  /** 「移動…」を出すか（入れ先が無く上の段にいて、並びも動かせないページでは出さない）。 */
+  move?: boolean;
+  /** 「ページの情報」を出すか。 */
+  pageInfo?: boolean;
+};
 
 /**
- * 「…」の項目: リンクで共有・書き出し（.md）・Google ドキュメントへ・履歴・複製・削除（docs-ui の shellMoreItems の順）。
+ * 「…」の項目: リンクで共有・書き出し（.md）・Google ドキュメントへ・[フォルダを書き出し（.zip）]・履歴・複製・[移動…]・
+ * [フォルダの背景…]・[ページの情報]・削除。shellMoreItems（Mac も使う）は変えず、ここで足す。
  * shellMoreItems の「書き出し」は .md と Google ドキュメントをまとめた 1 項目だが、項目は入れ子にできないので、
  * ここで 2 つに分ける（「書き出し」は .md、Google ドキュメントは次の項目）。
  * リンクで共有の補足「共有中」は、共有していると分かっているときだけ出す（分からないときは出さない）。
  */
-export function pageMenuItems(shared: boolean | null): ShellMenuItem[] {
-  return shellMoreItems(shared === true).flatMap((item) =>
-    item.id === "export"
-      ? [{ ...item, hint: ".md" }, { id: GOOGLE_DOCS_BATCH_ITEM, label: "Google ドキュメントへ", icon: item.icon }]
-      : [item],
-  );
+export function pageMenuItems(shared: boolean | null, extras: PageMenuExtras = {}): ShellMenuItem[] {
+  return shellMoreItems(shared === true).flatMap((item): ShellMenuItem[] => {
+    if (item.id === "export") {
+      return [
+        { ...item, hint: ".md" },
+        { id: GOOGLE_DOCS_BATCH_ITEM, label: "Google ドキュメントへ", icon: item.icon },
+        ...(extras.folder ? [{ id: FOLDER_EXPORT_ITEM, label: "フォルダを書き出し", icon: item.icon, hint: ".zip" }] : []),
+      ];
+    }
+    if (item.id === "delete") {
+      return [
+        ...(extras.move ? [{ id: MOVE_ITEM, label: "移動…", icon: "side" as const }] : []),
+        ...(extras.folder ? [{ id: FOLDER_FIELDS_ITEM, label: "フォルダの背景…", icon: "people" as const }] : []),
+        ...(extras.pageInfo ? [{ id: PAGE_INFO_ITEM, label: "ページの情報", icon: "info" as const }] : []),
+        item,
+      ];
+    }
+    return [item];
+  });
 }
+
+const LOCAL_ITEMS: ReadonlySet<string> = new Set([MOVE_ITEM, FOLDER_FIELDS_ITEM, PAGE_INFO_ITEM]);
 
 
 /** 「…」から開くシート（どちらも、まだ届いていない変更を保存してから開く）。 */
@@ -74,6 +109,10 @@ export type PageMenuOptions = {
   download?: (url: string) => void;
   /** 保存後、単ページと子孫に共通の durable batch 面へ移動する。 */
   goToGoogleDocsBatch?: (path: string) => void;
+  /** このページで足す項目（フォルダ・移動・ページの情報）。 */
+  extras?: PageMenuExtras;
+  /** 枠が受け持つ項目（移動…・フォルダの背景…・ページの情報）を選んだ（「…」へフォーカスを戻したあとに呼ぶ）。 */
+  onLocal?: (item: PageMenuLocalItem) => void;
 };
 
 export type PageMenu = {
@@ -81,14 +120,6 @@ export type PageMenu = {
   more: ShellHeaderProps["more"];
   note: string | null;
   confirm: { busy: boolean; error: string | null; onConfirm: () => void; onCancel: () => void } | null;
-  /**
-   * 情報パネルの「書き出し（Markdown）」と「ページを削除」。「…」の書き出し・削除と同じ動き（保存してから書き出す・確認してから削除）。
-   * フォーカスは押したボタンに残す（削除の確認を閉じたら、押したボタンへ戻る）。「…」を出さないページでは何もしない。
-   */
-  exportMarkdown: () => void;
-  /** 情報パネルの「フォルダを書き出す」。保存してから zip を始める（保存できなければ止めて理由を出す）。 */
-  exportFolder: () => void;
-  askDelete: () => void;
 };
 
 /** 同じ origin の `<a href download>` を押す（本文は fetch で読まない。ファイル名は応答の Content-Disposition）。 */
@@ -116,7 +147,7 @@ export function failureText(error: unknown, fallback: string): string {
 }
 
 /**
- * ヘッダーの「…」（リンクで共有・書き出し・履歴・複製・削除）。どの操作も、まだ届いていない変更を先に保存し（`flush`）、保存できなければ止めて理由を出す。
+ * ヘッダーの「…」（リンクで共有・書き出し・履歴・複製・移動・ページの情報・削除）。どの操作も、まだ届いていない変更を先に保存し（`flush`）、保存できなければ止めて理由を出す。
  * リンクで共有と履歴は、保存できたらシートを開く（シートの中身は use-page-share.ts・use-page-history.ts）。
  * 操作は「…」を開いたときのページの id に対して行い、終わったときに別のページへ移っていたら、その画面には何も出さない・移動しない。
  * 同じページの操作は 1 つずつ（二重に送らない）。削除は確認のあとだけ。
@@ -158,11 +189,16 @@ export function usePageMenu(options: PageMenuOptions): PageMenu {
     }
   };
 
-  /** 項目を行う。「…」から選んだときは「…」へフォーカスを戻す（情報パネルから押したときは、押したボタンに残す）。 */
-  const perform = (item: string, refocus: boolean) => {
+  /** 項目を行う。「…」へフォーカスを戻してから（削除の確認・シートを閉じたときの戻り先になる）。 */
+  const perform = (item: string) => {
     if (!owner) return;
     const target = owner;
-    if (refocus) latest.current.focusMore();
+    latest.current.focusMore();
+    if (LOCAL_ITEMS.has(item)) {
+      update(target, (current) => ({ ...current, open: false, note: null }));
+      latest.current.onLocal?.(item as PageMenuLocalItem);
+      return;
+    }
     if (item === "delete") {
       update(target, (current) => ({ ...current, open: false, note: null, confirm: { busy: false, error: null } }));
       return;
@@ -231,15 +267,12 @@ export function usePageMenu(options: PageMenuOptions): PageMenu {
     more: owner
       ? {
           open: view?.open ?? false,
-          items: pageMenuItems(options.page?.shared ?? null),
+          items: pageMenuItems(options.page?.shared ?? null, options.extras),
           onToggle: () => update(owner, (current) => ({ ...current, open: !current.open, note: current.open ? current.note : null })),
           onClose: () => update(owner, (current) => ({ ...current, open: false })),
-          onSelect: (item) => perform(item, true),
+          onSelect: (item) => perform(item),
         }
       : undefined,
-    exportMarkdown: () => perform("export", false),
-    exportFolder: () => perform(FOLDER_EXPORT_ITEM, false),
-    askDelete: () => perform("delete", false),
     note: view?.note ?? null,
     confirm:
       owner && view?.confirm

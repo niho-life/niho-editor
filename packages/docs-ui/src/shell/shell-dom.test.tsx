@@ -68,7 +68,7 @@ describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
   it("＋で新しいページのメニュー（空のページ／録音から）が開き、先頭にフォーカス。Esc で閉じて＋へ戻る", () => {
     const onPick = vi.fn();
     const host = mount(<Sidebar onPick={onPick} />);
-    const plus = host.querySelector<HTMLButtonElement>('button[aria-label="新しいページ"]')!;
+    const plus = [...host.querySelectorAll<HTMLButtonElement>("button.es-sb-act")].find((button) => button.textContent?.includes("新しいページ"))!;
     expect(host.querySelector('[role="menu"]')).toBeNull();
     act(() => plus.click());
     const menu = host.querySelector('[role="menu"]')!;
@@ -86,7 +86,7 @@ describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
   it("メニューの項目を選ぶと onPick（recording）が呼ばれる", () => {
     const onPick = vi.fn();
     const host = mount(<Sidebar onPick={onPick} />);
-    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="新しいページ"]')!.click());
+    act(() => [...host.querySelectorAll<HTMLButtonElement>("button.es-sb-act")].find((button) => button.textContent?.includes("新しいページ"))!.click());
     act(() => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent === "録音から")!.click());
     expect(onPick).toHaveBeenCalledWith("recording");
   });

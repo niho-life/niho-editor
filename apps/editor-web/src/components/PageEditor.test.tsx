@@ -7,6 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { NEW_PAGE_DRAFT_KEY, createIndexedDbDraftStorage, type DraftStorage, type PageDraft } from "@/lib/drafts";
 import { MAX_TITLE_CHARS } from "@/lib/page-limits";
+import { SAVE_STATUS_TEXT, type SaveStatus } from "@/lib/save-status";
 import { PageEditor, type EditablePage, type PageEditorEvents } from "./PageEditor";
 import { EditorFrame } from "./EditorFrame";
 
@@ -82,8 +83,18 @@ function bodyEditor(): Editor {
   return (container!.querySelector(".ProseMirror") as HTMLElement & { editor: Editor }).editor;
 }
 
-/** 本文の上の保存状態の表示（見える文字だけ。読み上げはヘッダーの状態の丸が持つ）。 */
-const status = () => container!.querySelector("[data-save-state]");
+/**
+ * エディタの保存状態（root の data-save-state・data-drafts）。本文の上に見える文字は出さない（失敗だけ枠のヘッダーが出す。
+ * 読み上げはヘッダーの状態の丸が持つ）ので、textContent は状態の言葉（SAVE_STATUS_TEXT。Mac と共有の文言）に読み替える。
+ */
+const status = () => {
+  const node = container!.querySelector("[data-save-state]");
+  if (!node) return null;
+  return {
+    textContent: SAVE_STATUS_TEXT[node.getAttribute("data-save-state") as SaveStatus],
+    getAttribute: (name: string) => node.getAttribute(name),
+  };
+};
 const alertBand = () => container!.querySelector('[data-conflict-band] [role="alert"]');
 const button = (label: string) => [...container!.querySelectorAll("button")].find((element) => element.textContent === label)!;
 
@@ -117,10 +128,8 @@ async function renderEditor(page: Partial<EditablePage> & { revision: number }, 
   }
   expect(container.querySelector(".ProseMirror")?.getAttribute("contenteditable")).toBe("true");
   if (options.settings) {
-    const toggle = container!.querySelector<HTMLButtonElement>('button[aria-label="このページの設定と AI"]')!;
-    if (toggle.getAttribute("aria-expanded") === "false") await act(async () => toggle.click());
-    const section = container!.querySelector<HTMLButtonElement>('#es-rail h2 button')!;
-    if (section.getAttribute("aria-expanded") === "false") await act(async () => section.click());
+    // 記事の情報（リード・カバー画像・言語・英語版）は、公開のシートの中だけに出る
+    await act(async () => container!.querySelector<HTMLButtonElement>(".es-dt .es-pubbtn")!.click());
   }
 }
 
@@ -217,7 +226,7 @@ describe("niho-docs-ui on React 19", () => {
 });
 
 describe("PageEditor autosave", () => {
-  it("右サイドバーのリードも日本語変換中は保存せず、確定後の値だけを下書きとサーバーへ保存する", async () => {
+  it("公開のシートのリードも日本語変換中は保存せず、確定後の値だけを下書きとサーバーへ保存する", async () => {
     const { bodies } = acceptingFetch();
     const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
     await renderEditor({ revision: 5 }, { drafts, settings: true });
@@ -262,15 +271,20 @@ describe("PageEditor autosave", () => {
     await renderEditor({ revision: 5, lead: "古い要約" }, { drafts, settings: true });
     const input = container!.querySelector<HTMLTextAreaElement>("[data-page-lead]")!;
     expect(container!.querySelector('#es-main [data-page-lead]')).toBeNull();
-    expect(input.closest('#es-rail')).not.toBeNull();
+    expect(input.closest('[role="dialog"][aria-label="公開"]')).not.toBeNull();
+    // ラベルは「リード」だけ。右に今の文字数と上限（説明文は出さない）
+    expect(input.closest("label")?.querySelector(".es-pf-cnt")?.textContent).toBe("4 / 160");
+    expect(input.closest("section")?.getAttribute("aria-label")).toBe("記事の情報");
+    expect(input.closest("section")?.textContent).not.toMatch(/公開情報|未設定でも公開できます|先に本文へ挿入/);
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "新しい要約");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    const toggle = container!.querySelector<HTMLButtonElement>('button[aria-label="このページの設定と AI"]')!;
-    await act(async () => toggle.click());
-    expect(container!.querySelector<HTMLElement>('[data-editor-shell]')?.dataset.rail).toBe("closed");
-    await act(async () => toggle.click());
+    expect(input.closest("label")?.querySelector(".es-pf-cnt")?.textContent).toBe("5 / 160");
+    // シートを閉じて開き直しても、打った値はエディタが持っている
+    await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === "閉じる")!.click());
+    expect(container!.querySelector("[data-page-lead]")).toBeNull();
+    await act(async () => container!.querySelector<HTMLButtonElement>(".es-dt .es-pubbtn")!.click());
     expect(container!.querySelector<HTMLTextAreaElement>("[data-page-lead]")?.value).toBe("新しい要約");
     await advance(300);
     await settleIdb();
@@ -422,12 +436,12 @@ describe("PageEditor autosave", () => {
     expect(status()?.textContent).toBe("保存済み");
   });
 
-  it("explains the 30 MiB scope and keeps the draft visible after a page-full response", async () => {
+  it("does not explain the 30 MiB scope on the page (only in the ⓘ), and keeps the draft visible after a page-full response", async () => {
     const fetchMock = vi.fn(async () => json(413, { error: "page_full" }));
     vi.stubGlobal("fetch", fetchMock);
     await renderEditor({ revision: 2 });
-    expect(container!.textContent).toContain("題名・リード・本文・本文/カバー画像・アップロード中の画像");
-    expect(container!.textContent).toContain("録音音声は別枠");
+    expect(container!.textContent).not.toContain("MiB");
+    expect(container!.textContent).not.toContain("録音音声は別枠");
     await act(async () => typeTitle("容量を超える変更"));
     await waitForAutosave();
     expect(container!.querySelector('[role="alert"]')?.textContent).toContain("本文やカバーから不要な画像を外すか、アップロード中の画像を中止");

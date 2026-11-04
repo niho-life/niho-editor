@@ -9,7 +9,7 @@ import { SAVE_STATUS_TEXT, type SaveStatus } from "@/lib/save-status";
 import { isMacPlatform } from "@/lib/use-search-shortcut";
 import { COPIED_NOTE_MS } from "./ShareSheet";
 import { EditorFrame, useEditorFrame, type AttachedPage, type FrameInitial } from "./EditorFrame";
-import { COUNT_DELAY_MS } from "./InfoPanel";
+import { COUNT_DELAY_MS } from "./PageInfo";
 import { LANG_NOT_SAVED, PageEditor } from "./PageEditor";
 import { NewPage } from "./FramePages";
 
@@ -27,12 +27,11 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
 }));
 
-// AI の通信・race は AiBox.test.tsx で本物を検証する。枠のテストでは常設・自動折りたたみの境界だけを見る。
+// AI の通信・race は AiBox.test.tsx で本物を検証する。枠のテストでは常設の境界だけを見る。
 vi.mock("./AiBox", () => ({
-  AiPanel: ({ onHistoryOverflow }: { onHistoryOverflow: () => void }) => (
-    <section aria-label="AIと作る">
+  AiPanel: () => (
+    <section aria-label="AIとの会話">
       <h2>AIと作る</h2>
-      <button type="button" aria-label="会話を表示域より長くする" onClick={onHistoryOverflow}>会話を長くする</button>
       <textarea aria-label="AIへのメッセージ" />
     </section>
   ),
@@ -127,10 +126,24 @@ const buttonByText = (text: string, scope: ParentNode = container!) => [...scope
 const rows = () => [...container!.querySelectorAll(".es-sb-list li .es-di-t")].map((node) => node.textContent);
 const shell = () => container!.querySelector<HTMLElement>("[data-editor-shell]")!.dataset;
 const click = (selector: string) => act(async () => container!.querySelector<HTMLElement>(selector)!.click());
-const openInfoRail = () => {
-  const button = container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="このページの設定と AI"]');
-  return button?.getAttribute("aria-expanded") === "false" ? click('.es-dt button[aria-label="このページの設定と AI"]') : Promise.resolve();
+/** 左の一覧の上の行ボタン（「検索」「新しいページ」。名前は見える文字）。 */
+const clickSidebarAct = (label: string) =>
+  act(async () => [...container!.querySelectorAll<HTMLButtonElement>("button.es-sb-act")].find((button) => button.textContent?.includes(label))!.click());
+/** ヘッダーの「⋯」の項目を選ぶ。 */
+const chooseMore = async (label: string) => {
+  await act(async () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="その他"]')!.click());
+  await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="その他"] [role="menuitem"]')].find((item) => item.textContent?.startsWith(label))!.click());
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
 };
+/** ヘッダーの「⋯」の項目の名前（開いて読み、閉じる）。 */
+const moreLabels = async () => {
+  const more = container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="その他"]')!;
+  await act(async () => more.click());
+  const labels = [...container!.querySelectorAll('[role="menu"][aria-label="その他"] [role="menuitem"]')].map((item) => item.textContent);
+  await act(async () => more.click());
+  return labels;
+};
+const sheetNamed = (label: string) => container!.querySelector<HTMLElement>(`[role="dialog"][aria-label="${label}"]`);
 const intersect = () => act(async () => observers.filter((entry) => !entry.disconnected).at(-1)!.callback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
 
 function chunkResponse(pages: PageSummary[], next: string | null): Response {
@@ -159,11 +172,15 @@ describe("EditorFrame", () => {
     expect(container!.querySelector(".ProseMirror")?.textContent).toBe("");
     expect(window.location.pathname).toBe(`/p/${PAGE_ID}`);
     expect(buttonByText("公開")).toBeDefined();
-    await openInfoRail();
-    expect(buttonByText("日本語", container!.querySelector(".es-rail")!)?.getAttribute("aria-pressed")).toBe("true");
-    expect(container!.querySelector(".es-rail")?.textContent).toContain("文字数0");
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher.mock.calls[0]).toMatchObject(["/api/pages", { method: "POST" }]);
+    // 文字数は本文の列の右下。言語は公開のシートの中
+    expect(container!.querySelector(".es-corner .es-count")?.textContent).toBe("0 字");
+    await act(async () => buttonByText("公開")!.click());
+    expect(buttonByText("日本語", dialog()!)?.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => buttonByText("閉じる", dialog()!)!.click());
+    // ページを作るのは 1 回だけ（ほかは公開のシートの英語版の状態を読むだけ）
+    const calls = fetcher.mock.calls as unknown as [string, RequestInit | undefined][];
+    expect(calls.filter(([, init]) => init?.method !== undefined)).toEqual([["/api/pages", expect.objectContaining({ method: "POST" })]]);
+    expect(calls.filter(([, init]) => init?.method === undefined).map(([url]) => url)).toEqual([`/api/pages/${PAGE_ID}/translation`]);
   });
 
   it("loads the next chunk when the end of the list comes near, one request at a time, deduped, until next is null", async () => {
@@ -222,11 +239,11 @@ describe("EditorFrame", () => {
     await act(async () => container!.querySelectorAll<HTMLButtonElement>(".es-sb-list li button")[1]!.click());
     expect(nav.push).toHaveBeenLastCalledWith("/p/00000000-0000-4000-8000-000000000002");
 
-    await click('button[aria-label="新しいページ"]');
+    await clickSidebarAct("新しいページ");
     await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent?.includes("空のページ"))!.click());
     expect(nav.push).toHaveBeenLastCalledWith("/p/new");
     expect(container!.querySelector('[role="menu"]')).toBeNull();
-    await click('button[aria-label="新しいページ"]');
+    await clickSidebarAct("新しいページ");
     await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent?.includes("録音から"))!.click());
     expect(nav.push).toHaveBeenLastCalledWith("/p/new?from=recording");
 
@@ -273,7 +290,7 @@ describe("EditorFrame", () => {
       expect(rows()).toEqual(["日記", "録音"]);
       expect(container!.querySelector('.es-sb-list [aria-hidden="true"]')).not.toBeNull();
 
-      await click('button[aria-label="探す"]');
+      await clickSidebarAct("検索");
       await type("朝");
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock.mock.calls[0]?.[0]).toMatch(/^\/api\/search\?q=/);
@@ -293,7 +310,7 @@ describe("EditorFrame", () => {
       const fetchMock = vi.fn<(url: string) => Promise<Response>>().mockResolvedValueOnce(searchResponse([])).mockResolvedValueOnce(searchResponse([], 503));
       vi.stubGlobal("fetch", fetchMock);
       await mount({ pages: [page("a", "日記")] });
-      await click('button[aria-label="探す"]');
+      await clickSidebarAct("検索");
       await type("ない");
       expect(rows()).toEqual([]);
       expect(note()).toBe("見つかりませんでした");
@@ -601,16 +618,12 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     await tick();
   }
   // 情報パネル（#34 第 3 段）
-  const railButton = () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="このページの設定と AI"]');
+  const railButton = () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="AIと作る"]');
   const mountedRail = () => container!.querySelector<HTMLElement>("#es-rail");
   const rail = () => {
     const presence = container!.querySelector<HTMLElement>(".es-rail-presence");
     return presence && !presence.hidden ? presence.querySelector<HTMLElement>("#es-rail") : null;
   };
-  const inRail = (label: string) => [...(rail()?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent?.trim() === label);
-  const pressedLang = () => [...(rail()?.querySelectorAll('button[aria-pressed="true"]') ?? [])].map((button) => button.textContent);
-  const railAlert = () => rail()?.querySelector('[role="alert"]')?.textContent;
-  const infoRows = () => [...(rail()?.querySelectorAll(".es-kv > div") ?? [])].map((row) => [row.querySelector("dt")?.textContent, row.querySelector("dd")?.textContent]);
   /** 端末の日付（YYYY-MM-DD。情報パネルの作成・更新の期待値）。 */
   const localDay = (iso: string) => {
     const date = new Date(iso);
@@ -637,13 +650,21 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     // 公開ボタンは枠（#43）が出す。公開のシートが読めていない（この suite では読み込みを無効にしている）間は、丸は「自分だけ」
     expect(container!.querySelector(".es-pubbtn")).not.toBeNull();
 
+    // 保存済み・保存中は見える文字を出さない（読み上げは丸の live region）。失敗のときだけヘッダーに琥珀の小さな文字
+    const saveNote = () => container!.querySelector(".es-dt [data-save-note]");
+    expect(saveNote()).toBeNull();
     await rerender(<FakePage page={{ ...a, status: "saving" }} />);
     expect(tip()).toBe("自分だけ · 保存中");
+    expect(saveNote()).toBeNull();
     await rerender(<FakePage page={{ ...a, status: "offline" }} />);
     expect(tip()).toBe("自分だけ · オフライン・この端末に保持");
+    expect(saveNote()?.textContent).toBe("オフライン・この端末に保持");
     for (const status of ["error", "conflict", "signedOut"] as SaveStatus[]) {
       await rerender(<FakePage page={{ ...a, status }} />);
       expect(tip()).toBe(`自分だけ · ${SAVE_STATUS_TEXT[status]}`);
+      expect(saveNote()?.textContent).toBe(SAVE_STATUS_TEXT[status]);
+      // 新しい live region・role は足さない
+      expect(saveNote()?.getAttribute("role")).toBeNull();
       // 公開していないので丸は出さない（出すのは公開中・限定公開・更新ありだけ）
       expect(dot()).toBeNull();
     }
@@ -661,8 +682,9 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     await act(async () => moreButton()!.click());
     expect(moreButton()?.getAttribute("aria-expanded")).toBe("true");
     // 書き出しは .md と Google ドキュメントの 2 項目。共有しているか分からないときは「共有中」を出さない
-    expect(menuItems().map((item) => item.textContent)).toEqual(["リンクで共有", "書き出し.md", "Google ドキュメントへ", "履歴", "複製", "削除"]);
-    const [shareItem, exportItem, , , , deleteItem] = menuItems();
+    // 移動できない（入れ先も並べ替える相手も無い）ページには「移動…」を出さない。「ページの情報」は削除の前
+    expect(menuItems().map((item) => item.textContent)).toEqual(["リンクで共有", "書き出し.md", "Google ドキュメントへ", "履歴", "複製", "ページの情報", "削除"]);
+    const [shareItem, exportItem, , , , , deleteItem] = menuItems();
     expect(document.activeElement).toBe(shareItem);
     await press(document.activeElement!, "ArrowDown");
     expect(document.activeElement).toBe(exportItem);
@@ -858,7 +880,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       vi.fn(async (url: string) => (url.startsWith("/api/search") ? json(200, { results: [hit(A, "合成の題名"), hit(D, "別のページ")] }) : new Response(null, { status: 204 }))),
     );
     await mount({ pages: [page(A, "合成の題名"), page(D, "別のページ")] }, <FakePage page={fakePage(A)} />);
-    await act(async () => container!.querySelector<HTMLButtonElement>('button[aria-label="探す"]')!.click());
+    await clickSidebarAct("検索");
     const input = container!.querySelector<HTMLInputElement>('input[type="search"]')!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "朝");
@@ -887,7 +909,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     await mount({ pages: [page(A, "合成の題名"), page(D, "別のページ")] }, <FakePage page={fakePage(A)} />);
-    await act(async () => container!.querySelector<HTMLButtonElement>('button[aria-label="探す"]')!.click());
+    await clickSidebarAct("検索");
     const input = container!.querySelector<HTMLInputElement>('input[type="search"]')!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "朝");
@@ -967,7 +989,8 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     expect(nav.push).not.toHaveBeenCalled();
     // 移った先の「…」はふつうに使える
     await act(async () => moreButton()!.click());
-    expect(menuItems()).toHaveLength(6);
+    // 2 ページあるので「移動…」も出る（共有・書き出し 2・履歴・複製・移動…・ページの情報・削除）
+    expect(menuItems()).toHaveLength(8);
   });
 
   describe("リンクで共有 (#34 第 2 段)", () => {
@@ -1406,29 +1429,22 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       useEffect(() => attachPage(attached), [attachPage, attached]);
       return <p>合成の本文</p>;
     }
-    const headings = () => [...rail()!.querySelectorAll("h2, h3")].map((heading) => `${heading.tagName}:${heading.textContent?.replace("▾", "")}`);
+    const countButton = () => container!.querySelector<HTMLButtonElement>(".es-corner button.es-count");
+    const infoPop = () => container!.querySelector<HTMLElement>(".es-count-pop");
+    const popRows = () => [...(infoPop()?.querySelectorAll(".es-kv > div") ?? [])].map((row) => [row.querySelector("dt")?.textContent, row.querySelector("dd")?.textContent]);
 
-    it("opens and closes from the header (aria-expanded, aria-controls, a named rail, h2 then h3); the rail has no publish items (the 公開 button is the frame header's)", async () => {
+    it("the rail is AIと作る only (no page settings, no publish items); opens and closes from the header and keeps the AI draft", async () => {
       await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A)} />);
       const button = railButton()!;
       expect(button.getAttribute("aria-expanded")).toBe("true");
       expect(button.getAttribute("aria-controls")).toBe("es-rail");
+      expect(button.getAttribute("title")).toBe("AIと作る");
       expect(rail()?.tagName).toBe("ASIDE");
-      expect(rail()?.getAttribute("aria-label")).toBe("このページの設定と AI");
+      expect(rail()?.getAttribute("aria-label")).toBe("AIと作る");
       expect(shell().rail).toBe("open");
-      expect(headings()).toEqual(["H2:ページ設定", "H3:言語", "H3:著者", "H3:ページ", "H3:書き出し", "H2:AIと作る"]);
-      // 公開の項目（発信先・カテゴリ・関連する体験）・Google ドキュメントはレールに出さない。公開ボタンは枠のヘッダーのもの（#39）
-      expect(rail()!.textContent).not.toMatch(/発信先|カテゴリ|関連する体験|公開|Google/);
+      expect([...rail()!.querySelectorAll("h2, h3")].map((heading) => heading.textContent)).toEqual(["AIと作る"]);
+      expect(rail()!.textContent).not.toMatch(/ページ設定|言語|著者|書き出し|削除|発信先|公開|Google/);
       expect(container!.querySelector(".es-pubbtn")).not.toBeNull();
-      expect([...rail()!.querySelectorAll("button")].map((item) => item.textContent?.replace("▾", "").trim())).toEqual(["ページ設定", "日本語", "English", "Markdown", "ページを削除", "会話を長くする"]);
-
-      // 節を閉じると、見出しに「自分だけ」
-      const section = rail()!.querySelector<HTMLButtonElement>("h2 button")!;
-      await act(async () => section.click());
-      expect(section.getAttribute("aria-expanded")).toBe("false");
-      expect(section.textContent).toContain("自分だけ");
-      await act(async () => section.click());
-      expect(section.textContent).not.toContain("自分だけ");
 
       const draft = rail()!.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')!;
       draft.value = "閉じても残す draft";
@@ -1442,38 +1458,12 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       expect(rail()!.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')?.value).toBe("閉じても残す draft");
     });
 
-    it("会話が表示域を越えると設定だけを一度閉じ、手動で開いた後は自動で閉じない", async () => {
-      await mount({ pages: [page(A, "合成の題名"), page(B, "別のページ")] }, <FakePage page={fakePage(A)} />);
-      const settings = () => rail()!.querySelector<HTMLButtonElement>("h2 button")!;
-      const overflow = () => rail()!.querySelector<HTMLButtonElement>('button[aria-label="会話を表示域より長くする"]')!;
-      expect(settings().getAttribute("aria-expanded")).toBe("true");
-      await act(async () => overflow().click());
-      expect(settings().getAttribute("aria-expanded")).toBe("false");
-      await act(async () => overflow().click());
-      expect(settings().getAttribute("aria-expanded")).toBe("false");
-      await act(async () => settings().click());
-      expect(settings().getAttribute("aria-expanded")).toBe("true");
-      await act(async () => overflow().click());
-      expect(settings().getAttribute("aria-expanded")).toBe("true");
-
-      // 手動優先はページ単位。別ページは初期状態から始まり、戻ると A の手動選択が残る。
-      nav.pathname = `/p/${B}`;
-      await rerender(<FakePage page={fakePage(B)} />);
-      expect(settings().getAttribute("aria-expanded")).toBe("true");
-      await act(async () => overflow().click());
-      expect(settings().getAttribute("aria-expanded")).toBe("false");
-      nav.pathname = `/p/${A}`;
-      await rerender(<FakePage page={fakePage(A)} />);
-      expect(settings().getAttribute("aria-expanded")).toBe("true");
-    });
-
     it("desktop: stays open when another page opens (as the mock v6), is not there on the settings, and is back on a page", async () => {
       await mount({ pages: [page(A, "合成の題名"), page(B, "別のページ")] }, <FakePage page={fakePage(A)} />);
       await openRail();
       nav.pathname = `/p/${B}`;
       await rerender(<FakePage page={fakePage(B, { lang: "en" })} />);
       expect(rail()).not.toBeNull();
-      expect(pressedLang()).toEqual(["English"]);
       expect(railButton()?.getAttribute("aria-expanded")).toBe("true");
 
       nav.pathname = "/settings";
@@ -1481,11 +1471,11 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       expect(railButton()).toBeNull();
       expect(rail()).toBeNull();
       expect(shell().rail).toBe("closed");
+      expect(countButton()).toBeNull();
 
       nav.pathname = `/p/${A}`;
       await rerender(<FakePage page={fakePage(A)} />);
       expect(rail()).not.toBeNull();
-      expect(pressedLang()).toEqual(["日本語"]);
     });
 
     it("narrow: the rail is the whole screen under the header, the same button closes it, and opening another page closes it", async () => {
@@ -1507,11 +1497,12 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       expect(railButton()?.getAttribute("aria-expanded")).toBe("false");
     });
 
-    it("has no button on a page not created yet, the recording start, the settings, or a page with no editor; while the drafts are read it shows but does nothing", async () => {
+    it("has no rail button or count on a page not created yet, the recording start, the settings, or a page with no editor; while the drafts are read the count waits", async () => {
       nav.pathname = "/p/new";
       const uncreated = fakePage(null);
       await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={uncreated} />);
       expect(railButton()).toBeNull();
+      expect(countButton()).toBeNull();
       nav.search = "from=recording";
       await rerender(null);
       expect(railButton()).toBeNull();
@@ -1523,25 +1514,21 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       nav.pathname = `/p/${A}`;
       await rerender(null);
       expect(railButton()).toBeNull();
+      expect(countButton()).toBeNull();
 
-      // 端末の下書きを読んでいる間（id はまだ無い）: レールは出せるが、押しても何もしない。文字数はまだ数えない
-      const loading = fakePage(null, { lang: "en" });
-      await rerender(<FakePage page={loading} />);
-      await openRail();
-      expect(rail()).not.toBeNull();
-      expect(pressedLang()).toEqual(["日本語"]);
-      await act(async () => inRail("English")!.click());
-      await act(async () => inRail("ページを削除")!.click());
-      expect(loading.setLang).not.toHaveBeenCalled();
-      expect(dialog()).toBeNull();
-      expect(infoRows().map(([label]) => label)).toEqual(["作成", "更新"]);
+      // 端末の下書きを読んでいる間（id はまだ無い）: 右下は出すが、まだ数えない
+      await rerender(<FakePage page={fakePage(null, { lang: "en" })} />);
+      expect(railButton()).not.toBeNull();
+      expect(countButton()?.textContent).toBe("… 字");
+      await act(async () => countButton()!.click());
+      expect(popRows().map(([label]) => label)).toEqual(["作成", "更新"]);
       // 読み終えた
       await rerender(<FakePage page={fakePage(A, { lang: "en" })} />);
-      expect(pressedLang()).toEqual(["English"]);
-      expect(infoRows().map(([label]) => label)).toEqual(["作成", "更新", "文字数"]);
+      expect(countButton()?.textContent).toBe("0 words");
+      expect(popRows().map(([label]) => label)).toEqual(["作成", "更新", "文字数"]);
     });
 
-    it("shows the signed-in name without a title, the dates, the recording length and the count (characters in ja, words in en) that follows the body", async () => {
+    it("the corner shows the count (字 in ja, words in en) that follows the body; it opens the page info (dates, recording, count), from the … too", async () => {
       const listeners = new Set<() => void>();
       let body = "合成の 本文です";
       const text = {
@@ -1556,70 +1543,60 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       const summary: PageSummary = { ...page(A, "合成の録音"), kind: "rec", createdAt: "2026-10-28T09:00:00.000Z", updatedAt: "2026-10-30T18:00:00.000Z" };
       const a = fakePage(A, { text });
       await mount({ pages: [summary] }, <OpenedFake summary={summary} page={a} recordingSec={878} />);
-      await openRail();
-      const me = rail()!.querySelector(".es-me")!;
-      expect(me.querySelector("div")?.textContent).toBe("開発ユーザー");
-      expect(me.querySelector("small")).toBeNull();
-      expect(me.querySelector(".es-av")?.textContent).toBe("開");
-      expect(infoRows()).toEqual([
+      expect(countButton()?.textContent).toBe("7 字");
+      expect(countButton()?.getAttribute("aria-expanded")).toBe("false");
+      await act(async () => countButton()!.click());
+      expect(infoPop()?.getAttribute("role")).toBe("dialog");
+      expect(popRows()).toEqual([
         ["作成", localDay(summary.createdAt)],
         ["更新", localDay(summary.updatedAt)],
         ["録音", "14:38"],
         ["文字数", "7"],
       ]);
+      // 説明は置かない（ⓘ のシートだけ）
+      expect(infoPop()?.textContent).not.toContain("MiB");
 
       // 本文が変わったら、少し待ってから数え直す（打つたびには数えない）
       body = "合成の本文です。続き";
       await act(async () => listeners.forEach((listener) => listener()));
-      expect(infoRows().at(-1)).toEqual(["文字数", "7"]);
+      expect(countButton()?.textContent).toBe("7 字");
       await act(async () => new Promise((resolve) => setTimeout(resolve, COUNT_DELAY_MS + 50)));
-      expect(infoRows().at(-1)).toEqual(["文字数", "10"]);
+      expect(countButton()?.textContent).toBe("10 字");
+      expect(popRows().at(-1)).toEqual(["文字数", "10"]);
 
       // 英語のページは語数
       body = "A synthetic body";
       await act(async () => listeners.forEach((listener) => listener()));
       await act(async () => new Promise((resolve) => setTimeout(resolve, COUNT_DELAY_MS + 50)));
       await rerender(<OpenedFake summary={summary} page={{ ...a, lang: "en" }} recordingSec={878} />);
-      expect(infoRows().at(-1)).toEqual(["文字数", "3 words"]);
+      expect(countButton()?.textContent).toBe("3 words");
 
-      // パネルを閉じたら、本文の知らせを受けない
-      await act(async () => railButton()!.click());
+      // Esc で閉じてボタンへ戻る
+      await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      expect(infoPop()).toBeNull();
+      expect(document.activeElement).toBe(countButton());
+
+      // 「…」の「ページの情報」でも開き、最初の要素（ⓘ）へフォーカス
+      await choose("ページの情報");
+      expect(infoPop()).not.toBeNull();
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("容量について");
+
+      // ⓘ は容量の説明のシート（閉じたら右下のボタンへ戻る）
+      await act(async () => (document.activeElement as HTMLButtonElement).click());
+      expect(dialog()?.getAttribute("aria-label")).toBe("容量について");
+      expect(dialog()?.textContent).toContain("1 ページ 30 MiB まで（題名・リード・本文・本文とカバーの画像・アップロード中の画像）。");
+      expect(dialog()?.textContent).toContain("録音の音声は別枠で、ページの容量には数えません。");
+      await act(async () => dialogButton("閉じる").click());
+      expect(dialog()).toBeNull();
+      expect(document.activeElement).toBe(countButton());
+
+      // ページを離れたら、本文の知らせを受けない
+      nav.pathname = "/settings";
+      await rerender(null);
       expect(listeners.size).toBe(0);
     });
 
-    it("shows the language note the page gives, under 言語", async () => {
-      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A, { langNote: LANG_NOT_SAVED })} />);
-      await openRail();
-      expect(railAlert()).toBe("言語を保存できませんでした");
-      expect(rail()!.querySelector('[role="alert"]')?.closest("section")?.querySelector("h3")?.textContent).toBe("言語");
-    });
-
-    it("Markdown saves first, then clicks the same export.md link as the … (the focus stays on the button); unsaved edits stop it with a reason", async () => {
-      const calls: string[] = [];
-      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
-        calls.push(`click ${this.getAttribute("href")} ${this.getAttribute("download")}`);
-      });
-      const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", fetchMock);
-      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A, { flush: vi.fn(async () => (calls.push("flush"), true)) })} />);
-      await openRail();
-      const markdown = inRail("Markdown")!;
-      markdown.focus();
-      await act(async () => markdown.click());
-      await tick();
-      expect(calls).toEqual(["flush", `click /api/pages/${A}/export.md `]);
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(document.activeElement).toBe(markdown);
-
-      calls.length = 0;
-      await rerender(<FakePage page={fakePage(A, { status: "offline", flush: vi.fn(async () => (calls.push("flush"), false)) })} />);
-      await act(async () => inRail("Markdown")!.click());
-      await tick();
-      expect(calls).toEqual(["flush"]);
-      expect(headerAlert()).toBe("書き出しの前に変更を保存できませんでした");
-    });
-
-    it("ページを削除 opens the same confirmation as the …; やめる gives the focus back to it; 削除する saves, DELETEs and leaves the page", async () => {
+    it("the … has 書き出し and 削除 (the rail no longer does); 削除 asks first and leaves the page", async () => {
       const calls: string[] = [];
       vi.stubGlobal(
         "fetch",
@@ -1629,23 +1606,15 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
         }),
       );
       await mount({ pages: [page(A, "合成の題名"), page(D, "別のページ")] }, <FakePage page={fakePage(A, { flush: vi.fn(async () => (calls.push("flush"), true)) })} />);
-      await openRail();
-      const remove = inRail("ページを削除")!;
-      expect(remove.className).toContain("es-danger");
-      remove.focus();
-      await act(async () => remove.click());
+      await choose("削除");
       expect(dialog()?.getAttribute("aria-label")).toBe("ページの削除");
-      expect(document.activeElement).toBe(dialogButton("やめる"));
-      expect(calls).toEqual([]);
       await act(async () => dialogButton("やめる").click());
       expect(dialog()).toBeNull();
-      expect(document.activeElement).toBe(remove);
-
-      await act(async () => remove.click());
+      expect(document.activeElement).toBe(moreButton());
+      await choose("削除");
       await act(async () => dialogButton("削除する").click());
       await tick();
       expect(calls).toEqual(["flush", `DELETE /api/pages/${A}`]);
-      expect(dialog()).toBeNull();
       expect(rows()).toEqual(["別のページ"]);
       expect(nav.push).toHaveBeenCalledWith("/");
     });
@@ -1679,8 +1648,10 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       expect(tip()).toBe("自分だけ · 保存済み");
       const saying = [...container!.querySelectorAll('[aria-live], [role="status"], [role="alert"], [role="log"]')].filter((node) => node.textContent?.includes("保存済み"));
       expect(saying).toEqual([container!.querySelector(".es-dt .es-st-wrap")]);
-      // 本文の上の表示は残す（見える文字だけ）
-      expect(container!.querySelector("[data-save-state]")?.textContent).toBe("保存済み");
+      // 保存済みは見える文字にしない（本文の上の表示は無く、状態は属性だけ。失敗だけヘッダーに出す）
+      expect(container!.querySelector("[data-save-state]")?.getAttribute("data-save-state")).toBe("saved");
+      expect(container!.querySelector("#es-main")?.textContent).not.toContain("保存済み");
+      expect(container!.querySelector(".es-dt [data-save-note]")).toBeNull();
 
       await typeTitle("合成の題名 2");
       expect(tip()).toBe("自分だけ · 保存中");
@@ -1833,8 +1804,22 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       }
     });
 
-    describe("the language in the info panel (#34 第 3 段)", () => {
+    describe("the language in the publish sheet (#34 第 3 段 → 公開のシートの記事の情報)", () => {
       type Call = { method: string; url: string; body: Record<string, unknown> | null };
+      // 言語は公開のシートの中（記事の情報）。シートを開いて、その中の言語の欄を見る
+      const sheetLang = () => container!.querySelector<HTMLElement>('[role="dialog"][aria-label="公開"] [data-page-lang]');
+      const openRail = async () => {
+        if (!sheetLang()) await act(async () => container!.querySelector<HTMLButtonElement>(".es-dt .es-pubbtn")!.click());
+        await tick();
+      };
+      const closeSheet = async () => {
+        const close = [...(container!.querySelector('[role="dialog"][aria-label="公開"]')?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent === "閉じる");
+        if (close) await act(async () => close.click());
+      };
+      const inRail = (label: string) => [...(sheetLang()?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent?.trim() === label);
+      const pressedLang = () => [...(sheetLang()?.querySelectorAll('button[aria-pressed="true"]') ?? [])].map((button) => button.textContent);
+      const railAlert = () => sheetLang()?.querySelector('[role="alert"]')?.textContent;
+      const patches = <T extends { method: string }>(calls: T[]) => calls.filter((call) => call.method === "PATCH");
       /** 保存（PATCH）を受ける合成のサーバー。`answer` で応答を差し替える（既定は revision を 1 つ進める）。 */
       function savingServer(calls: Call[], answer?: (body: Record<string, unknown>) => Response | undefined | Promise<Response | undefined>) {
         let serverRevision = 1;
@@ -1905,7 +1890,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
         expect(pressedLang()).toEqual(["English"]);
         expect(tip()).toBe("自分だけ · 保存中");
         // 1 秒の自動保存を待たずに送る
-        expect(calls).toEqual([{ method: "PATCH", url: `/api/pages/${A}`, body: { lang: "en", baseRevision: 1 } }]);
+        expect(patches(calls)).toEqual([{ method: "PATCH", url: `/api/pages/${A}`, body: { lang: "en", baseRevision: 1 } }]);
         await act(async () => answered.resolve());
         await tick();
         expect(tip()).toBe("自分だけ · 保存済み");
@@ -1918,9 +1903,10 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
         await tick();
         expect(calls.filter((call) => call.method === "PATCH").at(-1)).toEqual({ method: "PATCH", url: `/api/pages/${A}`, body: { title: "合成の題名 2", baseRevision: 2 } });
 
-        // 一覧の行の言語も替わった（エディタが下書きを読み直している間は、一覧の行の言語を出す）
+        // 一覧の行の言語も替わった（エディタが下書きを読み直している間は、一覧の行の言語で右下を数える）
+        await closeSheet();
         await rerender(<FakePage page={fakePage(null)} />);
-        expect(pressedLang()).toEqual(["English"]);
+        expect(container!.querySelector(".es-corner .es-count")?.textContent).toBe("… words");
       });
 
       it("a failed save puts the language the server has back with a short note, and sends that one too (the server ends as the screen says)", async () => {
@@ -1932,7 +1918,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
         await openRail();
         await act(async () => inRail("English")!.click());
         await tick();
-        expect(calls.map((call) => call.body)).toEqual([{ lang: "en", baseRevision: 1 }]);
+        expect(patches(calls).map((call) => call.body)).toEqual([{ lang: "en", baseRevision: 1 }]);
         expect(pressedLang()).toEqual(["日本語"]);
         expect(railAlert()).toBe(LANG_NOT_SAVED);
         expect(tip()).toBe("自分だけ · 保存に失敗しました。もう一度試します");
@@ -1941,7 +1927,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
         fail = false;
         await saveNow();
         await tick();
-        expect(calls.at(-1)?.body).toEqual({ lang: "ja", baseRevision: 1 });
+        expect(patches(calls).at(-1)?.body).toEqual({ lang: "ja", baseRevision: 1 });
         expect(tip()).toBe("自分だけ · 保存済み");
         expect(railAlert()).toBe(LANG_NOT_SAVED);
         // 次に変えたら一言は消える
@@ -1973,12 +1959,12 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
         // 帯が出ている間に変えても、保存は止まったまま（戻して一言）
         await act(async () => inRail("English")!.click());
         await tick();
-        expect(calls).toHaveLength(1);
+        expect(patches(calls)).toHaveLength(1);
         expect(pressedLang()).toEqual(["日本語"]);
 
         await act(async () => [...container!.querySelectorAll<HTMLButtonElement>("[data-conflict-band] button")].find((item) => item.textContent === "この内容で上書き")!.click());
         await tick();
-        expect(calls.at(-1)?.body).toMatchObject({ title: "合成の題名", lang: "ja", baseRevision: 3, overwrite: true });
+        expect(patches(calls).at(-1)?.body).toMatchObject({ title: "合成の題名", lang: "ja", baseRevision: 3, overwrite: true });
         expect(container!.querySelector("[data-conflict-band]")).toBeNull();
         expect(tip()).toBe("自分だけ · 保存済み");
         // 上書きのあとは普通に変えられる
@@ -1997,11 +1983,14 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
         await act(async () => inRail("English")!.click());
         await tick();
         expect(calls.filter((call) => call.method === "PATCH").at(-1)).toEqual({ method: "PATCH", url: `/api/pages/${A}`, body: { lang: "en", baseRevision: 4 } });
+        await closeSheet();
         await restoreFirstVersion();
         // 戻すのは言語を保存したあとの revision の上に
         expect(calls.find((call) => call.url.endsWith("/restore"))?.body).toEqual({ baseRevision: 5 });
         expect(body()).toBe("戻した本文");
+        await openRail();
         expect(pressedLang()).toEqual(["English"]);
+        await closeSheet();
         // 合成のサーバーは戻したあとの revision を 5 で返す。言語は送り直さない
         await typeTitle("合成の題名 2");
         await saveNow();
@@ -2036,8 +2025,8 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
         await openRail();
         expect(pressedLang()).toEqual(["English"]);
         await saveNow();
-        await untilAsync(async () => calls.length > 0);
-        expect(calls[0]?.body).toMatchObject({ title: "合成の題名", lang: "en", baseRevision: 1 });
+        await untilAsync(async () => patches(calls).length > 0);
+        expect(patches(calls)[0]?.body).toMatchObject({ title: "合成の題名", lang: "en", baseRevision: 1 });
       });
     });
   });
@@ -2101,7 +2090,7 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
     expect(tree()).toHaveLength(3);
   });
 
-  it("情報パネルの「フォルダ」で入れる・出す（本文・revision は送らない）", async () => {
+  it("「⋯」の「移動…」の「フォルダ」で入れる・出す（本文・revision は送らない）", async () => {
     const calls: { url: string; method?: string; body?: unknown }[] = [];
     vi.stubGlobal(
       "fetch",
@@ -2112,8 +2101,9 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
     );
     nav.pathname = `/p/${CHILD}`;
     await mount({ pages: [page(PARENT, "鎌倉の記事"), page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
-    await openInfoRail();
-    const select = container!.querySelector<HTMLSelectElement>('.es-rail select[aria-label="フォルダ"]')!;
+    await chooseMore("移動…");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("フォルダ");
+    const select = sheetNamed("移動")!.querySelector<HTMLSelectElement>('select[aria-label="フォルダ"]')!;
     expect([...select.options].map((option) => option.textContent)).toEqual(["フォルダに入れない", "鎌倉の記事"]);
     expect(select.value).toBe("");
 
@@ -2129,8 +2119,8 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
     ]);
 
     await act(async () => {
-      container!.querySelector<HTMLSelectElement>('.es-rail select[aria-label="フォルダ"]')!.value = "";
-      container!.querySelector<HTMLSelectElement>('.es-rail select[aria-label="フォルダ"]')!.dispatchEvent(new Event("change", { bubbles: true }));
+      sheetNamed("移動")!.querySelector<HTMLSelectElement>('select[aria-label="フォルダ"]')!.value = "";
+      sheetNamed("移動")!.querySelector<HTMLSelectElement>('select[aria-label="フォルダ"]')!.dispatchEvent(new Event("change", { bubbles: true }));
     });
     expect(calls.at(-1)).toEqual({ url: `/api/pages/${CHILD}/parent`, method: "PATCH", body: { parent: null } });
     expect(tree()).toEqual([
@@ -2143,13 +2133,13 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "too_deep" }), { status: 409, headers: { "content-type": "application/json" } })));
     nav.pathname = `/p/${CHILD}`;
     await mount({ pages: [page(PARENT, "鎌倉の記事"), page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
-    await openInfoRail();
-    const select = () => container!.querySelector<HTMLSelectElement>('.es-rail select[aria-label="フォルダ"]')!;
+    await chooseMore("移動…");
+    const select = () => sheetNamed("移動")!.querySelector<HTMLSelectElement>('select[aria-label="フォルダ"]')!;
     await act(async () => {
       select().value = PARENT;
       select().dispatchEvent(new Event("change", { bubbles: true }));
     });
-    expect(container!.querySelector('.es-rail [role="alert"]')?.textContent).toBe("このフォルダには入れられませんでした");
+    expect(sheetNamed("移動")!.querySelector('[role="alert"]')?.textContent).toBe("このフォルダには入れられませんでした");
     expect(select().value).toBe("");
     expect(tree()).toEqual([
       ["鎌倉の記事", 0],
@@ -2157,14 +2147,23 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
     ]);
   });
 
-  it("「フォルダ」の節は、入れ先が無く上の段にいるページには出さない", async () => {
+  it("「移動…」は、入れ先が無く上の段にいて、並びも動かせないページには出さない", async () => {
     nav.pathname = `/p/${CHILD}`;
     await mount({ pages: [page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
-    await openInfoRail();
-    expect(container!.querySelector('.es-rail select[aria-label="フォルダ"]')).toBeNull();
+    expect(await moreLabels()).not.toContain("移動…");
   });
 
-  it("書式の帯はヘッダーに常設で、録音は枠が受けて録音から始める画面へ移る", async () => {
+  it("「移動…」は Esc で閉じて「⋯」へフォーカスを戻す", async () => {
+    nav.pathname = `/p/${CHILD}`;
+    await mount({ pages: [page(PARENT, "鎌倉の記事"), page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
+    await chooseMore("移動…");
+    expect(sheetNamed("移動")).not.toBeNull();
+    await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(sheetNamed("移動")).toBeNull();
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("その他");
+  });
+
+  it("書式の帯はヘッダーに常設で（＋・画像・録音だけ。書式は選んだ文字の上）、録音は枠が受けて録音から始める画面へ移る", async () => {
     nav.pathname = `/p/${PAGE_ID}`;
     const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })));
@@ -2175,19 +2174,7 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
     await until(() => container!.querySelector('.es-dt [role="toolbar"]') !== null);
     const bar = container!.querySelector<HTMLElement>('.es-dt [role="toolbar"]')!;
     expect(bar.getAttribute("aria-label")).toBe("書式とブロック");
-    expect([...bar.querySelectorAll("button")].map((button) => button.getAttribute("aria-label"))).toEqual([
-      "ブロックを足す",
-      "テキスト、行の種類",
-      "太字",
-      "斜体",
-      "取り消し線",
-      "インラインコード",
-      "リンク",
-      "見出し",
-      "箇条書き",
-      "画像",
-      "録音",
-    ]);
+    expect([...bar.querySelectorAll("button")].map((button) => button.getAttribute("aria-label"))).toEqual(["ブロックを足す", "画像", "録音"]);
     await act(async () => bar.querySelector<HTMLButtonElement>('button[aria-label="録音"]')!.click());
     expect(nav.push).toHaveBeenLastCalledWith("/p/new?from=recording");
   });
@@ -2236,7 +2223,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     const group = container!.querySelector(".es-sb-group");
     return group ? [...group.querySelectorAll(".es-di-t")].map((node) => node.textContent) : null;
   };
-  const railButton = (label: string) => [...container!.querySelectorAll<HTMLButtonElement>(".es-rail button")].find((button) => (button.getAttribute("aria-label") ?? button.textContent)?.includes(label));
+  const railButton = (label: string) => [...container!.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => (button.getAttribute("aria-label") ?? button.textContent)?.includes(label));
 
   it("「最近」を隠し、ページの木と最後に開いたページの記録を残す", async () => {
     const calls: string[] = [];
@@ -2254,7 +2241,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     expect(recentRows()).toBeNull();
   });
 
-  it("情報パネルの「並び」で 1 つ動かし、木の順が変わる", async () => {
+  it("「⋯」の「移動…」の「並び」で 1 つ動かし、木の順が変わる", async () => {
     const calls: { url: string; body: unknown }[] = [];
     vi.stubGlobal(
       "fetch",
@@ -2267,7 +2254,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     // 上の段は渡した順（更新の新しい順）。別のページが下
     await mount({ pages: [page(FOLDER, "鎌倉の記事"), page(OTHER, "別のページ")] }, <FakePage page={fakePage(OTHER)} />);
     expect(rows()).toEqual(["鎌倉の記事", "別のページ"]);
-    await openInfoRail();
+    await chooseMore("移動…");
 
     const up = railButton("1 つ上へ")!;
     expect(up.getAttribute("aria-disabled")).toBeNull();
@@ -2299,7 +2286,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     nav.pathname = `/p/${A}`;
     await mount({ pages: [{ ...page(A, "A の記事"), sortOrder: 1 }, { ...page(C, "C の記事"), sortOrder: 3 }] }, <FakePage page={fakePage(A)} />);
     expect(rows()).toEqual(["A の記事", "C の記事"]);
-    await openInfoRail();
+    await chooseMore("移動…");
 
     await act(async () => railButton("1 つ下へ")!.click());
     await act(async () => {
@@ -2309,7 +2296,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     expect(rows()).toEqual(["A の記事", "C の記事"]);
   });
 
-  it("「このフォルダの背景」はフォルダのページでだけ出し、登場人物と固有名詞を保存する", async () => {
+  it("「フォルダの背景…」はフォルダのページでだけ出し、開いているあいだだけ読み、登場人物と固有名詞を保存する", async () => {
     const calls: { method: string; url: string; body: unknown }[] = [];
     vi.stubGlobal(
       "fetch",
@@ -2321,14 +2308,16 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     );
     nav.pathname = `/p/${FOLDER}`;
     await mount({ pages: [page(FOLDER, "鎌倉の記事"), inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER)} />);
-    await openInfoRail();
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(calls.some((call) => call.url.includes("/fields"))).toBe(false);
+    await chooseMore("フォルダの背景…");
     await until(() => calls.some((call) => call.url.includes("/fields")));
-    expect(container!.querySelector(".es-psfields")?.textContent).toContain("このフォルダの背景");
+    expect(sheetNamed("フォルダの背景")?.querySelector("h2")?.textContent).toBe("フォルダの背景");
 
     await act(async () => railButton("編集")!.click());
-    await act(async () => [...container!.querySelectorAll<HTMLButtonElement>(".es-rail button")].find((button) => button.textContent === "行を追加")!.click());
+    await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === "行を追加")!.click());
     await act(async () => {
-      const input = container!.querySelector<HTMLInputElement>(".es-psfields input")!;
+      const input = sheetNamed("フォルダの背景")!.querySelector<HTMLInputElement>("input")!;
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "田中");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
@@ -2336,10 +2325,12 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     await until(() => calls.some((call) => call.method === "PATCH"));
     expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({ entities: [{ name: "田中", reading: "", role: "", note: "" }], terms: [] });
 
-    // フォルダでないページには節を出さない
+    // フォルダでないページには項目を出さない（開いていたシートも出さない）
     nav.pathname = `/p/${INSIDE}`;
     await rerender(<FakePage page={fakePage(INSIDE)} />);
-    expect(container!.querySelector(".es-psfields")).toBeNull();
+    expect(sheetNamed("フォルダの背景")).toBeNull();
+    expect(await moreLabels()).not.toContain("フォルダの背景…");
+    expect(await moreLabels()).not.toContain("フォルダを書き出し.zip");
   });
 
   it("フォルダの書き出しは、まだ届いていない本文の変更を保存してから始める（保存できなければ始めない）", async () => {
@@ -2354,11 +2345,8 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
       let finishSave: (saved: boolean) => void = () => undefined;
       const flush = vi.fn(() => new Promise<boolean>((resolve) => { finishSave = resolve; }));
       await mount({ pages: [page(FOLDER, "鎌倉の記事"), inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER, { flush })} />);
-      await openInfoRail();
-      const exportButton = () => [...container!.querySelectorAll<HTMLButtonElement>(".es-rail button")].find((item) => item.textContent?.includes("このフォルダの中をまとめて"))!;
-
       // 保存を待っているあいだは、ダウンロードを始めない
-      await act(async () => exportButton().click());
+      await chooseMore("フォルダを書き出し");
       expect(flush).toHaveBeenCalledTimes(1);
       expect(clicked).toEqual([]);
       // 保存できたら始める
@@ -2366,7 +2354,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
       expect(clicked).toEqual([`/api/pages/${FOLDER}/export.zip`]);
 
       // 保存できなければ始めず、理由を出す
-      await act(async () => exportButton().click());
+      await chooseMore("フォルダを書き出し");
       await act(async () => finishSave(false));
       expect(clicked).toHaveLength(1);
       expect(container!.textContent).toContain("書き出しの前に変更を保存できませんでした");
@@ -2385,12 +2373,131 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
       vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ fields: { entities: [], terms: [] } }), { status: 200, headers: { "content-type": "application/json" } })));
       nav.pathname = `/p/${FOLDER}`;
       await mount({ pages: [page(FOLDER, "鎌倉の記事"), inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER)} />);
-      await openInfoRail();
-      const button = [...container!.querySelectorAll<HTMLButtonElement>(".es-rail button")].find((item) => item.textContent?.includes("このフォルダの中をまとめて"))!;
-      await act(async () => button.click());
+      await chooseMore("フォルダを書き出し");
       expect(clicked).toEqual([`/api/pages/${FOLDER}/export.zip`]);
     } finally {
       HTMLAnchorElement.prototype.click = click_;
     }
+  });
+});
+
+describe("EditorFrame: 左の一覧のドラッグで入れ子・並べ替え", () => {
+  const F = "00000000-0000-4000-8000-0000000000d0";
+  const X = "00000000-0000-4000-8000-0000000000d1";
+  const T1 = "00000000-0000-4000-8000-0000000000d2";
+  const T2 = "00000000-0000-4000-8000-0000000000d3";
+  const T3 = "00000000-0000-4000-8000-0000000000d4";
+  const top = (id: string, title: string, sortOrder: number): PageSummary => ({ ...page(id, title), sortOrder });
+  const calls: { url: string; method?: string; body?: unknown }[] = [];
+
+  beforeEach(() => {
+    calls.length = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, method: init?.method, body: init?.body === undefined ? undefined : JSON.parse(String(init.body)) });
+        const body = url.includes("/order") ? { moved: true } : {};
+        return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+  });
+
+  const rowOf = (title: string) => [...container!.querySelectorAll<HTMLElement>(".es-sb-list .es-dirow")].find((row) => row.querySelector(".es-di-t")?.textContent === title)!;
+  const tree = () =>
+    [...container!.querySelectorAll(".es-sb-list li")].map((li) => {
+      let depth = 0;
+      for (let at = li.parentElement; at && !at.classList.contains("es-sb-list"); at = at.parentElement) if (at.tagName === "UL") depth++;
+      return [li.querySelector(".es-di-t")?.textContent, depth - 1];
+    });
+  /** 行の箱を 0〜40px に（上 10px は before、下 10px は after、真ん中は into）。 */
+  const sizeRows = () => {
+    for (const row of container!.querySelectorAll<HTMLElement>(".es-dirow")) {
+      row.getBoundingClientRect = () => ({ top: 0, bottom: 40, height: 40, left: 0, right: 200, width: 200, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    }
+  };
+  const data = new Map<string, string>();
+  const transfer = { setData: (type: string, value: string) => void data.set(type, value), getData: (type: string) => data.get(type) ?? "", dropEffect: "none", effectAllowed: "all" };
+  const fire = async (target: Element, type: string, clientY = 20) => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "dataTransfer", { value: transfer });
+    Object.defineProperty(event, "clientY", { value: clientY });
+    await act(async () => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  };
+  /** 行をつかんで、別の行の上（y）で落とす。落とせたか（dragover が preventDefault されたか）を返す。 */
+  const dragTo = async (from: string, to: string, clientY: number) => {
+    sizeRows();
+    await fire(rowOf(from), "dragstart");
+    const over = await fire(rowOf(to), "dragover", clientY);
+    if (over.defaultPrevented) await fire(rowOf(to), "drop", clientY);
+    await fire(rowOf(from), "dragend");
+    for (let tries = 0; tries < 20; tries++) await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    return over.defaultPrevented;
+  };
+
+  it("真ん中に落とすとそのフォルダへ入れる（PATCH parent）。自分の中には落とせない", async () => {
+    await mount({ pages: [top(F, "鎌倉の記事", 1), top(X, "取材メモ", 2)] });
+    expect(rowOf("取材メモ").getAttribute("draggable")).toBe("true");
+    expect(await dragTo("取材メモ", "鎌倉の記事", 20)).toBe(true);
+    expect(calls).toEqual([{ url: `/api/pages/${X}/parent`, method: "PATCH", body: { parent: F } }]);
+    expect(tree()).toEqual([
+      ["鎌倉の記事", 0],
+      ["取材メモ", 1],
+    ]);
+    // フォルダを自分の子の中へは入れられない
+    calls.length = 0;
+    expect(await dragTo("鎌倉の記事", "取材メモ", 20)).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it("前・後に落とすと、同じ階層の並びを 1 歩ずつ動かして、落とした行の前・後にする", async () => {
+    await mount({ pages: [top(T1, "一", 1), top(T2, "二", 2), top(T3, "三", 3)] });
+    expect(await dragTo("三", "一", 4)).toBe(true);
+    expect(calls).toEqual([
+      { url: `/api/pages/${T3}/order`, method: "PATCH", body: { move: "up" } },
+      { url: `/api/pages/${T3}/order`, method: "PATCH", body: { move: "up" } },
+    ]);
+    expect(tree().map(([title]) => title)).toEqual(["三", "一", "二"]);
+
+    calls.length = 0;
+    expect(await dragTo("三", "二", 36)).toBe(true);
+    expect(calls.map((call) => call.body)).toEqual([{ move: "down" }, { move: "down" }]);
+    expect(tree().map(([title]) => title)).toEqual(["一", "二", "三"]);
+  });
+
+  it("フォルダの中の行を上の段の行の後に落とすと、先にフォルダから出してから並べる", async () => {
+    await mount({ pages: [top(F, "鎌倉の記事", 1), { ...page(X, "取材メモ"), parent: F }, top(T1, "一", 2)] });
+    expect(tree()).toEqual([
+      ["鎌倉の記事", 0],
+      ["取材メモ", 1],
+      ["一", 0],
+    ]);
+    expect(await dragTo("取材メモ", "鎌倉の記事", 36)).toBe(true);
+    expect(calls[0]).toEqual({ url: `/api/pages/${X}/parent`, method: "PATCH", body: { parent: null } });
+    expect(calls.slice(1).every((call) => call.url === `/api/pages/${X}/order`)).toBe(true);
+    expect(tree()).toEqual([
+      ["鎌倉の記事", 0],
+      ["取材メモ", 0],
+      ["一", 0],
+    ]);
+  });
+
+  it("並びが届かなければ止めて一言（ヘッダー。「移動…」のシートを開いているときはシートの中）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method });
+      return new Response(JSON.stringify({ error: "internal" }), { status: 500, headers: { "content-type": "application/json" } });
+    }));
+    nav.pathname = `/p/${T3}`;
+    await mount({ pages: [top(T1, "一", 1), top(T2, "二", 2), top(T3, "三", 3)] }, <p>本文</p>);
+    expect(await dragTo("三", "一", 4)).toBe(true);
+    expect(calls.filter((call) => call.url.includes("/order"))).toHaveLength(1);
+    expect(tree().map(([title]) => title)).toEqual(["一", "二", "三"]);
+    expect(container!.querySelector('.es-dt [role="alert"]')?.textContent).toBe("並びを変えられませんでした");
   });
 });

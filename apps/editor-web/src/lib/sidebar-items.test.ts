@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PageSummary } from "@niho/editor-store";
 import type { SearchHit } from "./search-client";
-import { arrangeSidebarItems, folderOptions, formatWhen, searchRows, withoutPageTree } from "./sidebar-items";
+import { arrangeSidebarItems, folderOptions, formatWhen, searchRows, siblingOrder, withoutPageTree } from "./sidebar-items";
 
 /** 2026-10-31 12:00（東京）＝ 03:00 UTC。 */
 const NOW = Date.parse("2026-10-31T03:00:00.000Z");
@@ -224,5 +224,19 @@ describe("folderOptions", () => {
 
   it("keeps the title as it is (the empty one is written 無題 by the shell)", () => {
     expect(folderOptions([page("a", { title: "" }), page("b")], "b")).toEqual([{ id: "a", title: "" }]);
+  });
+});
+
+describe("siblingOrder", () => {
+  it("lists the page and its siblings in the order of the tree (sortOrder, then the given order on top / created inside)", () => {
+    const pages = [
+      page("b", { sortOrder: 2 }),
+      page("a", { sortOrder: 1 }),
+      page("in-2", { parent: "a", sortOrder: 0, createdAt: "2026-10-02T00:00:00.000Z" }),
+      page("in-1", { parent: "a", sortOrder: 0, createdAt: "2026-10-01T00:00:00.000Z" }),
+    ];
+    expect(siblingOrder(pages, "b")).toEqual(["a", "b"]);
+    expect(siblingOrder(pages, "in-2")).toEqual(["in-1", "in-2"]);
+    expect(siblingOrder(pages, "missing")).toEqual([]);
   });
 });

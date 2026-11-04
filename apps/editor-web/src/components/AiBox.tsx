@@ -169,11 +169,10 @@ export type AiPanelProps = {
   pageId: string | null;
   context: AttachedAi | null;
   steps: AttachedAiSteps | null;
-  onHistoryOverflow: () => void;
 };
 
 /** 右レール下半分の常設 AI。レールを閉じても EditorShell が unmount しないため draft と実行状態を保つ。 */
-export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelProps) {
+export function AiPanel({ pageId, context, steps }: AiPanelProps) {
   const [thread, setThread] = useState<AiChatMessage[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<AiChatSummary[]>([]);
@@ -203,7 +202,6 @@ export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelPr
   const flightRef = useRef(false);
   const generationRef = useRef(0);
   const editedRef = useRef(false);
-  const overflowNotifiedRef = useRef(false);
 
   const readMacEngines = useCallback(async () => {
     const { detectShell } = await import("niho-desktop-bridge/tauri-shell-transport");
@@ -258,7 +256,6 @@ export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelPr
     setResumeSession(null);
     setHistoryOpen(false);
     setMenuOpen(false);
-    overflowNotifiedRef.current = false;
     if (!pageId || !context?.bridge) {
       setHistoryState("idle");
       setSessionLoading(false);
@@ -313,17 +310,7 @@ export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelPr
     const node = threadRef.current;
     if (!node) return;
     node.scrollTop = node.scrollHeight;
-    const check = () => {
-      if (!overflowNotifiedRef.current && node.clientHeight > 0 && node.scrollHeight > node.clientHeight + 2) {
-        overflowNotifiedRef.current = true;
-        onHistoryOverflow();
-      }
-    };
-    check();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(check);
-    observer?.observe(node);
-    return () => observer?.disconnect();
-  }, [thread, status, onHistoryOverflow]);
+  }, [thread, status]);
 
   const native = typeof window !== "undefined" && isShellWindow(window);
   const selectedMacEngine = macState.mode === "ready" ? macState.engines.find((engine) => engine.engine === macRoute) : undefined;
@@ -789,7 +776,6 @@ export function AiPanel({ pageId, context, steps, onHistoryOverflow }: AiPanelPr
           </div>
         )}
         <div ref={threadRef} className="es-ai-thread" role="log" aria-label="AIとの会話" aria-live="polite">
-          {thread.length === 0 && <p className="es-ai-empty">このページで、何をつくりますか。</p>}
           {thread.map((message) => message.role === "user" ? (
             <div key={message.id} className="es-ai-message es-ai-message--user">{message.text}</div>
           ) : (
