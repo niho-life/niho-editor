@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Owner-only input. The agent must never execute this with real key material.
+# The keyring is granted only to the web runtime; the cleanup job's dedicated identity cannot read it.
 # Reads one JSON keyring line from stdin, validates in memory, and adds a Secret version.
 # No value is printed, persisted locally, passed as an argument, or reused from another capability.
 set +x
@@ -9,6 +10,8 @@ load_deploy_env
 cd "$REPO_ROOT"
 [[ $# -eq 0 ]] || die "usage: $0 (owner supplies JSON on standard input)"
 secret_name=niho-editor-private-jobs-key-ring
+[[ "$PRIVATE_JOBS_MAINTENANCE" == true ]] || die "set PRIVATE_JOBS_MAINTENANCE=true before preparing the keyring"
+private_jobs_infra_ready || die "private-job cleanup is not ready: verify its dedicated identity and enabled 5-minute cleanup before adding the keyring"
 keyring=""
 trap 'unset keyring' EXIT
 if [[ -t 0 ]]; then

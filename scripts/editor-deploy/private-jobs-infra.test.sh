@@ -12,7 +12,11 @@ printf '%s\n' "$*" >> "$CALLS"
 case "$*" in
   *'run jobs describe'*)
     if [[ "${BAD_JOB:-false}" == true ]]; then printf '{}'; else
-      printf '%s' '{"spec":{"template":{"spec":{"template":{"spec":{"containers":[{"command":["node"],"args":["packages/editor-store/src/purge-cli.ts","--private-jobs-only"]}]}}}}}}'
+      service_account=niho-editor-private@my-gcp-project.iam.gserviceaccount.com
+      env='[{"name":"NODE_ENV","value":"production"},{"name":"DATABASE_URL","valueFrom":{"secretKeyRef":{"name":"niho-editor-database-url","key":"latest"}}}]'
+      [[ "${BAD_IDENTITY:-false}" != true ]] || service_account=niho-editor-runner@my-gcp-project.iam.gserviceaccount.com
+      [[ "${EXTRA_SECRET:-false}" != true ]] || env='[{"name":"NODE_ENV","value":"production"},{"name":"DATABASE_URL","valueFrom":{"secretKeyRef":{"name":"niho-editor-database-url","key":"latest"}}},{"name":"EDITOR_PRIVATE_JOBS_KEY_RING","valueFrom":{"secretKeyRef":{"name":"niho-editor-private-jobs-key-ring","key":"7"}}}]'
+      printf '%s' "{\"spec\":{\"template\":{\"spec\":{\"template\":{\"spec\":{\"serviceAccountName\":\"$service_account\",\"volumes\":[],\"containers\":[{\"command\":[\"node\"],\"args\":[\"packages/editor-store/src/purge-cli.ts\",\"--private-jobs-only\"],\"env\":$env}]}}}}}}"
     fi ;;
   *'iam service-accounts describe'*) exit 1 ;;
   *'scheduler jobs describe'*) [[ "${EXISTS:-false}" == true ]] ;;
@@ -29,4 +33,6 @@ if grep -Eq 'secrets (versions|access)|storage |projects add-iam-policy-binding|
 EXISTS=true bash "$here/private-jobs-infra.sh" > /dev/null
 grep -Eq 'scheduler jobs update http niho-editor-private-jobs-sweep' "$CALLS"
 if BAD_JOB=true bash "$here/private-jobs-infra.sh" > /dev/null 2>&1; then exit 1; fi
+if BAD_IDENTITY=true bash "$here/private-jobs-infra.sh" > /dev/null 2>&1; then exit 1; fi
+if EXTRA_SECRET=true bash "$here/private-jobs-infra.sh" > /dev/null 2>&1; then exit 1; fi
 printf 'private jobs infra: synthetic checks passed\n'

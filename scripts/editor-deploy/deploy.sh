@@ -129,7 +129,7 @@ gcp run jobs deploy "$MIGRATE_JOB" \
 if [[ "$PRIVATE_JOBS_MAINTENANCE" == true ]]; then
   log "private jobs: deploy bounded payload cleanup"
   gcp run jobs deploy "$PRIVATE_JOBS_JOB" --region "$GCP_REGION" --image "$IMAGE-migrate:$TAG" \
-    --service-account "$RUNNER_SA_EMAIL" --set-cloudsql-instances "$CONNECTION" \
+    --service-account "$PRIVATE_JOBS_RUNTIME_EMAIL" --set-cloudsql-instances "$CONNECTION" \
     --network "$VPC_NETWORK" --subnet "$VPC_SUBNET" --vpc-egress private-ranges-only \
     --set-secrets "DATABASE_URL=$SECRET_DATABASE_URL:latest" --set-env-vars "NODE_ENV=production" \
     --command node --args packages/editor-store/src/purge-cli.ts,--private-jobs-only \
