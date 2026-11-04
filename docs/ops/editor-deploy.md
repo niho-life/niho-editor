@@ -503,7 +503,7 @@ stagingのExperienceサイトがEditorの公開APIを読む面資格は、owner�
 scripts/editor-deploy/prepare-experience-publish-credentials.sh
 ```
 
-helperは引数を受け取らず、Editor projectを`deploy.env`から読み、Experience staging project IDを非表示入力で確認する。Secretの値は画面・ファイル・ログへ出さず、stdoutには次の2つのnumeric version参照だけを出す。ownerは参照だけを担当者へ渡し、raw tokenをチャットや設定ファイルへ貼らない。
+helperは引数を受け取らず、Editor projectを`deploy.env`から読み、Experience staging project IDを非表示入力で確認する。実行前に両projectのSecret・version metadata・service account・直接IAMを検査し、Editorのverifier Secretに有効版が1つある場合は、その固定版のJSON配列を検証して新しいExperience資格を追加する。既存の項目は保持する。有効版が複数ある、設定済みの固定版が一致しない、既存payloadが不正、Experience token Secretに有効版がある場合は、Secret作成やIAM変更より前に停止する。Secretの値は画面・ファイル・ログへ出さず、stdoutには次の2つのnumeric version参照だけを出す。ownerは参照だけを担当者へ渡し、raw tokenをチャットや設定ファイルへ貼らない。
 
 ```text
 EDITOR_FACE_CREDENTIALS_SECRET_REF=niho-editor-face-credentials:<version>
@@ -512,4 +512,4 @@ GUIDE_EDITOR_API_TOKEN_REF=experience-stg-editor-api-token:<version>
 
 この準備は資格を保存するだけで、Editor authority flag、Experience article authority flag、`EXPERIENCE_GUIDE_PUBLIC_SOURCE`を有効にしない。現在のcategoryが作成され、NIHO追加APIとEditor/Experienceのaudience・service accountが一致した後、staging固定SHAの別配備変更で有効化する。90日より前にownerが両側を同時にローテーションする。
 
-helperのSecret Manager追加が途中で失敗した場合は、出力された値を探さず、2つのSecretのversion metadataだけをownerが確認する。新たに有効になった片側だけのversionを無効化してから再実行する。以前から有効なversionがある場合は、helperを繰り返さず手動でrotationを計画する。
+helperのSecret Manager追加が途中で失敗した場合は、出力された値を探さず、2つのSecretのversion metadataだけをownerが確認する。helperは失敗時に自身が作成したと把握できる新versionを無効化する。コマンドが応答を失った場合などversion番号を受け取れなかったときは、metadataをownerが確認し、片側だけに有効版が残っていれば無効化してから再実行する。既存のEditor verifier版は残し、rotationはこのhelperの再実行で行わず、ownerが両サービスを同時に更新する。
