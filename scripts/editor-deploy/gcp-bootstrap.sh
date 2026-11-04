@@ -40,11 +40,12 @@ resources() {
   gcp services enable run.googleapis.com sqladmin.googleapis.com secretmanager.googleapis.com \
     artifactregistry.googleapis.com cloudbuild.googleapis.com iamcredentials.googleapis.com logging.googleapis.com
 
-  log "service accounts: runtime (the web service) and migrate (the migration job) are separate"
+  log "service accounts: web runtime, private-job cleanup runtime, and migration job are separate"
   ensure_service_account "$RUNNER_SA_EMAIL" "NIHO editor runtime (Cloud Run)"
+  ensure_service_account "$PRIVATE_JOBS_RUNTIME_EMAIL" "NIHO editor private-job cleanup"
   ensure_service_account "$MIGRATE_SA_EMAIL" "NIHO editor migration job"
   local email
-  for email in "$RUNNER_SA_EMAIL" "$MIGRATE_SA_EMAIL"; do
+  for email in "$RUNNER_SA_EMAIL" "$PRIVATE_JOBS_RUNTIME_EMAIL" "$MIGRATE_SA_EMAIL"; do
     gcp projects add-iam-policy-binding "$GCP_PROJECT" --condition=None \
       --member "serviceAccount:$email" --role roles/cloudsql.client > /dev/null
   done
@@ -82,6 +83,9 @@ resources() {
   # The web service reads only the app role's URL. The migration job reads both (it creates the app role).
   gcp secrets add-iam-policy-binding "$SECRET_DATABASE_URL" \
     --member "serviceAccount:$RUNNER_SA_EMAIL" --role roles/secretmanager.secretAccessor > /dev/null
+  # The cleanup job gets only the app DB URL. Its identity never receives the private-payload keyring.
+  gcp secrets add-iam-policy-binding "$SECRET_DATABASE_URL" \
+    --member "serviceAccount:$PRIVATE_JOBS_RUNTIME_EMAIL" --role roles/secretmanager.secretAccessor > /dev/null
   gcp secrets add-iam-policy-binding "$SECRET_DATABASE_URL" \
     --member "serviceAccount:$MIGRATE_SA_EMAIL" --role roles/secretmanager.secretAccessor > /dev/null
   gcp secrets add-iam-policy-binding "$SECRET_MIGRATE_DATABASE_URL" \

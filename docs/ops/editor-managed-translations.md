@@ -8,9 +8,9 @@
 
 一時候補の内容は23時間50分で期限切れにし、5分おきの専用cleanup jobで削除する。アプリを閉じたままでも進み、正常稼働時の24時間以内削除に余裕を設ける。障害時もAPIは期限切れ候補を復号/採用せず、jobを復旧して内容を消す。鍵の破棄をpurgeの代替にしない。
 
-`PRIVATE_JOBS_MAINTENANCE=true`と鍵参照なしで一度配備する。公式配備はmigrate imageを使い、app用DB資格だけを持つjobを`--private-jobs-only`で作る。`private-jobs-infra.sh`は別の構成操作として、そのjobだけを実行できるScheduler identityと5分ごとの呼出を作る。既存のゴミ箱やobjectは削除しない。停止中Schedulerを自動resumeせず、別jobや引数overrideを許可しない。jobの固定command/argsとSchedulerのidentity/target/stateを確認できるまで鍵参照付き配備を拒否する。
+`PRIVATE_JOBS_MAINTENANCE=true`と鍵参照なしで一度配備する。公式配備はmigrate imageを使い、`niho-editor-private`専用runtime identityで`--private-jobs-only`のjobを作る。このidentityはCloud SQL接続とapp用DB URLだけを持ち、Web runtimeのkeyringやほかのSecret、bucketにはアクセスできない。`private-jobs-infra.sh`は別の構成操作として、そのjobだけを実行できるScheduler identityと5分ごとの呼出を作る。既存のゴミ箱やobjectは削除しない。停止中Schedulerを自動resumeせず、別jobや引数overrideを許可しない。jobの固定command/args、専用runtime identity、DB URL以外のSecretがないこと、Schedulerのidentity/target/stateを確認できるまで鍵参照付き配備を拒否する。
 
-一時候補をDBへ平文で複製しないため、runtime専用の暗号化keyringが必要。ownerが`set-private-jobs-keyring.sh`へ安全な標準入力から1行JSONを渡してSecret Managerへ投入し、`deploy.env`の`EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF`へ`secret-name:固定数値版`だけを指定する。値は設定/ログ/PRに書かない。AIは鍵の作成・投入・読出を行わない。runtime IDだけにそのSecretの読取権限を付け、build/CI/migratorへ渡さない。Secret未設定/不正ならこの機能は閉じ、通常の文書編集を継続する。
+一時候補をDBへ平文で複製しないため、runtime専用の暗号化keyringが必要。cleanup専用IDとSchedulerの5分回収が稼働し、cleanup jobのSecret/IAM設定を確認した後に、ownerが`set-private-jobs-keyring.sh`へ安全な標準入力から1行JSONを渡してSecret Managerへ投入する。`deploy.env`の`EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF`へ`secret-name:固定数値版`だけを指定する。値は設定/ログ/PRに書かない。AIは鍵の作成・投入・読出を行わない。Web runtime IDだけにそのSecretの読取権限を付け、cleanup job/build/CI/migratorへ渡さない。Secret未設定/不正ならこの機能は閉じ、通常の文書編集を継続する。
 
 keyringのshapeはJSONでactive key IDとkeysの辞書。IDは短い識別子、値はbase64の32bytes。最大8 keys、最大4096bytes。内容はownerの安全な入力経路だけで管理する。AES-256-GCMはowner/proposal/purpose/expiryをAADに束縛する。候補の最長24hの保持が終わるまで旧keyを残した新しい固定版を指定し、公式再配備後に不要な古いSecret版を無効化する。`:latest`や値を含むコマンド引数は使わない。
 

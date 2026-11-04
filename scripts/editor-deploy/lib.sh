@@ -60,6 +60,8 @@ load_private_jobs_deploy_settings() {
   [[ "$PRIVATE_JOBS_MAINTENANCE" == true || "$PRIVATE_JOBS_MAINTENANCE" == false ]] || die "PRIVATE_JOBS_MAINTENANCE must be true or false"
   PRIVATE_JOBS_JOB=niho-editor-private-jobs
   PRIVATE_JOBS_SWEEP_JOB=niho-editor-private-jobs-sweep
+  PRIVATE_JOBS_RUNTIME_SA=niho-editor-private
+  PRIVATE_JOBS_RUNTIME_EMAIL="$PRIVATE_JOBS_RUNTIME_SA@$GCP_PROJECT.iam.gserviceaccount.com"
   PRIVATE_JOBS_SCHEDULER_SA=niho-editor-private-jobs-cron
   PRIVATE_JOBS_SCHEDULER_EMAIL="$PRIVATE_JOBS_SCHEDULER_SA@$GCP_PROJECT.iam.gserviceaccount.com"
   EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF="${EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF:-}"
@@ -381,6 +383,7 @@ private_jobs_env_vars() {
 
 private_jobs_job_safe() {
   gcp run jobs describe "$PRIVATE_JOBS_JOB" --region "$GCP_REGION" \
-    --format='json(spec.template.spec.template.spec.containers[0].command,spec.template.spec.template.spec.containers[0].args)' \
-    | python3 -c 'import json,sys; v=json.load(sys.stdin); c=v["spec"]["template"]["spec"]["template"]["spec"]["containers"]; sys.exit(0 if len(c)==1 and c[0].get("command")==["node"] and c[0].get("args")==["packages/editor-store/src/purge-cli.ts","--private-jobs-only"] else 1)'
+    --format='json(spec.template.spec.template.spec.serviceAccountName,spec.template.spec.template.spec.containers,spec.template.spec.template.spec.volumes)' \
+    | python3 -c 'import json,sys; v=json.load(sys.stdin); s=v["spec"]["template"]["spec"]["template"]["spec"]; c=s["containers"]; env={e.get("name"):e for e in c[0].get("env",[])} if len(c)==1 else {}; db=env.get("DATABASE_URL",{}).get("valueFrom",{}).get("secretKeyRef",{}); sys.exit(0 if s.get("serviceAccountName")==sys.argv[1] and len(c)==1 and c[0].get("command")==["node"] and c[0].get("args")==["packages/editor-store/src/purge-cli.ts","--private-jobs-only"] and set(env)=={"NODE_ENV","DATABASE_URL"} and env["NODE_ENV"].get("value")=="production" and db=={"name":sys.argv[2],"key":"latest"} and not s.get("volumes") else 1)' \
+      "$PRIVATE_JOBS_RUNTIME_EMAIL" "$SECRET_DATABASE_URL"
 }
