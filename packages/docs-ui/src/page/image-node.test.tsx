@@ -27,13 +27,39 @@ beforeAll(() => {
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
+let mountedEditor: Editor | null = null;
 
 afterEach(async () => {
-  await act(async () => root?.unmount());
-  container?.remove();
-  root = null;
-  container = null;
-  vi.restoreAllMocks();
+  // Tiptap's useEditor waits one tick after unmount before destroying the editor.
+  // Restore real timers first, then keep jsdom alive until that public event fires.
+  vi.useRealTimers();
+  const editor = mountedEditor;
+  let waitForDestroy: Promise<void> | null = null;
+  if (editor && !editor.isDestroyed) {
+    waitForDestroy = new Promise<void>((resolve, reject) => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const onDestroy = () => {
+        if (timeout !== undefined) clearTimeout(timeout);
+        resolve();
+      };
+      editor.on("destroy", onDestroy);
+      timeout = setTimeout(() => {
+        editor.off("destroy", onDestroy);
+        reject(new Error("Tiptap editor was not destroyed before the test environment closed"));
+      }, 1000);
+    });
+  }
+
+  try {
+    await act(async () => root?.unmount());
+    await waitForDestroy;
+  } finally {
+    container?.remove();
+    root = null;
+    container = null;
+    mountedEditor = null;
+    vi.restoreAllMocks();
+  }
 });
 
 type Uploaded = { file: File; pageId: string };
@@ -84,8 +110,10 @@ async function render(options: PageExtensionsOptions): Promise<Editor> {
   await act(async () => {
     root!.render(<Harness options={options} />);
   });
+  const editor = (container.querySelector(".ProseMirror") as HTMLElement & { editor: Editor }).editor;
+  mountedEditor = editor;
   await flush();
-  return (container.querySelector(".ProseMirror") as HTMLElement & { editor: Editor }).editor;
+  return editor;
 }
 
 /** 貼り付け・ドロップのファイルを受ける plugin（他の plugin を通さずに、この prop だけを試す）。 */
