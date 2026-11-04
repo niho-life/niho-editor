@@ -162,7 +162,7 @@ function FakePage() {
       id: PAGE, status: "saved", flush: save, revision: () => 1, reopen: () => undefined,
       shared: null, setShared: () => undefined, lang: "en", setLang: () => undefined, langNote: null,
       text: { read: () => "合成の本文", subscribe: () => () => undefined },
-      publicationFields: <><textarea data-page-lead="" aria-label="公開用リード" /><input data-page-cover="" type="file" aria-label="カバー画像を選ぶ" /></>,
+      publicationFields: <><textarea data-page-lead="" aria-label="公開用リード" /><input data-page-cover="" type="file" aria-label="カバー画像を選ぶ" /><div data-page-lang="" tabIndex={-1} role="group" aria-label="言語" /></>,
     });
     return () => { unregister(); detach(); };
   }, [registerPageSaver, attachPage]);
@@ -334,24 +334,28 @@ describe("公開のシート", () => {
     expect(document.activeElement).toBe($("textarea.page-title"));
   });
 
-  it("「直す」: 右のページ設定を開き、リードとカバーの問題を直す欄へ移る", async () => {
+  it("「直す」: リード・カバー画像・言語はシートを閉じず、シートの中の記事の情報の欄へ移る", async () => {
     const problems = [
       { id: "lead", message: "リードを入れてください", fix: "lead" as const },
       { id: "cover", message: "カバー写真を選んでください", fix: "cover" as const },
+      { id: "lang", message: "英語のページにしてください", fix: "lang" as const },
     ];
     server({ sheets: [sheet(), experiencePlan({ problems, primary: null })] });
     await mount();
-    await click($('#es-rail h2 button'));
-    await click($('button[aria-label="このページの設定と AI"]'));
     await click($(".es-pubbtn"));
-    await click(byText("button", "直す"));
-    expect(dialog()).toBeNull();
-    expect(document.activeElement).toBe($("[data-page-lead]"));
+    // 記事の情報（リード・カバー画像・言語）はシートの中。本文の列とレールには無い
+    expect(dialog()?.querySelector(".es-sh-fields [data-page-lead]")).not.toBeNull();
     expect($("#es-main [data-page-lead]")).toBeNull();
-    await click($(".es-pubbtn"));
+    expect($("#es-rail [data-page-lead]")).toBeNull();
+    await click(byText("button", "直す"));
+    expect(dialog()).not.toBeNull();
+    expect(document.activeElement).toBe(dialog()!.querySelector("[data-page-lead]"));
     await click(container!.querySelectorAll<HTMLButtonElement>(".es-need button")[1]);
-    expect(dialog()).toBeNull();
-    expect(document.activeElement).toBe($("[data-page-cover]"));
+    expect(dialog()).not.toBeNull();
+    expect(document.activeElement).toBe(dialog()!.querySelector("[data-page-cover]"));
+    await click(container!.querySelectorAll<HTMLButtonElement>(".es-need button")[2]);
+    expect(dialog()).not.toBeNull();
+    expect(document.activeElement).toBe(dialog()!.querySelector("[data-page-lang]"));
   });
 
   it("「直す」: カテゴリはシート内の選択欄へ移る", async () => {

@@ -9,12 +9,13 @@ export { StatusDot } from "./status-dot";
 export { shellPublishButton, shellStatus } from "./status";
 export { ShellTools, ShellMobileToolbar, type ShellToolAction, type ShellToolsProps } from "./tools";
 export { ShellHeader, shellMoreItems, type ShellHeaderProps } from "./header";
-export { ShellSidebar, shellAccountItems, type ShellSidebarProps } from "./sidebar";
+export { ShellSidebar, shellAccountItems, type ShellDropTarget, type ShellSidebarProps } from "./sidebar";
 export { NewPageMenu, type NewPageKind } from "./new-page-menu";
 export { ShellRail, ShellRailSection, type ShellRailProps, type ShellRailSectionProps } from "./rail";
 export { ShellSteps, ShellStepsStart, shellStepSay, type ShellStep, type ShellStepsAction, type ShellStepsChoice } from "./steps";
 export { ShellChat, type ShellChatAction, type ShellChatMessage, type ShellChatProps } from "./chat";
 export { ShellPageSettings, type ShellPageSettingsProps } from "./page-settings";
+export { ShellPageInfo, type ShellPageInfoProps } from "./page-info";
 export { ShellEntitiesEditor, ShellTermsEditor, type EditorSettingsEntityDraft } from "./editor-settings";
 export { ShellBubbleMenu, ShellSelectionBar, type ShellBubbleMenuProps, type ShellSelectionActions } from "./bubble";
 export {

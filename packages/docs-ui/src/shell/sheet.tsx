@@ -38,6 +38,7 @@ export type ShellSheetProps = {
  * role="dialog" aria-modal。開いたら中（data-autofocus の要素、なければダイアログ自身）へフォーカスし、
  * Esc・外（幕）の押下で閉じ、Tab は中で回り、閉じたら開く前の要素へフォーカスを戻す。
  * 開いているあいだ、シートの外（.es-root の中の兄弟）は inert（閉じたら元に戻す）。
+ * シートの中から別のシートを開いてもよい（入れ子）。そのあいだ Esc・Tab はいちばん内側のシートだけが扱う。
  * EditorShell の overlay に渡す（.es-root の中に出すため）。
  */
 export function ShellSheet({ label, onClose, className, children }: ShellSheetProps) {
@@ -54,6 +55,8 @@ export function ShellSheet({ label, onClose, className, children }: ShellSheetPr
     const restoreInert = veil.current ? inertOutside(veil.current) : () => undefined;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // シートの中から開いたシート（入れ子。ⓘ の説明など）があれば、Esc はいちばん内側だけを閉じる
+      if (dialog.current?.querySelector(".es-sheet")) return;
       event.stopPropagation();
       closeRef.current();
     };
@@ -75,6 +78,8 @@ export function ShellSheet({ label, onClose, className, children }: ShellSheetPr
   const trap = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Tab") return;
     const node = dialog.current;
+    // 入れ子のシートの中の Tab は、そのシートが回す
+    if (event.target instanceof Element && event.target.closest(".es-sheet") !== node) return;
     const items = [...(node?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])];
     const first = items[0];
     const last = items[items.length - 1];

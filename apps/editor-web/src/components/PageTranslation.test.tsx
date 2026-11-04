@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import axe from "axe-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PageTranslation } from "./PageTranslation";
+import { JA_INFO, PageTranslation, TRANSLATION_POLL_MS } from "./PageTranslation";
 
 const PAGE = "00000000-0000-4000-8000-000000000001";
 const TARGET = "00000000-0000-4000-8000-000000000002";
@@ -82,7 +82,7 @@ function button(text: string): HTMLButtonElement {
 }
 
 describe("PageTranslation", () => {
-  it("discloses destination and metering, generates only after the explicit action, compares every field, then adopts", async () => {
+  it("keeps the explanation in the ⓘ sheet (destination, metering, limits, adoption), generates only after the explicit action, compares every field, then adopts", async () => {
     const requests: Array<{ path: string; method: string; body: unknown }> = [];
     vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
@@ -94,16 +94,33 @@ describe("PageTranslation", () => {
       return json(500, { error: "unexpected" });
     }));
     const saveFirst = await mount("ja");
-    expect(container!.textContent).toContain("Anthropic APIへ送り、従量対象");
-    expect(container!.textContent).toContain("20,000文字・256項目");
-    expect(requests).toHaveLength(0);
+    // 1 行の形: ラベル・状態の短い語・主ボタン・ⓘ。説明文は画面に出さない
+    const section = container!.querySelector('section[aria-label="英語版"]')!;
+    expect(section.textContent).toBe("英語版なし英語案を作る");
+    expect(container!.textContent).not.toContain("Anthropic API");
+    expect(container!.querySelector("h3, h4")).toBeNull();
+    expect([...container!.querySelectorAll("button")].map((entry) => entry.textContent?.trim() || entry.getAttribute("aria-label"))).toEqual(["英語案を作る", "英語版について"]);
+    // 開いたときに状態を読む（読むだけで、生成はしない）
+    expect(requests.map((entry) => entry.method)).toEqual(["GET"]);
+
+    await act(async () => container!.querySelector<HTMLButtonElement>('button[aria-label="英語版について"]')!.click());
+    const info = document.querySelector<HTMLElement>('[role="dialog"][aria-label="英語版について"]')!;
+    expect([...info.querySelectorAll("p")].map((entry) => entry.textContent)).toEqual([...JA_INFO]);
+    expect(info.textContent).toContain("Anthropic APIへ送り、従量対象");
+    expect(info.textContent).toContain("20,000文字・256項目");
+    expect(info.textContent).toContain("採用すると、初回は非公開の英語ページを作ります");
+    await act(async () => [...info.querySelectorAll("button")].find((entry) => entry.textContent === "閉じる")!.click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+
     await act(async () => {
-      button("APIで英語案を作る").click();
+      button("英語案を作る").click();
       for (let index = 0; index < 10; index++) await Promise.resolve();
     });
     expect(saveFirst).toHaveBeenCalledTimes(1);
-    expect(requests[0]?.path).toMatch(/\/generate$/);
-    expect(requests[0]?.body).toEqual({ operationId: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+    const generated = requests.find((entry) => entry.method === "POST");
+    expect(generated?.path).toMatch(/\/generate$/);
+    expect(generated?.body).toEqual({ operationId: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+    expect(section.textContent).toContain("候補あり");
     expect(container!.textContent).toContain("原文: 合成の題名");
     expect(container!.textContent).toContain("英語案: Synthetic body");
     expect(container!.textContent).toContain("今回の対象外: コードブロック");
@@ -114,7 +131,7 @@ describe("PageTranslation", () => {
       button("この英語案を採用").click();
       for (let index = 0; index < 10; index++) await Promise.resolve();
     });
-    expect(requests[1]?.body).toEqual({ sourceRevision: 7, targetRevision: null });
+    expect(requests.filter((entry) => entry.method === "POST")[1]?.body).toEqual({ sourceRevision: 7, targetRevision: null });
     expect(navigation.push).toHaveBeenCalledWith(`/p/${TARGET}`);
   });
 
@@ -143,7 +160,6 @@ describe("PageTranslation", () => {
       return method === "POST" ? json(200, { status: "reviewed" }) : json(200, state);
     }));
     const saveFirst = await mount("en");
-    await act(async () => button("翻訳の状態を確認").click());
     expect(container!.textContent).toContain("原文または英語版が更新されています");
     await act(async () => button("原文と英語版を確認しました").click());
     expect(saveFirst).toHaveBeenCalledTimes(1);
@@ -168,7 +184,6 @@ describe("PageTranslation", () => {
       });
     }));
     const saveFirst = await mount("en");
-    await act(async () => button("翻訳の状態を確認").click());
     await act(async () => button("原文と英語版を確認しました").click());
     expect(saveFirst).toHaveBeenCalledTimes(1);
     expect(posts).toEqual([]);
@@ -186,7 +201,6 @@ describe("PageTranslation", () => {
       return json(200, { ...enState, page: { ...enState.page, revision }, relation: { ...enState.relation, targetRevision: revision } });
     }));
     await mount("en", vi.fn(async () => { revision = 5; return true; }), () => revision);
-    await act(async () => button("翻訳の状態を確認").click());
     await act(async () => button("原文と英語版を確認しました").click());
     expect(posts).toEqual([{ sourceRevision: 8, targetRevision: 5 }]);
   });
@@ -200,12 +214,11 @@ describe("PageTranslation", () => {
     }));
     vi.stubGlobal("fetch", fetcher);
     const saveFirst = await mount("en");
-    await act(async () => button("翻訳の状態を確認").click());
-    expect(container!.textContent).toContain("現在の日本語原文と英語版を確認済みです");
+    expect(container!.textContent).toContain("原文と英語版を確認済み");
     revision = 5;
     await act(async () => root!.render(<PageTranslation pageId={TARGET} lang="en" saveFirst={saveFirst} savedRevision={revision} currentRevision={() => revision} />));
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(container!.textContent).not.toContain("現在の日本語原文と英語版を確認済みです");
+    expect(container!.textContent).not.toContain("原文と英語版を確認済み");
     expect(button("原文と英語版を確認しました").disabled).toBe(false);
   });
 
@@ -233,7 +246,6 @@ describe("PageTranslation", () => {
       return method === "POST" ? json(200, { status: "detached" }) : json(200, state);
     }));
     await mount("en");
-    await act(async () => button("翻訳の状態を確認").click());
     expect(container!.textContent).toContain("次の公開・更新は停止します");
     expect(button("対応を外す").disabled).toBe(true);
     const checkbox = container!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
@@ -241,5 +253,54 @@ describe("PageTranslation", () => {
     expect(button("対応を外す").disabled).toBe(false);
     await act(async () => button("対応を外す").click());
     expect(requests.find((entry) => entry.method === "POST")?.body).toEqual({ targetRevision: 4 });
+  });
+  it("reads the state again when the page changes, and every few seconds while the proposal is generating (stops when it is done or gone)", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let status = "generating";
+      const reads: string[] = [];
+      vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+        reads.push(path);
+        return json(200, { ...jaState, proposal: { ...ready, status, sourceFields: null, candidateFields: null } });
+      }));
+      await mount("ja");
+      expect(reads).toHaveLength(1);
+      expect(container!.querySelector('section[aria-label="英語版"]')?.textContent).toContain("作成中…");
+      await act(async () => { await vi.advanceTimersByTimeAsync(TRANSLATION_POLL_MS); });
+      expect(reads).toHaveLength(2);
+      status = "failed";
+      await act(async () => { await vi.advanceTimersByTimeAsync(TRANSLATION_POLL_MS); });
+      expect(reads).toHaveLength(3);
+      await act(async () => { await vi.advanceTimersByTimeAsync(TRANSLATION_POLL_MS * 3); });
+      expect(reads).toHaveLength(3);
+      expect(container!.textContent).toContain("前回の生成は完了しませんでした");
+
+      // 別のページに替わったら、そのページの状態を読む
+      await act(async () => root!.render(<PageTranslation pageId={SOURCE} lang="ja" saveFirst={vi.fn(async () => true)} savedRevision={7} currentRevision={() => 7} />));
+      await act(async () => { await Promise.resolve(); });
+      expect(reads.at(-1)).toContain(SOURCE);
+
+      // 生成中に画面を離れたら止める
+      status = "generating";
+      await act(async () => root!.render(<PageTranslation pageId={PAGE} lang="ja" saveFirst={vi.fn(async () => true)} savedRevision={7} currentRevision={() => 7} />));
+      await act(async () => { await Promise.resolve(); });
+      const before = reads.length;
+      await act(async () => root!.unmount());
+      root = null;
+      await act(async () => { await vi.advanceTimersByTimeAsync(TRANSLATION_POLL_MS * 2); });
+      expect(reads).toHaveLength(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("en: an independent English page says so in one line; the long explanation is in the ⓘ", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json(200, { ...enState, relation: null })));
+    await mount("en");
+    expect(container!.querySelector('section[aria-label="英語版"]')?.textContent).toBe("英語版独立した英語ページ");
+    expect(container!.textContent).not.toContain("管理翻訳の確認条件");
+    expect(container!.querySelector("button")?.getAttribute("aria-label")).toBe("英語版について");
+    await act(async () => container!.querySelector<HTMLButtonElement>('button[aria-label="英語版について"]')!.click());
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("管理翻訳の確認条件は付きません");
   });
 });

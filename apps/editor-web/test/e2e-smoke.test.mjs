@@ -177,7 +177,9 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.match(response.headers.get("content-type") ?? "", /^text\/html/);
     const html = await response.text();
     assert.match(html, /aria-label="ページの一覧"/);
-    assert.match(html, /aria-label="新しいページ"/);
+    // 左の一覧の上段は「検索 ⌘K」「新しいページ ⌘N」の行（アイコンだけのボタンではないので aria-label ではなく文字で見る）
+    assert.match(html, /検索<kbd aria-hidden="true">⌘K<\/kbd>/);
+    assert.match(html, /新しいページ<kbd aria-hidden="true">⌘N<\/kbd>/);
     assert.match(html, /開発ユーザー/, "the me row shows the stub profile");
     for (const path of ["/p/new", "/p/new?from=recording", "/destinations", "/account", "/settings"]) {
       const screen = await fetch(`${base}${path}`);

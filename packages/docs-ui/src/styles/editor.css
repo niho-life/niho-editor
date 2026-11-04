@@ -10,6 +10,15 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be {
   position: relative;
 }
+/* 行の ＋ ⋮⋮ を出さない画面（editor-web の PageEditor）は、その余白を使わず題名と本文の左端を揃える */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be.be--flush .doc {
+  padding-left: 0;
+}
+/* 本文は紙面そのもの。ブラウザ既定のフォーカスの囲い（青い枠）は出さない（カーソルが位置を示す） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc:focus,
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc:focus-visible {
+  outline: none;
+}
 
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .et-icon { display: inline-grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 7px; background: transparent; color: var(--niho-text-sub); cursor: pointer; }
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .et-icon:hover, :where([data-docs-app-root]):where([data-docs-shared-ui]) .et-icon[aria-pressed="true"] { background: var(--docs-inset); color: var(--niho-dark); }

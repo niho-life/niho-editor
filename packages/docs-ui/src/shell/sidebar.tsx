@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type DragEvent as ReactDragEvent, type ReactNode } from "react";
 import { Icon } from "./icons";
 import { ShellMenu } from "./menu";
 import { NewPageMenu, type NewPageKind } from "./new-page-menu";
@@ -14,6 +14,14 @@ export type ShellSidebarProps = {
   onCollapse?: () => void;
   newMenu?: { open: boolean; onToggle: () => void; onClose: () => void; onPick: (kind: NewPageKind) => void };
   search?: { open: boolean; value: string; onOpen: () => void; onClose: () => void; onChange: (value: string) => void };
+  /**
+   * 行をドラッグして入れ子・並べ替え（HTML5 のドラッグ＆ドロップ）。渡したときだけ行を draggable にする。
+   * 行の高さの上 25% は before、下 25% は after、真ん中は into。検索の結果のように木でない並びでは渡さない（「最近」の行はドラッグしない）。
+   * キーボード・スマホの代替は、呼ぶ側のメニュー（「移動…」）が持つ。
+   */
+  onDrop?: (dragId: string, target: ShellDropTarget) => void;
+  /** その位置へ落とせるか。false なら印を出さず、落とせない。省けば全て落とせる。 */
+  canDrop?: (dragId: string, target: ShellDropTarget) => boolean;
   /** 一覧の末尾（<ul> の直後、<nav> の中）に置くもの。段階読み込みの目印など。 */
   listEnd?: ReactNode;
   /**
@@ -59,6 +67,31 @@ export function shellAccountItems(pendingInvites = 0, current?: string, name?: s
   return items.map((item) => (item.id === current ? { ...item, current: true } : item));
 }
 
+/** ドロップの位置。into はその行（フォルダ）の中へ、before / after はその行の前・後（同じ階層）。 */
+export type ShellDropTarget = { id: string; where: "before" | "after" | "into" };
+
+/** ドラッグの状態（どの行を動かしているか・どこに印を出すか）。 */
+type DragState = { dragId: string | null; over: ShellDropTarget | null };
+
+type DragProps = {
+  drag?: {
+    state: DragState;
+    onStart: (id: string) => void;
+    onOver: (target: ShellDropTarget | null) => void;
+    onDrop: (target: ShellDropTarget) => void;
+    onEnd: () => void;
+    can: (target: ShellDropTarget) => boolean;
+  };
+};
+
+/** 行の中の縦の位置から、落とす位置を決める（上 25% は before、下 25% は after、真ん中は into）。 */
+function dropWhere(event: ReactDragEvent<HTMLElement>): ShellDropTarget["where"] {
+  const box = event.currentTarget.getBoundingClientRect();
+  if (box.height <= 0) return "into";
+  const at = (event.clientY - box.top) / box.height;
+  return at < 0.25 ? "before" : at > 0.75 ? "after" : "into";
+}
+
 /** 木の 1 つの行と、その中の行。 */
 type TreeNode = { item: ShellListItem; children: TreeNode[] };
 
@@ -80,12 +113,66 @@ export function nestListItems(items: readonly ShellListItem[]): TreeNode[] {
   return roots;
 }
 
-function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder }: { nodes: TreeNode[] } & Pick<ShellSidebarProps, "currentId" | "onSelect" | "onToggleFolder">) {
+function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag }: { nodes: TreeNode[] } & Pick<ShellSidebarProps, "currentId" | "onSelect" | "onToggleFolder"> & DragProps) {
+  const rowClass = (id: string) => {
+    if (!drag) return "es-dirow";
+    const { dragId, over } = drag.state;
+    const marks = [dragId === id ? " es-di--dragging" : "", over?.id === id ? ` es-di--drop-${over.where}` : ""].join("");
+    return `es-dirow${marks}`;
+  };
   return (
     <ul>
       {nodes.map(({ item, children }) => (
         <li key={item.id}>
-          <div className="es-dirow">
+          <div
+            className={rowClass(item.id)}
+            draggable={drag ? true : undefined}
+            onDragStart={
+              drag
+                ? (event) => {
+                    event.dataTransfer?.setData("text/plain", item.id);
+                    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+                    drag.onStart(item.id);
+                  }
+                : undefined
+            }
+            onDragOver={
+              drag
+                ? (event) => {
+                    if (drag.state.dragId === null) return;
+                    const target: ShellDropTarget = { id: item.id, where: dropWhere(event) };
+                    if (!drag.can(target)) {
+                      if (drag.state.over?.id === item.id) drag.onOver(null);
+                      return;
+                    }
+                    event.preventDefault();
+                    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+                    if (drag.state.over?.id !== target.id || drag.state.over.where !== target.where) drag.onOver(target);
+                  }
+                : undefined
+            }
+            onDragLeave={
+              drag
+                ? (event) => {
+                    const next = event.relatedTarget as Node | null;
+                    if (next && event.currentTarget.contains(next)) return;
+                    if (drag.state.over?.id === item.id) drag.onOver(null);
+                  }
+                : undefined
+            }
+            onDrop={
+              drag
+                ? (event) => {
+                    if (drag.state.dragId === null) return;
+                    const target: ShellDropTarget = { id: item.id, where: dropWhere(event) };
+                    event.preventDefault();
+                    if (drag.can(target)) drag.onDrop(target);
+                    drag.onEnd();
+                  }
+                : undefined
+            }
+            onDragEnd={drag ? () => drag.onEnd() : undefined}
+          >
             {item.folder && onToggleFolder && (
               <button
                 type="button"
@@ -115,7 +202,7 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder }: { node
               )}
             </button>
           </div>
-          {children.length > 0 && <ShellSidebarRows nodes={children} currentId={currentId} onSelect={onSelect} onToggleFolder={onToggleFolder} />}
+          {children.length > 0 && <ShellSidebarRows nodes={children} currentId={currentId} onSelect={onSelect} onToggleFolder={onToggleFolder} drag={drag} />}
         </li>
       ))}
     </ul>
@@ -123,13 +210,32 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder }: { node
 }
 
 /**
- * 左の一覧。上は検索アイコンと＋（新しいページ）だけ。絞り込み（すべて／公開中／録音）は持たない。
+ * 左の一覧。上は「一覧をしまう」と、行のボタン「検索」「新しいページ」だけ。絞り込み（すべて／公開中／録音）は持たない。
+ * `onDrop` を渡すと、行をドラッグしてフォルダへ入れる・並べ替える。
  * 1行は題名と時刻。2行目は公開先・録音・作成中のときだけ。下は本人の行ひとつ。
  * 一覧は 1 本の木（フォルダ＝子を持てるページ）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
  */
-export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, listEnd, recent, me }: ShellSidebarProps) {
+export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, onDrop, canDrop, listEnd, recent, me }: ShellSidebarProps) {
   const newButton = useRef<HTMLButtonElement | null>(null);
   const meButton = useRef<HTMLButtonElement | null>(null);
+  const [dragState, setDragState] = useState<DragState>({ dragId: null, over: null });
+  const drag: DragProps["drag"] = onDrop
+    ? {
+        state: dragState,
+        onStart: (id) => setDragState({ dragId: id, over: null }),
+        onOver: (over) => setDragState((current) => ({ ...current, over })),
+        onDrop: (target) => {
+          const dragId = dragState.dragId;
+          if (dragId !== null && dragId !== target.id) onDrop(dragId, target);
+        },
+        onEnd: () => setDragState({ dragId: null, over: null }),
+        can: (target) => {
+          const dragId = dragState.dragId;
+          if (dragId === null || dragId === target.id) return false;
+          return canDrop ? canDrop(dragId, target) : true;
+        },
+      }
+    : undefined;
   return (
     <aside className="es-sb" aria-label="ページ">
       <div className="es-sb-top">
@@ -153,28 +259,7 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
           </div>
         ) : (
           <>
-            {search && (
-              <button type="button" className="es-ib" aria-label="探す" title="探す ⌘K" onClick={search.onOpen}>
-                <Icon name="search" />
-              </button>
-            )}
-            {newMenu && (
-              <span className="es-newwrap">
-                <button
-                  ref={newButton}
-                  type="button"
-                  className="es-newbtn"
-                  aria-label="新しいページ"
-                  title="新しいページ"
-                  aria-haspopup="menu"
-                  aria-expanded={newMenu.open}
-                  onClick={newMenu.onToggle}
-                >
-                  <Icon name="plus" />
-                </button>
-                {newMenu.open && <NewPageMenu trigger={newButton} onPick={newMenu.onPick} onClose={newMenu.onClose} />}
-              </span>
-            )}
+            <span className="es-sp" />
             {onCollapse && (
               <button type="button" className="es-ib" aria-label="一覧をしまう" title="一覧をしまう" onClick={onCollapse}>
                 <Icon name="side" />
@@ -183,6 +268,27 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
           </>
         )}
       </div>
+      {(search || newMenu) && (
+        <div className="es-sb-acts">
+          {search && !search.open && (
+            <button type="button" className="es-sb-act" onClick={search.onOpen}>
+              <Icon name="search" />
+              検索
+              <kbd aria-hidden="true">⌘K</kbd>
+            </button>
+          )}
+          {newMenu && (
+            <span className="es-newwrap">
+              <button ref={newButton} type="button" className="es-sb-act" aria-haspopup="menu" aria-expanded={newMenu.open} onClick={newMenu.onToggle}>
+                <Icon name="plus" />
+                新しいページ
+                <kbd aria-hidden="true">⌘N</kbd>
+              </button>
+              {newMenu.open && <NewPageMenu trigger={newButton} onPick={newMenu.onPick} onClose={newMenu.onClose} />}
+            </span>
+          )}
+        </div>
+      )}
       <nav className="es-sb-list" aria-label="ページの一覧">
         {recent && (
           <div className="es-sb-group">
@@ -193,7 +299,7 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
             {recent.open && <ShellSidebarRows nodes={nestListItems(recent.items)} currentId={currentId} onSelect={onSelect} />}
           </div>
         )}
-        <ShellSidebarRows nodes={nestListItems(items)} currentId={currentId} onSelect={onSelect} onToggleFolder={onToggleFolder} />
+        <ShellSidebarRows nodes={nestListItems(items)} currentId={currentId} onSelect={onSelect} onToggleFolder={onToggleFolder} drag={drag} />
         {listEnd}
       </nav>
       <div className="es-sb-foot">

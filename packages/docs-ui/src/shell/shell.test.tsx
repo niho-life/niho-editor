@@ -130,7 +130,7 @@ describe("EditorShell", () => {
       </EditorShell>,
     );
     const asides = [...withRail.matchAll(/<aside\b[^>]*aria-label="([^"]+)"/g)].map((m) => m[1]);
-    expect(asides).toEqual(["ページ", "このページの設定と AI"]);
+    expect(asides).toEqual(["ページ", "AIと作る"]);
     expect(new Set(asides).size).toBe(asides.length);
     expect([...withRail.matchAll(/<main\b/g)]).toHaveLength(1);
     expect([...withRail.matchAll(/<header\b/g)]).toHaveLength(1);
@@ -148,10 +148,16 @@ describe("ShellSidebar", () => {
     expect([...html.matchAll(/録音/g)]).toHaveLength(1);
   });
 
-  it("上は検索アイコンと＋だけ。開閉ボタンは＋の右隣", () => {
-    const top = html.slice(html.indexOf('class="es-sb-top"'), html.indexOf("<nav"));
-    const labels = [...top.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1]);
-    expect(labels).toEqual(["探す", "新しいページ", "一覧をしまう"]);
+  it("上段は右端の「一覧をしまう」だけ。その下に行ボタン「検索」「新しいページ」（見える文字が名前。ショートカットは飾り）", () => {
+    const top = html.slice(html.indexOf('class="es-sb-top"'), html.indexOf('class="es-sb-acts"'));
+    expect([...top.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1])).toEqual(["一覧をしまう"]);
+    const acts = html.slice(html.indexOf('class="es-sb-acts"'), html.indexOf("<nav"));
+    expect([...acts.matchAll(/class="es-sb-act"[^>]*>(?:<svg[\s\S]*?<\/svg>)?([^<]+)<kbd aria-hidden="true">([^<]+)<\/kbd>/g)].map((m) => [m[1], m[2]])).toEqual([
+      ["検索", "⌘K"],
+      ["新しいページ", "⌘N"],
+    ]);
+    expect(acts).not.toContain("aria-label=");
+    expect(html).not.toContain("es-newbtn");
   });
 
   it("1行は題名＋時刻。2行目は公開先・録音・作成中のときだけ。無題は薄く「無題」", () => {
@@ -204,7 +210,7 @@ describe("ShellHeader", () => {
   it("1段: 一覧 → 道具 → 状態 → 公開 → レール → … の順で並ぶ", () => {
     const html = renderToStaticMarkup(header());
     expect([...html.matchAll(/<header\b/g)]).toHaveLength(1);
-    const order = ["一覧を出す", "ブロックを足す", "録音", "ページの状態", ">公開<", "このページの設定と AI", 'aria-label="その他"'].map((needle) => html.indexOf(needle));
+    const order = ["一覧を出す", "ブロックを足す", "録音", "ページの状態", ">公開<", "AIと作る", 'aria-label="その他"'].map((needle) => html.indexOf(needle));
     expect(order.every((at) => at >= 0)).toBe(true);
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
@@ -239,7 +245,7 @@ describe("ShellHeader", () => {
     expect(shellStatus(pub({ updated: true })).state).toBe("updated");
     expect(shellStatus(pub({ range: "unlisted" })).tip).toBe("限定公開 · URL を知っている人だけ · 保存済み");
     expect(shellStatus(pub({}))).toEqual({ state: "published", tip: "公開中 · experience.niho.life/guides/x · 保存済み" });
-    expect(shellPublishButton({ pub: null })).toEqual({ label: "公開", tone: "outline", menu: false });
+    expect(shellPublishButton({ pub: null })).toEqual({ label: "公開", tone: "quiet", menu: false });
     expect(shellPublishButton({ pub: null, isArticle: true }).tone).toBe("primary");
     expect(shellPublishButton({ pub: null, planned: true }).tone).toBe("primary");
     expect(shellPublishButton({ pub: pub({ updated: true }) })).toEqual({ label: "更新を公開", tone: "primary", menu: false });

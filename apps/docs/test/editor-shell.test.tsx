@@ -52,9 +52,14 @@ function body(container: HTMLElement): Editor {
   return element.editor;
 }
 
-/** ＋ ›「空のページ」。 */
+/** 左の一覧の上段の行（「検索」「新しいページ」）。名前は行の文字で、⌘ の表示は読み上げに出さない。 */
+function sidebarAction(container: HTMLElement, label: string): HTMLButtonElement | null {
+  return [...container.querySelectorAll<HTMLButtonElement>(".es-sb-acts .es-sb-act")].find((candidate) => candidate.textContent?.includes(label)) ?? null;
+}
+
+/** 「新しいページ」›「空のページ」。 */
 async function newPage(container: HTMLElement) {
-  await click(container.querySelector<HTMLButtonElement>('button[aria-label="新しいページ"]')!);
+  await click(sidebarAction(container, "新しいページ")!);
   const item = [...container.querySelectorAll<HTMLButtonElement>('[role="menu"] button, [role="menuitem"]')].find(
     (candidate) => candidate.textContent?.includes("空のページ"),
   );
@@ -125,9 +130,9 @@ describe("Mac の新しい editor の画面", () => {
     const { container } = await render(editorBridge());
     expect(shell(container).querySelector(".es-sb")).not.toBeNull();
     expect(shell(container).querySelector(".es-dt")).not.toBeNull();
-    expect(container.querySelector('button[aria-label="新しいページ"]')).not.toBeNull();
-    expect(container.querySelector('button[aria-label="探す"]')).not.toBeNull();
-    // ＋と探すの他に、絞り込みの帯（すべて／公開中／録音）は持たない
+    expect(sidebarAction(container, "新しいページ")).not.toBeNull();
+    expect(sidebarAction(container, "検索")).not.toBeNull();
+    // 「新しいページ」と「検索」の他に、絞り込みの帯（すべて／公開中／録音）は持たない
     expect(container.textContent).not.toContain("公開中");
   });
 

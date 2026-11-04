@@ -136,6 +136,12 @@ const PATHS: Record<ShellIconName, ReactNode> = {
     </>
   ),
   trash: <path d="M5 7h14M9 7V4.5h6V7M7 7l1 13h8l1-13" />,
+  info: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8h.01" />
+    </>
+  ),
 };
 
 /** 装飾のアイコン。意味は隣の文字か、ボタンの aria-label が持つ。 */

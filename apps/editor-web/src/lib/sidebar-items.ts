@@ -189,6 +189,17 @@ export function orderNeighbours(pages: readonly PageSummary[], id: string): { ca
   return { canUp: at > 0, canDown: at >= 0 && at < sorted.length - 1 };
 }
 
+/**
+ * そのページと同じ階層の行の id を、一覧の並び（木と同じ規則）で返す。読み込んである行で見る。無ければ空。
+ * 左の一覧のドラッグで、落とした位置まで 1 歩ずつ並びを動かすのに使う。
+ */
+export function siblingOrder(pages: readonly PageSummary[], id: string): string[] {
+  const page = pages.find((item) => item.id === id);
+  if (!page) return [];
+  const siblings = pages.filter((item) => item.parent === page.parent);
+  return (page.parent === null ? siblings.toSorted(byOrderThenGiven) : siblings.toSorted(byOrderThenCreated)).map((item) => item.id);
+}
+
 /** 「最近」の行（木にしない。段も開閉も持たない）。 */
 export function recentRows(pages: readonly PageSummary[], now: number): ShellListItem[] {
   return pages.map((page) => rowOf(page, now, 0, false, false));

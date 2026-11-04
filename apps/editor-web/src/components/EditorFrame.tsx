@@ -6,22 +6,37 @@ import "niho-docs-ui/styles/shell.css";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageKind, PageLang, PageSummary, StepStatus } from "@niho/editor-store";
-import { EditorShell, ShellHeader, ShellMobileToolbar, ShellSheet, ShellSidebar, ShellTools, shellAccountItems, type NewPageKind, type ShellToolAction } from "niho-docs-ui/shell";
+import {
+  EditorShell,
+  ShellEntitiesEditor,
+  ShellHeader,
+  ShellMobileToolbar,
+  ShellSheet,
+  ShellSidebar,
+  ShellTermsEditor,
+  ShellTools,
+  shellAccountItems,
+  type NewPageKind,
+  type ShellDropTarget,
+  type ShellToolAction,
+} from "niho-docs-ui/shell";
 import type { PageChromeTools } from "niho-docs-ui/page/PageChrome";
 import { movePageOrderRequest, recordPageOpenRequest } from "@/lib/folder-client";
 import { listPagesRequest, movePageRequest } from "@/lib/pages-client";
-import { headerStatus } from "@/lib/save-status";
+import { PAGE_MAX_BYTES } from "@/image/image-limits";
+import { SAVE_STATUS_TEXT, headerStatus, type SaveStatus } from "@/lib/save-status";
 import { useShortcuts } from "@/lib/shortcuts";
-import { arrangeSidebarItems, folderOptions, orderNeighbours, reorderedPages, searchRows, withoutPageTree, type SidebarPublication } from "@/lib/sidebar-items";
+import { arrangeSidebarItems, folderOptions, orderNeighbours, reorderedPages, searchRows, siblingOrder, withoutPageTree, type SidebarPublication } from "@/lib/sidebar-items";
 import { usePageHistory } from "@/lib/use-page-history";
-import { usePageMenu, type AttachedPage } from "@/lib/use-page-menu";
+import { usePageMenu, type AttachedPage, type PageMenuLocalItem } from "@/lib/use-page-menu";
 import type { AttachedAiSteps } from "@/lib/attached-page";
 import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
-import { useFolderFields } from "@/lib/use-folder-fields";
+import { useFolderFields, type FolderFieldsState } from "@/lib/use-folder-fields";
 import { usePageShare } from "@/lib/use-page-share";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
 import { HistorySheet } from "./HistorySheet";
 import { InfoPanel } from "./InfoPanel";
+import { PageInfo } from "./PageInfo";
 import { usePagePublish } from "./PagePublish";
 import { BUSY_STYLE } from "./sheet-parts";
 import { ShareSheet } from "./ShareSheet";
@@ -54,7 +69,7 @@ export type FrameInitial = {
   initialNarrow: boolean;
 };
 
-/** 開いたページの、一覧の行に無いこと（情報パネルに出す）。 */
+/** 開いたページの、一覧の行に無いこと（右下のページの情報に出す）。 */
 export type OpenedDetails = {
   /** 録音の長さ（秒。録音ページでない・分からなければ null）。 */
   recordingSec?: number | null;
@@ -69,7 +84,7 @@ export type EditorFrameApi = {
   /** 開いたページ。一覧に読み込んでいない古いページでも、ヘッダーに題名を出し、保存したら一覧の上に足す。 */
   pageOpened: (page: PageSummary, details?: OpenedDetails) => void;
   pageTitleChanged: (id: string, title: string) => void;
-  /** 情報パネルで変えた言語を保存した。一覧（読み込んだ分と開いたページ）の言語を替える。 */
+  /** 公開のシートで変えた言語を保存した。一覧（読み込んだ分と開いたページ）の言語を替える。 */
   pageLangChanged: (id: string, lang: PageLang) => void;
   /** 保存した。一覧の上へ動かし、時刻を今にする。 */
   pageSaved: (id: string) => void;
@@ -218,18 +233,200 @@ function DeleteConfirm(props: { busy: boolean; error: string | null; onConfirm: 
   );
 }
 
+/** 保存の失敗だけをヘッダーに文字で出す（保存済み・保存中は状態の丸だけ。読み上げは丸の live region が持つ）。 */
+const SAVE_FAILURES: ReadonlySet<SaveStatus> = new Set<SaveStatus>(["offline", "error", "conflict", "signedOut"]);
+
+/** 並べ替えを 1 歩ずつ送る上限（左の一覧のドラッグ）。 */
+const MAX_ORDER_STEPS = 50;
+
+/** その行が、別の行（ancestor）の中（子孫）にあるか。 */
+function isInside(pages: readonly PageSummary[], id: string, ancestor: string): boolean {
+  const byId = new Map(pages.map((page) => [page.id, page]));
+  for (let at = byId.get(id)?.parent ?? null, guard = 0; at !== null && guard < 10; at = byId.get(at)?.parent ?? null, guard++) {
+    if (at === ancestor) return true;
+  }
+  return false;
+}
+
+/** 並びを 1 つ動かした結果を行に入れる（サーバーが確定した値があればそれを、無ければ同じ規則で作り直す）。 */
+function applyOrder(pages: PageSummary[], id: string, move: "up" | "down", orders: ReadonlyMap<string, number>): PageSummary[] {
+  return orders.size > 0 ? pages.map((page) => (orders.has(page.id) ? { ...page, sortOrder: orders.get(page.id)! } : page)) : reorderedPages(pages, id, move);
+}
+
+/**
+ * 「⋯」の「移動…」: フォルダへ入れる・出す、同じ階層の中で上へ・下へ（左の一覧のドラッグのキーボード・スマホの代替）。
+ */
+function MoveSheet(props: {
+  folder?: { value: string | null; options: { id: string; title: string }[]; note: string | null; onPick: (parent: string | null) => void };
+  order?: { canUp: boolean; canDown: boolean; busy: boolean; note: string | null; onUp: () => void; onDown: () => void };
+  onClose: () => void;
+}) {
+  const { folder, order } = props;
+  return (
+    <ShellSheet label="移動" onClose={props.onClose}>
+      <div className="es-sh-hd">
+        <h2>移動</h2>
+      </div>
+      <div className="es-sh-body">
+        {folder && (
+          <div className="es-sh-sec">
+            <h3>フォルダ</h3>
+            <select
+              className="es-input"
+              aria-label="フォルダ"
+              data-autofocus=""
+              value={folder.value ?? ""}
+              onChange={(event) => folder.onPick(event.target.value === "" ? null : event.target.value)}
+            >
+              <option value="">フォルダに入れない</option>
+              {folder.options.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.title || "無題"}
+                </option>
+              ))}
+            </select>
+            {folder.note && (
+              <p role="alert" className="es-upnote">
+                {folder.note}
+              </p>
+            )}
+          </div>
+        )}
+        {order && (
+          <div className="es-sh-sec">
+            <h3>並び</h3>
+            <div className="es-pills">
+              <button
+                type="button"
+                aria-label="このページを 1 つ上へ"
+                data-autofocus={folder ? undefined : ""}
+                aria-disabled={!order.canUp || order.busy || undefined}
+                onClick={() => order.canUp && !order.busy && order.onUp()}
+              >
+                上へ
+              </button>
+              <button type="button" aria-label="このページを 1 つ下へ" aria-disabled={!order.canDown || order.busy || undefined} onClick={() => order.canDown && !order.busy && order.onDown()}>
+                下へ
+              </button>
+            </div>
+            {order.note && (
+              <p role="alert" className="es-upnote">
+                {order.note}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="es-sh-foot">
+        <span className="es-sp" />
+        <button type="button" className="es-btn es-btn--quiet" onClick={props.onClose}>
+          閉じる
+        </button>
+      </div>
+    </ShellSheet>
+  );
+}
+
+/** 「⋯」の「フォルダの背景…」: 登場人物・固有名詞（#37）。シートを開いているあいだだけ読む。 */
+function FolderFieldsSheet({ fields, onClose }: { fields: FolderFieldsState; onClose: () => void }) {
+  return (
+    <ShellSheet label="フォルダの背景" onClose={onClose}>
+      <div className="es-sh-hd">
+        <h2>フォルダの背景</h2>
+      </div>
+      <div className="es-sh-body">
+        <div className="es-sh-sec">
+          {fields.open ? (
+            <>
+              <ShellEntitiesEditor entities={fields.entities} max={fields.max.entities} busy={fields.busy} onChange={fields.onEntities} onCancel={fields.onCancel} onSave={fields.onSave} />
+              <ShellTermsEditor
+                terms={fields.terms}
+                max={fields.max.terms}
+                busy={fields.busy}
+                onChange={fields.onTerms}
+                onCancel={fields.onCancel}
+                onSave={fields.onSave}
+                heading="このフォルダの固有名詞"
+                name="このフォルダの固有名詞"
+              />
+            </>
+          ) : (
+            <>
+              <dl className="es-kv">
+                <div>
+                  <dt>登場人物</dt>
+                  <dd>{fields.entities.length === 0 ? "なし" : fields.entities.map((entity) => entity.name).join(" · ")}</dd>
+                </div>
+                <div>
+                  <dt>固有名詞</dt>
+                  <dd>{fields.terms.length === 0 ? "なし" : fields.terms.map((term) => term.term).join(" · ")}</dd>
+                </div>
+              </dl>
+              <button type="button" className="es-btn es-btn--outline es-btn--sm" style={{ marginTop: 12 }} data-autofocus="" onClick={fields.onOpen}>
+                編集
+              </button>
+            </>
+          )}
+          {fields.note && (
+            <p role="alert" className="es-upnote">
+              {fields.note}
+            </p>
+          )}
+        </div>
+      </div>
+      <div className="es-sh-foot">
+        <span className="es-sp" />
+        <button type="button" className="es-btn es-btn--quiet" onClick={onClose}>
+          閉じる
+        </button>
+      </div>
+    </ShellSheet>
+  );
+}
+
+/** 右下のページの情報の ⓘ: 容量の説明（説明文はここだけに置く）。 */
+function CapacitySheet({ onClose }: { onClose: () => void }) {
+  return (
+    <ShellSheet label="容量について" onClose={onClose}>
+      <div className="es-sh-hd">
+        <h2>容量について</h2>
+      </div>
+      <div className="es-sh-body">
+        <div className="es-sh-sec">
+          <p className="es-sh-text">1 ページ {PAGE_MAX_BYTES / (1024 * 1024)} MiB まで（題名・リード・本文・本文とカバーの画像・アップロード中の画像）。</p>
+          <p className="es-sh-text" style={{ marginTop: 8 }}>
+            録音の音声は別枠で、ページの容量には数えません。
+          </p>
+        </div>
+      </div>
+      <div className="es-sh-foot">
+        <span className="es-sp" />
+        <button type="button" className="es-btn es-btn--quiet" data-autofocus="" onClick={onClose}>
+          閉じる
+        </button>
+      </div>
+    </ShellSheet>
+  );
+}
+
+/** 枠が出すシート（「⋯」の移動・フォルダの背景と、ページの情報の ⓘ）。開いたページの id で持ち、ページが替わったら出さない。 */
+type FrameSheet = { kind: "move" | "folder-fields" | "capacity"; id: string };
+
 /**
  * editor の枠（一覧＋ヘッダー＋ページ）。見た目は niho-docs-ui の shell（#48）。ここは状態と移動だけを持つ。
  * - 一覧は最初の区切りをサーバーから受け、末尾が近づいたら続きを読む。
  * - 900px 以下では `/` が一覧の画面。ページと設定は全画面で、ヘッダーの左のボタンで一覧を出す。
- * - ヘッダーの右上は、開いているページ（`attachPage` で登録されたもの）の状態の丸（いつも「自分だけ」＋保存の状態）と、
- *   「…」（リンクで共有・書き出し・履歴・複製・削除。src/lib/use-page-menu.ts・use-page-share.ts・use-page-history.ts）。
- *   まだ作っていないページでは「…」を出さない。削除の確認・共有・履歴は ShellSheet で overlay に出す。
+ * - ヘッダーの右上は、開いているページ（`attachPage` で登録されたもの）の状態の丸（いつも「自分だけ」＋保存の状態。保存の失敗だけ
+ *   見える文字を添える）と、「…」（リンクで共有・書き出し・Google ドキュメント・[フォルダを書き出し]・履歴・複製・[移動…]・
+ *   [フォルダの背景…]・ページの情報・削除。src/lib/use-page-menu.ts・use-page-share.ts・use-page-history.ts）。
+ *   まだ作っていないページでは「…」を出さない。削除の確認・共有・履歴・移動・フォルダの背景は ShellSheet で overlay に出す。
  * - ショートカット（設計 §11）: ⌘N 新しいページ、⌘K 検索、⌘⇧P 公開のシート（⌘S はページ、⌘/ は本文が持つ）。
- * - ヘッダーの「このページの設定と AI」で右のレールに情報パネル（./InfoPanel.tsx）を出す。保存したページ（`/p/{id}`）だけで、
+ * - ヘッダーの「AIと作る」で右のレール（./InfoPanel.tsx。AI だけ）を出す。保存したページ（`/p/{id}`）だけで、
  *   まだ作っていないページ（`/p/new`）・録音から・設定系の画面ではボタンを出さない。デスクトップではページを替えても開いたまま
  *   （モック v6 と同じ。画面の移動でレールを閉じない）、狭い画面（900px 以下）は全画面のレールで、開いたページでだけ出す
  *   （一覧から別のページを開いたら閉じる。閉じるのはヘッダーの同じボタン）。
+ * - 公開に関する欄（リード・カバー画像・言語・英語版）は公開のシートの中だけ。文字数とページの情報は本文の列の右下（./PageInfo.tsx）。
+ * - フォルダへの出し入れと並びは、左の一覧のドラッグ（キーボード・スマホは「…」の「移動…」）。
  */
 export function EditorFrame({ initial, children }: { initial: FrameInitial; children: ReactNode }) {
   const router = useRouter();
@@ -238,22 +435,31 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const narrow = useSyncExternalStore(subscribeNarrow, isNarrowNow, () => initial.initialNarrow);
 
   const [list, setList] = useState<ListState>({ pages: initial.pages, next: initial.next, opened: null, details: null, gone: new Set() });
+  // 非同期の操作（ドラッグの並べ替え）が、描画を待たずに今の一覧を読む
+  const listNow = useRef(list);
+  useEffect(() => {
+    listNow.current = list;
+  });
   const [now, setNow] = useState(initial.now);
   const [collapsed, setCollapsed] = useState(false);
   // 閉じているフォルダ（木の段。開いているのが既定）
   const [closedFolders, setClosedFolders] = useState<ReadonlySet<string>>(() => new Set());
-  // フォルダへ入れられなかったときの一言（情報パネルのフォルダの下）
+  // フォルダへ入れられなかったときの一言（「移動…」のフォルダの下、閉じていればヘッダー）
   const [moveNote, setMoveNote] = useState<string | null>(null);
   // 並べ替えが届かなかったときの一言と、送っているあいだ
   const [orderNote, setOrderNote] = useState<string | null>(null);
   const [ordering, setOrdering] = useState(false);
   // 狭い画面で一覧を出している path（path が変われば閉じる）
   const [listFor, setListFor] = useState<string | null>(null);
-  // 情報パネル: デスクトップで開いているか（ページを替えても持つ）と、狭い画面で開いている path（path が変われば閉じる）
+  // 右のレール（AIと作る）: デスクトップで開いているか（ページを替えても持つ）と、狭い画面で開いている path（path が変われば閉じる）
   const [railOpenWide, setRailOpenWide] = useState(true);
   const [railFor, setRailFor] = useState<string | null>(null);
-  // ページ設定の開閉。自動で閉じたことと、利用者が手動で選んだことをページごとに保持する。
-  const [settingsByPage, setSettingsByPage] = useState<ReadonlyMap<string, { open: boolean; manual: boolean; autoCollapsed: boolean }>>(() => new Map());
+  // 「⋯」の移動・フォルダの背景と、ページの情報の ⓘ のシート
+  const [frameSheet, setFrameSheet] = useState<FrameSheet | null>(null);
+  // 右下のページの情報を開いているページ
+  const [infoFor, setInfoFor] = useState<string | null>(null);
+  // 並べ替えを送っているあいだ（描画を待たずに読む。ドラッグの次のドロップを受けない）
+  const orderingRef = useRef(false);
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const [meOpen, setMeOpen] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
@@ -460,23 +666,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     if (attached.id === id && (!active || active === document.body || !active.isConnected)) focusMore();
   }, [attached, focusMore]);
 
-  // 右上の「…」（リンクで共有・書き出し・履歴・複製・削除）。操作の前に、開いているページのまだ届いていない変更を保存する
-  const menu = usePageMenu({
-    page: attached,
-    current: () => attachedRef.current,
-    onDuplicated: (copy, stillOpen) => {
-      api.pageCreated(copy.id, copy.title, copy.kind);
-      if (stillOpen) router.push(`/p/${copy.id}`);
-    },
-    onDeleted: (id, stillOpen) => {
-      api.pageRemoved(id);
-      // 最後に開いたページの cookie が消したページを指していても、`/` はサーバーで確かめて新しいページへ移す
-      if (stillOpen) router.push("/");
-    },
-    openSheet: (sheet, owner) => (sheet === "share" ? share.open(owner) : history.open(owner)),
-    focusMore,
-    goToGoogleDocsBatch: (path) => router.push(path),
-  });
   const restoredNote = history.notice && history.notice.id === currentId ? history.notice.text : "";
 
   // 打つたびにサーバーで探す（題名と本文）。検索語が空のあいだは、ふつうの一覧のまま
@@ -543,38 +732,43 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
       }),
     [],
   );
-  /** 手動の並びを 1 つ動かす（情報パネルの「並び」）。届いたら一覧を読み直さず、行の `sortOrder` を入れ替える。 */
+  /**
+   * 手動の並びを 1 歩動かす（送って、届いたら行の `sortOrder` を入れ替える）。届かなければ一言を出して null。
+   * 並びはサーバーが同じ親の全ての兄弟に 1 から振り直す。一覧は一部しか読み込んでいないことがあるので、持っている行で
+   * 入れ替えず、サーバーが確定した値を行に入れる（読み込んでいない兄弟との並びがずれない）。
+   */
+  const stepOrder = useCallback(async (id: string, move: "up" | "down"): Promise<{ moved: boolean; orders: ReadonlyMap<string, number> } | null> => {
+    try {
+      const { moved, orders } = await movePageOrderRequest(id, move);
+      if (moved) setList((current) => ({ ...current, pages: applyOrder(current.pages, id, move, orders) }));
+      return { moved, orders };
+    } catch {
+      setOrderNote("並びを変えられませんでした");
+      return null;
+    }
+  }, []);
+  /** 手動の並びを 1 つ動かす（「移動…」の「上へ」「下へ」）。 */
   const moveOrder = useCallback(
     async (id: string, move: "up" | "down") => {
+      if (orderingRef.current) return;
       setOrderNote(null);
+      orderingRef.current = true;
       setOrdering(true);
       try {
-        // 並びはサーバーが同じ親の全ての兄弟に 1 から振り直す。一覧は一部しか読み込んでいないことがあるので、持っている行で
-        // 入れ替えず、サーバーが確定した値を行に入れる（読み込んでいない兄弟との並びがずれない）
-        const { moved, orders } = await movePageOrderRequest(id, move);
-        if (moved) {
-          setList((current) => ({
-            ...current,
-            pages:
-              orders.size > 0
-                ? current.pages.map((page) => (orders.has(page.id) ? { ...page, sortOrder: orders.get(page.id)! } : page))
-                : reorderedPages(current.pages, id, move),
-          }));
-        }
-      } catch {
-        setOrderNote("並びを変えられませんでした");
+        await stepOrder(id, move);
       } finally {
+        orderingRef.current = false;
         setOrdering(false);
       }
     },
-    [],
+    [stepOrder],
   );
   const saveFirst = useCallback(() => pageSaver.current?.() ?? Promise.resolve(true), []);
   /**
-   * ページをフォルダへ入れる・出す（情報パネルの「フォルダ」）。先に一覧の行を動かし、届かなければ戻して一言。
+   * ページをフォルダへ入れる・出す（「移動…」と左の一覧のドラッグ）。先に一覧の行を動かし、届かなければ戻して一言（false）。
    * 本文・revision は変わらないので、開いているエディタには触らない。
    */
-  const movePage = useCallback(async (id: string, parent: string | null) => {
+  const movePage = useCallback(async (id: string, parent: string | null): Promise<boolean> => {
     setMoveNote(null);
     let before: string | null | undefined;
     setList((current) => {
@@ -587,6 +781,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     });
     try {
       await movePageRequest(id, parent);
+      return true;
     } catch {
       const back = before ?? null;
       setList((current) => ({
@@ -595,8 +790,66 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         opened: current.opened?.id === id ? { ...current.opened, parent: back } : current.opened,
       }));
       setMoveNote("このフォルダには入れられませんでした");
+      return false;
     }
   }, []);
+  /** 左の一覧のドラッグで落とせるか（into は入れられるフォルダ、before / after は入れ先の階層に入れられ、自分の中でない行）。 */
+  const canDrop = useCallback(
+    (dragId: string, target: ShellDropTarget): boolean => {
+      if (ordering) return false;
+      const pages = list.pages;
+      if (target.id === dragId || !pages.some((page) => page.id === dragId)) return false;
+      if (target.where === "into") return folderOptions(pages, dragId).some((option) => option.id === target.id);
+      const row = pages.find((page) => page.id === target.id);
+      if (!row || isInside(pages, target.id, dragId)) return false;
+      return row.parent === null || folderOptions(pages, dragId).some((option) => option.id === row.parent);
+    },
+    [list.pages, ordering],
+  );
+  /**
+   * 左の一覧のドラッグを落とした。into はそのフォルダへ入れる。before / after は、入れ先の階層が今と違えば先に入れ直し、
+   * そのあと同じ階層の並びを、落とした行の前・後になるまで 1 歩ずつ動かす（既存の `PATCH /order { move }`。各歩で行を入れ替える）。
+   * 途中で届かなければ止めて一言。動かしている間は次のドロップを受けない。
+   */
+  const dropPage = useCallback(
+    async (dragId: string, target: ShellDropTarget) => {
+      if (orderingRef.current) return;
+      if (target.where === "into") {
+        void movePage(dragId, target.id);
+        return;
+      }
+      let pages = listNow.current.pages;
+      const row = pages.find((page) => page.id === target.id);
+      const dragged = pages.find((page) => page.id === dragId);
+      if (!row || !dragged) return;
+      const parent = row.parent;
+      orderingRef.current = true;
+      setOrdering(true);
+      setOrderNote(null);
+      try {
+        if (dragged.parent !== parent) {
+          if (!(await movePage(dragId, parent))) return;
+          pages = pages.map((page) => (page.id === dragId ? { ...page, parent } : page));
+        }
+        for (let step = 0; step < MAX_ORDER_STEPS; step++) {
+          const order = siblingOrder(pages, dragId);
+          const at = order.indexOf(dragId);
+          const to = order.indexOf(target.id);
+          if (at < 0 || to < 0) break;
+          const want = target.where === "before" ? (at < to ? to - 1 : to) : at < to ? to : to + 1;
+          if (at === want) break;
+          const move = at > want ? "up" : "down";
+          const result = await stepOrder(dragId, move);
+          if (!result || !result.moved) break;
+          pages = applyOrder(pages, dragId, move, result.orders);
+        }
+      } finally {
+        orderingRef.current = false;
+        setOrdering(false);
+      }
+    },
+    [movePage, stepOrder],
+  );
   /**
    * ヘッダーに常設する書式の帯（ShellTools）。開いているページの本文の操作（PageChrome が登録したもの）につなぐ。
    * 「録音」は本文の操作ではないので枠が受け、録音から始める画面へ移る。ページを開いていないあいだは出さない。
@@ -622,13 +875,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     onPublication,
     onNavigate: (path) => router.push(path),
     saveFirst,
-    revealField: (field) => {
-      if (field !== "cover" && field !== "lead" && field !== "lang") return;
-      const id = openPage?.id;
-      if (id) setSettingsByPage((current) => new Map(current).set(id, { open: true, manual: true, autoCollapsed: false }));
-      if (narrow) setRailFor(pathname);
-      else setRailOpenWide(true);
-    },
+    // 記事の情報（リード・カバー画像・言語・英語版）は、開いているページのエディタが持つ欄を公開のシートの中に出す
+    fields: attached && (attached.id ?? currentId) === openPage?.id ? attached.publicationFields : undefined,
   });
   useEffect(() => {
     publishSaved.current = publishing.pageSaved;
@@ -674,7 +922,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // 一覧をしまう: デスクトップでは列を閉じ、狭い画面ではページへ戻る（`/` では一覧がその画面なので出さない）
   const collapse = narrow ? (pathname === "/" ? undefined : () => setListFor(null)) : () => setCollapsed(true);
 
-  // 情報パネルのページ: 開いているエディタのページ（作ったばかりで URL がまだ `/p/new` のときも）か、URL のページ。
+  // レール・右下のページの情報のページ: 開いているエディタのページ（作ったばかりで URL がまだ `/p/new` のときも）か、URL のページ。
   // 一覧の行（作成・更新）が分かり、エディタが画面にあるときだけボタンを出す（`/p/new` の作る前・設定系・ページが無い 404 では出さない）。
   // エディタが下書きを読み終えるまでは、レールは出したまま中のボタンは何もしない（ページを替えるたびにレールが消えて戻らないように）
   const railId = attached?.id ?? (attached ? currentId : undefined);
@@ -683,30 +931,46 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     : undefined;
   const railPage = attached && attached.id !== null && attached.id === railId ? attached : null;
   const railShown = railSummary !== undefined && (narrow ? railFor === pathname : railOpenWide);
-  const settingsState = railId ? (settingsByPage.get(railId) ?? { open: true, manual: false, autoCollapsed: false }) : { open: true, manual: false, autoCollapsed: false };
-  const togglePageSettings = useCallback(() => {
-    if (!railId) return;
-    setSettingsByPage((current) => {
-      const previous = current.get(railId) ?? { open: true, manual: false, autoCollapsed: false };
-      return new Map(current).set(railId, { ...previous, open: !previous.open, manual: true });
-    });
-  }, [railId]);
-  const collapseSettingsForChat = useCallback(() => {
-    if (!railId) return;
-    setSettingsByPage((current) => {
-      const previous = current.get(railId);
-      if (previous?.manual || previous?.autoCollapsed) return current;
-      return new Map(current).set(railId, { open: false, manual: false, autoCollapsed: true });
-    });
-  }, [railId]);
-  // 入れられるフォルダ（読み込んである上の段のページ）。入れ先が無く、いま上の段にいるなら「フォルダ」の節を出さない
+  // 入れられるフォルダ（読み込んである上の段のページ）。入れ先が無く、いま上の段にいるなら「移動…」の「フォルダ」を出さない
   const railFolders = useMemo(() => (railSummary ? folderOptions(list.pages, railSummary.id) : []), [railSummary, list.pages]);
-  // フォルダ（＝子を持つ上の段のページ）でだけ「このフォルダの背景」とフォルダの書き出しを出す。
-  // 欄を読むのはレールを開いているあいだだけ（閉じているページで要求を出さない）
+  const canFolder = railSummary !== undefined && (railFolders.length > 0 || railSummary.parent !== null);
+  // フォルダ（＝子を持つ上の段のページ）でだけ「フォルダの背景…」とフォルダの書き出しを出す
   const railIsFolder = railSummary !== undefined && railSummary.parent === null && list.pages.some((page) => page.parent === railSummary.id);
-  const folderFields = useFolderFields(railShown && railIsFolder && railSummary ? railSummary.id : null);
   // 「並び」は動かせるときだけ出す（同じ階層に 1 つしか無いページには出さない）
   const railOrder = railSummary ? orderNeighbours(list.pages, railSummary.id) : { canUp: false, canDown: false };
+  const canOrder = railOrder.canUp || railOrder.canDown;
+  // 枠のシートとページの情報は、開いたときのページでだけ出す（ページが替わったら出さない）
+  const sheetFor = frameSheet && railSummary && frameSheet.id === railSummary.id ? frameSheet.kind : null;
+  const infoOpen = railSummary !== undefined && infoFor === railSummary.id;
+  // フォルダの欄を読むのは「フォルダの背景…」のシートを開いているあいだだけ
+  const folderFields = useFolderFields(sheetFor === "folder-fields" && railIsFolder && railSummary ? railSummary.id : null);
+  // 右上の「…」（リンクで共有・書き出し・履歴・複製・移動・ページの情報・削除）。操作の前に、開いているページのまだ届いていない変更を保存する
+  const menu = usePageMenu({
+    page: attached,
+    current: () => attachedRef.current,
+    onDuplicated: (copy, stillOpen) => {
+      api.pageCreated(copy.id, copy.title, copy.kind);
+      if (stillOpen) router.push(`/p/${copy.id}`);
+    },
+    onDeleted: (id, stillOpen) => {
+      api.pageRemoved(id);
+      // 最後に開いたページの cookie が消したページを指していても、`/` はサーバーで確かめて新しいページへ移す
+      if (stillOpen) router.push("/");
+    },
+    openSheet: (sheet, owner) => (sheet === "share" ? share.open(owner) : history.open(owner)),
+    focusMore,
+    goToGoogleDocsBatch: (path) => router.push(path),
+    extras: { folder: railIsFolder, move: canFolder || canOrder, pageInfo: railSummary !== undefined },
+    // 「移動…」「フォルダの背景…」はシート、「ページの情報」は右下のポップオーバー。開いたときのページの id で持つ
+    onLocal: (item: PageMenuLocalItem) => {
+      const id = railSummary?.id;
+      if (!id) return;
+      if (item === "page-info") setInfoFor(id);
+      else setFrameSheet({ kind: item === "move" ? "move" : "folder-fields", id });
+    },
+  });
+  const closeFrameSheet = useCallback(() => setFrameSheet(null), []);
+  const closeInfo = useCallback(() => setInfoFor(null), []);
   const toggleRail = () => {
     if (narrow) setRailFor(railShown ? null : pathname);
     else setRailOpenWide(!railShown);
@@ -718,31 +982,19 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         <EditorShell
           sidebarOpen={sidebarOpen}
           railOpen={railShown}
-          toolbar={editorBar && narrow ? <ShellMobileToolbar {...editorBar} /> : undefined}
-          rail={
+          toolbar={editorBar && narrow ? <ShellMobileToolbar {...editorBar} compact /> : undefined}
+          rail={railSummary ? <InfoPanel page={railPage} aiSteps={aiSteps?.ownerId === railId ? aiSteps : null} /> : undefined}
+          corner={
             railSummary ? (
-              <InfoPanel
+              <PageInfo
                 summary={railSummary}
-                page={railPage}
-                author={initial.me}
-                folders={railFolders.length > 0 || railSummary.parent !== null ? railFolders : undefined}
-                folderNote={moveNote}
-                onFolder={(parent) => void movePage(railSummary.id, parent)}
-                order={
-                  railOrder.canUp || railOrder.canDown
-                    ? { ...railOrder, busy: ordering, note: orderNote ?? undefined, onUp: () => void moveOrder(railSummary.id, "up"), onDown: () => void moveOrder(railSummary.id, "down") }
-                    : undefined
-                }
-                fields={railIsFolder ? folderFields : undefined}
-                onExportFolder={railIsFolder ? menu.exportFolder : undefined}
+                text={railPage?.text ?? null}
+                lang={railPage?.lang ?? railSummary.lang}
                 recordingSec={list.details?.id === railSummary.id ? list.details.recordingSec : null}
-                open={settingsState.open}
-                onToggle={togglePageSettings}
-                onChatOverflow={collapseSettingsForChat}
-                aiSteps={aiSteps?.ownerId === railId ? aiSteps : null}
-                active={railShown}
-                onExportMarkdown={menu.exportMarkdown}
-                onDelete={menu.askDelete}
+                open={infoOpen}
+                onToggle={() => setInfoFor(infoOpen ? null : railSummary.id)}
+                onClose={closeInfo}
+                onInfo={() => setFrameSheet({ kind: "capacity", id: railSummary.id })}
               />
             ) : undefined
           }
@@ -753,6 +1005,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               onSelect={select}
               onToggleFolder={toggleFolder}
               onCollapse={collapse}
+              onDrop={searching ? undefined : (dragId, target) => void dropPage(dragId, target)}
+              canDrop={canDrop}
               newMenu={{ open: newMenuOpen, onToggle: () => setNewMenuOpen((open) => !open), onClose: () => setNewMenuOpen(false), onPick: pickNew }}
               search={{
                 open: search.open,
@@ -785,12 +1039,23 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
             <ShellHeader
               title={title}
               plain={settings !== undefined}
-              tools={editorBar && !narrow ? <ShellTools {...editorBar} /> : undefined}
+              tools={editorBar && !narrow ? <ShellTools {...editorBar} compact /> : undefined}
               showListButton={!sidebarOpen}
               onToggleList={() => (narrow ? setListFor(pathname) : setCollapsed(false))}
               status={attached ? headerStatus(attached.status, publishing.status) : publishing.status}
               trailing={
                 <>
+                  {attached && SAVE_FAILURES.has(attached.status) && (
+                    <span data-save-note="" style={MENU_NOTE_STYLE}>
+                      {SAVE_STATUS_TEXT[attached.status]}
+                    </span>
+                  )}
+                  {/* 左の一覧のドラッグが届かなかったときの一言（「移動…」のシートを開いているあいだは、シートの中に出す） */}
+                  {sheetFor !== "move" && (orderNote ?? moveNote) && (
+                    <span role="alert" style={MENU_NOTE_STYLE}>
+                      {orderNote ?? moveNote}
+                    </span>
+                  )}
                   {menu.note && (
                     <span role="alert" style={MENU_NOTE_STYLE}>
                       {menu.note}
@@ -815,7 +1080,27 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           }
           overlay={
             <>
-              {menu.confirm ? <DeleteConfirm {...menu.confirm} /> : share.sheet ? <ShareSheet {...share.sheet} /> : history.sheet ? <HistorySheet {...history.sheet} now={now} /> : null}
+              {menu.confirm ? (
+                <DeleteConfirm {...menu.confirm} />
+              ) : share.sheet ? (
+                <ShareSheet {...share.sheet} />
+              ) : history.sheet ? (
+                <HistorySheet {...history.sheet} now={now} />
+              ) : sheetFor === "move" && railSummary ? (
+                <MoveSheet
+                  folder={canFolder ? { value: railSummary.parent, options: railFolders, note: moveNote, onPick: (parent) => void movePage(railSummary.id, parent) } : undefined}
+                  order={
+                    canOrder
+                      ? { ...railOrder, busy: ordering, note: orderNote, onUp: () => void moveOrder(railSummary.id, "up"), onDown: () => void moveOrder(railSummary.id, "down") }
+                      : undefined
+                  }
+                  onClose={closeFrameSheet}
+                />
+              ) : sheetFor === "folder-fields" && railIsFolder ? (
+                <FolderFieldsSheet fields={folderFields} onClose={closeFrameSheet} />
+              ) : sheetFor === "capacity" ? (
+                <CapacitySheet onClose={closeFrameSheet} />
+              ) : null}
               {publishing.overlay}
             </>
           }

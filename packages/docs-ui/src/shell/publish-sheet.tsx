@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import { Icon } from "./icons";
 import { ShellSheet } from "./sheet";
 import type { ShellDest } from "./types";
@@ -77,6 +77,11 @@ export type PublishFormProps = {
   experience?: PublishExperienceSettings;
   /** 公開に失敗したときなどの 1 行（role="alert"）。 */
   error?: string | null;
+  /**
+   * 記事の情報（リード・カバー画像・言語・英語版など。保存は呼ぶ側）。「どこに出すか」と条件の後、「範囲」の前に出す。
+   * 発信先を選んでいなくても出す。見出しは付けない（欄それぞれがラベルを持つ）。
+   */
+  fields?: ReactNode;
 };
 
 /** 「公開をやめる」の確認（PublishForm の「公開をやめる」から呼ぶ側が切り替える）。 */
@@ -242,6 +247,7 @@ function PublishForm(props: PublishFormProps) {
               </p>
             </div>
           ))}
+        {props.fields ? <div className="es-sh-sec es-sh-fields">{props.fields}</div> : null}
         {chosen && chosen.id !== "site" && (
           <div className="es-sh-sec">
             <h3 id={rangeId}>範囲</h3>

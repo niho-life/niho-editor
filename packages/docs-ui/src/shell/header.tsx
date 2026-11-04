@@ -16,7 +16,7 @@ export type ShellHeaderProps = {
   publish?: { label: string; tone: ShellButtonTone; menu?: boolean; onClick?: () => void } | null;
   /** 状態・公開ボタンのかわりに出す操作（録音からの「やめる」など）。 */
   trailing?: ReactNode;
-  /** 右のレール（このページの設定と AI）。 */
+  /** 右のレール（AIと作る）。 */
   railOpen?: boolean;
   onToggleRail?: () => void;
   more?: { open: boolean; items: ShellMenuItem[]; onToggle: () => void; onClose: () => void; onSelect: (id: string) => void };
@@ -69,8 +69,8 @@ export function ShellHeader(props: ShellHeaderProps) {
         <button
           type="button"
           className={`es-ib${props.railOpen ? " es-ib--on" : ""}`}
-          aria-label="このページの設定と AI"
-          title="このページの設定と AI"
+          aria-label="AIと作る"
+          title="AIと作る"
           aria-expanded={props.railOpen ?? false}
           aria-controls="es-rail"
           onClick={props.onToggleRail}
