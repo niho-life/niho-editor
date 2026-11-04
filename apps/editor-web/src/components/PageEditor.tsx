@@ -130,6 +130,15 @@ function imageAssetIds(blocks: unknown[], currentCover: string | null): string[]
   return [...ids];
 }
 
+/** 出たとき（公開のシートが開いて欄が描かれたとき）に一度だけ `run` を呼ぶ。何も描かない。 */
+function OnMount({ run }: { run: () => void }) {
+  const runRef = useRef(run);
+  useEffect(() => {
+    runRef.current();
+  }, []);
+  return null;
+}
+
 function statusOf(state: SaveState): SaveStatus {
   return state === "stopped" ? "conflict" : state;
 }
@@ -619,6 +628,12 @@ function EditorScreen(props: ScreenProps) {
   // 保存と下書きの持ち主はエディタのまま、入力欄だけを公開のシート（「公開」を押したときだけ出る）へ渡す。
   // 説明文は置かない（英語版の説明は ⓘ のシートの中だけ）。
   const leadCount = Array.from(lead ?? "").length;
+  // カバーの選択肢は本文の画像から読む。入力のたびには読まず、欄が出たとき（シートを開いたとき）と欄に触れたときだけ読み直す。
+  // 画像もカバーもないと欄は無効になってフォーカスできないので、触れたときだけに頼らず、出たときにも読み直す。
+  const refreshCoverOptions = useCallback(() => {
+    const next = imageAssetIds(editorRef.current?.getJSON().content ?? page.blocks, coverRef.current);
+    setCoverOptions((current) => (current.length === next.length && current.every((assetId, index) => assetId === next[index]) ? current : next));
+  }, [page.blocks]);
   const publicationFields = useMemo(() => (
     <section aria-label="記事の情報" style={{ display: "grid", gap: 14, minWidth: 0 }} onCompositionStart={compositionStarted} onCompositionEnd={compositionEnded}>
       <label>
@@ -645,6 +660,7 @@ function EditorScreen(props: ScreenProps) {
         />
       </label>
       <label>
+        <OnMount run={refreshCoverOptions} />
         カバー画像
         {/* The private same-origin image endpoint requires the viewer's session cookie. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -654,7 +670,7 @@ function EditorScreen(props: ScreenProps) {
           data-page-cover=""
           value={cover ?? ""}
           disabled={!ready || unreadable || (coverOptions.length === 0 && !cover)}
-          onFocus={() => setCoverOptions(imageAssetIds(editorRef.current?.getJSON().content ?? page.blocks, coverRef.current))}
+          onFocus={refreshCoverOptions}
           onChange={(event) => {
             const next = event.currentTarget.value || null;
             coverRef.current = next;
@@ -727,7 +743,7 @@ function EditorScreen(props: ScreenProps) {
       </div>
       {pageId && <PageTranslation pageId={pageId} lang={lang} saveFirst={flush} savedRevision={savedRevision} currentRevision={revision} />}
     </section>
-  ), [lead, leadCount, cover, ready, unreadable, coverOptions, coverConsent, coverMetaBusy, coverError, page.blocks, pageId, lang, changeLang, langNote, flush, savedRevision, revision, compositionStarted, compositionEnded]);
+  ), [lead, leadCount, cover, ready, unreadable, coverOptions, refreshCoverOptions, coverConsent, coverMetaBusy, coverError, pageId, lang, changeLang, langNote, flush, savedRevision, revision, compositionStarted, compositionEnded]);
 
   const status = statusOf(state);
   useEffect(

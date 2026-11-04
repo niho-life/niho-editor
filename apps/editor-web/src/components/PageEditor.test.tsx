@@ -293,6 +293,24 @@ describe("PageEditor autosave", () => {
     expect(bodies).toEqual([{ lead: "新しい要約", baseRevision: 5 }]);
   });
 
+  it("画像もカバーもないページで本文へ画像を足しても、公開のシートを開き直せばカバーに選べる", async () => {
+    const assetId = "00000000-0000-4000-8000-000000000003";
+    acceptingFetch();
+    await renderEditor({ revision: 5 }, { settings: true });
+    // 選べる画像がないあいだは無効（フォーカスできないので、触れたときの読み直しには頼れない）
+    const before = container!.querySelector<HTMLSelectElement>("[data-page-cover]")!;
+    expect(before.disabled).toBe(true);
+    expect([...before.options].map((option) => option.value)).toEqual([""]);
+    await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((candidate) => candidate.textContent === "閉じる")!.click());
+    await act(async () => {
+      bodyEditor().commands.insertContent({ type: "image", attrs: { assetId } });
+    });
+    await act(async () => container!.querySelector<HTMLButtonElement>(".es-dt .es-pubbtn")!.click());
+    const after = container!.querySelector<HTMLSelectElement>("[data-page-cover]")!;
+    expect(after.disabled).toBe(false);
+    expect([...after.options].map((option) => option.value)).toEqual(["", assetId]);
+  });
+
   it("uses a page image as the cover without uploading a second copy", async () => {
     const assetId = "00000000-0000-4000-8000-000000000002";
     const patches: Array<Record<string, unknown>> = [];
