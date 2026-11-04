@@ -84,6 +84,18 @@ describe("recording client: requests", () => {
     expect(fetchMock.mock.calls.at(-1)![0]).toBe("/api/pages/..%2Fx%3Fy/recording");
   });
 
+  it("keeps one latest candidate summary per id when a recording read repeats an id", async () => {
+    const first = { ...candidate(4), name: "最新の案" };
+    const repeated = { ...candidate(3), name: "古い案" };
+    const second = { ...candidate(), id: "22222222-2222-4222-8222-222222222222", name: "別の案" };
+    mockFetch(200, { ...snapshot(3), candidates: [first, repeated, second] });
+
+    const loaded = await getRecording(ID);
+
+    expect(loaded.candidates?.map((item) => item.id)).toEqual([first.id, second.id]);
+    expect(loaded.candidates?.[0]?.name).toBe(first.name);
+  });
+
   it("editSegments / renameSpeaker / mergeSpeakers patch with baseRevision and exactly one operation", async () => {
     const fetchMock = mockFetch(200, snapshot(4));
     expect((await editSegments(ID, 3, [{ index: 1, text: "直した" }])).recording.revision).toBe(4);
