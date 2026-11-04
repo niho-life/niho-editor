@@ -494,3 +494,22 @@ ownerが`set-private-jobs-keyring.sh`へkeyringを安全な標準入力で投入
 公開APIの面の資格は、生tokenを配る側とSHA-256・audience・期限の検証情報を持つEditor側を分ける。ownerが標準のSecret Manager手順で検証情報を登録し、Web runtime IDにそのSecretだけの読取権限を付けてから、固定版の参照を`EDITOR_FACE_CREDENTIALS_SECRET_REF`へ入れる。private-job cleanup IDにはこのSecretを付けない。AIセッションはtoken値・秘密値を作成・取得・表示しない。
 
 有効化前に、現在writerの有無、別用途token拒否、別サービス/audience拒否、カテゴリ停止、招待取消・OWNER変更・体験停止、公開停止後の写真404、依存障害時の拒否を合成データで確認する。公開元の切替はExperience側の独立した操作で、既存記事を削除しない。問題時はauthority flagをOFFへ戻して固定SHAを再配備し、本文・公開版・履歴を保持する。
+
+### Experience staging向け公開API資格
+
+stagingのExperienceサイトがEditorの公開APIを読む面資格は、owner専用helperが1組の資格を発行する。Editorには`audience=exp`・SHA-256・作成から90日の期限だけを保存し、raw tokenはExperience stagingの`experience-stg-editor-api-token` Secretに保存する。EditorのWeb runtime IDとExperience staging runtime IDだけへ、それぞれのSecretの`secretAccessor`を付ける。private-job cleanup identityには付与しない。
+
+```sh
+scripts/editor-deploy/prepare-experience-publish-credentials.sh
+```
+
+helperは引数を受け取らず、Editor projectを`deploy.env`から読み、Experience staging project IDを非表示入力で確認する。Secretの値は画面・ファイル・ログへ出さず、stdoutには次の2つのnumeric version参照だけを出す。ownerは参照だけを担当者へ渡し、raw tokenをチャットや設定ファイルへ貼らない。
+
+```text
+EDITOR_FACE_CREDENTIALS_SECRET_REF=niho-editor-face-credentials:<version>
+GUIDE_EDITOR_API_TOKEN_REF=experience-stg-editor-api-token:<version>
+```
+
+この準備は資格を保存するだけで、Editor authority flag、Experience article authority flag、`EXPERIENCE_GUIDE_PUBLIC_SOURCE`を有効にしない。現在のcategoryが作成され、NIHO追加APIとEditor/Experienceのaudience・service accountが一致した後、staging固定SHAの別配備変更で有効化する。90日より前にownerが両側を同時にローテーションする。
+
+helperのSecret Manager追加が途中で失敗した場合は、出力された値を探さず、2つのSecretのversion metadataだけをownerが確認する。新たに有効になった片側だけのversionを無効化してから再実行する。以前から有効なversionがある場合は、helperを繰り返さず手動でrotationを計画する。
