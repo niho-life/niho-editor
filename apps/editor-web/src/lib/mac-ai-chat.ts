@@ -21,6 +21,11 @@ export const MAC_AI_ERROR_TEXT = {
   extra_files: "CLI が別のファイルを作ったため、ページには反映していません。",
   invalid_result: "CLI の結果を確認できませんでした。ページには反映していません。",
   edited: "CLI の作業中にページが編集されました。結果は保存せず、もう一度頼んでください。",
+  blocked: "CLI を許可した範囲（文書の書き換えだけ）で動かせなかったため止めました。ページには反映していません。もう一度試すか、CLI を更新するか、別の AI を選んでください。",
+  usage_limit: "CLI の利用上限に達しました。ページには反映していません。時間をおいてから、もう一度お試しください。",
+  model: "選んだモデルをこの CLI で使えませんでした。ページには反映していません。別のモデルを選んでください。",
+  timed_out: "CLI が時間内に終わりませんでした。ページには反映していません。",
+  session: "CLI で前の会話の続きを見つけられませんでした。ページには反映していません。新しい会話で頼んでください。",
   failed: "CLI の依頼を終えられませんでした。ページには反映していません。",
 } as const;
 
@@ -57,6 +62,23 @@ export function macEngineStatus(engine: ShellAiEngine): string {
 
 export function macEngineReady(engine: ShellAiEngine): boolean {
   return engine.installed && engine.authenticated && macEngineModels(engine).length > 0;
+}
+
+/**
+ * CLI の Error の理由（native の `ReasonCode`）から、画面の決まった文を選ぶ。CLI の message はそのまま出さない
+ * （CLI の出力の断片を含みうるので）。知らない理由は「終えられませんでした」。
+ */
+const ERROR_OF_REASON: Readonly<Record<string, MacAiErrorCode>> = {
+  CliLoginRequired: "auth",
+  NotConfigured: "blocked",
+  UsageLimitReached: "usage_limit",
+  ModelNotFound: "model",
+  TimedOut: "timed_out",
+  SessionNotFound: "session",
+};
+
+export function macErrorOfReason(reason: unknown): MacAiErrorCode {
+  return typeof reason === "string" && Object.hasOwn(ERROR_OF_REASON, reason) ? ERROR_OF_REASON[reason]! : "failed";
 }
 
 function errorFromShell(error: unknown): MacAiError {
@@ -151,7 +173,7 @@ export async function runMacAiTurn(input: {
   }
   if (input.signal.aborted) throw new MacAiError("aborted");
   if (!turn || typeof turn !== "object" || !turn.finalEvent || typeof turn.finalEvent !== "object") throw new MacAiError("invalid_result");
-  if (turn.finalEvent.type === "Error") throw new MacAiError("failed");
+  if (turn.finalEvent.type === "Error") throw new MacAiError(macErrorOfReason(turn.finalEvent.reason_code));
   if (turn.finalEvent.type !== "Done" || typeof turn.finalEvent.text !== "string" ||
       (turn.finalEvent.session_id !== null && typeof turn.finalEvent.session_id !== "string")) throw new MacAiError("invalid_result");
   if (turn.finalEvent.stop_reason !== "EndTurn") throw new MacAiError(turn.finalEvent.stop_reason === "Stopped" ? "aborted" : turn.finalEvent.stop_reason === "MaxTokens" ? "incomplete" : "invalid_result");

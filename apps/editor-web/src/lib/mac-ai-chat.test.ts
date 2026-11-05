@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ShellBridge } from "niho-desktop-bridge/shell-bridge";
 import type { ShellAiTurn } from "niho-desktop-bridge/shell-contract";
-import { MacAiError, macChatEvent, macEngineModels, macEngineReady, runMacAiTurn } from "./mac-ai-chat";
+import { MAC_AI_ERROR_TEXT, MacAiError, macChatEvent, macEngineModels, macEngineReady, runMacAiTurn } from "./mac-ai-chat";
 
 const PAGE = { pageId: "page-1", title: "合成ページ", markdown: "元の本文" };
 const DONE: ShellAiTurn = {
@@ -41,6 +41,25 @@ describe("Mac CLI chat turn", () => {
     [{ ...DONE, page: { pageId: "other", markdown: "bad" } }, "invalid_result"],
   ] as const)("rejects an unsafe native result", async (result, code) => {
     await expect(run(result as ShellAiTurn).promise).rejects.toMatchObject({ code });
+  });
+
+  it.each([
+    // 許可していない道具（MCP のリソースなど）で止めた・安全に動かせなかった
+    ["NotConfigured", "blocked"],
+    ["CliLoginRequired", "auth"],
+    ["UsageLimitReached", "usage_limit"],
+    ["ModelNotFound", "model"],
+    ["TimedOut", "timed_out"],
+    ["SessionNotFound", "session"],
+    ["TransientFailure", "failed"],
+    ["toString", "failed"],
+    ["未知", "failed"],
+  ] as const)("shows a fixed reason for a CLI Error (%s) instead of the CLI message", async (reason, code) => {
+    const error: ShellAiTurn = { ...DONE, page: null, finalEvent: { type: "Error", reason_code: reason, message: "CLI の出力の断片 /Users/x" } };
+    const rejected = await run(error).promise.catch((cause: unknown) => cause);
+    expect(rejected).toBeInstanceOf(MacAiError);
+    expect(rejected).toMatchObject({ code });
+    expect(MAC_AI_ERROR_TEXT[(rejected as MacAiError).code]).not.toContain("/Users/x");
   });
 
   it("calls aiStop and never accepts a late Done after cancellation", async () => {
