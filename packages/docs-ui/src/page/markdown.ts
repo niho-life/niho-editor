@@ -297,6 +297,8 @@ const serializer = new MarkdownSerializer(
         return `](${state.esc(String(mark.attrs.href ?? ""))})`;
       },
     },
+    // AI が足した語の印（ai-mark.ts）は Markdown に出さない（AI の道具が読む本文に記号を混ぜない）
+    ai: { open: "", close: "" },
   },
 );
 

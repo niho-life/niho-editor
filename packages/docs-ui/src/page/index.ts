@@ -17,6 +17,7 @@ export {
 } from "./blocks";
 export { IMAGE_NODE_NAME, docFromBlocks, imageAttrsOf, imageNode, replaceBlocks, type ImageAttrs } from "./doc";
 export { CALLOUT_NODE_NAME, PageCallout } from "./callout";
+export { AI_MARK_NAME, AiMark, PRESERVE_AI_MARKS_META } from "./ai-mark";
 export {
   BLOCK_CHOICES,
   LINE_TYPE_CHOICES,

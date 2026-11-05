@@ -84,6 +84,7 @@ export const CHAT_RULES: readonly string[] = [
   "write_page には本文の全体を渡す（一部だけ渡すと、渡さなかった所が消える）。",
   "使える記法は見出し（## と ###）・段落・箇条書き・番号つき・引用・囲み（> [!note]）・太字・斜体・リンクだけ。表・コード・画像は使わない。",
   "作業報告・前置きを本文に書かない。返答には、何をどう変えたかを 1〜3 文で書く。",
+  "道具を使う前に、何を読んで何をどう直すつもりかを、人に話しかける短い段落（1〜3 文）で書く。その文は画面にそのまま流れるので、『考えています』のような前置きや箇条書きの作業ログにしない。",
 ];
 
 export type ChatPrompt = { system: string; messages: unknown[] };
@@ -147,6 +148,14 @@ export type ChatRun = {
   code: string | null;
 };
 
+/**
+ * 依頼の途中を画面へ流す出来事（SSE。chat-api.ts）。`text` はモデルが書いている文の差分、
+ * `tool` は道具の実行の前（`start`。ok・page は null）と後（`end`）。最終の結果（items・reply）は ChatRun が持つ。
+ */
+export type ChatEvent =
+  | { type: "text"; text: string }
+  | { type: "tool"; tool: string; page: string | null; ok: boolean | null; phase: "start" | "end" };
+
 export type ChatRunner = {
   client: Pick<AnthropicClient, "converse">;
   system: string;
@@ -160,6 +169,8 @@ export type ChatRunner = {
   beforeCall?: () => Promise<boolean>;
   onUsage?: (usage: { model: string; inputTokens: number; outputTokens: number }) => Promise<void>;
   signal?: AbortSignal;
+  /** 途中の出来事（文の差分・道具の前後）。渡すとモデルを streaming で呼ぶ。 */
+  onEvent?: (event: ChatEvent) => void;
 };
 
 /** 上流の失敗の種類から会話に残す code（ai-executor.ts と同じ名前）。 */
@@ -186,6 +197,7 @@ export async function runChatTurn(options: ChatRunner): Promise<ChatRun> {
   const items: ChatItem[] = [];
   let reply = "";
   let toolCalls = 0;
+  const onEvent = options.onEvent;
 
   for (let step = 0; step < maxSteps; step++) {
     options.signal?.throwIfAborted();
@@ -198,6 +210,7 @@ export async function runChatTurn(options: ChatRunner): Promise<ChatRun> {
         tools: [...CHAT_TOOLS],
         ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
         ...(options.signal ? { signal: options.signal } : {}),
+        ...(onEvent ? { onText: (text: string) => onEvent({ type: "text", text }) } : {}),
       });
     } catch (error) {
       if (error instanceof AnthropicError) {
@@ -230,7 +243,9 @@ export async function runChatTurn(options: ChatRunner): Promise<ChatRun> {
     for (const call of turn.toolCalls) {
       options.signal?.throwIfAborted();
       toolCalls += 1;
+      onEvent?.({ type: "tool", tool: call.name, page: null, ok: null, phase: "start" });
       const outcome = await options.run(call);
+      onEvent?.({ type: "tool", tool: call.name, page: outcome.page ?? null, ok: outcome.ok, phase: "end" });
       items.push({ kind: "tool", tool: call.name, page: outcome.page ?? null, ok: outcome.ok });
       results.push({ type: "tool_result", tool_use_id: call.id, content: outcome.result, ...(outcome.ok ? {} : { is_error: true }) });
     }

@@ -65,14 +65,16 @@ export function ShellMenu({ label, items, onSelect, onClose, trigger, className,
         <button
           key={item.id}
           type="button"
-          role="menuitem"
+          role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"}
           className={`es-mi${item.danger ? " es-mi--danger" : ""}${item.current ? " es-mi--on" : ""}`}
           aria-current={item.current ? "page" : undefined}
+          aria-checked={item.checked === undefined ? undefined : item.checked}
           onClick={() => onSelect(item.id)}
         >
           {item.icon && <Icon name={item.icon} />}
           {item.label}
           {item.badge ? <small className="es-mi-badge">{item.badge}</small> : item.hint ? <small>{item.hint}</small> : null}
+          {item.checked && <span className="es-mi-check" aria-hidden="true"><Icon name="check" /></span>}
         </button>
       ))}
     </div>

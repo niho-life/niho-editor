@@ -28,7 +28,8 @@ import { SAVE_STATUS_TEXT, headerStatus, type SaveStatus } from "@/lib/save-stat
 import { useShortcuts } from "@/lib/shortcuts";
 import { arrangeSidebarItems, folderOptions, orderNeighbours, reorderedPages, searchRows, siblingOrder, withoutPageTree, type SidebarPublication } from "@/lib/sidebar-items";
 import { usePageHistory } from "@/lib/use-page-history";
-import { usePageMenu, type AttachedPage, type PageMenuLocalItem } from "@/lib/use-page-menu";
+import { AI_GRAY_ITEM, usePageMenu, type AttachedPage, type PageMenuLocalItem } from "@/lib/use-page-menu";
+import { setAiGray, useAiGray } from "@/lib/ai-gray";
 import type { AttachedAiSteps } from "@/lib/attached-page";
 import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
 import { useFolderFields, type FolderFieldsState } from "@/lib/use-folder-fields";
@@ -945,6 +946,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // フォルダの欄を読むのは「フォルダの背景…」のシートを開いているあいだだけ
   const folderFields = useFolderFields(sheetFor === "folder-fields" && railIsFolder && railSummary ? railSummary.id : null);
   // 右上の「…」（リンクで共有・書き出し・履歴・複製・移動・ページの情報・削除）。操作の前に、開いているページのまだ届いていない変更を保存する
+  // 「…」の「AI の文を灰色で見せる」（この端末の表示だけ。PageEditor が本文に当てる）
+  const aiGray = useAiGray();
   const menu = usePageMenu({
     page: attached,
     current: () => attachedRef.current,
@@ -960,9 +963,13 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     openSheet: (sheet, owner) => (sheet === "share" ? share.open(owner) : history.open(owner)),
     focusMore,
     goToGoogleDocsBatch: (path) => router.push(path),
-    extras: { folder: railIsFolder, move: canFolder || canOrder, pageInfo: railSummary !== undefined },
+    extras: { folder: railIsFolder, move: canFolder || canOrder, pageInfo: railSummary !== undefined, aiGray },
     // 「移動…」「フォルダの背景…」はシート、「ページの情報」は右下のポップオーバー。開いたときのページの id で持つ
     onLocal: (item: PageMenuLocalItem) => {
+      if (item === AI_GRAY_ITEM) {
+        setAiGray(!aiGray);
+        return;
+      }
       const id = railSummary?.id;
       if (!id) return;
       if (item === "page-info") setInfoFor(id);

@@ -9,15 +9,17 @@ import { validateBlocks } from "niho-docs-ui/page/blocks";
 import { blocksToMarkdown } from "niho-docs-ui/page/markdown";
 import { Icon } from "niho-docs-ui/shell";
 import { MAX_CHAT_INPUT_CHARS } from "@/ai/chat-limits";
-import type { AttachedAi, AttachedAiStep, AttachedAiSteps } from "@/lib/attached-page";
+import type { AiDiffState, AttachedAi, AttachedAiStep, AttachedAiSteps } from "@/lib/attached-page";
 import {
   AiConflictError,
   AiRequestError,
   getAiChat,
   listAiChats,
   recordDeviceAiChat,
-  sendAiChat,
+  streamAiChat,
   undoAiChat,
+  type AiChatChange,
+  type AiChatEvent,
   type AiChatMessage,
   type AiChatResult,
   type AiChatSummary,
@@ -38,6 +40,7 @@ export const AI_TEXT = {
   stopped: "途中で止まりました。もう一度頼めます",
   chatFailed: "AI が答えられませんでした。もう一度お試しください",
   nearLimit: "今月の AI の使用量が上限に近づいています",
+  diffFailed: "変更を読めませんでした",
 } as const;
 
 export const AI_BLOCKED_TEXT = {
@@ -74,6 +77,43 @@ export const AI_TOOL_TEXT: Record<string, string> = {
   create_page: "作りました",
 };
 
+/** 作業中の薄い 1 行（道具の実行の前に出し、次の出来事まで残す）。 */
+export const AI_WORK_TEXT: Record<string, string> = {
+  read_page: "本文を読んでいます…",
+  list_pages: "ページを見ています…",
+  write_page: "書いています…",
+  create_page: "ページを作っています…",
+};
+
+const AI_WORK_FALLBACK = "作業しています…";
+
+/** 書きかけの AI の発言（SSE・CLI の出来事を足していく）。`split` は次の文を新しい段落にする（道具をまたいだ）。 */
+export type AiLiveTurn = {
+  input: string;
+  paragraphs: { kind: "text" | "thinking"; text: string }[];
+  work: string | null;
+  workEnded: boolean;
+  split: boolean;
+};
+
+export function liveTurn(input: string): AiLiveTurn {
+  return { input, paragraphs: [], work: null, workEnded: false, split: false };
+}
+
+/** 出来事を書きかけの発言に足す。段落は道具の前後と、思考と返答の切り替わりで分ける。 */
+export function addLiveEvent(turn: AiLiveTurn, event: AiChatEvent): AiLiveTurn {
+  if (event.type === "tool") {
+    if (event.phase === "start") return { ...turn, work: AI_WORK_TEXT[event.tool] ?? AI_WORK_FALLBACK, workEnded: false, split: true };
+    return { ...turn, workEnded: true, split: true };
+  }
+  const kind = event.kind ?? "text";
+  const last = turn.paragraphs.at(-1);
+  const paragraphs = last && !turn.split && last.kind === kind
+    ? [...turn.paragraphs.slice(0, -1), { kind, text: last.text + event.text }]
+    : [...turn.paragraphs, { kind, text: event.text }];
+  return { ...turn, paragraphs, split: false, ...(turn.workEnded ? { work: null, workEnded: false } : {}) };
+}
+
 export function aiItemText(item: { kind: "narration"; text: string } | { kind: "tool"; tool: string; page: string | null; ok: boolean }): string {
   if (item.kind === "narration") return item.text;
   const what = AI_TOOL_TEXT[item.tool] ?? item.tool;
@@ -84,11 +124,16 @@ export function aiItemText(item: { kind: "narration"; text: string } | { kind: "
 type Busy = "working" | "saving" | "undoing" | "compact" | "step" | null;
 type MacState = { mode: "loading" | "error" } | { mode: "ready"; shell: ShellBridge; engines: ShellAiEngine[] };
 type MacRoute = "" | "server" | ShellAiEngineName;
+type SkillId = "factcheck" | "polish" | "expand" | "compact";
 type MenuItem =
-  | { id: "factcheck" | "compact"; kind: "skill"; label: string; hint: string; search: string; disabledReason: string | null }
+  | { id: SkillId; kind: "skill"; label: string; hint: string; search: string; disabledReason: string | null }
   | { id: string; kind: "step"; label: string; hint: string; search: string; disabledReason: string | null };
 
 const FACTCHECK_TEXT = "本文の固有名詞・数値・日付・引用を、文字起こしと資料に照らし確認してください。本文は直さず、確認箇所と理由を一覧にしてください。";
+const POLISH_TEXT = "文体をそろえ、繰り返しと冗長な言い回しを削って読みやすくしてください。意味・固有名詞・数字・引用は変えないでください。";
+const EXPAND_TEXT = "本文の各段落を章の書き出しとして一字も変えずに残し、その前後を参照（録音の文字起こし・同じフォルダの資料）から補ってください。各章の前に見出し案（##）を足してください。資料に無い事実は書かず、〔要確認: 何が不明か〕と置いてください。文字起こし由来の段落の末尾に（mm:ss）の時刻を添えてください。";
+/** 入力欄へ文を入れるだけのスキル。 */
+const SKILL_TEXT: Partial<Record<SkillId, string>> = { factcheck: FACTCHECK_TEXT, polish: POLISH_TEXT, expand: EXPAND_TEXT };
 const COMPACT_PROMPT = [
   "ここまでの会話で決まったことと、次に必要な前提だけを日本語で要約してください。",
   "本文やページは変更せず、会話の引き継ぎ用の要約だけを返してください。",
@@ -194,6 +239,10 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
   const [macRoute, setMacRoute] = useState<MacRoute>("");
   const [macModel, setMacModel] = useState("");
   const [resumeSession, setResumeSession] = useState<{ engine: ShellAiEngineName; conversationId: string; id: string } | null>(null);
+  const [live, setLive] = useState<AiLiveTurn | null>(null);
+  // 「変更を見る」で開いている行（発言とページ）と、閉じたときに戻した数（画面だけ。保存しない）
+  const [diffFor, setDiffFor] = useState<{ messageId: string; pageId: string } | null>(null);
+  const [revertedNotes, setRevertedNotes] = useState<Record<string, number>>({});
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
@@ -202,6 +251,8 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
   const flightRef = useRef(false);
   const generationRef = useRef(0);
   const editedRef = useRef(false);
+  const diffForRef = useRef<{ messageId: string; pageId: string } | null>(null);
+  const lastDiffRef = useRef<AiDiffState | null>(null);
 
   const readMacEngines = useCallback(async () => {
     const { detectShell } = await import("niho-desktop-bridge/tauri-shell-transport");
@@ -235,6 +286,23 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
     };
   }, [context?.editor]);
 
+  // 本文の「変更を見る」の開閉を知る。閉じたら、その行に戻した数を添える
+  const diff = context?.diff;
+  useEffect(() => {
+    if (!diff) return;
+    lastDiffRef.current = diff.current();
+    return diff.subscribe((next) => {
+      const open = diffForRef.current;
+      if (next === null && open) {
+        const reverted = lastDiffRef.current?.reverted ?? 0;
+        if (reverted > 0) setRevertedNotes((current) => ({ ...current, [`${open.messageId}:${open.pageId}`]: (current[`${open.messageId}:${open.pageId}`] ?? 0) + reverted }));
+        diffForRef.current = null;
+        setDiffFor(null);
+      }
+      lastDiffRef.current = next;
+    });
+  }, [diff]);
+
   // ページ/owner が替わったら古い要求を止め、古い会話・undo・CLI session を新ページへ混ぜない。
   useEffect(() => {
     const generation = ++generationRef.current;
@@ -256,6 +324,10 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
     setResumeSession(null);
     setHistoryOpen(false);
     setMenuOpen(false);
+    setLive(null);
+    setDiffFor(null);
+    diffForRef.current = null;
+    setRevertedNotes({});
     if (!pageId || !context?.bridge) {
       setHistoryState("idle");
       setSessionLoading(false);
@@ -310,7 +382,7 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
     const node = threadRef.current;
     if (!node) return;
     node.scrollTop = node.scrollHeight;
-  }, [thread, status]);
+  }, [thread, status, live]);
 
   const native = typeof window !== "undefined" && isShellWindow(window);
   const selectedMacEngine = macState.mode === "ready" ? macState.engines.find((engine) => engine.engine === macRoute) : undefined;
@@ -320,6 +392,8 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
   const allMenuItems = useMemo<MenuItem[]>(() => [
     ...(steps?.options.map((step): MenuItem => ({ ...step, kind: "step", search: `${step.label} ${step.hint} 工程 手順` })) ?? []),
     { id: "factcheck", kind: "skill", label: "事実確認", hint: "固有名詞・数値・日付・引用を確認", search: "事実確認 ファクトチェック factcheck 固有名詞 数値 日付 引用", disabledReason: null },
+    { id: "polish", kind: "skill", label: "推敲", hint: "文体・重複・読みやすさ", search: "推敲 polish 文体 重複 冗長 読みやすさ", disabledReason: null },
+    { id: "expand", kind: "skill", label: "肉付け", hint: "書き出しの前後を埋める", search: "肉付け expand 書き出し 前後 補う 章", disabledReason: null },
     {
       id: "compact",
       kind: "skill",
@@ -405,10 +479,11 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
     generation: number,
     controller: AbortController,
     macInstruction = value,
+    onEvent: (event: AiChatEvent) => void = () => undefined,
   ) => {
     let nextResume: { engine: ShellAiEngineName; conversationId: string; id: string } | null = null;
     if (!native || macRoute === "server") {
-      const answer = await sendAiChat(target.pageId, { text: value, ...(conversationId ? { conversationId } : {}) }, { signal: controller.signal });
+      const answer = await streamAiChat(target.pageId, { text: value, ...(conversationId ? { conversationId } : {}) }, { signal: controller.signal, onEvent });
       return { answer, nextResume };
     }
     if (!context || macState.mode !== "ready" || !macRoute) throw new MacAiError("unavailable");
@@ -433,7 +508,7 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
       conversationId,
       resumeSession: resumable && resumable.engine === macRoute && resumable.conversationId === conversationId ? resumable.id : null,
       signal: controller.signal,
-      onProgress: (next) => { if (generation === generationRef.current) setStatus(next); },
+      onEvent,
     });
     if (generation !== generationRef.current || controller.signal.aborted) return null;
     if (editedRef.current) throw new MacAiError("edited");
@@ -469,7 +544,12 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
     controllerRef.current = controller;
     closeMenus();
     setBusy("working");
-    setStatus(AI_TEXT.working);
+    setStatus("");
+    setLive(liveTurn(value));
+    // 書きかけの発言へ途中の文・道具を足す（別のページへ移ったあとの出来事は捨てる）
+    const onEvent = (event: AiChatEvent) => {
+      if (generation === generationRef.current && !controller.signal.aborted) setLive((current) => current && addLiveEvent(current, event));
+    };
     try {
       const target = await context.bridge.prepare();
       if (controller.signal.aborted) throw new AiRequestError("aborted");
@@ -478,7 +558,7 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
         return;
       }
       if (target.pageId !== pageId || generation !== generationRef.current) return;
-      const executed = await executeChat(value, target, generation, controller);
+      const executed = await executeChat(value, target, generation, controller, value, onEvent);
       if (!executed || generation !== generationRef.current) return;
       const { answer, nextResume } = executed;
       if (native && macRoute !== "server" && !answer.conversation) {
@@ -509,6 +589,8 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
     } finally {
       if (controllerRef.current === controller) controllerRef.current = null;
       if (generation === generationRef.current) {
+        // 終わったら書きかけの発言を消す（成功ならサーバーの結果の発言に置き換わっている。失敗なら入力欄に依頼が残る）
+        setLive(null);
         setBusy(null);
         flightRef.current = false;
       }
@@ -622,6 +704,31 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
     }
   };
 
+  /** 「変更を見る」／「変更を閉じる」（本文に直す前の版との差分を描く）。 */
+  const toggleDiff = async (messageId: string, change: AiChatChange) => {
+    const view = context?.diff;
+    if (!view || change.version === null) return;
+    const open = diffForRef.current;
+    if (open && open.messageId === messageId && open.pageId === change.pageId) {
+      view.close();
+      return;
+    }
+    if (open) view.close();
+    const generation = generationRef.current;
+    try {
+      await view.open({ version: change.version, revision: change.revision ?? -1 });
+      if (generation !== generationRef.current) {
+        view.close();
+        return;
+      }
+      lastDiffRef.current = view.current();
+      diffForRef.current = { messageId, pageId: change.pageId };
+      setDiffFor(diffForRef.current);
+    } catch {
+      if (generation === generationRef.current) setStatus(AI_TEXT.diffFailed);
+    }
+  };
+
   const selectMenuItem = (item: MenuItem) => {
     if (item.disabledReason) {
       setStatus(item.disabledReason);
@@ -637,10 +744,11 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
       queueMicrotask(() => textareaRef.current?.focus());
       return;
     }
-    if (item.id === "factcheck") {
+    const skillText = SKILL_TEXT[item.id as SkillId];
+    if (skillText) {
       const before = stripped.value.slice(0, stripped.caret).trimEnd();
       const after = stripped.value.slice(stripped.caret).trimStart();
-      setText([before, FACTCHECK_TEXT, after].filter(Boolean).join("\n"));
+      setText([before, skillText, after].filter(Boolean).join("\n"));
       queueMicrotask(() => textareaRef.current?.focus());
       return;
     }
@@ -780,19 +888,35 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
             <div key={message.id} className="es-ai-message es-ai-message--user">{message.text}</div>
           ) : (
             <div key={message.id} className="es-ai-message es-ai-message--assistant">
-              <p>{message.text}</p>
-              {message.items.length > 0 && <ul>{message.items.map((item, index) => <li key={index}>{aiItemText(item)}</li>)}</ul>}
-              {message.changes.length > 0 && (
-                <div className="es-ai-change">
-                  {message.changes.map((change) => <p key={change.pageId}>{change.undoneAt ? `${aiChangeText(change)}（元に戻しました）` : aiChangeText(change)}</p>)}
-                  {message.changes.some((change) => change.undoneAt === null) && <button type="button" disabled={busy !== null} onClick={() => void undo(message.id)}>元に戻す</button>}
-                </div>
-              )}
+              {message.items.map((item, index) => item.kind === "narration" && item.text.trim() ? <p key={index}>{item.text}</p> : null)}
+              {message.text && <p>{message.text}</p>}
+              {message.changes.map((change, index) => {
+                const key = `${message.id}:${change.pageId}`;
+                const viewable = change.change === "edited" && change.pageId === pageId && change.version !== null && change.undoneAt === null && Boolean(context?.diff);
+                const opened = diffFor?.messageId === message.id && diffFor.pageId === change.pageId;
+                const undoable = change.undoneAt === null && !message.changes.slice(index + 1).some((later) => later.undoneAt === null);
+                const reverted = revertedNotes[key] ?? 0;
+                return (
+                  <p key={change.pageId} className="es-ai-verline">
+                    <span>{aiChangeText(change)}{change.undoneAt ? "（元に戻しました）" : ""}{reverted > 0 ? `（${reverted} か所を戻しました）` : ""}</span>
+                    {viewable && <button type="button" className="es-ai-link" aria-pressed={opened} disabled={busy !== null && !opened} onClick={() => void toggleDiff(message.id, change)}>{opened ? "変更を閉じる" : "変更を見る"}</button>}
+                    {undoable && <button type="button" className="es-ai-link" disabled={busy !== null} onClick={() => void undo(message.id)}>元に戻す</button>}
+                  </p>
+                );
+              })}
             </div>
           ))}
+          {live && (
+            <>
+              <div className="es-ai-message es-ai-message--user">{live.input}</div>
+              <div className="es-ai-message es-ai-message--assistant es-ai-message--live" aria-busy="true">
+                {live.paragraphs.map((paragraph, index) => <p key={index} className={paragraph.kind === "thinking" ? "es-ai-thinking" : undefined}>{paragraph.text}</p>)}
+                {live.work && <p className="es-ai-work"><span className="es-ai-spin" aria-hidden="true" />{live.work}</p>}
+              </div>
+            </>
+          )}
           {status && <p className="es-ai-status" role="status">{status}</p>}
           {nearLimit && <p className="es-ai-status">{AI_TEXT.nearLimit}</p>}
-          {(busy === "working" || busy === "compact") && <button type="button" className="es-ai-stop" onClick={() => controllerRef.current?.abort()}>中止</button>}
         </div>
         <div className="es-ai-composer">
           {selectedStep && <div className="es-ai-chip"><Icon name="play" /><span>{selectedStep.label}</span><button type="button" aria-label={`${selectedStep.label}を外す`} disabled={busy !== null} onClick={() => setSelectedStep(null)}>×</button></div>}
@@ -827,14 +951,16 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
               setHistoryOpen(false);
               textareaRef.current?.focus();
             }}><Icon name="plus" /></button>
-            <button type="button" className="es-ai-send" aria-label="メッセージを送る" disabled={sendDisabled} onClick={send}><Icon name="up" /></button>
+            {busy === "working" || busy === "compact"
+              ? <button type="button" className="es-ai-send es-ai-send--stop" aria-label="止める" onClick={() => controllerRef.current?.abort()}><span className="es-ai-stop-mark" aria-hidden="true" /></button>
+              : <button type="button" className="es-ai-send" aria-label="メッセージを送る" disabled={sendDisabled} onClick={send}><Icon name="up" /></button>}
           </div>
           {menuOpen && (
             <div className="es-ai-popover es-ai-skills" aria-label="工程とスキル">
               {menuItems.length === 0 && <p>該当する工程・スキルがありません。</p>}
               {menuItems.map((item, index) => (
                 <button key={`${item.kind}-${item.id}`} type="button" className="es-ai-menu-row" aria-current={index === activeMenuIndex ? "true" : undefined} aria-disabled={item.disabledReason ? true : undefined} onMouseDown={(event) => event.preventDefault()} onClick={() => selectMenuItem(item)}>
-                  <Icon name={item.kind === "step" ? "play" : item.id === "factcheck" ? "check" : "doc"} />
+                  <Icon name={item.kind === "step" ? "play" : item.id === "factcheck" ? "check" : item.id === "polish" || item.id === "expand" ? "edit" : "doc"} />
                   <span>{item.label}<small>{item.disabledReason ?? item.hint}</small></span>
                 </button>
               ))}

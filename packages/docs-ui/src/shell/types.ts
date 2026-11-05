@@ -26,6 +26,8 @@ export type ShellMenuItem = {
   danger?: boolean;
   /** いま開いているページ（設定系のページでメニューに現在地を示す）。 */
   current?: boolean;
+  /** 切り替えの項目の今の値（あれば `menuitemcheckbox` で、ON のとき右に ✓）。 */
+  checked?: boolean;
 };
 
 /**

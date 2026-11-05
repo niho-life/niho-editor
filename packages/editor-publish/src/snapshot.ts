@@ -217,7 +217,7 @@ class Converter {
     this.unknown(node);
   }
 
-  /** Keeps bold / italic / strike / code / link in the contract's order; drops other formatting. */
+  /** Keeps bold / italic / strike / code / link in the contract's order; drops other formatting (`ai` silently). */
   private marks(raw: unknown): Mark[] {
     if (!Array.isArray(raw)) return [];
     const kept = new Map<MarkType, Mark>();
@@ -229,6 +229,9 @@ class Converter {
         const href = attrsOf(entry).href;
         if (isSafeLinkHref(href)) kept.set("link", { type: "link", href });
         else this.notice(CONVERSION_NOTICES.link);
+      } else if (type === "ai") {
+        // The editor's "written by AI" highlight is a view-only mark: published pages never show it, and it is not a lost format.
+        continue;
       } else {
         this.notice(CONVERSION_NOTICES.format);
       }

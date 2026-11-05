@@ -191,7 +191,8 @@ const BLOCK_TYPES: ReadonlySet<string> = new Set([
 export const BLOCK_NODE_NAMES: readonly string[] = [...BLOCK_TYPES];
 /** 行の中に置ける node の名前。 */
 export const INLINE_NODE_NAMES: readonly string[] = ["text", "hardBreak"];
-export const MARK_NAMES: readonly string[] = ["bold", "italic", "strike", "code", "link"];
+/** 行の中の mark の名前。`ai` は AI が足した語の印（ai-mark.ts。attrs 無し）。 */
+export const MARK_NAMES: readonly string[] = ["bold", "italic", "strike", "code", "link", "ai"];
 
 /** リンク先として保存してよいか。 */
 export function isSafeLinkHref(href: unknown): href is string {

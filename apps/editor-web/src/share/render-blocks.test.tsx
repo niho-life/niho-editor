@@ -82,6 +82,12 @@ describe("SharedBlocks", () => {
     );
   });
 
+  it("does not show the editor's ai mark (AI が足した語の印) in the shared view", () => {
+    const html = render([paragraph(text("前の"), text("AI の語", [{ type: "ai" }]), text("太字", [{ type: "bold" }, { type: "ai" }]))]);
+    expect(html).toBe("<p>前のAI の語<strong>太字</strong></p>");
+    expect(html).not.toContain("data-ai");
+  });
+
   it("renders tables and code and skips images", () => {
     const html = render([
       { type: "table", content: [{ type: "tableRow", content: [{ type: "tableCell", content: [paragraph(text("表の中"))] }] }] },

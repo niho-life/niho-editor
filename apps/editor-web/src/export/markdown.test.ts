@@ -380,6 +380,11 @@ describe("exportMarkdown", () => {
     expect(exportMarkdown([p(text("本文"))])).toBe("本文\n");
   });
 
+  it("ignores the editor's ai mark (AI が足した語の印) and keeps the other marks", () => {
+    expect(exportMarkdown([p(text("前の"), { type: "text", text: "AI の語", marks: [{ type: "ai" }] }, { type: "text", text: "太字", marks: [{ type: "bold" }, { type: "ai" }] })])).toBe("前のAI の語**太字**\n");
+    expect(exportFullMarkdown([p(text("前の"), { type: "text", text: "AI の語", marks: [{ type: "ai" }] })])).toBe("前のAI の語\n");
+  });
+
   it("writes headings, paragraphs, lists, and quotes in the subset", () => {
     const { markdown, parsed } = roundTrip([
       h(2, text("見出し")),
