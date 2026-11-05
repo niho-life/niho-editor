@@ -139,6 +139,19 @@ export async function listPageVersions(id: string): Promise<PageVersionRow[]> {
   return rows as PageVersionRow[];
 }
 
+/**
+ * 1 つの版の本文（`GET /api/pages/{id}/versions/{n}`）。AI と作るの「変更を見る」が直す前の本文として読む。
+ * 形が違えば PageActionError 500。
+ */
+export async function getPageVersion(id: string, version: number): Promise<{ version: number; blocks: unknown[] }> {
+  const data = (await send(pagePath(id, `/versions/${encodeURIComponent(String(version))}`), "GET")) as { version?: unknown };
+  const row = data.version;
+  if (typeof row !== "object" || row === null) throw new PageActionError(500);
+  const { version: number, blocks } = row as Record<string, unknown>;
+  if (!isPositiveInteger(number) || !Array.isArray(blocks)) throw new PageActionError(500);
+  return { version: number, blocks };
+}
+
 /** 版に戻したあとのページ（エディタを開き直すのに要る分）。 */
 export type RestoredPage = { id: string; title: string; blocks: unknown[]; revision: number; updatedAt: string; cover: string | null; lead: string | null };
 

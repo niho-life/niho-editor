@@ -228,6 +228,12 @@ describe("toPublishedBlocks: never drops unknown nodes silently", () => {
     expect(conversion.blocks).toEqual([{ type: "paragraph", content: [t("x", [{ type: "bold" }])] }]);
     expect(conversion.notices.map((notice) => notice.id)).toEqual(["format-dropped"]);
   });
+
+  it("drops the editor's ai mark without a notice and joins the text it split", () => {
+    const conversion = toPublishedBlocks(doc(p(t("前の"), t("AI の語", [{ type: "ai" }]), t("太字", [{ type: "bold" }, { type: "ai" }]), t("後"))));
+    expect(conversion.blocks).toEqual([{ type: "paragraph", content: [t("前のAI の語"), t("太字", [{ type: "bold" }]), t("後")] }]);
+    expect(conversion.notices).toEqual([]);
+  });
 });
 
 describe("toPublishedBlocks: links", () => {

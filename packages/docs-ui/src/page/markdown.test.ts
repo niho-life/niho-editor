@@ -52,6 +52,21 @@ describe("限定 AST ↔ Markdown", () => {
     expect(roundTrip(blocks)).toEqual(blocks);
   });
 
+  it("AI が足した語の印（ai）は Markdown に記号を出さず、ほかの mark はそのまま書く", () => {
+    const blocks: Block[] = [
+      {
+        type: "paragraph",
+        content: [
+          text("前の"),
+          { type: "text", text: "新しい語", marks: [{ type: "ai" }] },
+          { type: "text", text: "太字", marks: [{ type: "bold" }, { type: "ai" }] },
+          text("の後"),
+        ],
+      },
+    ];
+    expect(blocksToMarkdown(blocks)).toEqual({ ok: true, markdown: "前の新しい語**太字**の後" });
+  });
+
   it("囲みは引用の中の目印で往復する（旧い画面では引用として読める）", () => {
     const blocks: Block[] = [
       { type: "callout", content: [{ type: "paragraph", content: [text("囲みの中")] }] },

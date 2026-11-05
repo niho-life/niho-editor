@@ -219,3 +219,65 @@ describe("one chat turn", () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe("the chat streams what it is doing", () => {
+  it("asks the model to write a short plan before using tools", () => {
+    expect(buildChatSystem()).toContain("道具を使う前に、何を読んで何をどう直すつもりかを、人に話しかける短い段落（1〜3 文）で書く");
+  });
+
+  it("sends text, then tool start and end, in order, and keeps the final items and reply the same", async () => {
+    // 偽のモデル: onText があれば書いた文を流してから答える（streaming と同じ順）
+    const answers = [
+      turn({ text: "本文を読みます。", toolCalls: [{ id: "t1", name: "read_page", input: { page_id: page.id } }], stopReason: "tool_use" }),
+      turn({ text: "見出しを足します。", toolCalls: [{ id: "t2", name: "write_page", input: { page_id: page.id, markdown: "## 見出し" } }], stopReason: "tool_use" }),
+      turn({ text: "見出しを足しました。" }),
+    ];
+    let index = 0;
+    const client = {
+      converse: async (input: { onText?: (delta: string) => void }) => {
+        const answer = answers[index++]!;
+        if (answer.text) input.onText?.(answer.text);
+        return answer;
+      },
+    };
+    const events: unknown[] = [];
+    const run = await runChatTurn({
+      client,
+      system: "s",
+      messages: [],
+      run: recordingRunner(),
+      onEvent: (event) => events.push(event),
+    });
+    expect(events).toEqual([
+      { type: "text", text: "本文を読みます。" },
+      { type: "tool", tool: "read_page", page: null, ok: null, phase: "start" },
+      { type: "tool", tool: "read_page", page: "合成の座談会", ok: true, phase: "end" },
+      { type: "text", text: "見出しを足します。" },
+      { type: "tool", tool: "write_page", page: null, ok: null, phase: "start" },
+      { type: "tool", tool: "write_page", page: "合成の座談会", ok: true, phase: "end" },
+      { type: "text", text: "見出しを足しました。" },
+    ]);
+    expect(run).toEqual({
+      reply: "見出しを足しました。",
+      items: [
+        { kind: "narration", text: "本文を読みます。" },
+        { kind: "tool", tool: "read_page", page: "合成の座談会", ok: true },
+        { kind: "narration", text: "見出しを足します。" },
+        { kind: "tool", tool: "write_page", page: "合成の座談会", ok: true },
+      ],
+      result: "done",
+      code: null,
+    });
+  });
+
+  it("does not pass onText to the model without onEvent", async () => {
+    const seen: unknown[] = [];
+    await runChatTurn({
+      client: { converse: async (input: { onText?: unknown }) => (seen.push(input.onText), turn({ text: "終わり" })) },
+      system: "s",
+      messages: [],
+      run: recordingRunner(),
+    });
+    expect(seen).toEqual([undefined]);
+  });
+});

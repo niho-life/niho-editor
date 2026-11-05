@@ -88,7 +88,8 @@ function composeAnswer(user: string): string {
 /** 決定的な偽物の 1 往復。usage は送った文字数・返した文字数の 1/4（切り上げ）。 */
 export function createFakeClient(): AnthropicClient {
   const usageOf = (sent: number, returned: number) => ({ model: FAKE_CLIENT_MODEL, inputTokens: Math.ceil(sent / 4), outputTokens: Math.ceil(returned / 4) });
-  const converse = async (input: { system: string; messages: unknown[]; tools?: unknown[]; signal?: AbortSignal }): Promise<Turn> => {
+  type FakeConverseInput = { system: string; messages: unknown[]; tools?: unknown[]; signal?: AbortSignal; onText?: (delta: string) => void };
+  const answer = async (input: FakeConverseInput): Promise<Turn> => {
     input.signal?.throwIfAborted();
     const sent = countChars(input.system) + countChars(JSON.stringify(input.messages));
     const usage = usageOf(sent, 64);
@@ -115,6 +116,12 @@ export function createFakeClient(): AnthropicClient {
       return { text: "", toolCalls: [callTool("write_page", { page_id: id, markdown: next }, 3)], stopReason: "tool_use", usage };
     }
     return { text: "[fake] 本文に 1 段落足しました。元に戻せます。", toolCalls: [], stopReason: "end_turn", usage };
+  };
+  // streaming（思考の中継）を頼まれたら、書いた文を 1 回で流す（画面の fake の経路でも途中の文が見える）
+  const converse = async (input: FakeConverseInput): Promise<Turn> => {
+    const turn = await answer(input);
+    if (input.onText && turn.text) input.onText(turn.text);
+    return turn;
   };
   return {
     converse,

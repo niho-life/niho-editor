@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ShellBridge } from "niho-desktop-bridge/shell-bridge";
 import type { ShellAiTurn } from "niho-desktop-bridge/shell-contract";
-import { MacAiError, macEngineModels, macEngineReady, runMacAiTurn } from "./mac-ai-chat";
+import { MacAiError, macChatEvent, macEngineModels, macEngineReady, runMacAiTurn } from "./mac-ai-chat";
 
 const PAGE = { pageId: "page-1", title: "合成ページ", markdown: "元の本文" };
 const DONE: ShellAiTurn = {
@@ -59,5 +59,31 @@ describe("Mac CLI chat turn", () => {
     expect(macEngineModels(claude).length).toBeGreaterThan(0);
     expect(macEngineReady({ ...claude, authenticated: false })).toBe(false);
     expect(new MacAiError("auth").message).not.toContain(PAGE.markdown);
+  });
+
+  it("maps CLI events to the same chat events as the server stream", () => {
+    expect(macChatEvent({ type: "TextDelta", text: "読みます" })).toEqual({ type: "text", text: "読みます", kind: "text" });
+    expect(macChatEvent({ type: "ThinkingDelta", text: "考え" })).toEqual({ type: "text", text: "考え", kind: "thinking" });
+    expect(macChatEvent({ type: "ToolUse", id: "t1", name: "Edit", summary: "page.md" })).toEqual({ type: "tool", tool: "Edit", page: null, ok: null, phase: "start" });
+    expect(macChatEvent({ type: "ToolResult", id: "t1", name: "Edit", ok: false })).toEqual({ type: "tool", tool: "Edit", page: null, ok: false, phase: "end" });
+    expect(macChatEvent({ type: "Error", reason_code: "x", message: "y" })).toBeNull();
+  });
+
+  it("passes the mapped events of its own turn to onEvent", async () => {
+    const onEvent = vi.fn();
+    const aiTurn = vi.fn().mockImplementation(async (turnId: string, _request: unknown, listener: (envelope: unknown) => void) => {
+      listener({ turnId, seq: 0, event: { type: "TextDelta", text: "本文を読みます" } });
+      listener({ turnId, seq: 1, event: { type: "ToolUse", id: "t1", name: "Read", summary: "page.md" } });
+      listener({ turnId: "other", seq: 2, event: { type: "TextDelta", text: "別の依頼" } });
+      listener({ turnId, seq: 1, event: { type: "TextDelta", text: "重複" } });
+      return DONE;
+    });
+    const shell = { aiTurn, aiStop: vi.fn() } as unknown as ShellBridge;
+    await runMacAiTurn({ shell, engine: "cli:codex", model: "gpt-6", page: PAGE, selection: null, instruction: "直して",
+      conversationId: null, resumeSession: null, signal: new AbortController().signal, onEvent });
+    expect(onEvent.mock.calls.map(([event]) => event)).toEqual([
+      { type: "text", text: "本文を読みます", kind: "text" },
+      { type: "tool", tool: "Read", page: null, ok: null, phase: "start" },
+    ]);
   });
 });

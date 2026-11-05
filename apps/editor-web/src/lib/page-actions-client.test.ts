@@ -7,6 +7,7 @@ import {
   getPageShare,
   googleDocExportStatus,
   newGoogleDocExportId,
+  getPageVersion,
   listPageVersions,
   pageExportUrl,
   restorePageVersion,
@@ -101,6 +102,19 @@ describe("page actions client", () => {
     await expect(deletePageRequest("../trash")).rejects.toThrow(PageActionError);
     expect(encoded).toHaveBeenCalledWith("/api/pages/..%2Ftrash", expect.anything());
   });
+  it("reads one version's blocks, and refuses a malformed version", async () => {
+    const blocks = [{ type: "paragraph", content: [{ type: "text", text: "前の文" }] }];
+    const fetchMock = mockFetch(200, { version: { version: 3, reason: "ai", createdAt: "2026-01-01T00:00:00.000Z", blocks } });
+    await expect(getPageVersion(ID, 3)).resolves.toEqual({ version: 3, blocks });
+    expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${ID}/versions/3`, { method: "GET", credentials: "same-origin", cache: "no-store" });
+    for (const version of [undefined, null, { version: 0, blocks }, { version: 3, blocks: null }]) {
+      mockFetch(200, { version });
+      await expect(getPageVersion(ID, 3)).rejects.toMatchObject({ status: 500 });
+    }
+    mockFetch(404, { error: "not_found" });
+    await expect(getPageVersion(ID, 3)).rejects.toMatchObject({ status: 404 });
+  });
+
   it("lists the versions newest first as the server sent them, and refuses a malformed list", async () => {
     const rows = [
       { version: 3, reason: "restore", createdAt: "2026-01-03T00:00:00.000Z", blockCount: 2 },

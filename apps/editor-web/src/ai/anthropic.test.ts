@@ -404,3 +404,119 @@ describe("settings", () => {
     expect(proposalMaxTokens(request({ paragraphs: [{ index: 0, kind: "paragraph", text: "あ".repeat(1_000) }] }), maxTokensLimit({}))).toBe(4024);
   });
 });
+
+/** SSE の 1 つの event（合成）。 */
+function sse(data: Record<string, unknown>): string {
+  return `event: ${String(data.type)}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+/** 決まったチャンクを流す streaming の応答。`hang` なら最後のチャンクのあと閉じない。 */
+function streamResponse(chunks: string[], options: { hang?: boolean } = {}): Response {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      if (!options.hang) controller.close();
+    },
+  });
+  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+const STREAM_TURN = [
+  sse({ type: "message_start", message: { model: "claude-sonnet-5-5", usage: { input_tokens: 120, output_tokens: 1 } } }),
+  sse({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
+  sse({ type: "ping" }),
+  sse({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "本文を読んで、" } }),
+  sse({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "見出しを足します。" } }),
+  sse({ type: "content_block_stop", index: 0 }),
+  sse({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_1", name: "read_page", input: {} } }),
+  sse({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"page_' } }),
+  sse({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: 'id":"p1"}' } }),
+  sse({ type: "content_block_stop", index: 1 }),
+  sse({ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 42 } }),
+  sse({ type: "message_stop" }),
+];
+
+describe("createAnthropicClient.converse (streaming)", () => {
+  it("streams the text to onText and builds the same turn as the non-streaming answer", async () => {
+    // チャンクの切れ目は event の途中にも来る
+    const joined = STREAM_TURN.join("");
+    const chunks = [joined.slice(0, 50), joined.slice(50, 333), joined.slice(333)];
+    const { fetch, calls } = fakeFetch(() => streamResponse(chunks));
+    const client = createAnthropicClient({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: KEY }, fetch });
+    const deltas: string[] = [];
+    const turn = await client.converse({ system: "s", messages: [{ role: "user", content: "u" }], tools: [{ name: "read_page" }], onText: (delta) => deltas.push(delta) });
+    expect(calls[0]!.body).toMatchObject({ stream: true, tools: [{ name: "read_page" }] });
+    expect(deltas).toEqual(["本文を読んで、", "見出しを足します。"]);
+    expect(turn).toEqual({
+      text: "本文を読んで、見出しを足します。",
+      toolCalls: [{ id: "toolu_1", name: "read_page", input: { page_id: "p1" } }],
+      stopReason: "tool_use",
+      usage: { model: "claude-sonnet-5-5", inputTokens: 120, outputTokens: 42 },
+    });
+  });
+
+  it("does not stream without onText", async () => {
+    const { fetch, calls } = fakeFetch(() => message("合成の答え"));
+    const client = createAnthropicClient({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: KEY }, fetch });
+    expect((await client.converse({ system: "s", messages: [] })).text).toBe("合成の答え");
+    expect(calls[0]!.body).not.toHaveProperty("stream");
+  });
+
+  it("fails as server on an error event in the middle, without carrying the body", async () => {
+    const { fetch } = fakeFetch(() => streamResponse([
+      STREAM_TURN[0]!,
+      STREAM_TURN[1]!,
+      sse({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: SECRET_TEXT } }),
+      sse({ type: "error", error: { type: "overloaded_error", message: SECRET_TEXT } }),
+    ]));
+    const client = createAnthropicClient({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: KEY }, fetch });
+    const error = await failureOf(client.converse({ system: "s", messages: [], onText: () => undefined }));
+    expect(error.kind).toBe("server");
+    expect(error.message).not.toContain(SECRET_TEXT);
+    expect(JSON.stringify(log.mock.calls)).not.toContain(SECRET_TEXT);
+  });
+
+  it("fails as invalid_output when the tool input is broken JSON or the stream ends early", async () => {
+    const broken = fakeFetch(() => streamResponse([
+      STREAM_TURN[0]!,
+      sse({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "read_page", input: {} } }),
+      sse({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"page_' } }),
+      sse({ type: "content_block_stop", index: 0 }),
+    ]));
+    const first = await failureOf(createAnthropicClient({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: KEY }, fetch: broken.fetch }).converse({ system: "s", messages: [], onText: () => undefined }));
+    expect([first.kind, first.reason]).toEqual(["invalid_output", "bad_body"]);
+
+    const cut = fakeFetch(() => streamResponse(STREAM_TURN.slice(0, 4)));
+    const second = await failureOf(createAnthropicClient({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: KEY }, fetch: cut.fetch }).converse({ system: "s", messages: [], onText: () => undefined }));
+    expect([second.kind, second.reason]).toEqual(["invalid_output", "bad_body"]);
+  });
+
+  it("keeps a refusal as invalid_output", async () => {
+    const { fetch } = fakeFetch(() => streamResponse([STREAM_TURN[0]!, sse({ type: "message_delta", delta: { stop_reason: "refusal" }, usage: { output_tokens: 3 } }), sse({ type: "message_stop" })]));
+    const error = await failureOf(createAnthropicClient({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: KEY }, fetch }).converse({ system: "s", messages: [], onText: () => undefined }));
+    expect([error.kind, error.reason]).toEqual(["invalid_output", "refusal"]);
+  });
+
+  it("times out when the chunks stop for EDITOR_AI_TIMEOUT_MS, counting from the last chunk", async () => {
+    vi.useFakeTimers();
+    const encoder = new TextEncoder();
+    let push: ((chunk: string) => void) | null = null;
+    const { fetch } = fakeFetch(() => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        push = (chunk) => controller.enqueue(encoder.encode(chunk));
+      },
+    }), { status: 200 }));
+    const client = createAnthropicClient({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: KEY, EDITOR_AI_TIMEOUT_MS: "2000" }, fetch });
+    const pending = failureOf(client.converse({ system: "s", messages: [], onText: () => undefined }));
+    let settled = false;
+    void pending.finally(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(1_500);
+    push!(STREAM_TURN[0]!);
+    // チャンクが届いたのでタイマーは張り直される（最初から 2 秒を過ぎても切れない）
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(500);
+    expect((await pending).kind).toBe("timeout");
+  });
+});

@@ -55,6 +55,8 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-mi small{margin-left:auto;color:var(--ed-ink-mute);font-size:12px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-mi .es-mi-badge{background:var(--ed-accent-soft);color:var(--ed-accent-ink);border-radius:999px;padding:0 7px;font-weight:600}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-mi--danger{color:var(--ed-red)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-mi .es-mi-check{margin-left:auto;display:inline-flex;color:var(--ed-accent-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-mi small+.es-mi-check{margin-left:6px}
 
 /* ===== 枠（一覧｜ヘッダー＋ページ＋レール） ===== */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ws{display:grid;grid-template-columns:272px minmax(0,1fr);height:100%;min-height:0}
@@ -465,11 +467,22 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-body{position:relative;flex:1;min-height:0;padding:0;display:flex;flex-direction:column;overflow:hidden}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-thread{flex:1;min-height:72px;overflow:auto;padding:10px 13px 14px;display:flex;flex-direction:column;gap:14px;scrollbar-width:thin}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message{flex:none;min-width:0;font-size:12.5px;line-height:1.75;overflow-wrap:anywhere;white-space:pre-wrap}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message--user{align-self:flex-end;max-width:94%;padding:8px 11px;border:1px solid var(--ed-line-2);border-radius:12px 12px 3px 12px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message--user{align-self:flex-end;max-width:88%;padding:8px 12px;background:var(--ed-accent-soft);color:var(--ed-ink);border-radius:16px 4px 16px 16px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message--assistant{padding:0 3px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message ul{margin:6px 0 0;padding-left:18px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-change{margin-top:8px;padding:8px 9px;border:1px solid var(--ed-line-2);border-radius:8px;font-size:12px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-change button,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-stop{margin-top:6px;color:var(--ed-accent-ink);font-size:12px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message--assistant p+p{margin-top:8px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message--assistant .es-ai-thinking{color:var(--ed-ink-mute)}
+/* 作業中の薄い 1 行（道具の前に出し、次の出来事まで残す） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-work{display:flex;align-items:center;gap:7px;color:var(--ed-ink-mute);font-size:12px;line-height:1.5}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-spin{flex:none;width:11px;height:11px;border:1.5px solid var(--ed-line-3);border-top-color:var(--ed-accent-ink);border-radius:50%;animation:es-ai-spin .8s linear infinite}
+@keyframes es-ai-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-spin{animation:none}}
+/* 版の行（変更ごとに 1 行。文字リンクで「変更を見る」「元に戻す」） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-verline{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;margin-top:8px;font-size:12px;line-height:1.6;color:var(--ed-ink-sub);white-space:normal}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-verline+.es-ai-verline{margin-top:2px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-verline>span{min-width:0;overflow-wrap:anywhere}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-link{color:var(--ed-accent-ink);font-size:12px;font-weight:600}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-link:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-link:focus-visible{text-decoration:underline}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-link:disabled{color:var(--ed-ink-mute);cursor:not-allowed;text-decoration:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-status{flex:none;color:var(--ed-ink-mute);font-size:12px;line-height:1.55;overflow-wrap:anywhere}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-composer{position:relative;flex:none;margin:0 12px 11px;padding:8px;border:1px solid var(--ed-line-2);border-radius:10px;min-width:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-composer textarea{display:block;width:100%;min-width:0;min-height:48px;resize:vertical;overflow-y:hidden;border:0;outline:0;background:transparent;padding:2px 3px;font:inherit;font-size:12.5px;line-height:1.6;color:var(--ed-ink)}
@@ -477,6 +490,8 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-send{width:28px;height:28px;margin-left:auto;border-radius:50%;display:grid;place-items:center;background:var(--ed-primary-bg);color:var(--ed-primary-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-send:disabled{opacity:.4;cursor:not-allowed}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-send .es-ico{width:16px;height:16px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-send--stop{background:var(--ed-primary-bg);color:var(--ed-primary-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-stop-mark{width:10px;height:10px;border-radius:2px;background:currentColor}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip{display:flex;align-items:center;gap:5px;margin:0 1px 7px;padding:4px 6px;border:1px solid var(--ed-line-2);border-radius:6px;color:var(--ed-accent-ink);font-size:12px;min-width:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip .es-ico{width:14px;height:14px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -13,6 +13,9 @@ import { useEditorFrame } from "@/components/EditorFrame";
 import { PageChrome } from "niho-docs-ui/page/PageChrome";
 import { docFromBlocks, replaceBlocks } from "@/editor/doc";
 import { buildPageExtensions } from "@/editor/page-extensions";
+import { AiDiffView, aiDiffOf } from "@/editor/ai-diff-view";
+import { useAiGray } from "@/lib/ai-gray";
+import { getPageVersion } from "@/lib/page-actions-client";
 import { normalizePastedHtml } from "@/editor/paste";
 import { prepareAi, replaceForAi, type AiBridge, type AiBridgeDeps } from "@/lib/ai-bridge";
 import { createAutosave, type Autosave, type SaveState } from "@/lib/autosave";
@@ -28,7 +31,7 @@ import {
   type DraftStorage,
   type PageDraft,
 } from "@/lib/drafts";
-import type { PageText } from "@/lib/attached-page";
+import type { AiDiffState, AttachedAiDiff, PageText } from "@/lib/attached-page";
 import { MAX_LEAD_CHARS, MAX_TITLE_CHARS } from "@/lib/page-limits";
 import { UNCREATED_REVISION, classifySaveFailure, createPageSaver, type PageSaver } from "@/lib/page-save";
 import type { RestoredPage } from "@/lib/page-actions-client";
@@ -343,6 +346,45 @@ function EditorScreen(props: ScreenProps) {
     },
     replace: (page, options) => replaceForAi(aiDeps, page, options),
   }));
+  // 「変更を見る」（AI の変更を本文に inline で描く）。表示中の状態は描画と右レールの AI の両方へ知らせる
+  const [aiDiff, setAiDiff] = useState<AiDiffState | null>(null);
+  const aiDiffRef = useRef<AiDiffState | null>(null);
+  const [aiDiffListeners] = useState(() => new Set<(state: AiDiffState | null) => void>());
+  const publishAiDiff = useCallback((next: AiDiffState | null) => {
+    const current = aiDiffRef.current;
+    if (current === next || (current && next && current.version === next.version && current.hunks === next.hunks && current.reverted === next.reverted && current.edited === next.edited)) return;
+    aiDiffRef.current = next;
+    setAiDiff(next);
+    aiDiffListeners.forEach((listener) => listener(next));
+  }, [aiDiffListeners]);
+  const [aiDiffBridge] = useState<AttachedAiDiff>(() => ({
+    open: async ({ version, revision: after }) => {
+      const id = saverRef.current?.pageId ?? null;
+      const target = editorRef.current;
+      if (!id || !target) throw new Error("ai diff unavailable");
+      const edited = (saverRef.current?.revision ?? null) !== after;
+      const read = await getPageVersion(id, version);
+      const current = editorRef.current;
+      if (current !== target || current.isDestroyed || saverRef.current?.pageId !== id) throw new Error("ai diff stale");
+      if (!current.commands.showAiDiff({ before: read.blocks })) throw new Error("ai diff unreadable");
+      const diff = aiDiffOf(current.state);
+      if (!diff) throw new Error("ai diff unreadable");
+      publishAiDiff({ version, hunks: diff.hunks.length, reverted: diff.reverted, edited });
+    },
+    close: () => {
+      const current = editorRef.current;
+      if (current && !current.isDestroyed && aiDiffOf(current.state)) current.commands.hideAiDiff();
+      publishAiDiff(null);
+    },
+    subscribe: (listener) => {
+      aiDiffListeners.add(listener);
+      return () => {
+        aiDiffListeners.delete(listener);
+      };
+    },
+    current: () => aiDiffRef.current,
+  }));
+  const aiGray = useAiGray();
   useEffect(() => {
     eventsRef.current = props;
   });
@@ -444,7 +486,7 @@ function EditorScreen(props: ScreenProps) {
     // 画像（#33）はアップロードの口と、入れる先のページを渡す。この関数は画像を入れるとき（操作のとき）だけ呼ばれ、
     // 描画には使わない（新しいページの id は最初の保存で決まるので、保存の部品から読む）
     // eslint-disable-next-line react-hooks/refs -- 描画中には読まない（画像を入れる操作の中だけ）
-    extensions: buildPageExtensions({ images: pageImages, pageId: () => saverRef.current?.pageId ?? initialRef.current.id }),
+    extensions: [...buildPageExtensions({ images: pageImages, pageId: () => saverRef.current?.pageId ?? initialRef.current.id }), AiDiffView],
     content: docFromBlocks(page.blocks),
     // 下書きを読み終えるまでは書けない
     editable: storage === null,
@@ -470,6 +512,41 @@ function EditorScreen(props: ScreenProps) {
     editorRef.current = editor;
     textListeners.forEach((listener) => listener());
   }, [editor, textListeners]);
+
+  // 差分の表示中に本文が変わった（戻した・競合で差し替わった）・閉じた（Esc）を、帯と右レールへ知らせる
+  useEffect(() => {
+    if (!editor) return;
+    let wasOpen = aiDiffOf(editor.state) !== null;
+    const sync = () => {
+      const diff = aiDiffOf(editor.state);
+      const current = aiDiffRef.current;
+      if (!diff) {
+        // 閉じたら書けるように戻す。表示中に再描画が走ると @tiptap/react の useEditor が options.editable に
+        // isEditable（plugin の読み取り専用で false）を写し戻すので、plugin の editable が true に戻るだけでは足りない
+        if (wasOpen) editor.setEditable(readyRef.current && !unreadableRef.current, false);
+        publishAiDiff(null);
+      } else if (current) publishAiDiff({ ...current, hunks: diff.hunks.length, reverted: diff.reverted });
+      wasOpen = diff !== null;
+    };
+    editor.on("transaction", sync);
+    return () => {
+      editor.off("transaction", sync);
+      // ページを離れたら閉じる（右レールの「変更を閉じる」を残さない）
+      publishAiDiff(null);
+    };
+  }, [editor, publishAiDiff]);
+
+  // 表示中は本文が読み取り専用で focus を持たないので、Esc は画面で受けて閉じる
+  const diffOpen = aiDiff !== null;
+  useEffect(() => {
+    if (!diffOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      aiDiffBridge.close();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [diffOpen, aiDiffBridge]);
 
   // 開いたとき: 端末の下書きを読み、サーバーのページと比べる
   useEffect(() => {
@@ -842,9 +919,9 @@ function EditorScreen(props: ScreenProps) {
       text,
       publicationFields,
       clearCover,
-      ai: { editor, bridge: aiBridge, title, kind: page.kind ?? "note", lang },
+      ai: { editor, bridge: aiBridge, title, kind: page.kind ?? "note", lang, diff: aiDiffBridge },
     }),
-    [attachPage, ready, pageId, status, flush, revision, reopenHere, shared, setShared, lang, changeLang, langNote, text, publicationFields, clearCover, editor, aiBridge, title, page.kind],
+    [attachPage, ready, pageId, status, flush, revision, reopenHere, shared, setShared, lang, changeLang, langNote, text, publicationFields, clearCover, editor, aiBridge, aiDiffBridge, title, page.kind],
   );
 
   const overwrite = () => {
@@ -910,8 +987,18 @@ function EditorScreen(props: ScreenProps) {
         </p>
       )}
       {unreadable && <p role="alert">本文を読み込めませんでした。この画面では本文を変更しません。</p>}
-      {/* be--flush: 旧 NIHO docs の「＋ ⋮⋮」用の左の余白を使わない（題名と本文の左端を揃える） */}
-      <div className="be be--flush">
+      {aiDiff && (
+        <div className="be-diffbar" role="status">
+          <span>
+            AI の変更（版 {aiDiff.version}）を表示中
+            {aiDiff.edited && <small>AI のあとに編集があります。戻すとその段落の編集も戻ります</small>}
+          </span>
+          <button type="button" disabled={aiDiff.hunks === 0} onClick={() => editorRef.current?.commands.revertAllAiHunks()}>すべて戻す</button>
+          <button type="button" onClick={() => aiDiffBridge.close()}>閉じる</button>
+        </div>
+      )}
+      {/* be--flush: 旧 NIHO docs の「＋ ⋮⋮」用の左の余白を使わない（題名と本文の左端を揃える）。be--ai-plain: AI の文を灰色にしない（「…」の切り替え） */}
+      <div className={aiGray ? "be be--flush" : "be be--flush be--ai-plain"}>
         <EditorContent editor={editor} />
         {/* ヘッダーに常設の書式の帯（ShellTools）を出すため、本文の操作を枠へ渡す（#37 T9） */}
         <PageChrome editor={editor} onTools={registerTools} />

@@ -12,6 +12,32 @@ const usage = { model: "claude-sonnet-5-5", inputTokens: 100, outputTokens: 20 }
 
 const p = (text: string): Block => ({ type: "paragraph", content: [{ type: "text", text }] });
 
+/** 保存された本文から `ai` mark（AI が足した語の印）を除いた形（印の付き方は別のテストで見る）。 */
+function plain(blocks: readonly Block[] | undefined): Block[] | undefined {
+  if (blocks === undefined) return undefined;
+  const strip = (node: Block): Block => {
+    const out: Record<string, unknown> = { ...node };
+    if (Array.isArray(node.marks)) {
+      const marks = (node.marks as Array<{ type: string }>).filter((mark) => mark.type !== "ai");
+      if (marks.length > 0) out.marks = marks;
+      else delete out.marks;
+    }
+    if (Array.isArray(node.content)) {
+      // 印を外して隣り合った同じ mark の text は 1 つにまとめる
+      const merged: Block[] = [];
+      for (const child of (node.content as Block[]).map(strip)) {
+        const last = merged.at(-1);
+        if (last && last.type === "text" && child.type === "text" && JSON.stringify(last.marks) === JSON.stringify(child.marks)) {
+          merged[merged.length - 1] = { ...last, text: String(last.text) + String(child.text) };
+        } else merged.push(child);
+      }
+      out.content = merged;
+    }
+    return out;
+  };
+  return blocks.map(strip);
+}
+
 function turn(partial: Partial<Turn>): Turn {
   return { text: "", toolCalls: [], stopReason: "end_turn", usage, ...partial };
 }
@@ -281,7 +307,7 @@ describe("POST /api/pages/{id}/ai/chat", () => {
     const body = (await response.json()) as { message: { result: string; changes: { version: number; delta: number }[] }; page: Page | null };
 
     // ページは依頼の中で書き換わる（採用を待たない）
-    expect(store.rows.get(page.id)!.blocks).toEqual([
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([
       { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "見出し" }] },
       p("新しい本文"),
     ]);
@@ -349,7 +375,7 @@ describe("POST /api/pages/{id}/ai/chat", () => {
     ]);
     const chats = memoryConversations(store);
     await chat(page.id, { text: "親を直して" }, deps("user-a", store, { ai, conversations: chats }));
-    expect(store.rows.get(parent.id)!.blocks).toEqual([p("直した文字起こし")]);
+    expect(plain(store.rows.get(parent.id)!.blocks)).toEqual([p("直した文字起こし")]);
     expect(chats.turns[0]!.changes).toHaveLength(1);
     // 兄弟は作業場に入らない（開いているページの親・子だけ）
     expect(store.rows.get(sibling.id)!.blocks).toEqual([p("方針")]);
@@ -399,7 +425,7 @@ describe("POST /api/pages/{id}/ai/chat", () => {
     ]);
     const chats = memoryConversations(store);
     await chat(page.id, { text: "直して" }, deps("user-a", store, { ai, conversations: chats }));
-    expect(store.rows.get(page.id)!.blocks).toEqual([p("二度目")]);
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([p("二度目")]);
     // 戻す先は「依頼の前の本文」の版（最初の 1 つ）
     expect(chats.turns[0]!.changes).toEqual([{ pageId: page.id, change: "edited", version: 1, revision: 3, chars: 3, delta: -2 }]);
   });
@@ -414,7 +440,7 @@ describe("POST /api/pages/{id}/ai/chat", () => {
     const chats = memoryConversations(store);
     await chat(page.id, { text: "まとめを作って" }, deps("user-a", store, { ai, conversations: chats }));
     const created = [...store.rows.values()].find((row) => row.title === "合成のまとめ");
-    expect(created?.blocks).toEqual([p("まとめの本文")]);
+    expect(plain(created?.blocks)).toEqual([p("まとめの本文")]);
     expect(chats.turns[0]!.changes).toEqual([{ pageId: created!.id, change: "created", version: null, revision: 1, chars: 6, delta: 6 }]);
   });
 
@@ -444,7 +470,7 @@ describe("POST /api/pages/{id}/ai/chat", () => {
     expect(response.status).toBe(200);
     // 1 往復目は通り、2 往復目の前で止まる（書いた分はそのまま・版も残る）
     expect(ai.calls).toBe(1);
-    expect(store.rows.get(page.id)!.blocks).toEqual([p("書き換え")]);
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([p("書き換え")]);
     expect(chats.turns[0]).toMatchObject({ result: "stopped", resultCode: "quota_exceeded" });
   });
 
@@ -485,7 +511,7 @@ describe("POST /api/pages/{id}/ai/chat/{messageId}/undo", () => {
     const ai = stubBackend(writeTurn(page.id, "AI が書いた本文"));
     const d = deps("user-a", store, { ai, conversations: chats });
     const body = (await (await chat(page.id, { text: "直して" }, d)).json()) as { conversation: { messageId: string } };
-    expect(store.rows.get(page.id)!.blocks).toEqual([p("AI が書いた本文")]);
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([p("AI が書いた本文")]);
 
     const response = await undo(page.id, body.conversation.messageId, d);
     expect(response.status).toBe(200);
@@ -543,7 +569,7 @@ describe("POST /api/pages/{id}/ai/chat/{messageId}/undo", () => {
 
     expect((await undo(page.id, body.conversation.messageId, deps(null, store, { conversations: chats }))).status).toBe(401);
     expect((await undo(page.id, "message-99", d)).status).toBe(404);
-    expect(store.rows.get(page.id)!.blocks).toEqual([p("書き換え")]);
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([p("書き換え")]);
   });
 });
 
@@ -618,7 +644,7 @@ describe("POST /api/pages/{id}/ai/chat/turns (この Mac の CLI の結果)", ()
     expect(response.status).toBe(200);
 
     expect(ai.calls).toBe(0);
-    expect(store.rows.get(page.id)!.blocks).toEqual([p("CLI が書いた本文")]);
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([p("CLI が書いた本文")]);
     expect(store.versions).toEqual([{ pageId: page.id, version: 1, blocks: [p("もとの本文")] }]);
     expect(chats.turns[0]).toMatchObject({ input: "直して", reply: "直しました。", result: "done", author: { route: "device", engine: "cli:claude-code" } });
     // サブスクなので金額は数えず、device の行に回数だけ残る
@@ -633,7 +659,7 @@ describe("POST /api/pages/{id}/ai/chat/turns (この Mac の CLI の結果)", ()
     const usage = memoryUsage(10_000_000);
     const response = await deviceTurn(page.id, body(page.id), deps("user-a", store, { usage, limitUsd: 10 }));
     expect(response.status).toBe(200);
-    expect(store.rows.get(page.id)!.blocks).toEqual([p("CLI が書いた本文")]);
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([p("CLI が書いた本文")]);
   });
 
   it("can be undone like any other turn", async () => {
@@ -740,8 +766,8 @@ describe("会話に書けなくても、書いたページは返す", () => {
       expect(response.status).toBe(200);
       const body = (await response.json()) as { conversation: unknown; page: Page | null };
       expect(body.conversation).toBeNull();
-      expect(body.page?.blocks).toEqual([p("書き換え")]);
-      expect(store.rows.get(page.id)!.blocks).toEqual([p("書き換え")]);
+      expect(plain(body.page?.blocks)).toEqual([p("書き換え")]);
+      expect(plain(store.rows.get(page.id)!.blocks)).toEqual([p("書き換え")]);
       expect(store.versions).toHaveLength(1);
       expect(JSON.stringify(log.mock.calls)).not.toContain("書き換え");
     } finally {
@@ -767,9 +793,155 @@ describe("会話に書けなくても、書いたページは返す", () => {
         deps("user-a", store, { conversations: broken }),
       );
       expect(response.status).toBe(200);
-      expect(store.rows.get(page.id)!.blocks).toEqual([p("CLI が書いた本文")]);
+      expect(plain(store.rows.get(page.id)!.blocks)).toEqual([p("CLI が書いた本文")]);
     } finally {
       log.mockRestore();
     }
+  });
+});
+
+describe("AI が足した語の印（ai mark）", () => {
+  it("write_page で 1 語だけ変えると、保存した本文のその語だけが ai を持ち、前からあった ai は残る", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", {
+      title: "合成のページ",
+      blocks: [{ type: "paragraph", content: [{ type: "text", text: "the " }, { type: "text", text: "old", marks: [{ type: "ai" }] }, { type: "text", text: " quick fox" }] }],
+    });
+    const d = deps("user-a", store, { ai: stubBackend(writeTurn(page.id, "the old slow fox")) });
+    expect((await chat(page.id, { text: "直して" }, d)).status).toBe(200);
+    expect(store.rows.get(page.id)!.blocks).toEqual([
+      {
+        type: "paragraph",
+        content: [
+          { type: "text", text: "the " },
+          { type: "text", text: "old", marks: [{ type: "ai" }] },
+          { type: "text", text: " " },
+          { type: "text", text: "slow", marks: [{ type: "ai" }] },
+          { type: "text", text: " fox" },
+        ],
+      },
+    ]);
+    // 版には書く前の本文（ai 付き）がそのまま残る
+    expect(store.versions[0]!.blocks).toEqual(page.blocks);
+  });
+
+  it("create_page の本文は全部 ai", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { blocks: [p("本文")] });
+    const ai = stubBackend([
+      turn({ toolCalls: [{ id: "t1", name: "create_page", input: { title: "合成のまとめ", markdown: "## 見出し\n\n- ひとつ\n- ふたつ" } }], stopReason: "tool_use" }),
+      turn({ text: "作りました。" }),
+    ]);
+    await chat(page.id, { text: "まとめを作って" }, deps("user-a", store, { ai }));
+    const created = [...store.rows.values()].find((row) => row.title === "合成のまとめ")!;
+    const texts: Block[] = [];
+    const walk = (node: Block) => {
+      if (node.type === "text") texts.push(node);
+      if (Array.isArray(node.content)) (node.content as Block[]).forEach(walk);
+    };
+    created.blocks.forEach(walk);
+    expect(texts.map((node) => node.text)).toEqual(["見出し", "ひとつ", "ふたつ"]);
+    for (const node of texts) expect(node.marks).toEqual([{ type: "ai" }]);
+  });
+});
+
+/** SSE の本文を event の並びにする。 */
+function parseSse(text: string): Array<{ event: string; data: unknown }> {
+  return text
+    .split("\n\n")
+    .filter((chunk) => chunk.startsWith("event: "))
+    .map((chunk) => {
+      const [eventLine, dataLine] = chunk.split("\n");
+      return { event: eventLine!.slice("event: ".length), data: JSON.parse(dataLine!.slice("data: ".length)) as unknown };
+    });
+}
+
+/** onText があれば書いた文を流してから答える偽のモデル（streaming と同じ順）。 */
+function streamingBackend(answers: Turn[]): AiComposeBackend {
+  const backend = stubBackend(answers);
+  const converse = backend.client.converse;
+  return {
+    ...backend,
+    client: {
+      ...backend.client,
+      converse: async (input) => {
+        const answer = await converse(input);
+        if (answer.text) input.onText?.(answer.text);
+        return answer;
+      },
+    },
+  };
+}
+
+function streamRequest(path: string, body: unknown, accept = "text/event-stream"): Request {
+  return new Request(`${ORIGIN}${path}`, {
+    method: "POST",
+    headers: { host: "editor.test", origin: ORIGIN, "content-type": "application/json", accept },
+    body: JSON.stringify(body),
+  });
+}
+
+describe("POST /api/pages/{id}/ai/chat の SSE（Accept: text/event-stream）", () => {
+  const answers = (pageId: string) => [
+    turn({ text: "本文を読んで書き直します。", toolCalls: [{ id: "t1", name: "write_page", input: { page_id: pageId, markdown: "新しい本文" } }], stopReason: "tool_use" }),
+    turn({ text: "書き直しました。" }),
+  ];
+
+  it("流す event は text → tool start → tool end → text → done で、done の本文は JSON のときと同じ", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("前の本文")] });
+    const response = await runAiChat(streamRequest(`/api/pages/${page.id}/ai/chat`, { text: "直して" }), page.id, deps("user-a", store, { ai: streamingBackend(answers(page.id)) }));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
+    expect(response.headers.get("cache-control")).toBe("no-cache, no-transform");
+    expect(response.headers.get("x-accel-buffering")).toBe("no");
+    const events = parseSse(await response.text());
+    expect(events.map((event) => event.event)).toEqual(["text", "tool", "tool", "text", "done"]);
+    expect(events.slice(0, 4).map((event) => event.data)).toEqual([
+      { text: "本文を読んで書き直します。" },
+      { tool: "write_page", page: null, ok: null, phase: "start" },
+      { tool: "write_page", page: "合成のページ", ok: true, phase: "end" },
+      { text: "書き直しました。" },
+    ]);
+
+    // 同じ依頼を JSON で（別のページで同じ動き）。done の本文の形・値は id 以外同じ
+    const other = memoryStore();
+    const twin = other.add("user-a", { title: "合成のページ", blocks: [p("前の本文")] });
+    const json = await runAiChat(streamRequest(`/api/pages/${twin.id}/ai/chat`, { text: "直して" }, "application/json"), twin.id, deps("user-a", other, { ai: streamingBackend(answers(twin.id)) }));
+    expect(json.headers.get("content-type")).not.toContain("event-stream");
+    const done = events.at(-1)!.data as Record<string, unknown>;
+    const plainBody = (await json.json()) as Record<string, unknown>;
+    const shape = (body: Record<string, unknown>) => JSON.parse(JSON.stringify(body).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "ID").replace(/"(createdAt|updatedAt)":"[^"]*"/g, '"$1":"T"')) as unknown;
+    expect(shape(done)).toEqual(shape(plainBody));
+    expect(Object.keys(done).sort()).toEqual(["conversation", "message", "page", "usage"]);
+  });
+
+  it("Accept に無ければ今までどおり JSON、事前の確認の失敗は SSE でも HTTP のステータスで返す", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { blocks: [p("本文")] });
+    const json = await chat(page.id, { text: "直して" }, deps("user-a", store));
+    expect(json.headers.get("content-type")).toContain("application/json");
+    const unauthorized = await runAiChat(streamRequest(`/api/pages/${page.id}/ai/chat`, { text: "直して" }), page.id, deps(null, store));
+    expect(unauthorized.status).toBe(401);
+    const missing = await runAiChat(streamRequest(`/api/pages/${page.id}/ai/chat`, { text: "直して" }), page.id, deps("user-b", store));
+    expect(missing.status).toBe(404);
+  });
+
+  it("途中の例外は error event（本文・内部の情報は出さない）", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { blocks: [p("本文")] });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const broken = stubBackend([]);
+    broken.client.converse = async (input) => {
+      input.onText?.("読みます。");
+      throw new TypeError("合成の内部の失敗");
+    };
+    const response = await runAiChat(streamRequest(`/api/pages/${page.id}/ai/chat`, { text: "直して" }), page.id, deps("user-a", store, { ai: broken }));
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(parseSse(text)).toEqual([{ event: "text", data: { text: "読みます。" } }, { event: "error", data: { error: "internal" } }]);
+    expect(text).not.toContain("合成の内部の失敗");
+    expect(log).toHaveBeenCalledWith("editor-web: request failed", { route: "POST /api/pages/[id]/ai/chat", name: "TypeError" });
+    log.mockRestore();
   });
 });

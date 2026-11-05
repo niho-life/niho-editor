@@ -2,12 +2,16 @@ import type { Extensions } from "@tiptap/core";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { TableKit } from "@tiptap/extension-table";
 import StarterKit from "@tiptap/starter-kit";
+import { AiMark } from "./ai-mark";
 import { isSafeLinkHref } from "./blocks";
 import { PageCallout } from "./callout";
 
 /**
  * 限定 AST（blocks.ts）のうち、画面の部品を持たない分（段落・見出し・箇条書き・チェックリスト・番号付き・表・コード・引用・
- * 囲み・区切り線と、行の中の太字・斜体・取り消し線・インラインコード・リンク・改行）。
+ * 囲み・区切り線と、行の中の太字・斜体・取り消し線・インラインコード・リンク・改行・AI が足した語の印 `ai`）。
+ *
+ * `ai`（ai-mark.ts）は、AI チャットの道具が読む Markdown には出ない（serializer が何も書かない）が、
+ * `ai` 付きの本文を Markdown にできるよう schema には入れる。
  *
  * **React に触れない**ので、サーバー（editor-web の AI チャットがページを Markdown で読み書きする道具）からも読める。
  * 画像は NodeView（React）を持つのでここには無い。Markdown に画像の置き場は無く、markdown.ts は画像のある本文を
@@ -29,5 +33,6 @@ export function buildMarkdownExtensions(): Extensions {
     TaskItem.configure({ nested: true }),
     TableKit.configure({ table: { resizable: false, allowTableNodeSelection: false } }),
     PageCallout,
+    AiMark,
   ];
 }

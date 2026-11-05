@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pageMenuItems } from "./use-page-menu";
+import { AI_GRAY_ITEM, pageMenuItems } from "./use-page-menu";
 import { googleDocsConnectPath, GOOGLE_DOCS_CONNECT_PATH } from "./google-docs-paths";
 
 /** 「…」の項目と、Google ドキュメントの失敗の文言（code ごと）。 */
@@ -31,6 +31,14 @@ describe("「…」の項目", () => {
     ]);
     expect(pageMenuItems(null, { folder: true }).find((item) => item.id === "export-folder")?.hint).toBe(".zip");
     expect(pageMenuItems(null, { pageInfo: true }).map((item) => item.id)).toEqual(["share", "export", "export-google-docs-batch", "history", "duplicate", "page-info", "delete"]);
+  });
+
+  it("「AI の文を灰色で見せる」は今の値を checked に持ち、削除の前に出る（値を渡さなければ出さない）", () => {
+    const on = pageMenuItems(null, { pageInfo: true, aiGray: true });
+    expect(on.map((item) => item.id).slice(-3)).toEqual(["page-info", AI_GRAY_ITEM, "delete"]);
+    expect(on.find((item) => item.id === AI_GRAY_ITEM)).toMatchObject({ label: "AI の文を灰色で見せる", checked: true });
+    expect(pageMenuItems(null, { aiGray: false }).find((item) => item.id === AI_GRAY_ITEM)?.checked).toBe(false);
+    expect(pageMenuItems(null).some((item) => item.id === AI_GRAY_ITEM)).toBe(false);
   });
 
   it("共有中が分かっているときだけ補足を出す", () => {
