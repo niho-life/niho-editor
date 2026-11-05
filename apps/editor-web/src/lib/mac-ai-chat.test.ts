@@ -50,7 +50,9 @@ describe("Mac CLI chat turn", () => {
     ["CliLoginRequired", "auth"],
     ["UsageLimitReached", "usage_limit"],
     ["ModelNotFound", "model"],
-    ["TimedOut", "timed_out"],
+    // 契約の名前（crate の TimedOut はアプリが Timeout に変えて渡すので、TimedOut は届かない）
+    ["Timeout", "timed_out"],
+    ["TimedOut", "failed"],
     ["SessionNotFound", "session"],
     ["TransientFailure", "failed"],
     ["toString", "failed"],
