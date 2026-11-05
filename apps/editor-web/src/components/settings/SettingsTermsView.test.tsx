@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SettingsDto, SettingsFailure, SettingsPatchInput } from "@/lib/settings-client";
 import { SETTINGS_MESSAGES } from "@/settings/messages";
-import { button, click, dto, field, mount, shown, status, type, unmount, unnamed } from "./settings-test-kit";
+import { button, click, dto, field, flush, mount, shown, status, type, unmount, unnamed } from "./settings-test-kit";
 
 const push = vi.fn();
 const save = vi.fn<(patch: SettingsPatchInput) => Promise<{ ok: true; settings: SettingsDto } | SettingsFailure>>();
@@ -107,6 +107,38 @@ describe("SettingsTermsView（/settings/terms）", () => {
     await click("固有名詞を保存");
     expect(status()).toBe(SETTINGS_MESSAGES.unavailable);
     expect(field("表記").value).toBe("書き換え");
+  });
+
+  it("does not open another row while a save is on the way, and closes only the row it saved", async () => {
+    const ENKAKU = { term: "円覚寺", reading: "えんがくじ", variants: [], note: "" };
+    await mount(<SettingsTermsView initial={dto({ glossary: [KITA, ENKAKU] })} />);
+    await click("北鎌倉 を編集");
+    await type("補足", "臨済宗");
+    let answer: (value: { ok: true; settings: SettingsDto }) => void = () => undefined;
+    save.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    await click("固有名詞を保存");
+    // 送っている間は、別の行・追加を押しても開かない（押せないことは aria-disabled で伝える）
+    expect(button("円覚寺 を編集")?.getAttribute("aria-disabled")).toBe("true");
+    await click("円覚寺 を編集");
+    expect(field("補足").value).toBe("臨済宗");
+    expect(button("円覚寺 を編集")).toBeTruthy();
+    // 保存が返ったら、送った行だけが閉じる
+    answer({ ok: true, settings: dto({ glossary: [{ ...KITA, note: "臨済宗" }, ENKAKU] }) });
+    await flush();
+    expect(button("北鎌倉 を編集")).toBeTruthy();
+    expect(button("円覚寺 を編集")?.getAttribute("aria-disabled")).toBeNull();
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a row opened after the save of another one has come back", async () => {
+    const ENKAKU = { term: "円覚寺", reading: "えんがくじ", variants: [], note: "" };
+    await mount(<SettingsTermsView initial={dto({ glossary: [KITA, ENKAKU] })} />);
+    await click("北鎌倉 を編集");
+    save.mockResolvedValue({ ok: true, settings: dto({ glossary: [KITA, ENKAKU] }) });
+    await click("固有名詞を保存");
+    await click("円覚寺 を編集");
+    await type("補足", "臨済宗");
+    expect(field("補足").value).toBe("臨済宗");
   });
 
   it("names every control and labels every field, also while a row is open", async () => {

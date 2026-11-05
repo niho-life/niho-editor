@@ -95,9 +95,16 @@ export function useSettingsState(initial: SettingsDto) {
  */
 export function useTermRows(terms: readonly SettingsTerm[], max: number, busy: boolean, save: (next: SettingsTerm[]) => Promise<boolean>): Omit<EditorTermRowsProps, "label" | "addRow"> {
   const [editing, setEditing] = useState<EditorTermEditing | null>(null);
+  // 開いた行の通し番号。保存が返ったとき、送った行がまだ開いているときだけ閉じる（その間に開き直した別の行の入力を消さない）
+  const opened = useRef(0);
+  const open = (next: EditorTermEditing | null) => {
+    opened.current += 1;
+    setEditing(next);
+  };
   const commit = (next: SettingsTerm[]) => {
+    const sent = opened.current;
     void save(next).then((ok) => {
-      if (ok) setEditing(null);
+      if (ok && opened.current === sent) open(null);
     });
   };
   return {
@@ -105,15 +112,16 @@ export function useTermRows(terms: readonly SettingsTerm[], max: number, busy: b
     max,
     busy,
     editing,
+    // 送っている間は別の行を開かない（削除が返ると行の位置がずれ、開いた行が別の固有名詞を指す）
     onOpen: (index) => {
       const entry = terms[index];
-      if (entry) setEditing({ index, draft: { ...entry, variants: formatVariants(entry.variants) } });
+      if (!busy && entry) open({ index, draft: { ...entry, variants: formatVariants(entry.variants) } });
     },
     onAdd: () => {
-      if (terms.length < max) setEditing({ index: null, draft: { term: "", reading: "", variants: "", note: "" } });
+      if (!busy && terms.length < max) open({ index: null, draft: { term: "", reading: "", variants: "", note: "" } });
     },
     onDraft: (draft) => setEditing((current) => (current ? { ...current, draft } : current)),
-    onCancel: () => setEditing(null),
+    onCancel: () => open(null),
     onSave: () => {
       if (!editing || editing.draft.term.trim() === "") return;
       const entry: SettingsTerm = { ...editing.draft, variants: parseVariants(editing.draft.variants) };

@@ -49,8 +49,7 @@ const VARIANTS: { id: string; widths: readonly number[] }[] = [
   { id: "sheet:publish?pick=site&conn=0", widths: [1440, 390, 375, 320] },
   { id: "sheet:publish?page=enoden&pick=exp", widths: [1440, 390, 375, 320] },
   { id: "sheet:publish?page=gomi", widths: [1440, 390, 375, 320] },
-  // 設定（editor-web。2026-11-05 の 3 層: 一覧・固有名詞・あなたについて・既定の手順・足した手順）
-  { id: "settings-web", widths: [1440, 390, 375, 320] },
+  // 設定（editor-web。2026-11-05 の 3 層: 固有名詞・あなたについて・既定の手順・足した手順。一覧は screens.ts の settings-web）
   { id: "settings-web?terms=1", widths: [1440, 390, 375, 320] },
   { id: "settings-web?about=1", widths: [1440, 390, 375, 320] },
   { id: "settings-web?recipe=tpl-1", widths: [1440, 390, 375, 320] },

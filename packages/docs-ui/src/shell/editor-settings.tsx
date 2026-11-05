@@ -616,7 +616,7 @@ function TermEditRow({ editing, busy, onDraft, onCancel, onSave, onRemove }: { e
   );
 }
 
-/** 表記 | よみ | 誤りやすい表記 の表。行を押すとその行だけがその場の欄に変わる（同時に直すのは 1 行）。 */
+/** 表記 | よみ | 誤りやすい表記 の表。行を押すとその行だけがその場の欄に変わる（同時に直すのは 1 行。送っている間は別の行を開かない）。 */
 export function EditorTermRows(props: EditorTermRowsProps) {
   const { label, terms, max, busy, editing } = props;
   const adding = editing?.index === null;
@@ -635,7 +635,7 @@ export function EditorTermRows(props: EditorTermRowsProps) {
         editing?.index === index ? (
           edit(editing)
         ) : (
-          <button key={`${index}:${entry.term}`} type="button" className="es-row es-row--term" aria-label={`${entry.term || "表記のない行"} を編集`} onClick={() => props.onOpen(index)}>
+          <button key={`${index}:${entry.term}`} type="button" className="es-row es-row--term" aria-label={`${entry.term || "表記のない行"} を編集`} {...busyProps(busy)} onClick={() => !busy && props.onOpen(index)}>
             <span className="es-tm-t">{entry.term}</span>
             <span className={entry.reading ? "es-tm-r" : "es-tm-r es-tm--none"} data-k="よみ">
               {entry.reading || "—"}
@@ -652,7 +652,7 @@ export function EditorTermRows(props: EditorTermRowsProps) {
       {adding && editing && edit(editing)}
       {terms.length === 0 && !adding && <div className="es-row es-row--note">{EDITOR_SETTINGS_TEXT.empty}</div>}
       {props.addRow && !adding && terms.length < max && (
-        <button type="button" className="es-row es-row--add" onClick={props.onAdd}>
+        <button type="button" className="es-row es-row--add" {...busyProps(busy)} onClick={() => !busy && props.onAdd()}>
           <Icon name="plus" />
           <span>追加</span>
         </button>
