@@ -1,6 +1,8 @@
 <!doctype html>
 <!--
   mock: NIHO editor の AI コンポーザー v1（PC。Cursor の Composer の動きを、右の「AIと作る」と本文で再現）
+  色と文字: このモックは単体で開けるよう、色を :root の仮値（hex）で持つ。実装（docs-ui / editor-web）では packages/ui/src/styles/tokens.css の token を引き、生の hex は足さない。文字は 12px 以上にそろえてある。
+  mock: NIHO editor の AI コンポーザー v1（PC。Cursor の Composer の動きを、右の「AIと作る」と本文で再現）
   論点（上の帯の「場面」で切り替える。開くと自動で 1 回流れる。「やり直す」で再生）:
     推敲       … 本文全体に「ですます調にそろえて、繰り返しを削って」。右のカードに思考が流れ（折りたたみ）、工程の行が進み、
                  本文の中に差分（消す語＝取り消し線、足す語＝灰色）が 1 か所ずつ置かれる。段落ごとに採用／却下（⌘⏎・⌘⌫・⌥↓⌥↑）。
@@ -48,7 +50,7 @@ b,strong{font-weight:600}
 [hidden]{display:none!important}
 .ico{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .sp{flex:1}
-kbd{font:11px var(--mono);color:var(--faint)}
+kbd{font:12px var(--mono);color:var(--faint)}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:32px;padding:0 14px;border-radius:999px;background:var(--grad);color:#fff;font-weight:600;font-size:13px;white-space:nowrap}
 .btn:hover{background:var(--grad-h)}
 .btn.line{background:#fff;color:var(--ink);box-shadow:inset 0 0 0 1.5px var(--line3)}
@@ -59,7 +61,7 @@ kbd{font:11px var(--mono);color:var(--faint)}
 .btn:disabled{opacity:.45;cursor:default}
 .ib{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:var(--ink2);flex:none;position:relative}
 .ib:hover,.ib.on{background:var(--sand2);color:var(--ink)}
-.ib[data-tip]::after{content:attr(data-tip);position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);white-space:nowrap;background:var(--ink);color:#fff;font-size:11.5px;font-weight:600;padding:3px 8px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .12s;z-index:30}
+.ib[data-tip]::after{content:attr(data-tip);position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);white-space:nowrap;background:var(--ink);color:#fff;font-size:12px;font-weight:600;padding:3px 8px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .12s;z-index:30}
 .ib[data-tip]:hover::after{opacity:1}
 .menu{position:absolute;z-index:40;min-width:200px;background:#fff;border:1px solid var(--line2);border-radius:12px;box-shadow:0 12px 36px rgba(28,28,26,.12);padding:6px;display:none}
 .menu.open{display:block}
@@ -74,7 +76,7 @@ kbd{font:11px var(--mono);color:var(--faint)}
 
 /* mock bar */
 .mock{position:sticky;top:0;z-index:100;overflow:hidden;display:flex;align-items:center;gap:10px;height:40px;padding:0 12px;background:#141413;color:#fff;font-size:12.5px}
-.mock .url{flex:1;min-width:0;background:rgba(255,255,255,.08);border-radius:8px;padding:4px 10px;font-family:var(--mono);font-size:11.5px;color:rgba(255,255,255,.55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mock .url{flex:1;min-width:0;background:rgba(255,255,255,.08);border-radius:8px;padding:4px 10px;font-family:var(--mono);font-size:12px;color:rgba(255,255,255,.55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mock .url b{color:#fff;font-weight:600}
 .variant-switch{display:flex;align-items:center;gap:6px}
 .variant-switch span{color:rgba(255,255,255,.5);margin-left:6px}
@@ -100,12 +102,12 @@ kbd{font:11px var(--mono);color:var(--faint)}
 .row:hover{background:var(--sand2)}
 .row.on{background:#fff;box-shadow:0 1px 2px rgba(28,28,26,.06),0 0 0 1px var(--line)}
 .row b{flex:1;min-width:0;font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.row .when{font-size:11.5px;color:var(--faint);white-space:nowrap}
+.row .when{font-size:12px;color:var(--faint);white-space:nowrap}
 .row .mk{width:14px;height:14px;color:var(--mute)}
 .sb-foot{border-top:1px solid var(--line);padding:8px 10px}
 .sb-me{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:6px 8px;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--ink2)}
 .sb-me:hover{background:var(--sand2);color:var(--ink)}
-.sb-me .av{width:22px;height:22px;border-radius:50%;background:var(--pale);color:var(--moss);display:grid;place-items:center;font-size:11px;font-weight:700}
+.sb-me .av{width:22px;height:22px;border-radius:50%;background:var(--pale);color:var(--moss);display:grid;place-items:center;font-size:12px;font-weight:700}
 
 /* document */
 .doc{position:relative;display:flex;flex-direction:column;min-width:0;min-height:calc(100vh - 40px)}
@@ -137,7 +139,7 @@ kbd{font:11px var(--mono);color:var(--faint)}
 .bd .ai{color:var(--mute)}
 body.nogray .bd .ai{color:inherit}
 .bd .ai:not(.pend){position:relative}
-.bd span.ai:hover::after{content:"AI が書いた";position:absolute;left:0;top:calc(100% + 2px);font-size:11px;font-weight:600;color:var(--faint);background:#fff;border:1px solid var(--line2);border-radius:6px;padding:1px 7px;white-space:nowrap;z-index:6;pointer-events:none}
+.bd span.ai:hover::after{content:"AI が書いた";position:absolute;left:0;top:calc(100% + 2px);font-size:12px;font-weight:600;color:var(--faint);background:#fff;border:1px solid var(--line2);border-radius:6px;padding:1px 7px;white-space:nowrap;z-index:6;pointer-events:none}
 /* 差分（hunk） */
 .bd .hunk{position:relative}
 .bd .hunk::before{content:"";position:absolute;left:-18px;top:5px;bottom:5px;width:3px;border-radius:2px;background:var(--leaf)}
@@ -156,7 +158,7 @@ body.nogray .bd .ai{color:inherit}
 .ht button{height:26px;padding:0 9px;border-radius:7px;font-weight:600;color:var(--ink2);display:inline-flex;align-items:center;gap:5px}
 .ht button:hover{background:var(--sand)}
 .ht button.ok{color:var(--moss)}
-.ht kbd{font-size:10.5px}
+.ht kbd{font-size:12px}
 
 /* 文字数 */
 .count{position:fixed;right:18px;bottom:14px;z-index:15;font-size:12px;color:var(--faint);padding:4px 9px;border-radius:999px;background:var(--canvas)}
@@ -172,7 +174,7 @@ body.nogray .bd .ai{color:inherit}
 .msg.me{align-self:flex-end;max-width:92%;background:var(--sand);border-radius:14px 14px 4px 14px;padding:8px 12px}
 .msg.me .chips{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:5px}
 .msg.bot{padding:0 2px;color:var(--ink)}
-.pre{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;background:var(--pale);color:var(--moss);font-size:11.5px;font-weight:600;margin-right:6px;vertical-align:1px}
+.pre{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;background:var(--pale);color:var(--moss);font-size:12px;font-weight:600;margin-right:6px;vertical-align:1px}
 .chip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:999px;background:var(--pale);color:var(--moss);font-size:12px;font-weight:600;white-space:nowrap}
 .chip .ico{width:13px;height:13px}
 .chip .x{color:var(--moss);opacity:.7;font-size:14px;margin-left:1px}
@@ -183,7 +185,7 @@ body.nogray .bd .ai{color:inherit}
 .think-hd i.spin{width:11px;height:11px;border-radius:50%;border:2px solid var(--moss);border-top-color:transparent;animation:spin .8s linear infinite;flex:none}
 .think.closed .think-hd i.spin{display:none}
 .think-hd em{font-style:normal;color:var(--faint);font-weight:500;margin-left:auto}
-.think-hd .caret{transition:transform .15s;color:var(--faint);font-size:11px}
+.think-hd .caret{transition:transform .15s;color:var(--faint);font-size:12px}
 .think.closed .caret{transform:rotate(-90deg)}
 .think-body{max-height:150px;overflow:auto;padding:0 10px 8px;font-size:12.5px;line-height:1.6;color:var(--mute);white-space:pre-wrap}
 .think.closed .think-body{display:none}
@@ -203,7 +205,7 @@ body.nogray .bd .ai{color:inherit}
 .hk.cur{background:var(--pale)}
 .hk b{width:14px;color:var(--faint);font-weight:600;flex:none}
 .hk span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.hk em{font-style:normal;color:var(--faint);font-size:11.5px;flex:none}
+.hk em{font-style:normal;color:var(--faint);font-size:12px;flex:none}
 .hk.ok em{color:var(--moss)}
 .hk.no span{text-decoration:line-through;color:var(--faint)}
 .run-foot{display:flex;gap:6px;align-items:center}
@@ -336,7 +338,7 @@ body.nogray .bd .ai{color:inherit}
             <div class="foot">
               <button class="ib" id="skillbtn" data-tip="工程・スキル" aria-label="工程・スキル"><svg class="ico" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
               <button class="ib" id="atbtn" data-tip="ページや出典を渡す" aria-label="ページや出典を渡す"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-3.5 7.1"/></svg></button>
-              <button class="model">Claude · Sonnet 4.6<span style="font-size:10px;color:var(--faint)">▾</span></button>
+              <button class="model">Claude · Sonnet 4.6<span style="font-size:12px;color:var(--faint)">▾</span></button>
               <button class="send" id="send" aria-label="送る"><svg class="ico" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
             </div>
           </div>
