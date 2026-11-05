@@ -46,6 +46,23 @@ describe("AiDiffView", () => {
     expect(JSON.stringify(target.getJSON())).toBe(json);
   });
 
+  it("shows a formatting-only change as a hunk, paints the block, and reverts it", () => {
+    const target = open([p("太字にした文", [{ type: "bold" }])]);
+    target.commands.showAiDiff({ before: [p("太字にした文")] });
+    const diff = aiDiffOf(target.state)!;
+    expect(diff.hunks).toHaveLength(1);
+    expect(diff.hunks[0]).toMatchObject({ kind: "changed" });
+    const dom = target.view.dom;
+    expect(dom.querySelectorAll(".es-diff-changed")).toHaveLength(1);
+    expect(dom.querySelector(".es-diff-changed")?.getAttribute("title")).toBe("書式が変わりました");
+    // 同じ文を打ち消し線で重ねない
+    expect(dom.querySelector(".es-diff-del-block")).toBeNull();
+    expect(dom.querySelectorAll(".es-diff-ctl")).toHaveLength(1);
+    expect(target.commands.revertAllAiHunks()).toBe(true);
+    expect(target.getJSON().content?.[0]?.content?.[0]).toEqual({ type: "text", text: "太字にした文" });
+    expect(aiDiffOf(target.state)!.hunks).toEqual([]);
+  });
+
   it("is read-only while shown and editable again when hidden", () => {
     const target = open();
     target.commands.showAiDiff({ before: BEFORE });

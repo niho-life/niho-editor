@@ -136,6 +136,8 @@ function decorations(editor: Editor, state: EditorState, diff: NonNullable<AiDif
     if (hunk.kind === "inserted") {
       decos.push(Decoration.node(start, end, { class: "es-diff-added" }));
     } else if (hunk.parts && node.isTextblock) {
+      // 文は同じで、太字・リンク先・見出しの段階などだけが変わった（語の差分が無いので、ブロックを塗って気づけるようにする）
+      if (hunk.parts.every((part) => typeof part === "string")) decos.push(Decoration.node(start, end, { class: "es-diff-changed", title: "書式が変わりました" }));
       const positions = inlinePositions(node, start);
       const posAt = (offset: number) => positions[Math.min(offset, positions.length - 1)]!;
       let offset = 0;
@@ -151,8 +153,10 @@ function decorations(editor: Editor, state: EditorState, diff: NonNullable<AiDif
       });
     } else {
       const text = blockText(diff.before[hunk.beforeIndex] ?? {});
-      decos.push(Decoration.node(start, end, { class: "es-diff-changed" }));
-      decos.push(Decoration.widget(start, () => element("del", "es-diff-del-block", text || "（前のブロック）"), { ...WIDGET, side: -1, key: `was-${index}-${text}` }));
+      // 文が同じで構造・書式だけ違う（入れ子の段落を見出しにした等）ときは、同じ文を打ち消し線で重ねず、ブロックを塗るだけにする
+      const same = text !== "" && text === blockText(node.toJSON() as Block);
+      decos.push(Decoration.node(start, end, same ? { class: "es-diff-changed", title: "書式が変わりました" } : { class: "es-diff-changed" }));
+      if (!same) decos.push(Decoration.widget(start, () => element("del", "es-diff-del-block", text || "（前のブロック）"), { ...WIDGET, side: -1, key: `was-${index}-${text}` }));
     }
     decos.push(Decoration.widget(ctlPos, () => controls(editor, index), { ...WIDGET, side: ctlSide, key: `ctl-${index}` }));
   });

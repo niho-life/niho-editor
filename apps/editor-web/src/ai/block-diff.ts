@@ -10,7 +10,10 @@ import { diffWords, type DiffPart } from "./diff";
  * 純粋な関数だけ（DOM・Node の API を使わない）。ブラウザとサーバーの両方で読む。
  */
 
-/** 対応付けの結果。`same` は type・attrs・平文が同じ、`changed` は対にしたが違うもの。 */
+/**
+ * 対応付けの結果。`same` は type・attrs・平文・書式（`ai` を除く）が同じ、`changed` は対にしたが違うもの
+ * （文字が同じでも、太字・リンク先・見出しの段階・入れ子の構造が違えば `changed`）。
+ */
 export type BlockPair =
   | { kind: "same" | "changed"; beforeIndex: number; afterIndex: number }
   | { kind: "inserted"; afterIndex: number }
@@ -80,8 +83,35 @@ function stable(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
+/**
+ * 対応付け（LCS）の鍵。type・attrs・平文だけ（書式だけ違うブロックも同じ位置の対にするため、書式は含めない）。
+ * attrs は formKey と同じく、null の値・空の attrs は「無い」とみなす（`{ language: null }` と無しを同じに扱う）。
+ */
 function anchorKey(block: Block): string {
-  return `${typeOf(block)}\u0000${stable(block.attrs ?? null)}\u0000${blockText(block)}`;
+  return `${typeOf(block)}\u0000${stable(canonical({ attrs: block.attrs }))}\u0000${blockText(block)}`;
+}
+
+/** 比べるための形: null・undefined・空の attrs / marks は「無い」とみなし、mark は種類順にそろえる。 */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (typeof value !== "object" || value === null) return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (child === undefined || child === null) continue;
+    let next = canonical(child);
+    if (key === "marks" && Array.isArray(next)) next = next.map((mark) => [stable(mark), mark] as const).sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0)).map(([, mark]) => mark);
+    const empty = key === "marks" ? Array.isArray(next) && next.length === 0 : key === "attrs" && typeof next === "object" && next !== null && Object.keys(next).length === 0;
+    if (!empty) out[key] = next;
+  }
+  return out;
+}
+
+/**
+ * 変更の有無を決める鍵。文字のほか、太字・リンク先・見出しの段階・入れ子の構造まで含める。
+ * `ai`（AI が足した語の印）は外し、同じ mark で分かれた text は 1 つにする（印だけの違い・Markdown の往復での分かれ方は変更にしない）。
+ */
+function formKey(block: Block): string {
+  return stable(stripAiMarks([canonical(block) as Block])[0]);
 }
 
 /** anchor の間に残ったブロックを順に対にする（数は min。余りは消した・足した）。 */
@@ -99,6 +129,7 @@ function range(from: number, to: number): number[] {
 /**
  * トップレベル（または同じ容器の子）のブロックを対応付ける。まず type・attrs・平文が同じものを LCS で anchor にし、
  * anchor の間の残りは順に対にする。大きすぎるときは位置が同じものだけを対にする。
+ * anchor にした対でも、書式・構造が違えば `changed`（`same` は formKey まで同じ対だけ。鍵は対にしたときだけ作る）。
  */
 export function alignBlocks(before: readonly Block[], after: readonly Block[]): BlockPair[] {
   const a = before.map(anchorKey);
@@ -106,10 +137,11 @@ export function alignBlocks(before: readonly Block[], after: readonly Block[]): 
   const n = a.length;
   const m = b.length;
   const pairs: BlockPair[] = [];
+  const sameForm = (beforeIndex: number, afterIndex: number) => formKey(before[beforeIndex]!) === formKey(after[afterIndex]!);
   if (n * m > MAX_BLOCK_LCS_CELLS) {
     const count = Math.min(n, m);
     for (let index = 0; index < count; index++) {
-      pairs.push({ kind: a[index] === b[index] ? "same" : "changed", beforeIndex: index, afterIndex: index });
+      pairs.push({ kind: a[index] === b[index] && sameForm(index, index) ? "same" : "changed", beforeIndex: index, afterIndex: index });
     }
     pairGap(pairs, range(count, n), range(count, m));
     return pairs;
@@ -131,7 +163,7 @@ export function alignBlocks(before: readonly Block[], after: readonly Block[]): 
       pairGap(pairs, gapBefore, gapAfter);
       gapBefore = [];
       gapAfter = [];
-      pairs.push({ kind: "same", beforeIndex: i, afterIndex: j });
+      pairs.push({ kind: sameForm(i, j) ? "same" : "changed", beforeIndex: i, afterIndex: j });
       i++;
       j++;
     } else if (table[(i + 1) * width + j]! >= table[i * width + j + 1]!) {

@@ -65,6 +65,42 @@ describe("diffBlocks", () => {
     expect(hunks[2]).toEqual({ kind: "deleted", beforeIndex: 2, block: p(t("gone")) });
     expect(diffBlocks([p(t("a"))], [ul("a")])).toEqual([{ kind: "changed", beforeIndex: 0, afterIndex: 0, parts: null }]);
   });
+
+  describe("文字が同じで書式・構造だけ違う変更", () => {
+    const link = (href: string, text: string): Block => ({ type: "text", text, marks: [{ type: "link", attrs: { href } }] });
+    const quote = (...content: Block[]): Block => ({ type: "blockquote", content });
+
+    it("太字を付けただけでも changed になり、語の差分は無い（parts は文字だけ）", () => {
+      const hunks = diffBlocks([p(t("a b"))], [p(t("a "), t("b", "bold"))]);
+      expect(hunks).toEqual([{ kind: "changed", beforeIndex: 0, afterIndex: 0, parts: ["a b"] }]);
+      expect(alignBlocks([p(t("a b"))], [p(t("a "), t("b", "bold"))])).toEqual([{ kind: "changed", beforeIndex: 0, afterIndex: 0 }]);
+    });
+
+    it("リンク先だけ変えても changed になる", () => {
+      const hunks = diffBlocks([p(link("https://a.example/", "here"))], [p(link("https://b.example/", "here"))]);
+      expect(hunks).toHaveLength(1);
+      expect(hunks[0]).toMatchObject({ kind: "changed", beforeIndex: 0, afterIndex: 0 });
+    });
+
+    it("引用の中の段落を同じ文字の見出しにしただけでも changed になる（容器は parts が null）", () => {
+      const hunks = diffBlocks([quote(p(t("quoted")))], [quote(h(2, "quoted"))]);
+      expect(hunks).toEqual([{ kind: "changed", beforeIndex: 0, afterIndex: 0, parts: null }]);
+    });
+
+    it("anchor を使わない大きい本文でも、書式だけ違うブロックを見逃さない", () => {
+      const before = Array.from({ length: 401 }, (_, index) => p(t(`b${index}`)));
+      const after = before.map((block, index) => (index === 6 ? p(t("b6", "bold")) : block));
+      const hunks = diffBlocks(before, after);
+      expect(hunks).toEqual([{ kind: "changed", beforeIndex: 6, afterIndex: 6, parts: ["b6"] }]);
+    });
+
+    it("ai だけの違い・mark の並び・text の分かれ方・null の attrs は変更にしない", () => {
+      expect(diffBlocks([p(t("kept", "ai"), t(" text"))], [p(t("kept text"))])).toEqual([]);
+      expect(diffBlocks([p(t("ab", "bold", "italic"))], [p(t("a", "italic", "bold"), t("b", "bold", "italic"))])).toEqual([]);
+      const code = (attrs?: Record<string, unknown>): Block => ({ type: "codeBlock", ...(attrs ? { attrs } : {}), content: [t("x")] });
+      expect(diffBlocks([code({ language: null })], [code()])).toEqual([]);
+    });
+  });
 });
 
 describe("markAiInserted", () => {
@@ -112,6 +148,11 @@ describe("markAiInserted", () => {
   it("見出しの level だけ変えたときは文字に ai を付けない", () => {
     const out = markAiInserted([h(2, "title")], [h(3, "title")]);
     expect(out[0]).toEqual(h(3, "title"));
+  });
+
+  it("書式だけ変えたときは文字に ai を付けない（足した語ではない）", () => {
+    const out = markAiInserted([p(t("a b"))], [p(t("a "), t("b", "bold"))]);
+    expect(out[0]).toEqual(p(t("a "), t("b", "bold")));
   });
 
   it("改行は 1 文字として扱い、そのまま残す", () => {
