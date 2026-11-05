@@ -102,6 +102,20 @@ describe("shell.css（フェーズ2）", () => {
     expect(mobileOf(".es-dst")).toContain("grid-template-columns:32px minmax(0,1fr)");
   });
 
+  it("設定の行（2026-11-05）: 600px 以下で値を名前の下へ折り返し、› は右に残す。集中編集のシートは右に全高、900px 未満は全面", () => {
+    const narrow = root.nodes.find((node): node is AtRule => node.type === "atrule" && node.name === "media" && node.params === "(max-width:600px)")!;
+    const narrowOf = (selector: string) => decls(narrow.nodes?.find((node): node is Rule => node.type === "rule" && node.selectors.includes(`${PREFIX}${full(selector)}`)));
+    expect(bodyOf(".es-row")).toContain("grid-template-columns:150px minmax(0,1fr) auto");
+    expect(narrowOf(".es-row")).toContain("grid-template-columns:minmax(0,1fr) auto");
+    expect(narrowOf(".es-row-v")).toContain("grid-column:1");
+    expect(narrowOf(".es-row-e")).toContain("grid-column:2");
+    expect(bodyOf(".es-veil.es-veil--edit")).toContain("justify-items:end");
+    expect(bodyOf(".es-sheet.es-sheet--edit")).toContain("width:min(100%,640px)");
+    expect(bodyOf(".es-sheet.es-sheet--edit")).toContain("height:100%");
+    expect(mobileOf(".es-sheet.es-sheet--edit")).toContain("width:100%");
+    expect(mobileOf(".es-sheet.es-sheet--edit")).toContain("border-radius:0");
+  });
+
   it("(max-width:900px) の @media はひとつだけ（フェーズ1の枠と同じ区切り）", () => {
     const blocks = root.nodes.filter((node): node is AtRule => node.type === "atrule" && node.name === "media" && node.params === "(max-width:900px)");
     expect(blocks).toHaveLength(1);

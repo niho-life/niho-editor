@@ -1,30 +1,22 @@
 import type { Metadata } from "next";
-import { getEditorSettings } from "@niho/editor-store";
 import { StoreUnavailable } from "@/components/Notice";
-import { SettingsView } from "@/components/SettingsView";
-import { getPool } from "@/server/db";
-import { ownerRecipes } from "@/server/recipe-source";
-import { requireSession } from "@/server/session";
-import { settingsDto } from "@/server/settings-api";
+import { SettingsHubView } from "@/components/settings/SettingsHubView";
 import { settingsFacts } from "@/settings/facts";
+import { settingsPageData } from "@/settings/page-data";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "設定" };
 
 /**
- * 設定（#108）。AI の提案の言語・固有名詞・手順は変えられ（`PATCH /api/settings`）、
- * 文字起こしのエンジンはサーバー側の設定を読む。保存先はNIHOクラウド固定。
+ * 設定の一覧（#108。2026-11-05 から 3 層: 一覧 → 詳細ページ → 集中編集のシート）。
+ * 変えられる物だけを行にし、詳細は /settings/about・/settings/terms・/settings/recipes/{id} に分ける。
  * 最初の値はここで読む（画面を開いたときに空から始めない）。AI とメディアの使用量は画面が各 API を読む。
+ * 音声の上限と保持日数は「データ」の ⓘ に出す（エンジン名・時間切れは設定に出さない）。
  */
 export default async function SettingsPage() {
-  const session = await requireSession("/settings");
-  const pool = getPool();
-  if (!pool) return <StoreUnavailable />;
-  const [settings, recipes, facts] = await Promise.all([
-    getEditorSettings(pool, session.userId),
-    ownerRecipes(pool, session.userId),
-    settingsFacts(),
-  ]);
-  return <SettingsView key={session.userId} initial={settingsDto(settings, recipes)} facts={facts} />;
+  const data = await settingsPageData("/settings");
+  if (!data) return <StoreUnavailable />;
+  const { audio } = settingsFacts().transcription;
+  return <SettingsHubView key={data.userId} initial={data.settings} audio={{ maxBytes: audio.maxBytes, maxDurationSec: audio.maxDurationSec, retentionDays: audio.retentionDays }} />;
 }

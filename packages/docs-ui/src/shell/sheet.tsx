@@ -30,6 +30,8 @@ export type ShellSheetProps = {
   onClose: () => void;
   /** .es-sheet に足す class（レールのシートの es-sheet--rail など）。 */
   className?: string;
+  /** .es-veil に足す class（設定の集中編集の es-veil--edit：右に全高で出す）。 */
+  veilClassName?: string;
   children: ReactNode;
 };
 
@@ -41,7 +43,7 @@ export type ShellSheetProps = {
  * シートの中から別のシートを開いてもよい（入れ子）。そのあいだ Esc・Tab はいちばん内側のシートだけが扱う。
  * EditorShell の overlay に渡す（.es-root の中に出すため）。
  */
-export function ShellSheet({ label, onClose, className, children }: ShellSheetProps) {
+export function ShellSheet({ label, onClose, className, veilClassName, children }: ShellSheetProps) {
   const veil = useRef<HTMLDivElement | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
   const closeRef = useRef(onClose);
@@ -101,7 +103,7 @@ export function ShellSheet({ label, onClose, className, children }: ShellSheetPr
   return (
     <div
       ref={veil}
-      className="es-veil"
+      className={veilClassName ? `es-veil ${veilClassName}` : "es-veil"}
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}

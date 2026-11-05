@@ -1,0 +1,668 @@
+<!doctype html>
+<!--
+  mock: NIHO editor の設定ページ リファイン v1（PC と 320px）
+  色と文字: 単体で開けるよう、色は :root の仮値（hex）で持つ。実装（docs-ui / editor-web）では packages/ui/src/styles/tokens.css の
+  token を引き、生の hex は足さない。文字は 12px 以上。
+
+  HCD の見立て（現状 editor.niho.life/settings）:
+    - 設定なのに「変えられない事実」が半分を占める（エンジン・時間切れ・上限・受け付ける形式・保存先・容量の説明文）。
+      人は「何かを変えたくて」設定を開く。事実は使う場所（ファイル選択の accept・断るときのエラー・録音ブロックの足元）へ移す。
+    - 「編集」が 6 個並び、どれも同じ言葉で違いが分からない。行そのものを押せるようにして、ボタンは消す。
+    - 手順の編集が一覧の途中にインラインで開く。手順は「手順 › 段階 › 指示」の 3 層の物で、名前・文書ガイド・段階×3・
+      固有名詞・お手本文書・抽出・保存が 1 本の縦長フォームになり、段階 1 の指示（約 950 字）は 3 行の欄に詰まる。
+    - 欄の名前が長い（「段階 1 の処理の重さ」「手順の固有名詞 1 の誤りやすい表記（「・」で区切る）」）。
+      平たい一覧の中で自分を説明しないといけないから。階層に置けば「重さ」「誤りやすい表記」で済む。
+    - 保存／やめる がフォームの最下段にあり、見出しから遠い。保存の結果はページ最上部の status に出る。
+
+  方針（3 層までにする）:
+    1. 設定（一覧）    : 変えられる物だけを行にする。AI（提案の言語・あなたについて・固有名詞）／手順（1 行 1 手順）／データ（使用量・容量）。
+                         行を押すと詳細へ（›）。提案の言語だけは 1 タップで決まるのでその場に置く。説明文は ⓘ の中。
+    2. 詳細（ページ）  : 手順＝段階の並び（ドラッグで並べ替え）＋文書ガイド＋お手本の文書＋この手順だけの固有名詞。複製・既定に戻す・削除は右上の ⋯。
+                         固有名詞＝表の形で一覧し、行をその場で直す。あなたについて＝2 つの欄だけ。
+    3. 集中編集（右の全高シート） : 段階の指示・文書ガイドのような長文は、右に全高のシートを開いて書く。名前・重さ・字数・保存／やめる が常に見える。
+                         スマホでは全画面。背景に手順の詳細が残るので「どこを直しているか」を失わない。
+    - 事実の移し先: 受け付ける形式→ファイル選択の accept と断るときの文。1 ファイルの上限・音声は 30 日→録音ブロックの足元と「データ」の ⓘ。
+      エンジン名・時間切れ→設定から外す（使う人が決めるものではない。off／偽物のときは録音ページに帯で出す）。
+
+  作っていない:
+    - 上の黒い帯は mock 用。本物には無い。
+    - 保存・抽出・取り込み・並べ替えは見た目だけ（保存を押すと右上に一言出るだけ）。ドラッグは動かない。
+    - 既定の手順の「段階を足せない」制約は、足すボタンの代わりに「複製して足す」の 1 行で表す。
+    - 役割とつながり・発信先・ログアウトは別ページ（左下のメニュー）。ここには出さない。
+  参照: packages/docs-ui/src/shell/editor-settings.tsx / docs/mockups/editor-ui-refine-v1.html / docs/architecture/editor-niho-life-design.md §4 §8.1
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>NIHO editor 設定 リファイン v1</title>
+<style>
+:root{
+  --ink:#2a2a26;--ink2:#54544d;--mute:#6e6d66;--faint:#898880;
+  --white:#fff;--canvas:#fffdfa;--shell:#fcfaf5;--sand:#f7f7f4;--sand2:#f5f3ee;
+  --line:#f1f1ed;--line2:#e7e7e2;--line3:#dbdbd5;--track:#f2efe8;
+  --moss:#56751e;--pale:#EEF6E1;--leaf:#B2D67C;--deep:#63A109;
+  --grad:linear-gradient(140deg,#7DBA3A 0%,#63A109 100%);--grad-h:linear-gradient(140deg,#74B033 0%,#5C9508 100%);
+  --amber:#C8713A;--amber-ink:#a55827;--amber-pale:#FAF0E6;
+  --red:#B42318;--red-pale:#fdebec;
+  --sans:"Hiragino Maru Gothic ProN","Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;
+  --mono:ui-monospace,Menlo,monospace;
+  --sbw:244px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{font:14px/1.6 var(--sans);color:var(--ink);background:var(--canvas);-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4,p,ul,ol,dl,dd{margin:0}
+ul,ol{padding:0;list-style:none}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0;padding:0;text-align:left}
+b,strong{font-weight:600}
+:focus-visible{outline:2px solid var(--moss);outline-offset:2px;border-radius:6px}
+[hidden]{display:none!important}
+.ico{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.sp{flex:1}
+kbd{font:12px var(--mono);color:var(--faint)}
+
+/* ===== 共通の部品 ===== */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:34px;padding:0 15px;border-radius:999px;background:var(--grad);color:#fff;font-weight:600;font-size:13.5px;white-space:nowrap}
+.btn:hover{background:var(--grad-h)}
+.btn.line{background:#fff;color:var(--ink);box-shadow:inset 0 0 0 1.5px var(--line3)}
+.btn.line:hover{background:var(--sand);box-shadow:inset 0 0 0 1.5px var(--line3)}
+.btn.quiet{background:none;color:var(--ink2)}
+.btn.quiet:hover{background:var(--sand)}
+.btn.sm{height:30px;padding:0 12px;font-size:13px}
+.btn .ico{width:15px;height:15px}
+.ib{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:var(--ink2);flex:none;position:relative}
+.ib:hover,.ib.on{background:var(--sand2);color:var(--ink)}
+.ib[data-tip]::after{content:attr(data-tip);position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);white-space:nowrap;background:var(--ink);color:#fff;font-size:12px;font-weight:600;padding:3px 8px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .12s;z-index:30}
+.ib[data-tip]:hover::after,.ib[data-tip]:focus-visible::after{opacity:1}
+.menu{position:absolute;right:0;top:calc(100% + 4px);z-index:40;min-width:200px;background:#fff;border:1px solid var(--line2);border-radius:12px;box-shadow:0 12px 36px rgba(28,28,26,.12);padding:6px;display:none}
+.menu.open{display:block}
+.menu button{display:flex;align-items:center;gap:10px;width:100%;padding:7px 10px;border-radius:8px;font-size:13.5px;color:var(--ink)}
+.menu button:hover{background:var(--sand)}
+.menu button .ico{width:16px;height:16px;color:var(--ink2)}
+.menu button.danger{color:var(--red)}
+.menu button.danger .ico{color:var(--red)}
+.menu hr{border:0;border-top:1px solid var(--line);margin:5px 4px}
+.pop{position:absolute;right:0;top:calc(100% + 6px);z-index:40;width:min(320px,calc(100vw - 32px));background:#fff;border:1px solid var(--line2);border-radius:14px;box-shadow:0 14px 40px rgba(28,28,26,.14);padding:12px 14px;font-size:12.5px;line-height:1.7;color:var(--ink2);display:none;text-align:left;white-space:normal}
+.pop.open{display:block}
+.pop b{display:block;color:var(--ink);margin-bottom:2px}
+.pop dl{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;margin-top:6px}
+.pop dt{color:var(--faint);font-weight:600;white-space:nowrap}
+.tag{display:inline-flex;align-items:center;height:18px;padding:0 7px;border-radius:999px;font-size:11.5px;font-weight:600;color:var(--faint);background:var(--sand2);white-space:nowrap;flex:none}
+.tag.ok{color:var(--moss);background:var(--pale)}
+.tag.light{color:var(--ink2);background:var(--sand2)}
+.tag.adv{color:var(--moss);background:var(--pale)}
+.chev{width:16px;height:16px;color:var(--faint);flex:none}
+.toast{position:fixed;top:52px;right:16px;z-index:120;background:var(--ink);color:#fff;font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;box-shadow:0 8px 24px rgba(28,28,26,.2);opacity:0;transition:opacity .15s;pointer-events:none}
+.toast.show{opacity:1}
+
+/* ===== mock bar（本物には無い） ===== */
+.mock{position:sticky;top:0;z-index:100;overflow:hidden;display:flex;align-items:center;gap:10px;height:40px;padding:0 12px;background:#141413;color:#fff;font-size:12.5px}
+.mock .url{flex:1;min-width:0;background:rgba(255,255,255,.08);border-radius:8px;padding:4px 10px;font-family:var(--mono);font-size:12px;color:rgba(255,255,255,.55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mock .url b{color:#fff;font-weight:600}
+.variant-switch{display:flex;align-items:center;gap:6px;overflow:auto}
+.variant-switch button{height:24px;padding:0 10px;border-radius:999px;color:rgba(255,255,255,.75);font-weight:600;font-size:12px;border:1px solid rgba(255,255,255,.18);white-space:nowrap;flex:none}
+.variant-switch button.on{background:#fff;color:#141413;border-color:#fff}
+@media (max-width:820px){.mock .url{display:none}}
+
+/* ===== shell ===== */
+.ws{display:grid;grid-template-columns:var(--sbw) minmax(0,1fr);min-height:calc(100vh - 40px)}
+.ws.nosb{grid-template-columns:minmax(0,1fr)}
+.ws.nosb .sb{display:none}
+.sb{position:sticky;top:40px;height:calc(100vh - 40px);display:flex;flex-direction:column;background:var(--shell);border-right:1px solid var(--line)}
+.sb-top{display:flex;align-items:center;gap:6px;padding:12px 10px 4px 14px}
+.sb-top .brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;flex:1;min-width:0}
+.sb-top .brand i{width:20px;height:20px;border-radius:6px;background:var(--grad);flex:none}
+.sb-top .ib{color:var(--faint)}
+.sb-act{padding:6px 8px 4px}
+.sb-act button{display:flex;align-items:center;gap:9px;width:100%;height:30px;padding:0 8px;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--ink2)}
+.sb-act button:hover{background:var(--sand2);color:var(--ink)}
+.sb-act button .ico{width:16px;height:16px;color:var(--faint)}
+.sb-act button kbd{margin-left:auto}
+.sb-list{flex:1;overflow:auto;padding:6px 8px 10px}
+.row{position:relative;display:flex;align-items:center;gap:6px;height:32px;padding:0 6px 0 calc(8px + var(--d,0) * 18px);border-radius:8px;cursor:pointer;user-select:none}
+.row:hover{background:var(--sand2)}
+.row b{flex:1;min-width:0;font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .when{font-size:12px;color:var(--faint);white-space:nowrap}
+.row .mk{width:14px;height:14px;color:var(--mute)}
+.sb-foot{border-top:1px solid var(--line);padding:8px 10px}
+.sb-me{display:flex;align-items:center;gap:10px;width:100%;padding:6px 8px;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--ink2)}
+.sb-me:hover,.sb-me.on{background:var(--sand2);color:var(--ink)}
+.sb-me .av{width:22px;height:22px;border-radius:50%;background:var(--pale);color:var(--moss);display:grid;place-items:center;font-size:12px;font-weight:700}
+
+/* 上のバー（スマホだけ。PC はサイドバーの開閉で足りる） */
+.dt{display:none;position:sticky;top:40px;z-index:20;align-items:center;gap:4px;height:46px;padding:0 8px;background:var(--canvas)}
+.dt .crumb{font-size:13px;color:var(--mute);margin-left:4px}
+
+/* ===== 設定のページ ===== */
+.page{padding:36px 48px 120px;min-width:0}
+.page .in{max-width:640px;margin:auto;min-width:0}
+.back{display:inline-flex;align-items:center;gap:2px;font-size:13px;font-weight:600;color:var(--mute);margin-bottom:10px;margin-left:-6px;padding:4px 8px 4px 4px;border-radius:8px}
+.back:hover{background:var(--sand);color:var(--ink)}
+.back .ico{width:16px;height:16px}
+.hd{display:flex;align-items:center;gap:10px;min-width:0}
+.hd h1{font-size:22px;font-weight:600;flex:1;min-width:0;overflow-wrap:anywhere}
+.hd h1 input{width:100%;border:0;background:none;font:inherit;padding:2px 6px;margin-left:-6px;border-radius:8px}
+.hd h1 input:hover{background:var(--sand)}
+.hd h1 input:focus{background:#fff;box-shadow:0 0 0 1.5px var(--line3);outline:none}
+.hd .ibwrap{position:relative;flex:none}
+.sub{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:12.5px;color:var(--faint)}
+.sect{margin-top:30px}
+.sect h2{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--mute);margin:0 0 8px 2px}
+.sect h2 .sp{flex:1}
+.sect h2 .act{font-size:12.5px;font-weight:600;color:var(--moss);padding:2px 8px;border-radius:6px}
+.sect h2 .act:hover{background:var(--pale)}
+.ibs{position:relative;width:22px;height:22px;border-radius:6px;display:grid;place-items:center;color:var(--faint);flex:none}
+.ibs:hover{background:var(--sand2);color:var(--ink)}
+.ibs .ico{width:15px;height:15px}
+
+/* 行のまとまり（設定の一覧・段階・固有名詞に共通） */
+.grp{border:1px solid var(--line2);border-radius:14px;background:#fff;overflow:visible}
+.r{position:relative;display:grid;grid-template-columns:150px minmax(0,1fr) auto;align-items:center;gap:6px 14px;width:100%;min-height:48px;padding:8px 12px 8px 16px;border-top:1px solid var(--line);font-size:13.5px;color:var(--ink)}
+.grp>.r:first-child{border-top:0;border-radius:13px 13px 0 0}
+.grp>.r:last-child{border-radius:0 0 13px 13px}
+.grp>.r:only-child{border-radius:13px}
+.r .k{font-weight:600;font-size:13px;color:var(--ink2);display:flex;align-items:center;gap:8px;min-width:0}
+.r .k span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.r .v{min-width:0;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.r .v.none{color:var(--faint)}
+.r .v small{color:var(--faint);font-size:12.5px;margin-left:6px}
+.r .e{display:flex;align-items:center;gap:8px;justify-content:flex-end;min-width:0}
+.r.link{cursor:pointer}
+.r.link:hover{background:var(--sand)}
+.r.add{min-height:44px;color:var(--moss);font-weight:600;font-size:13px;grid-template-columns:auto minmax(0,1fr);gap:8px}
+.r.add .ico{width:15px;height:15px}
+.r.add:hover{background:var(--pale)}
+.r.note{min-height:40px;grid-template-columns:minmax(0,1fr) auto;color:var(--faint);font-size:12.5px}
+
+/* 提案の言語（その場で選ぶ） */
+.seg{display:inline-flex;background:var(--sand2);border-radius:999px;padding:3px;flex:none;max-width:100%}
+.seg button{height:26px;padding:0 11px;border-radius:999px;font-size:12.5px;font-weight:600;color:var(--ink2);white-space:nowrap}
+.seg button.on{background:#fff;color:var(--moss);box-shadow:0 1px 2px rgba(28,28,26,.08)}
+
+/* 使用量 */
+.bar{width:120px;height:6px;border-radius:3px;background:var(--track);flex:none;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--grad);border-radius:3px}
+
+/* 段階の行 */
+.st{grid-template-columns:auto auto minmax(0,1fr) auto auto auto;min-height:56px;padding-left:10px}
+.st .grip{width:14px;height:14px;color:var(--line3);cursor:grab}
+.st:hover .grip{color:var(--faint)}
+.st .num{width:22px;height:22px;border-radius:50%;background:var(--sand2);color:var(--mute);font-size:12px;font-weight:700;display:grid;place-items:center}
+.st .t{min-width:0}
+.st .t b{display:block;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st .t small{display:block;font-size:12.5px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st .mw{position:relative;display:grid}
+.st .more{width:26px;height:26px;border-radius:6px;display:grid;place-items:center;color:var(--faint);opacity:0}
+.st:hover .more,.st .more:focus-visible,.st .more.open{opacity:1}
+.st .more:hover{background:var(--line2);color:var(--ink)}
+
+/* 文書ガイドのカード */
+.gcard{display:block;width:100%;border:1px solid var(--line2);border-radius:14px;background:#fff;padding:14px 16px 10px;cursor:pointer;color:var(--ink)}
+.gcard:hover{background:var(--sand)}
+.gcard pre{margin:0;font:13px/1.7 var(--sans);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink2);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.gcard .f{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12.5px;color:var(--faint)}
+.gcard .f b{color:var(--moss);display:inline-flex;align-items:center;gap:2px}
+
+/* お手本の文書 */
+.r.sm{grid-template-columns:auto minmax(0,1fr) auto auto;min-height:48px}
+.r.sm .ico.doc{width:16px;height:16px;color:var(--faint)}
+.r.sm .t b{display:block;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.r.sm .t small{display:block;font-size:12.5px;color:var(--faint)}
+
+/* 固有名詞の表 */
+.tm{grid-template-columns:minmax(90px,1.1fr) minmax(80px,1fr) minmax(90px,1.4fr) auto;min-height:46px}
+.tm.hdr{min-height:34px;font-size:11.5px;font-weight:600;color:var(--faint);border-top:0}
+.tm>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tm .rd{color:var(--mute);font-size:13px}
+.tm .vr{color:var(--ink2);font-size:13px}
+.tm .vr.none,.tm .rd.none{color:var(--line3)}
+.tm .more{width:26px;height:26px;border-radius:6px;display:grid;place-items:center;color:var(--faint);opacity:0;position:relative}
+.tm:hover .more,.tm .more.open{opacity:1}
+.tm .more:hover{background:var(--line2);color:var(--ink)}
+.tm.edit{grid-template-columns:minmax(0,1fr);background:var(--sand);padding:12px 16px 12px}
+.tm.edit .f4{display:grid;grid-template-columns:1.1fr 1fr 1.4fr 1fr;gap:8px;width:100%}
+.tm.edit .f4 .field{min-width:0}
+.tm.edit .acts{display:flex;gap:6px;justify-content:flex-end;width:100%}
+
+/* 欄 */
+.field{display:grid;gap:5px;min-width:0}
+.field label{font-size:12px;font-weight:600;color:var(--mute)}
+.input,.area{width:100%;min-width:0;border:1px solid var(--line2);border-radius:10px;padding:8px 11px;background:#fff;font-size:14px;outline:none}
+.input:focus,.area:focus{border-color:var(--ink2)}
+.area{resize:vertical;line-height:1.7;min-height:200px}
+.cnt{font-size:12px;color:var(--faint);text-align:right}
+.form{display:grid;gap:16px;max-width:640px}
+.form .two{display:grid;grid-template-columns:200px minmax(0,1fr);gap:12px}
+.ftr{display:flex;align-items:center;gap:8px;margin-top:18px}
+.ftr .note{font-size:12.5px;color:var(--faint);display:flex;align-items:center;gap:4px;min-width:0}
+.ftr .note .ico{width:14px;height:14px}
+
+/* ===== 集中編集（右の全高シート） ===== */
+.veil{position:fixed;inset:40px 0 0 0;z-index:55;background:rgba(20,20,18,.18);display:none}
+.veil.open{display:block}
+.sheet{position:fixed;top:40px;right:0;bottom:0;width:min(640px,100vw);background:#fff;border-left:1px solid var(--line2);box-shadow:-12px 0 40px rgba(28,28,26,.10);z-index:60;display:none;flex-direction:column}
+.sheet.open{display:flex}
+.sheet .sh{display:flex;align-items:center;gap:10px;padding:14px 14px 8px 24px;flex:none;min-width:0}
+.sheet .sh div{min-width:0;flex:1}
+.sheet .sh small{display:block;font-size:12px;color:var(--faint);font-weight:600}
+.sheet .sh h2{font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sheet .sbody{flex:1;min-height:0;overflow:auto;padding:6px 24px 10px;display:flex;flex-direction:column;gap:14px}
+.sheet .meta{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:end}
+.sheet .lab{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--mute);margin-top:4px}
+.sheet .lab .sp{flex:1}
+.sheet .lab .cnt{font-weight:500}
+.sheet .big{flex:1;min-height:280px;resize:none;font-size:14px;line-height:1.75;padding:12px 14px;border:1px solid var(--line2);border-radius:12px;outline:none;width:100%}
+.sheet .big:focus{border-color:var(--ink2)}
+.sheet .sf{display:flex;align-items:center;gap:8px;padding:12px 24px 14px;border-top:1px solid var(--line);flex:none}
+.sheet .sf .hint{font-size:12.5px;color:var(--faint);min-width:0}
+/* 取り込みのシート（小さい） */
+.sheet.small{top:auto;right:16px;bottom:16px;width:min(420px,calc(100vw - 32px));border:1px solid var(--line2);border-radius:16px;box-shadow:0 14px 40px rgba(28,28,26,.16);max-height:min(560px,calc(100vh - 72px))}
+.sheet.small .sbody{padding:6px 22px 10px}
+.sheet.small .sh{padding-left:22px}
+.sheet.small .sf{padding:12px 22px 14px}
+.drop{border:1.5px dashed var(--line3);border-radius:12px;padding:18px 14px;text-align:center;color:var(--mute);font-size:13px;cursor:pointer}
+.drop:hover{background:var(--sand);border-color:var(--leaf)}
+.drop b{display:block;color:var(--ink);font-size:13.5px}
+.drop small{display:block;color:var(--faint);font-size:12px;margin-top:2px}
+.or{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--faint)}
+.or::before,.or::after{content:"";flex:1;border-top:1px solid var(--line)}
+
+/* ===== スマホ ===== */
+@media (max-width:900px){
+  :root{--sbw:100vw}
+  .ws{grid-template-columns:minmax(0,1fr)}
+  .sb{position:fixed;inset:40px 0 0 0;z-index:50;width:min(100vw,300px);box-shadow:0 0 0 100vw rgba(20,20,18,.3);display:none}
+  .ws.sbopen .sb{display:flex}
+  .dt{display:flex}
+  .page{padding:12px 16px 100px}
+  .sheet{width:100vw;border-left:0}
+}
+@media (max-width:600px){
+  .r{grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;padding:10px 10px 10px 14px}
+  .r .k{grid-column:1}
+  .r .v{grid-column:1;white-space:normal;font-size:13px}
+  .r .e{grid-column:2;grid-row:1 / span 2;align-self:center}
+  .r.lang{grid-template-columns:minmax(0,1fr)}
+  .r.lang .e{grid-column:1;grid-row:auto;justify-content:flex-start;margin-top:4px}
+  .r.lang .seg{width:100%}.r.lang .seg button{flex:1;text-align:center;padding:0 6px}
+  .r.add{grid-template-columns:auto minmax(0,1fr)}
+  .r.note{grid-template-columns:minmax(0,1fr) auto}
+  .st{grid-template-columns:auto minmax(0,1fr) auto auto;padding-left:12px}
+  .st .grip{display:none}
+  .st .more{opacity:1}
+  .st .chev{display:none}
+  .sheet .sf .hint{display:none}
+  .r.sm{grid-template-columns:auto minmax(0,1fr) auto}
+  .tm{grid-template-columns:minmax(0,1fr) auto;row-gap:2px}
+  .tm.hdr{display:none}
+  .tm>span{white-space:normal}
+  .tm .rd::before{content:"よみ ";color:var(--faint);font-size:11.5px}
+  .tm .vr::before{content:"誤りやすい表記 ";color:var(--faint);font-size:11.5px}
+  .tm .more{opacity:1;grid-column:2;grid-row:1 / span 3}
+  .tm.edit{grid-template-columns:minmax(0,1fr)}
+  .tm.edit .f4{grid-template-columns:1fr}
+  .form .two{grid-template-columns:minmax(0,1fr)}
+  .sheet .meta{grid-template-columns:minmax(0,1fr)}
+  .bar{width:80px}
+}
+</style>
+</head>
+<body>
+
+<div class="mock">
+  <div class="url">https://editor.niho.life<b id="url">/settings</b></div>
+  <div class="variant-switch" id="vs"></div>
+</div>
+
+<div class="ws" id="ws">
+  <aside class="sb" aria-label="ページ">
+    <div class="sb-top">
+      <div class="brand"><i></i>NIHO editor</div>
+      <button class="ib" data-sb="close" data-tip="閉じる" aria-label="サイドバーを閉じる"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+    </div>
+    <div class="sb-act">
+      <button><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>検索<kbd>⌘K</kbd></button>
+      <button><svg class="ico" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新しいページ<kbd>⌘N</kbd></button>
+    </div>
+    <ul class="sb-list">
+      <li class="row"><b>鎌倉の朝の散歩</b><span class="when">昨日</span></li>
+      <li class="row" style="--d:1"><svg class="ico mk" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><b>散歩の録音 11/4</b><span class="when">昨日</span></li>
+      <li class="row"><b>来週の段取り</b><span class="when">昨日</span></li>
+      <li class="row"><b>読書メモ</b><span class="when">2日前</span></li>
+      <li class="row"><b>由比ヶ浜の夕方</b><span class="when">2日前</span></li>
+      <li class="row"><b>合成記事: 鎌倉の朝の散歩</b><span class="when">3日前</span></li>
+    </ul>
+    <div class="sb-foot">
+      <button class="sb-me on"><span class="av">N</span>設定</button>
+    </div>
+  </aside>
+
+  <main class="page" id="main">
+    <header class="dt">
+      <button class="ib" data-sb="open" data-tip="ページ" aria-label="サイドバー"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+      <span class="crumb">設定</span>
+    </header>
+    <div class="in" id="view"></div>
+  </main>
+</div>
+
+<div class="veil" id="veil" data-close></div>
+<aside class="sheet" id="sheet" role="dialog" aria-label="集中編集"></aside>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+/* ===== データ（既定の手順の本文は packages/docs-core/src/templates.ts の写し） ===== */
+const ic = (n) => ({
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  back: '<path d="m14.5 6-6 6 6 6"/>',
+  chev: '<path d="m9.5 6 6 6-6 6"/>',
+  more: '<circle cx="6" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="18" cy="12" r="1.3" fill="currentColor"/>',
+  info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.5"/>',
+  grip: '<circle cx="9" cy="6" r="1.4" fill="currentColor"/><circle cx="15" cy="6" r="1.4" fill="currentColor"/><circle cx="9" cy="12" r="1.4" fill="currentColor"/><circle cx="15" cy="12" r="1.4" fill="currentColor"/><circle cx="9" cy="18" r="1.4" fill="currentColor"/><circle cx="15" cy="18" r="1.4" fill="currentColor"/>',
+  doc: '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
+  reset: '<path d="M4 12a8 8 0 1 0 2.5-5.8M4 4v5h5"/>',
+  trash: '<path d="M5 7h14M9 7V4.5h6V7M7 7l1 13h8l1-13"/>',
+  up: '<path d="M12 19V6M6 12l6-6 6 6"/>',
+  down: '<path d="M12 5v13M6 12l6 6 6-6"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  edit: '<path d="M4 20h4l10.5-10.5a2 2 0 0 0 0-2.8l-1.2-1.2a2 2 0 0 0-2.8 0L4 16z"/>',
+  spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM5 17l.8 2.2L8 20l-2.2.8L5 23l-.8-2.2L2 20l2.2-.8z"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+}[n]);
+const svg = (n, cls = "ico") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ic(n)}</svg>`;
+
+const FIX_HEAD = `文字起こしの原文を、背景情報を踏まえて読みやすい日本語の文字起こし修正版に整える。出力は要約ではなく、後続の工程で全文を参照するための修正版。
+- 原文の発話順・話題の流れ・発言量をできるだけ保ち、要約・短縮・論点の統合・記事向けの再構成はしない。
+- 発言・具体例・数字・質問回答・脱線は、文意が完全に取れない箇所以外は省略しない。
+- 誤字脱字や明らかな聞き取り違いは補正する。意味を変える創作や、原文に無い情報の追加はしない。
+- 不明瞭で正確な文言が分からない箇所は、削らずに（※聞き取り不明瞭）または（おそらく〇〇）として残す。
+- 専門用語・固有名詞は、文脈と背景情報（表記・よみ・誤りやすい表記）から妥当な表記へ補正し、不確かなときは注記する。
+- 句読点・段落・改行を整える。段落の整理で内容を圧縮しない。`;
+const FIX_TAIL = `- 話者ラベルがある文字起こしでは番号を保ち、背景情報の話者の対応表にある番号だけ名前に置き換える。対応表に無い番号を推測で名前にしない。話者ラベルが無い文字起こしでは、背景情報と文脈から発話を分けてラベルを付け、確信の持てない発話は「話者?:」にする。推定で付けた名前は最初の 1 回に「（推定）」を添える。
+- 年月日・金額・人数・時間などの漢数字は算用数字にする（「一つ」「二人」のような慣用の表記は残す）。
+- 大きなテーマが切り替わる箇所に ## 見出しを付ける。見出しは全文を読みやすくするための区切りで、本文の置き換えではない。
+- 「はい」「そうそう」などの相槌、「えー」「あの」などのフィラー、言い直しは省く。言い回し・語尾は残す。
+- 最後に誤字と表記の揺れを確かめる。`;
+
+const GUIDE = `## 記事の目的と読者
+取材や座談会で聞いた話をもとに、その場にいなかった読者へ出来事の要点と人の言葉を伝える。読み終えた人が、話の背景と次にできることを理解できる記事にする。
+
+## 構成
+本文 2,000〜3,000 字、見出し 4〜6 本。
+### タイトル
+内容の核心を 30 字前後で表す。固有名詞を 1 つ入れる。
+### 冒頭
+3 文以内で場面と主題を示し、何の話かを伝える。
+### 本編
+時系列ではなく論点ごとに見出しを立て、各見出しの中に当事者の言葉を 1 つ置く。
+### 結び
+読者が次にできること（問い合わせ先・次の機会など）を 1 段落で示す。
+
+## 書き方・文体・口調
+- 「です・ます」で書き、語りかけすぎない。
+- 発言はかぎかっこで短く引用し、地の文で補う。発言を要約した地の文に「〜と語った」を重ねない。
+- 1 段落は 3〜4 文。強調の太字は 1 記事に 2 か所まで。
+- 専門用語は初出で短く言い換え、読者が前提を知らなくても読めるようにする。
+
+## 表記
+- 数字は算用数字、年は西暦。
+- 人名は初出でフルネーム、以降は「〇〇さん」。団体名・地名は背景情報の表記に合わせる。
+
+## してはいけないこと
+- 文字起こしで確かめられない数字や事実を書かない。
+- 発言の趣旨を変える要約や、本人が言っていない言葉の引用をしない。
+- 宣伝の決まり文句で締めない。
+- 登場する人を評価する言葉（「素晴らしい」など）で地の文を飾らない。
+
+## 見直しのチェックリスト
+- 冒頭 3 文で何の話か分かるか
+- 各見出しに当事者の言葉があるか
+- 固有名詞が背景情報の表記と一致しているか
+- 数字と日付が文字起こしと一致しているか
+- 引用した発言が文字起こしの言葉と一致しているか`;
+
+const PROFILE = { light: ["軽量", "light"], standard: ["標準", "light"], advanced: ["高性能", "adv"] };
+const RECIPE = {
+  id: "tpl-1", name: "記事制作", isDefault: true, modified: true,
+  guide: GUIDE,
+  steps: [
+    { id: "s1", name: "文字起こし修正", profile: "light", instruction: `${FIX_HEAD}\n${FIX_TAIL}` },
+    { id: "s2", name: "記事方針", profile: "advanced", instruction: `修正済みの文字起こしと背景情報をもとに、記事作成の方針を Markdown で整理する。
+- 核となるメッセージ、想定読者、主要テーマ、切り口、構成方針、文体、読者に期待する反応、避けたい表現を含める。
+- この段階では本文を書かず、後続の記事本文が迷わない編集方針に絞る。
+- 文字起こしにある具体的な事実・数字・固有名詞・印象的な発言を見落とさず、推測が強い点は断定しない。
+- 構成と文体は文書ガイドの決まりに沿わせ、ガイドと食い違う方針を立てない。` },
+    { id: "s3", name: "記事本文", profile: "advanced", instruction: `文字起こし修正と記事方針をもとに、公開を想定した記事本文を Markdown で書く。
+- 文書ガイドの構成・書き方・表記・してはいけないことに従う。タイトルは H1 にする。
+- 読者に伝わる具体性を重視し、過度な誇張は避ける。
+- 出典の無い内容を断定しない。発言の引用は短く、固有名詞は背景情報の表記に揃える。
+- 分量は文書ガイドの目安に合わせる（指定が無ければ 2,500 字前後）。
+- 書き終えたら、文書ガイドの見直しのチェックリストで確かめてから出す。` },
+  ],
+  samples: [{ name: "鎌倉の朝市レポート.md", chars: 8200 }, { name: "ひとはこ通信 2026-09", chars: 4100, url: true }],
+  terms: [{ term: "鎌倉ひとはこ", reading: "かまくらひとはこ", variants: "鎌倉一箱 · 鎌倉ヒトハコ" }],
+};
+const RECIPES = [
+  { name: "記事制作", pipe: ["文字起こし修正", "記事方針", "記事本文"], def: true, mod: true },
+  { name: "議事録", pipe: ["議事録", "共有用の要約"], def: true },
+  { name: "インサイト整理", pipe: ["インサイト"], def: true },
+  { name: "コーチング", pipe: ["文字起こし修正", "分析"], def: true },
+  { name: "取材メモ", pipe: ["要点", "下書き"], def: false },
+];
+const TERMS = [
+  { term: "北鎌倉", reading: "きたかまくら", variants: "北鎌倉駅 · 北鎌" },
+  { term: "円覚寺", reading: "えんがくじ", variants: "円学寺 · えんかくじ" },
+  { term: "材木座", reading: "ざいもくざ", variants: "" },
+  { term: "NIHO kamakura", reading: "", variants: "ニホ鎌倉 · niho鎌倉" },
+  { term: "由比ヶ浜", reading: "ゆいがはま", variants: "由比が浜 · 由比ケ浜", editing: true },
+  { term: "鎌倉ひとはこ", reading: "かまくらひとはこ", variants: "鎌倉一箱" },
+];
+
+const n = (v) => v.toLocaleString("ja-JP");
+const firstLine = (t) => t.split("\n")[0].replace(/^[-#\s]+/, "");
+const chev = svg("chev", "ico chev");
+
+/* ===== 画面 ===== */
+const V = {};
+
+V.settings = () => ({ url: "/settings", crumb: "設定", html: `
+  <h1 style="font-size:22px;font-weight:600">設定</h1>
+
+  <div class="sect"><h2>AI</h2>
+    <div class="grp">
+      <div class="r lang"><div class="k"><span>提案の言語</span></div><div class="v"></div>
+        <div class="e"><div class="seg" role="group" aria-label="提案の言語"><button class="on" aria-pressed="true">書いた言語のまま</button><button>日本語</button><button>English</button></div></div></div>
+      <button class="r link" data-go="about"><div class="k"><span>あなたについて</span></div><div class="v">Mika · 地域で暮らす人の視点を大切にし、簡潔で落ち着いた文体に…</div><div class="e">${chev}</div></button>
+      <button class="r link" data-go="terms"><div class="k"><span>固有名詞</span></div><div class="v">北鎌倉 · 円覚寺 · 材木座 · NIHO kamakura<small>＋2</small></div><div class="e">${chev}</div></button>
+    </div>
+  </div>
+
+  <div class="sect"><h2>手順</h2>
+    <div class="grp">
+      ${RECIPES.map((r) => `<button class="r link" data-go="${r.name === "記事制作" ? "recipe" : "recipe"}"><div class="k"><span>${r.name}</span>${r.mod ? `<span class="tag ok">変更あり</span>` : r.def ? "" : `<span class="tag">自分で作成</span>`}</div><div class="v">文字起こし › ${r.pipe.join(" › ")}</div><div class="e">${chev}</div></button>`).join("")}
+      <button class="r add" data-toast="新しい手順を作ります（モック）">${svg("plus")}<span>手順を追加</span></button>
+    </div>
+  </div>
+
+  <div class="sect"><h2>データ</h2>
+    <div class="grp">
+      <div class="r"><div class="k"><span>今月の AI 使用量</span></div><div class="v" style="display:flex;align-items:center;gap:10px"><span class="bar" aria-hidden="true"><i style="width:2%"></i></span><span>$0.00 <small style="margin:0">/ $10.00</small></span></div>
+        <div class="e"><span style="position:relative"><button class="ibs" data-pop="usage" aria-label="使用量の内訳">${svg("info")}</button>
+          <div class="pop" id="pop-usage"><b>2026 年 11 月</b>送った 285 トークン・返った 104 トークン。上限に届くと、月が替わるまで AI の提案を使えません。</div></span></div></div>
+      <div class="r"><div class="k"><span>メディア容量</span></div><div class="v">103 KiB<small>画像 0 · 音声 103 KiB</small></div>
+        <div class="e"><span style="position:relative"><button class="ibs" data-pop="store" aria-label="保存とデータについて">${svg("info")}</button>
+          <div class="pop" id="pop-store"><b>保存とデータ</b>ページとメディアは NIHO クラウドに保存され、Web と Mac アプリで共通です。容量の上限はありません。
+            <dl><dt>音声</dt><dd>30 日で消えます（文字起こしとページは残ります）</dd><dt>1 ファイル</dt><dd>2 GiB・6 時間まで</dd><dt>数えるもの</dt><dd>アップロード済みの画像と保持期限内の音声（ゴミ箱を含む）</dd></dl></div></span></div></div>
+    </div>
+  </div>
+` });
+
+V.recipe = () => ({ url: "/settings/recipes/tpl-1", crumb: "手順", html: `
+  <a class="back" href="#settings">${svg("back")}設定</a>
+  <div class="hd"><h1><input value="${RECIPE.name}" aria-label="手順の名前"></h1>
+    <div class="ibwrap"><button class="ib" data-menu="recipe" aria-label="手順のメニュー" data-tip="その他">${svg("more")}</button>
+      <div class="menu" id="menu-recipe">
+        <button data-toast="「記事制作のコピー」を作りました（モック）">${svg("copy")}複製</button>
+        <button data-toast="既定の内容に戻しました（モック）">${svg("reset")}既定に戻す</button>
+        <hr><button class="danger" disabled style="opacity:.45;cursor:not-allowed">${svg("trash")}削除<small style="margin-left:auto;font-size:12px;color:var(--faint)">既定の手順</small></button>
+      </div></div></div>
+  <div class="sub"><span>既定の手順</span><span class="tag ok">変更あり</span></div>
+
+  <div class="sect"><h2>段階<span class="sp"></span></h2>
+    <div class="grp" id="steps">
+      ${RECIPE.steps.map((s, i) => `<div class="r link st" role="button" tabindex="0" data-sheet="step:${i}" aria-label="段階 ${i + 1} ${s.name} を開く">
+        ${svg("grip", "ico grip")}<span class="num">${i + 1}</span>
+        <span class="t"><b>${s.name}</b><small>${firstLine(s.instruction)}</small></span>
+        <span class="tag ${PROFILE[s.profile][1]}">${PROFILE[s.profile][0]}</span>
+        <span class="mw"><button class="more" data-menu="step${i}" aria-label="段階 ${i + 1} のメニュー">${svg("more", "ico")}</button>
+          <div class="menu" id="menu-step${i}" style="min-width:160px"><button>${svg("up")}上へ</button><button>${svg("down")}下へ</button><button>${svg("copy")}複製</button><hr><button class="danger">${svg("trash")}削除</button></div></span>
+        ${chev}</div>`).join("")}
+      <div class="r note"><span>既定の手順は段階の数を変えられません</span><button class="btn quiet sm" data-toast="「記事制作のコピー」を作りました（モック）">複製して足す</button></div>
+    </div>
+  </div>
+
+  <div class="sect"><h2>文書ガイド<span class="sp"></span><span style="position:relative"><button class="ibs" data-pop="guide" aria-label="文書ガイドとは">${svg("info")}</button><div class="pop" id="pop-guide"><b>文書ガイド</b>全部の段階に渡す「お手本」です。構成・文体・表記・してはいけないことを書きます。お手本の文書から AI に抽出させることもできます。</div></span></h2>
+    <button class="gcard" data-sheet="guide"><pre>${RECIPE.guide}</pre><div class="f"><span>${n(RECIPE.guide.length)} 字</span><span class="sp"></span><b>開く${chev}</b></div></button>
+  </div>
+
+  <div class="sect"><h2>お手本の文書<span class="sp"></span><button class="act" data-toast="お手本から文書ガイドと固有名詞の案を作ります（モック）">${svg("spark", "ico")} 文書ガイドを抽出</button></h2>
+    <div class="grp">
+      ${RECIPE.samples.map((s) => `<div class="r sm">${svg(s.url ? "link" : "doc", "ico doc")}<span class="t"><b>${s.name}</b><small>${n(s.chars)} 字${s.url ? " · URL から" : ""}</small></span><span></span><button class="ibs" aria-label="${s.name} を外す" data-toast="お手本を外しました（モック）">${svg("x")}</button></div>`).join("")}
+      <button class="r add" data-sheet="import">${svg("plus")}<span>取り込む<small style="font-weight:500;color:var(--faint);margin-left:8px">ファイル・URL</small></span></button>
+    </div>
+  </div>
+
+  <div class="sect"><h2>この手順だけの固有名詞<span class="sp"></span><span style="position:relative"><button class="ibs" data-pop="rterms" aria-label="この手順だけの固有名詞とは">${svg("info")}</button><div class="pop" id="pop-rterms"><b>この手順だけの固有名詞</b>設定の「固有名詞」（全部の手順で使う）に加えて、この手順を走らせるときだけ渡す表記です。</div></span></h2>
+    <div class="grp">
+      ${RECIPE.terms.map((t) => `<div class="r tm"><span><b>${t.term}</b></span><span class="rd">${t.reading}</span><span class="vr">${t.variants}</span><button class="ibs" aria-label="${t.term} を外す">${svg("x")}</button></div>`).join("")}
+      <button class="r add" data-toast="行を足します（モック）">${svg("plus")}<span>追加</span></button>
+    </div>
+  </div>
+` });
+
+V.terms = () => ({ url: "/settings/terms", crumb: "固有名詞", html: `
+  <a class="back" href="#settings">${svg("back")}設定</a>
+  <div class="hd"><h1>固有名詞</h1><button class="btn line sm" data-toast="行を足します（モック）">${svg("plus")}追加</button></div>
+  <div class="sub"><span>AI の提案と文字起こし修正に、この表記のとおりに書くよう渡します · ${TERMS.length} 語 / 200 語</span></div>
+  <div class="sect">
+    <div class="grp">
+      <div class="r tm hdr"><span>表記</span><span>よみ</span><span>誤りやすい表記</span><span></span></div>
+      ${TERMS.map((t, i) => t.editing ? `<div class="r tm edit" aria-label="${t.term} を編集">
+          <div class="f4">
+            <div class="field"><label>表記</label><input class="input" value="${t.term}"></div>
+            <div class="field"><label>よみ</label><input class="input" value="${t.reading}"></div>
+            <div class="field"><label>誤りやすい表記（「・」で区切る）</label><input class="input" value="${t.variants}"></div>
+            <div class="field"><label>補足</label><input class="input" value="" placeholder="任意"></div>
+          </div>
+          <div class="acts"><button class="btn quiet sm" data-go="terms">やめる</button><button class="btn sm" data-save="terms">保存</button></div>
+        </div>` : `<button class="r link tm" data-toast="行をその場で開きます（モック）"><span><b>${t.term}</b></span><span class="rd ${t.reading ? "" : "none"}">${t.reading || "—"}</span><span class="vr ${t.variants ? "" : "none"}">${t.variants || "—"}</span><span class="more" aria-hidden="true">${svg("edit", "ico")}</span></button>`).join("")}
+    </div>
+  </div>
+` });
+
+V.about = () => ({ url: "/settings/about", crumb: "あなたについて", html: `
+  <a class="back" href="#settings">${svg("back")}設定</a>
+  <div class="hd"><h1>あなたについて</h1></div>
+  <div class="sub"><span>AI に毎回渡す、あなたの説明と書き方の希望。公開はされません</span></div>
+  <div class="sect form">
+    <div class="two"><div class="field"><label>呼び名</label><input class="input" value="Mika"></div></div>
+    <div class="field"><label>説明と書き方の希望</label>
+      <textarea class="area" id="about-text">地域で暮らす人の視点を大切にします。簡潔で落ち着いた文体にし、事実にないことは補いません。
+鎌倉・逗子の地名と寺社名は正式表記で。英語版は固有名詞をローマ字にせず、日本語のまま残してください。</textarea>
+      <div class="cnt" id="about-cnt"></div></div>
+    <div class="ftr"><span class="sp"></span><button class="btn quiet sm" data-go="settings">やめる</button><button class="btn sm" data-save="about">保存</button></div>
+  </div>
+` });
+
+/* ===== 集中編集のシート ===== */
+const SHEET = {
+  step: (i) => { const s = RECIPE.steps[i]; return `
+    <div class="sh"><div><small>段階 ${i + 1} / ${RECIPE.steps.length} · ${RECIPE.name}</small><h2>${s.name}</h2></div><button class="ib" data-close aria-label="閉じる">${svg("x")}</button></div>
+    <div class="sbody">
+      <div class="meta">
+        <div class="field"><label>名前</label><input class="input" value="${s.name}"></div>
+        <div class="field"><label>重さ</label><div class="seg" role="group" aria-label="処理の重さ">${Object.entries(PROFILE).map(([k, [l]]) => `<button class="${k === s.profile ? "on" : ""}" aria-pressed="${k === s.profile}">${l}</button>`).join("")}</div></div>
+      </div>
+      <div class="lab">指示<span class="sp"></span><span class="cnt">${n(s.instruction.length)} 字</span></div>
+      <textarea class="big" aria-label="段階 ${i + 1} の指示">${s.instruction}</textarea>
+    </div>
+    <div class="sf"><span class="hint">前の段階の結果と文書ガイド・固有名詞は自動で渡されます</span><span class="sp"></span><button class="btn quiet sm" data-close>やめる</button><button class="btn sm" data-save="step">保存</button></div>`; },
+  guide: () => `
+    <div class="sh"><div><small>${RECIPE.name}</small><h2>文書ガイド</h2></div><button class="ib" data-close aria-label="閉じる">${svg("x")}</button></div>
+    <div class="sbody">
+      <div class="lab">全部の段階に渡すお手本<span class="sp"></span><span class="cnt">${n(RECIPE.guide.length)} 字</span></div>
+      <textarea class="big" aria-label="文書ガイド">${RECIPE.guide}</textarea>
+    </div>
+    <div class="sf"><button class="btn quiet sm" data-toast="お手本の文書から案を作ります（モック）">${svg("spark")}お手本から抽出</button><span class="sp"></span><button class="btn quiet sm" data-close>やめる</button><button class="btn sm" data-save="guide">保存</button></div>`,
+  import: () => `
+    <div class="sh"><div><h2>お手本の文書を取り込む</h2></div><button class="ib" data-close aria-label="閉じる">${svg("x")}</button></div>
+    <div class="sbody">
+      <div class="drop" role="button" tabindex="0"><b>ファイルを選ぶ</b><small>Markdown · テキスト · Word · PDF · 8 MiB まで</small></div>
+      <div class="or">または</div>
+      <div class="field"><label>公開 Web ページの URL</label><input class="input" placeholder="https://"></div>
+      <p style="font-size:12.5px;color:var(--faint);line-height:1.6">本文は 30,000 字まで保存します。ページや公開内容には入らず、抽出を頼んだときだけ AI へ送ります。</p>
+    </div>
+    <div class="sf"><span class="sp"></span><button class="btn quiet sm" data-close>やめる</button><button class="btn sm" data-save="import">取り込む</button></div>`,
+};
+
+/* ===== 状態と描画 ===== */
+const S = { view: "settings", sheet: null };
+const $ = (s, r = document) => r.querySelector(s);
+const vsEl = $("#vs"), viewEl = $("#view"), sheetEl = $("#sheet"), veilEl = $("#veil"), toastEl = $("#toast");
+const VARIANTS = [["settings", "設定"], ["recipe", "手順の詳細"], ["recipe/step:0", "段階の指示"], ["recipe/guide", "文書ガイド"], ["terms", "固有名詞"], ["about", "あなたについて"]];
+
+function render() {
+  const [view, sheet] = S.view.split("/");
+  const v = (V[view] || V.settings)();
+  viewEl.innerHTML = v.html;
+  $("#url").textContent = v.url;
+  $(".dt .crumb").textContent = v.crumb;
+  document.title = `${v.crumb} · NIHO editor 設定 リファイン v1`;
+  vsEl.innerHTML = VARIANTS.map(([k, l]) => `<button class="${k === S.view ? "on" : ""}" data-view="${k}">${l}</button>`).join("");
+  openSheet(sheet || null);
+  if (view === "about") countAbout();
+  window.scrollTo(0, 0);
+}
+function openSheet(key) {
+  S.sheet = key;
+  if (!key) { sheetEl.className = "sheet"; sheetEl.innerHTML = ""; veilEl.classList.remove("open"); return; }
+  const [kind, arg] = key.split(":");
+  sheetEl.innerHTML = SHEET[kind](arg !== undefined ? Number(arg) : undefined);
+  sheetEl.className = `sheet open${kind === "import" ? " small" : ""}`;
+  veilEl.classList.add("open");
+  const big = $(".big", sheetEl); if (big) { big.focus(); big.setSelectionRange(0, 0); big.scrollTop = 0; }
+}
+function go(view) { S.view = view; render(); try { history.replaceState(null, "", `#${view}`); } catch { /* data: URL では hash を触れない */ } }
+function toast(text) { toastEl.textContent = text; toastEl.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => toastEl.classList.remove("show"), 1800); }
+function countAbout() { const t = $("#about-text"), c = $("#about-cnt"); if (t && c) c.textContent = `${n(t.value.length)} / 2,000 字`; }
+function closeMenus(except) { document.querySelectorAll(".menu.open, .pop.open").forEach((m) => m !== except && m.classList.remove("open")); document.querySelectorAll(".more.open").forEach((b) => b.classList.remove("open")); }
+
+window.addEventListener("hashchange", () => { S.view = location.hash.slice(1) || "settings"; render(); });
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-view],[data-go],[data-sheet],[data-close],[data-menu],[data-pop],[data-save],[data-toast],[data-sb],.seg button");
+  if (!t) { closeMenus(); return; }
+  if (t.dataset.view) { go(t.dataset.view); return; }
+  if (t.dataset.go) { go(t.dataset.go); return; }
+  if (t.dataset.sheet) { e.stopPropagation(); go(`${S.view.split("/")[0]}/${t.dataset.sheet}`); return; }
+  if (t.hasAttribute("data-close")) { go(S.view.split("/")[0]); return; }
+  if (t.dataset.menu) { e.stopPropagation(); const m = $(`#menu-${t.dataset.menu}`); const open = !m.classList.contains("open"); closeMenus(); m.classList.toggle("open", open); t.classList.toggle("open", open); return; }
+  if (t.dataset.pop) { e.stopPropagation(); const m = $(`#pop-${t.dataset.pop}`); const open = !m.classList.contains("open"); closeMenus(); m.classList.toggle("open", open); return; }
+  if (t.dataset.save) { const what = t.dataset.save; if (what === "step" || what === "guide" || what === "import") { go(S.view.split("/")[0]); toast(what === "import" ? "取り込みました" : "保存しました"); } else { go("settings"); toast("保存しました"); } return; }
+  if (t.dataset.toast) { toast(t.dataset.toast); return; }
+  if (t.dataset.sb) { $("#ws").classList.toggle("sbopen", t.dataset.sb === "open"); $("#ws").classList.toggle("nosb", t.dataset.sb === "close" && window.innerWidth > 900); return; }
+  if (t.matches(".seg button")) { t.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === t); b.setAttribute("aria-pressed", b === t); }); return; }
+});
+document.addEventListener("input", (e) => {
+  if (e.target.id === "about-text") countAbout();
+  if (e.target.matches(".sheet .big")) { const c = $(".sheet .lab .cnt"); if (c) c.textContent = `${n(e.target.value.length)} 字`; }
+});
+document.addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches("[role=button][data-sheet]")) { e.preventDefault(); e.target.click(); return; } if (e.key === "Escape") { if (S.sheet) go(S.view.split("/")[0]); closeMenus(); } });
+S.view = location.hash.slice(1) || "settings";
+render();
+</script>
+</body>
+</html>

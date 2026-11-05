@@ -1,60 +1,122 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
-import { EDITOR_SETTINGS_TEXT, EditorSettingsPage, type EditorSettingsPageProps, type EditorSettingsRecipe } from "./index";
+import { describe, expect, it } from "vitest";
+import {
+  EDITOR_SETTINGS_TEXT,
+  EditorSettingsAboutPage,
+  EditorSettingsHub,
+  EditorSettingsRecipePage,
+  EditorSettingsTermsPage,
+  recipeMenuItems,
+  stepMenuItems,
+  type EditorRecipeSheet,
+  type EditorSettingsAboutPageProps,
+  type EditorSettingsHubProps,
+  type EditorSettingsRecipe,
+  type EditorSettingsRecipePageProps,
+  type EditorTermRowsProps,
+} from "./index";
 
-/** editor-web の設定（#108）。モック v6 の V.settings の語彙で、Web で本当に出せる項目だけを出す。 */
+/** editor.niho.life の設定（オーナー決定 2026-11-05）。一覧 → 詳細ページ → 集中編集のシートの 3 層。値はすべて合成。 */
 
 const noop = () => undefined;
 
 const RECIPES: EditorSettingsRecipe[] = [
-  { id: "tpl-1", name: "記事制作", guide: "## 構成", steps: [{ id: "k7m2q9xa", name: "文字起こし修正", instruction: "整える。", profile: "light" }], terms: [], samples: [], isDefault: true, modified: false },
-  { id: "tpl-2", name: "議事録", guide: "", steps: [{ id: "d9c3x7mf", name: "議事録", instruction: "", profile: "standard" }], terms: [], samples: [], isDefault: true, modified: true },
-  { id: "r-talk", name: "対談", guide: "", steps: [{ id: "s-1", name: "まとめ", instruction: "", profile: "advanced" }], terms: [], samples: [], isDefault: false, modified: false },
+  { id: "tpl-1", name: "記事制作", guide: "## 構成\n見出しを 4〜6 本。\n本文は 2,000 字。\n4 行目", steps: [
+    { id: "k7m2q9xa", name: "文字起こし修正", instruction: "- 読みやすく整える。\n次の行", profile: "light" },
+    { id: "r4t8wz3c", name: "記事方針", instruction: "方針を立てる。", profile: "advanced" },
+  ], terms: [], samples: [], isDefault: true, modified: false },
+  { id: "tpl-2", name: "議事録", guide: "", steps: [{ id: "d9c3x7mf", name: "議事録", instruction: "", profile: "standard" }], terms: [], samples: [], isDefault: true, modified: true, unusableReason: "「議事録」の指示が空です。" },
+  { id: "r-talk", name: "対談", guide: "", steps: [{ id: "s-1", name: "まとめ", instruction: "まとめる。", profile: "advanced" }], terms: [{ term: "鎌倉ひとはこ", reading: "かまくらひとはこ", variants: ["鎌倉一箱"], note: "" }], samples: [
+    { id: "sample-1", name: "朝市レポート.md", chars: 8200 },
+    { id: "sample-2", name: "ひとはこ通信", chars: 30000, truncatedFrom: 41000, sourceUrl: "https://example.invalid/a" },
+  ], isDefault: false, modified: false },
 ];
 
-function props(patch: Partial<EditorSettingsPageProps> = {}): EditorSettingsPageProps {
+function hubProps(patch: Partial<EditorSettingsHubProps> = {}): EditorSettingsHubProps {
   return {
     status: "",
     busy: false,
     aiLang: "same",
     onAiLang: noop,
-    glossary: [{ term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌"], note: "" }],
-    termsDraft: null,
-    onEditTerms: noop,
-    onTermsDraft: noop,
-    onCancelTerms: noop,
-    onSaveTerms: noop,
     aboutName: "合成の呼び名",
-    about: "合成の自己紹介です。",
-    aboutDraft: null,
-    onEditAbout: noop,
-    onAboutDraft: noop,
-    onCancelAbout: noop,
-    onSaveAbout: noop,
+    about: "合成の自己紹介です。\n二行目",
+    glossary: ["北鎌倉", "円覚寺", "材木座", "由比ヶ浜", "長谷", "極楽寺"].map((term) => ({ term, reading: "", variants: [], note: "" })),
     recipes: RECIPES,
-    recipeDraft: null,
-    recipeValidation: null,
-    onEditRecipe: noop,
-    onRecipeDraft: noop,
-    onCancelRecipe: noop,
-    onSaveRecipe: noop,
-    onDuplicateRecipe: noop,
-    onResetRecipe: noop,
-    onRemoveRecipe: noop,
+    canAddRecipe: true,
     onAddRecipe: noop,
-    newStepId: () => "s-new",
     usage: { month: "2026-10", inputTokens: 128400, outputTokens: 12900, costUsd: 0.42, limitUsd: 5, nearLimit: false },
     usageNote: null,
-    transcription: { engine: "deepgram", timeoutSec: 1200, maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30, extensions: ["m4a", "mp3"] },
     storageUsage: { imageBytes: "1073741824", audioBytes: "4096", totalBytes: "1073745920" },
     storageUsageNote: null,
-    limits: { glossary: 200, recipes: 20, steps: 12, aboutChars: 2_000, aboutNameChars: 80 },
+    audio: { maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30 },
+    onNavigate: noop,
     ...patch,
   };
 }
 
-const html = (patch: Partial<EditorSettingsPageProps> = {}) => renderToStaticMarkup(<EditorSettingsPage {...props(patch)} />);
-const text = (patch: Partial<EditorSettingsPageProps> = {}) => html(patch).replace(/<[^>]*>/g, " ");
+function termRows(patch: Partial<Omit<EditorTermRowsProps, "label" | "addRow">> = {}): Omit<EditorTermRowsProps, "label" | "addRow"> {
+  return {
+    terms: [
+      { term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌", "きた鎌倉"], note: "" },
+      { term: "円覚寺", reading: "", variants: [], note: "" },
+    ],
+    max: 200,
+    busy: false,
+    editing: null,
+    onOpen: noop,
+    onAdd: noop,
+    onDraft: noop,
+    onCancel: noop,
+    onSave: noop,
+    onRemove: noop,
+    ...patch,
+  };
+}
+
+function recipeProps(recipe: EditorSettingsRecipe, patch: Partial<EditorSettingsRecipePageProps> = {}): EditorSettingsRecipePageProps {
+  return {
+    status: "",
+    busy: false,
+    recipe,
+    canDuplicate: true,
+    maxSteps: 12,
+    nameDraft: recipe.name,
+    nameError: null,
+    onNameDraft: noop,
+    onCommitName: noop,
+    onDuplicate: noop,
+    onReset: noop,
+    onRemove: noop,
+    onSteps: noop,
+    newStepId: () => "s-new",
+    sheet: null,
+    onSheet: noop,
+    stepErrors: null,
+    onSaveStep: noop,
+    onSaveGuide: noop,
+    onImport: noop,
+    onExtract: noop,
+    extraction: null,
+    selectedExtractionTerms: [],
+    onToggleExtractionTerm: noop,
+    onApplyExtractedGuide: noop,
+    onApplyExtractedTerms: noop,
+    onRemoveSample: noop,
+    terms: termRows({ terms: recipe.terms }),
+    onNavigate: noop,
+    ...patch,
+  };
+}
+
+function aboutProps(patch: Partial<EditorSettingsAboutPageProps> = {}): EditorSettingsAboutPageProps {
+  return { status: "", busy: false, value: { name: "みか", text: "短い文で書きます。" }, onChange: noop, limits: { aboutChars: 2_000, aboutNameChars: 80 }, onSave: noop, onNavigate: noop, ...patch };
+}
+
+const hub = (patch: Partial<EditorSettingsHubProps> = {}) => renderToStaticMarkup(<EditorSettingsHub {...hubProps(patch)} />);
+const recipePage = (recipe: EditorSettingsRecipe, patch: Partial<EditorSettingsRecipePageProps> = {}) => renderToStaticMarkup(<EditorSettingsRecipePage {...recipeProps(recipe, patch)} />);
+const aboutPage = (patch: Partial<EditorSettingsAboutPageProps> = {}) => renderToStaticMarkup(<EditorSettingsAboutPage {...aboutProps(patch)} />);
+const termsPage = (patch: Partial<Omit<EditorTermRowsProps, "label" | "addRow">> = {}) => renderToStaticMarkup(<EditorSettingsTermsPage status="" rows={termRows(patch)} onNavigate={noop} />);
+const textOf = (markup: string) => markup.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
 
 /** ボタンはすべて、aria-label か見える文字を持つ。 */
 function unlabeledButtons(markup: string): string[] {
@@ -63,205 +125,335 @@ function unlabeledButtons(markup: string): string[] {
     .map(([whole]) => whole.slice(0, 80));
 }
 
-/** 入力は、for が結ばれた label を持つ。 */
+/** 入力は、for が結ばれた label か aria-label を持つ。 */
 function unlabeledInputs(markup: string): string[] {
   return [...markup.matchAll(/<(input|textarea)\b([^>]*?)>/g)]
     .filter(([, , attrs]) => {
+      if (/aria-label="[^"]+"/.test(attrs ?? "")) return false;
       const id = /\bid="([^"]+)"/.exec(attrs ?? "")?.[1];
-      return !id || !new RegExp(`<label[^>]*for="${id}"`).test(markup);
+      return !id || !new RegExp(`<label[^>]*for="${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`).test(markup);
     })
     .map(([whole]) => whole.slice(0, 80));
 }
 
-describe("EditorSettingsPage", () => {
-  it("has the four sections of #108 and a status line", () => {
-    const markup = html();
-    for (const id of ["es-s-ai", "es-s-steps", "es-s-tr", "es-s-save"]) expect(markup).toContain(`id="${id}"`);
+/** 押せない見た目のボタン（busy）を、名前（aria-label か文字）で探す。 */
+function buttonAttrs(markup: string, name: string): string | undefined {
+  return [...markup.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)].find(([, attrs, inner]) => (/aria-label="([^"]+)"/.exec(attrs ?? "")?.[1] ?? (inner ?? "").replace(/<[^>]*>/g, "").trim()) === name)?.[1];
+}
+
+describe("EditorSettingsHub（/settings）", () => {
+  it("has the three groups AI / 手順 / データ, a status line, and no 「編集」 button anywhere", () => {
+    const markup = hub();
+    for (const id of ["es-s-ai", "es-s-steps", "es-s-data"]) expect(markup).toContain(`id="${id}"`);
+    for (const title of ["AI", "手順", "データ"]) expect(markup).toContain(`>${title}</h2>`);
     expect(markup).toContain('role="status"');
-    // モック v6 のプロフィールの節は持たない（NIHO アカウントの値）
-    expect(markup).not.toContain("写真を変更");
+    expect([...markup.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)].map(([, inner]) => (inner ?? "").replace(/<[^>]*>/g, "").trim())).not.toContain("編集");
+    // 事実は一覧から外した（エンジン・時間切れ・受け付ける形式・保存の節）
+    const shown = textOf(markup);
+    for (const gone of ["Deepgram", "時間切れ", "受け付ける形式", "文字起こし</h2>"]) expect(markup.includes(gone) || shown.includes(gone)).toBe(false);
   });
 
-  it("shows the 文字起こし facts that 設計 §12 asks to spell out, and says the engine cannot be chosen here", () => {
-    const shown = text();
-    expect(shown).toContain("Deepgram");
-    expect(shown).toContain(EDITOR_SETTINGS_TEXT.engineFixed);
-    expect(shown).toContain("2 GiB");
-    expect(shown).toContain("6 時間");
-    expect(shown).toContain("20 分");
-    expect(shown).toContain("30 日で消えます");
-    expect(shown).toContain(EDITOR_SETTINGS_TEXT.geminiLater);
-    expect(text({ transcription: { ...props().transcription, engine: "fake" } })).toContain(EDITOR_SETTINGS_TEXT.engineFake);
-    expect(text({ transcription: { ...props().transcription, engine: "off", timeoutSec: null } })).toContain(EDITOR_SETTINGS_TEXT.engineOff);
+  it("links the rows to the detail pages", () => {
+    const markup = hub();
+    expect(markup).toContain('href="/settings/about"');
+    expect(markup).toContain('href="/settings/terms"');
+    for (const recipe of RECIPES) expect(markup).toContain(`href="/settings/recipes/${recipe.id}"`);
   });
 
-  it("shows the fixed NIHO cloud destination and media capacity with no quota", () => {
-    const shown = text();
-    expect(shown).toContain("NIHO クラウド");
-    expect(shown).toContain("Web と Mac アプリで共通");
-    expect(shown).toContain("1 GiB");
-    expect(shown).toContain("画像 1 GiB・音声 4 KiB");
-    expect(shown).toContain(EDITOR_SETTINGS_TEXT.cloudStorageFixed);
-    expect(shown).toContain("容量上限は未設定です");
-    expect(shown).not.toContain("この Mac だけ");
+  it("summarises あなたについて and the first four 固有名詞 with the rest counted", () => {
+    const shown = textOf(hub());
+    expect(shown).toContain("合成の呼び名 · 合成の自己紹介です。");
+    expect(shown).not.toContain("二行目");
+    expect(shown).toContain("北鎌倉 · 円覚寺 · 材木座 · 由比ヶ浜");
+    expect(shown).toContain("＋2");
+    const empty = textOf(hub({ aboutName: "", about: "", glossary: [] }));
+    expect(empty).toContain(EDITOR_SETTINGS_TEXT.aboutEmpty);
+    expect(empty).toContain(EDITOR_SETTINGS_TEXT.empty);
   });
 
-  it("shows an error instead of retaining a stale storage value", () => {
-    const shown = text({ storageUsage: null, storageUsageNote: "メディア容量を読み込めませんでした" });
-    expect(shown).toContain("メディア容量を読み込めませんでした");
-    expect(shown).not.toContain("画像 1 GiB");
+  it("saves the 提案の言語 in place with a pressed state", () => {
+    const markup = hub({ aiLang: "en" });
+    expect(markup).toContain('aria-label="提案の言語"');
+    expect(markup).toMatch(/aria-pressed="true"[^>]*>English</);
+    expect(markup).toMatch(/aria-pressed="false"[^>]*>書いた言語のまま</);
   });
 
-  it("shows the month's usage, and warns only when it is close to or past the limit", () => {
-    const shown = text();
+  it("tags an edited default and a recipe the owner made, and says why a recipe cannot run", () => {
+    const shown = textOf(hub());
+    expect(shown).toContain("文字起こし › 文字起こし修正 › 記事方針");
+    expect(shown).toContain("変更あり");
+    expect(shown).toContain("自分で作成");
+    expect(shown).toContain("実行できません: 「議事録」の指示が空です。");
+  });
+
+  it("offers 手順を追加 only under the limit", () => {
+    expect(hub()).toContain("手順を追加");
+    expect(hub({ canAddRecipe: false })).not.toContain("手順を追加");
+    expect(hub()).not.toContain("20 つまで");
+  });
+
+  it("shows the month's usage with a bar, and keeps the warning visible in the row (never only inside ⓘ)", () => {
+    const markup = hub();
+    const shown = textOf(markup);
     expect(shown).toContain("$0.42 / $5.00");
+    expect(markup).toContain('class="es-bar"');
+    expect(markup).toContain("width:8%");
     expect(shown).toContain("2026-10");
     expect(shown).not.toContain(EDITOR_SETTINGS_TEXT.nearLimit);
-    expect(text({ usage: { ...props().usage!, costUsd: 4.2, nearLimit: true } })).toContain(EDITOR_SETTINGS_TEXT.nearLimit);
-    expect(text({ usage: { ...props().usage!, costUsd: 5, nearLimit: true } })).toContain(EDITOR_SETTINGS_TEXT.overLimit);
-    // 小さい額を 0 にしない
-    expect(text({ usage: { ...props().usage!, costUsd: 0.0004, limitUsd: null } })).toContain("$0.0004");
-    expect(text({ usage: null, usageNote: "使用量を読めませんでした" })).toContain("使用量を読めませんでした");
+    const near = hub({ usage: { ...hubProps().usage!, costUsd: 4.2, nearLimit: true } });
+    expect(near).toMatch(/role="alert"[^>]*>今月の上限に近づいています/);
+    expect(near.indexOf(EDITOR_SETTINGS_TEXT.nearLimit)).toBeLessThan(near.indexOf("送った 128,400"));
+    expect(textOf(hub({ usage: { ...hubProps().usage!, costUsd: 5, nearLimit: true } }))).toContain(EDITOR_SETTINGS_TEXT.overLimit);
+    // 上限が無いときは棒を出さない。小さい額を 0 にしない
+    const unlimited = hub({ usage: { ...hubProps().usage!, costUsd: 0.0004, limitUsd: null } });
+    expect(unlimited).not.toContain('class="es-bar"');
+    expect(textOf(unlimited)).toContain("$0.0004");
+    expect(textOf(hub({ usage: null, usageNote: "使用量を読めませんでした" }))).toContain("使用量を読めませんでした");
   });
 
-  it("lists every 手順 with its 段階, marks an edited default, and offers 既定に戻す / 削除 accordingly", () => {
-    const markup = html();
-    expect(markup).toContain("文字起こし › 文字起こし修正");
-    expect(markup).toContain("手を入れています");
-    expect(markup).toContain('aria-label="記事制作を複製"');
-    expect(markup).toContain('aria-label="議事録を既定に戻す"');
-    expect(markup).toContain('aria-label="対談を削除"');
-    // 手を入れていない既定は「既定に戻す」を出さない
-    expect(markup).not.toContain('aria-label="記事制作を既定に戻す"');
-    expect(markup).not.toContain('aria-label="記事制作を削除"');
+  it("shows the media capacity, and puts the storage facts in the ⓘ disclosure", () => {
+    const markup = hub();
+    const shown = textOf(markup);
+    expect(shown).toContain("1 GiB");
+    expect(shown).toContain("画像 1 GiB · 音声 4 KiB");
+    expect(shown).toContain("30 日で消えます（文字起こしとページは残ります）");
+    expect(shown).toContain("2 GiB・6 時間まで");
+    expect(shown).toContain(EDITOR_SETTINGS_TEXT.cloud);
+    expect(shown).toContain(EDITOR_SETTINGS_TEXT.counted);
+    const stale = textOf(hub({ storageUsage: null, storageUsageNote: "メディア容量を読み込めませんでした" }));
+    expect(stale).toContain("メディア容量を読み込めませんでした");
+    expect(stale).not.toContain("画像 1 GiB");
   });
 
-  it("hides 手順を追加 and 複製 once the limit is reached", () => {
-    const markup = html({ limits: { glossary: 200, recipes: RECIPES.length, steps: 12, aboutChars: 2_000, aboutNameChars: 80 } });
-    expect(markup).not.toContain("手順を追加");
-    expect(markup).not.toContain('aria-label="記事制作を複製"');
-  });
-
-  it("opens the 固有名詞 editor in the page, with a labelled field per column", () => {
-    const markup = html({ termsDraft: [{ term: "北鎌倉", reading: "きたかまくら", variants: "北鎌・きた鎌倉", note: "駅名" }] });
-    expect(markup).toContain("1 行目の表記");
-    expect(markup).toContain("1 行目のよみ");
-    expect(markup).toContain("1 行目の補足");
-    // 誤りやすい表記は 1 欄に「・」で並ぶ（打ったままの文字列を出す）
-    expect(markup).toContain('value="北鎌・きた鎌倉"');
-    expect(markup).toContain('aria-label="固有名詞を保存"');
-    expect(markup).toContain('aria-label="この行を削除（1 行目）"');
-    // 編集しているあいだ、まとめの「編集」は出さない
-    expect(markup).not.toContain('aria-label="固有名詞を編集"');
-    expect(html({ termsDraft: [] })).toContain(EDITOR_SETTINGS_TEXT.empty);
-  });
-
-  it("keeps the 誤りやすい表記 field exactly as it was typed, separator and all", () => {
-    // 区切りを打った途中・末尾の区切り・空白つきも、打ったまま出す（配列にして描き直すと「・」が消えて続きが前の語に繋がる）
-    for (const typed of ["北鎌", "北鎌・", "北鎌・き", "北鎌 ・ きた鎌倉", "・"]) {
-      expect(html({ termsDraft: [{ term: "北鎌倉", reading: "", variants: typed, note: "" }] }), typed).toContain(`value="${typed}"`);
+  it("opens the ⓘ disclosures under the row (aria-expanded + aria-controls, closed at first)", () => {
+    const markup = hub();
+    for (const label of ["使用量の内訳", "保存とデータについて"]) {
+      const attrs = buttonAttrs(markup, label);
+      expect(attrs).toContain('aria-expanded="false"');
+      const controls = /aria-controls="([^"]+)"/.exec(attrs ?? "")?.[1];
+      expect(controls).toBeTruthy();
+      expect(markup).toMatch(new RegExp(`id="${controls!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[^>]*hidden`));
     }
   });
 
-  it("opens the 手順 editor, and lets a default change only its words (not the number of 段階)", () => {
-    const base = RECIPES[0]!;
-    const fixed = html({ recipeDraft: { ...base } });
-    expect(fixed).toContain("手順の名前");
-    expect(fixed).toContain("お手本（全部の段階に渡す文書ガイド）");
-    expect(fixed).toContain("段階 1 の指示");
-    expect(fixed).toContain(EDITOR_SETTINGS_TEXT.fixedSteps);
-    expect(fixed).not.toContain("段階を追加");
-    expect(fixed).not.toContain('aria-label="この段階を削除（段階 1）"');
-
-    const added = html({ recipeDraft: { ...RECIPES[2]! } });
-    expect(added).toContain("段階を追加");
-    expect(added).not.toContain(EDITOR_SETTINGS_TEXT.fixedSteps);
-    // 段階が 1 つだけのときは消させない（段階のない手順は実行できない）
-    expect(added).not.toContain('aria-label="この段階を削除（段階 1）"');
-    const two = { ...RECIPES[2]!, steps: [...RECIPES[2]!.steps, { id: "s-2", name: "下書き", instruction: "", profile: "standard" }] };
-    expect(html({ recipeDraft: two })).toContain('aria-label="この段階を削除（段階 1）"');
-  });
-
-  it("lets a recipe attach examples and explicitly review/apply guide and term proposals", () => {
-    const recipe = { ...RECIPES[2]!, samples: [{ id: "sample-a", name: "合成見本.md", chars: 24 }] };
-    const markup = html({
-      recipeDraft: recipe,
-      sampleUrl: "https://example.test/guide.md",
-      extraction: {
-        sampleIds: ["sample-a"],
-        guide: "## 文書の目的と読者\\n読む人に伝える。",
-        candidates: [{ term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌"], note: "駅名" }],
-      },
-      selectedExtractionTerms: ["北鎌倉:0"],
-    });
-    expect(markup).toContain("ファイルから取り込む");
-    expect(markup).toContain("公開WebページのURL");
-    expect(markup).toContain("お手本から抽出する");
-    expect(markup).toContain("文書ガイドに置き換える");
-    expect(markup).toContain("選んだ固有名詞を追加");
-    expect(markup).toContain("本文はこの手順の利用者データとして保存");
-    expect(markup).not.toContain("お手本文書本文のサンプル");
-    expect(unlabeledButtons(markup)).toEqual([]);
-    expect(unlabeledInputs(markup)).toEqual([]);
-  });
-
-  it("names every button and labels every field, in every state", () => {
-    for (const patch of [
-      {},
-      { termsDraft: [{ term: "", reading: "", variants: "", note: "" }] },
-      { recipeDraft: { ...RECIPES[0]! } },
-      { recipeDraft: { ...RECIPES[2]! } },
-      { usage: null, usageNote: "読めません" },
-    ] satisfies Partial<EditorSettingsPageProps>[]) {
-      const markup = html(patch);
-      expect(unlabeledButtons(markup), JSON.stringify(Object.keys(patch))).toEqual([]);
-      expect(unlabeledInputs(markup), JSON.stringify(Object.keys(patch))).toEqual([]);
-    }
-  });
-
-  it("does nothing while busy, and says so on the buttons", () => {
-    const onAddRecipe = vi.fn();
-    const busy = html({ busy: true, status: "保存しています…", onAddRecipe });
-    expect(busy).toContain('aria-disabled="true"');
-    expect(busy).toContain("保存しています…");
-    // disabled にはしない（フォーカスが外れる）
-    expect(busy).not.toMatch(/<button[^>]*\sdisabled/);
+  it("names every button and dims (never disables) while saving", () => {
+    expect(unlabeledButtons(hub())).toEqual([]);
+    expect(unlabeledInputs(hub())).toEqual([]);
+    const busy = hub({ busy: true });
+    expect(buttonAttrs(busy, "手順を追加")).toContain('aria-disabled="true"');
+    expect(busy).not.toMatch(/<button[^>]*\sdisabled=""/);
   });
 });
 
-describe("「あなたについて」", () => {
-  it("shows the summary and the editor, and says it is not the author information of a published page", () => {
-    expect(text()).toContain("あなたについて");
-    expect(text()).toContain("合成の自己紹介です。");
-    const editing = text({ aboutDraft: { name: "合成の呼び名", text: "合成の自己紹介です。" } });
-    expect(editing).toContain(EDITOR_SETTINGS_TEXT.aboutHelp);
-    expect(editing).toContain("呼び名（AI向け）");
-    expect(editing).toContain("2,000 字");
-  });
-
-  it("says when it is empty, and marks the save as not allowed when it is too long", () => {
-    expect(text({ aboutName: "", about: "" })).toContain(EDITOR_SETTINGS_TEXT.empty);
-    const over = html({ aboutDraft: { name: "合成の呼び名", text: "あ".repeat(2_001) } });
-    expect(over).toContain("パーソナライズが長すぎるので保存できません");
-    expect(over).toMatch(/aria-label="あなたについてを保存"[^>]*aria-disabled="true"|aria-disabled="true"[^>]*aria-label="あなたについてを保存"/);
-  });
-
-  it("keeps every button and input labelled", () => {
-    const markup = html({ aboutDraft: { name: "合成の呼び名", text: "合成の自己紹介です。" } });
-    expect(unlabeledButtons(markup)).toEqual([]);
+describe("EditorSettingsAboutPage（/settings/about）", () => {
+  it("has the back link, the two fields with counters, and やめる / 保存", () => {
+    const markup = aboutPage();
+    const shown = textOf(markup);
+    expect(markup).toContain('href="/settings"');
+    expect(markup).toContain(">あなたについて</h1>");
+    expect(shown).toContain(EDITOR_SETTINGS_TEXT.aboutSub);
+    expect(markup).toMatch(/<label[^>]*>呼び名<\/label>/);
+    expect(markup).toMatch(/<label[^>]*>説明と書き方の希望<\/label>/);
+    expect(shown).toContain("9 / 2,000 字");
+    expect(markup).toContain('aria-label="あなたについてを保存"');
     expect(unlabeledInputs(markup)).toEqual([]);
+    expect(unlabeledButtons(markup)).toEqual([]);
   });
 
-  /** gallery は型で守られていない（どの tsconfig にも入っていない）ので、渡し忘れても画面が落ちないこと。 */
-  it("still renders when the caller does not pass it at all", () => {
-    const without = props();
-    for (const key of ["about", "aboutName", "aboutDraft", "onEditAbout", "onAboutDraft", "onCancelAbout", "onSaveAbout"]) {
-      delete (without as unknown as Record<string, unknown>)[key];
+  it("does not let a text over the limit be saved", () => {
+    const over = aboutPage({ value: { name: "", text: "あ".repeat(2_001) } });
+    expect(textOf(over)).toContain("説明と書き方の希望が長すぎるので保存できません");
+    expect(buttonAttrs(over, "あなたについてを保存")).toContain('aria-disabled="true"');
+    expect(buttonAttrs(aboutPage(), "あなたについてを保存")).not.toContain("aria-disabled");
+  });
+});
+
+describe("EditorSettingsTermsPage（/settings/terms）", () => {
+  it("lists 表記 | よみ | 誤りやすい表記 as rows that open in place", () => {
+    const markup = termsPage();
+    const shown = textOf(markup);
+    expect(markup).toContain(">固有名詞</h1>");
+    expect(shown).toContain(`${EDITOR_SETTINGS_TEXT.termsSub} · 2 語 / 200 語`);
+    // 行の名前は見える文字＋見えない「を編集」（aria-label で短くしない。WCAG 2.5.3）
+    expect(markup).toMatch(/<button type="button" class="es-row es-row--term"><span class="es-tm-t">北鎌倉<\/span>/);
+    expect(markup).toContain('<span class="es-vh">を編集</span>');
+    expect(shown).toContain("北鎌 · きた鎌倉");
+    expect(markup).toContain('aria-label="固有名詞を追加"');
+    expect(unlabeledButtons(markup)).toEqual([]);
+  });
+
+  it("turns one row into labelled fields with やめる / 削除 / 保存, and refuses an empty 表記", () => {
+    const markup = termsPage({ editing: { index: 0, draft: { term: "北鎌倉", reading: "きたかまくら", variants: "北鎌・", note: "" } } });
+    for (const label of ["表記", "よみ", "誤りやすい表記（「・」で区切る）", "補足"]) expect(markup).toMatch(new RegExp(`<label[^>]*>${label.replace(/[()]/g, "\\$&")}</label>`));
+    // 打ったままの文字列（区切りが残る）
+    expect(markup).toContain('value="北鎌・"');
+    expect(markup).toContain('aria-label="固有名詞の編集をやめる"');
+    expect(markup).toContain('aria-label="北鎌倉を削除"');
+    expect(markup).not.toContain('<span class="es-tm-t">北鎌倉</span>');
+    expect(unlabeledInputs(markup)).toEqual([]);
+    expect(unlabeledButtons(markup)).toEqual([]);
+    const empty = termsPage({ editing: { index: null, draft: { term: "", reading: "", variants: "", note: "" } } });
+    expect(textOf(empty)).toContain(EDITOR_SETTINGS_TEXT.termEmpty);
+    expect(buttonAttrs(empty, "固有名詞を保存")).toContain('aria-disabled="true"');
+    // 足している行には削除が無い
+    expect(empty).not.toMatch(/aria-label="[^"]*を削除"/);
+  });
+});
+
+describe("EditorSettingsRecipePage（/settings/recipes/{id}）", () => {
+  const [article, minutes, talk] = RECIPES as [EditorSettingsRecipe, EditorSettingsRecipe, EditorSettingsRecipe];
+
+  it("has the back link, the name as the heading input, the ⋯ menu, and the kind of recipe", () => {
+    const markup = recipePage(minutes);
+    expect(markup).toContain('href="/settings"');
+    expect(markup).toMatch(/<h1><input[^>]*aria-label="手順の名前"[^>]*value="議事録"/);
+    expect(markup).toContain('aria-label="手順のメニュー"');
+    const shown = textOf(markup);
+    expect(shown).toContain("既定の手順");
+    expect(shown).toContain("変更あり");
+    expect(shown).toContain("実行できません: 「議事録」の指示が空です。");
+    expect(textOf(recipePage(talk))).toContain("自分で作成");
+    expect(textOf(recipePage(minutes, { nameError: "この手順名はほかの手順と重複しています。" }))).toContain("重複しています");
+  });
+
+  it("offers 複製 / 既定に戻す / 削除 in the menu by kind (a default cannot be removed)", () => {
+    const ids = (items: ReturnType<typeof recipeMenuItems>) => items.map((item) => `${item.id}${item.disabled ? "(off)" : ""}`);
+    expect(ids(recipeMenuItems(article, true))).toEqual(["duplicate", "remove(off)"]);
+    expect(ids(recipeMenuItems(minutes, true))).toEqual(["duplicate", "reset", "remove(off)"]);
+    expect(recipeMenuItems(minutes, true).find((item) => item.id === "remove")?.hint).toBe("既定の手順");
+    expect(ids(recipeMenuItems(talk, true))).toEqual(["duplicate", "remove"]);
+    expect(ids(recipeMenuItems(talk, false))).toEqual(["duplicate(off)", "remove"]);
+  });
+
+  it("lists the stages with their first line and weight, and a ⋯ per stage that only reorders a default", () => {
+    const markup = recipePage(article);
+    const shown = textOf(markup);
+    expect(markup).toMatch(/<button type="button" class="es-row-main">.*?<span class="es-vh">段階 1<\/span><b>文字起こし修正<\/b>.*?<span class="es-vh">を開く<\/span><\/button>/);
+    expect(markup).toContain('aria-label="段階 2 のメニュー"');
+    expect(shown).toContain("読みやすく整える。");
+    expect(shown).not.toContain("次の行");
+    expect(shown).toContain("軽量");
+    expect(shown).toContain("高性能");
+    const ids = (items: ReturnType<typeof stepMenuItems>) => items.map((item) => `${item.id}${item.disabled ? "(off)" : ""}`);
+    expect(ids(stepMenuItems(0, 2, true, 12))).toEqual(["up(off)", "down"]);
+    expect(ids(stepMenuItems(1, 2, true, 12))).toEqual(["up", "down(off)"]);
+    expect(ids(stepMenuItems(0, 2, false, 12))).toEqual(["up(off)", "down", "duplicate", "remove"]);
+    expect(ids(stepMenuItems(0, 1, false, 12))).toEqual(["up(off)", "down(off)", "duplicate"]);
+    expect(ids(stepMenuItems(0, 12, false, 12))).toEqual(["up(off)", "down", "duplicate(off)", "remove"]);
+  });
+
+  it("says a default cannot change its number of stages and offers 複製して足す; a custom one offers 段階を追加", () => {
+    const fixed = textOf(recipePage(article));
+    expect(fixed).toContain(EDITOR_SETTINGS_TEXT.fixedSteps);
+    expect(fixed).toContain("複製して足す");
+    expect(fixed).not.toContain("段階を追加");
+    const custom = textOf(recipePage(talk));
+    expect(custom).toContain("段階を追加");
+    expect(custom).not.toContain("複製して足す");
+    expect(textOf(recipePage(talk, { maxSteps: 1 }))).not.toContain("段階を追加");
+  });
+
+  it("shows the 文書ガイド as a card with its length, with an ⓘ disclosure", () => {
+    const markup = recipePage(article);
+    expect(markup).toContain('<button type="button" class="es-gcard"><span class="es-vh">文書ガイド</span>');
+    expect(markup).toContain("es-gcard-t");
+    expect(textOf(markup)).toContain(`${Array.from(article.guide).length} 字`);
+    expect(buttonAttrs(markup, "文書ガイドとは")).toContain('aria-expanded="false"');
+    expect(textOf(recipePage(talk))).toContain(EDITOR_SETTINGS_TEXT.guideEmpty);
+  });
+
+  it("lists the お手本 with their size, truncation and source, each removable, and 取り込む last", () => {
+    const markup = recipePage(talk, { extraction: { sampleIds: ["sample-1"], guide: "## 抽出", candidates: [] } });
+    const shown = textOf(markup);
+    expect(shown).toContain("8,200 字");
+    expect(shown).toContain("30,000 字 · 元の文書は 41,000 字 · URL から");
+    expect(markup).toContain('aria-label="朝市レポート.md を外す"');
+    expect(shown).toContain("文書ガイドを抽出");
+    expect(shown).toContain("抽出した案があります");
+    expect(markup).toContain('aria-label="抽出した案を見る"');
+    expect(shown).toContain("取り込む");
+    // お手本が無ければ抽出は出さない
+    expect(textOf(recipePage(article))).not.toContain("文書ガイドを抽出");
+    // お手本の名前は変えられない（ファイル名・URL から決まる）
+    expect(markup).not.toMatch(/<input[^>]*value="朝市レポート.md"/);
+  });
+
+  it("uses the same term rows for この手順だけの固有名詞, with 追加 at the end", () => {
+    const markup = recipePage(talk);
+    expect(markup).toContain('aria-label="この手順だけの固有名詞"');
+    expect(markup).toContain('<span class="es-tm-t">鎌倉ひとはこ</span>');
+    expect(markup).toContain('aria-label="この手順だけの固有名詞とは"');
+    expect(textOf(markup)).toContain("追加");
+  });
+
+  const sheets: [string, EditorRecipeSheet, string[]][] = [
+    ["段階", { kind: "step", index: 0, draft: { ...article.steps[0]! } }, ["名前", "指示"]],
+    ["新しい段階", { kind: "step", index: null, draft: { id: "s-new", name: "新しい段階", instruction: "", profile: "standard" } }, ["名前", "指示"]],
+    ["文書ガイド", { kind: "guide", draft: article.guide }, ["文書ガイド"]],
+    ["取り込み", { kind: "import", file: null, url: "" }, ["ファイル（Markdown・テキスト・Word・PDF）", "公開 Web ページの URL"]],
+    ["抽出", { kind: "extract" }, ["抽出された文書ガイド"]],
+  ];
+  for (const [name, sheet, labels] of sheets) {
+    it(`renders the ${name} sheet as a labelled dialog with named controls`, () => {
+      const markup = recipePage(talk, {
+        sheet,
+        extraction: { sampleIds: ["sample-1"], guide: "## 抽出", candidates: [{ term: "朝市", reading: "あさいち", variants: [], note: "" }] },
+        selectedExtractionTerms: ["朝市:0"],
+      });
+      expect(markup).toMatch(/role="dialog" aria-modal="true" aria-label="[^"]+"/);
+      for (const label of labels) expect(markup).toMatch(new RegExp(`<label[^>]*>${label.replace(/[()]/g, "\\$&")}</label>`));
+      expect(unlabeledInputs(markup)).toEqual([]);
+      expect(unlabeledButtons(markup)).toEqual([]);
+    });
+  }
+
+  it("the stage sheet: position, weight, live counter, hint and validation that blocks 保存", () => {
+    const sheet: EditorRecipeSheet = { kind: "step", index: 1, draft: { ...article.steps[1]! } };
+    const markup = recipePage(article, { sheet });
+    const shown = textOf(markup);
+    expect(shown).toContain("段階 2 / 2 · 記事制作");
+    expect(markup).toContain("es-sheet--edit");
+    expect(markup).toContain("es-veil--edit");
+    expect(markup).toContain('aria-label="重さ"');
+    expect(markup).toMatch(/aria-pressed="true"[^>]*>高性能</);
+    expect(shown).toContain("7 字");
+    expect(shown).toContain(EDITOR_SETTINGS_TEXT.stepHint);
+    expect(buttonAttrs(markup, "段階を保存")).not.toContain("aria-disabled");
+    const invalid = recipePage(article, { sheet, stepErrors: { instruction: "指示を書いてください。" } });
+    expect(textOf(invalid)).toContain("指示を書いてください。");
+    expect(buttonAttrs(invalid, "段階を保存")).toContain('aria-disabled="true"');
+  });
+
+  it("the import sheet: accept list, the one sentence, and 取り込む only with a file or URL", () => {
+    const markup = recipePage(talk, { sheet: { kind: "import", file: null, url: "" } });
+    expect(markup).toContain('accept=".md,.txt,.docx,.pdf"');
+    expect(textOf(markup)).toContain(EDITOR_SETTINGS_TEXT.importNote);
+    expect(buttonAttrs(markup, "取り込む")).toContain('aria-disabled="true"');
+    expect(buttonAttrs(recipePage(talk, { sheet: { kind: "import", file: null, url: "https://example.invalid" } }), "取り込む")).not.toContain("aria-disabled");
+  });
+
+  it("the extraction sheet: replace the guide and add chosen terms, nothing applied by itself", () => {
+    const markup = recipePage(talk, {
+      sheet: { kind: "extract" },
+      extraction: { sampleIds: ["sample-1"], guide: "## 抽出", candidates: [{ term: "朝市", reading: "あさいち", variants: [], note: "" }] },
+      selectedExtractionTerms: [],
+    });
+    const shown = textOf(markup);
+    expect(shown).toContain("文書ガイドに置き換える");
+    expect(shown).toContain("朝市（あさいち）");
+    expect(shown).toContain(EDITOR_SETTINGS_TEXT.extractNote);
+    expect(buttonAttrs(markup, "選んだ固有名詞を追加")).toContain('aria-disabled="true"');
+  });
+
+  it("names every button and labels every field, and dims while saving", () => {
+    for (const recipe of RECIPES) {
+      const markup = recipePage(recipe);
+      expect(unlabeledButtons(markup)).toEqual([]);
+      expect(unlabeledInputs(markup)).toEqual([]);
     }
-    delete (without.limits as unknown as Record<string, unknown>).aboutChars;
-    delete (without.limits as unknown as Record<string, unknown>).aboutNameChars;
-    const markup = renderToStaticMarkup(<EditorSettingsPage {...without} />);
-    expect(markup).toContain("あなたについて");
-    expect(markup).toContain(EDITOR_SETTINGS_TEXT.empty);
+    const busy = recipePage(talk, { busy: true });
+    expect(buttonAttrs(busy, "朝市レポート.md を外す")).toContain('aria-disabled="true"');
+    expect(buttonAttrs(busy, "文書ガイドを抽出")).toContain('aria-disabled="true"');
+    expect(busy).not.toMatch(/<button[^>]*\sdisabled=""/);
   });
 });

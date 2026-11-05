@@ -22,6 +22,8 @@ const ALLOWED_PATHS = [
   /^\/destinations\/[a-z0-9-]{1,64}$/,
   /^\/account$/,
   /^\/settings$/,
+  /^\/settings\/(?:about|terms)$/,
+  /^\/settings\/recipes\/[a-z0-9][a-z0-9-]{0,63}$/,
   /^\/google-docs\/connect$/,
   ...PHOTO_PATHS,
 ];

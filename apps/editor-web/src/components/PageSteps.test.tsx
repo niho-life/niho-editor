@@ -425,7 +425,7 @@ describe("PageSteps（手順の帯）", () => {
     expect(note()).toBe("「文字起こし修正」が失敗しました。今月の AI の使用量が上限に達しました。来月まで手順を実行できません。");
     expect(bandActions()).toEqual(["使用量を見る"]);
     await pressAction("使用量を見る");
-    expect(router.push).toHaveBeenCalledWith("/settings#es-s-ai");
+    expect(router.push).toHaveBeenCalledWith("/settings#es-s-data");
   });
 
   it("原因を直せる失敗では、やり直しと手順への案内の両方を出す", async () => {

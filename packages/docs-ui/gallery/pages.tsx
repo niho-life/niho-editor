@@ -3,7 +3,11 @@ import {
   AccountPage,
   DestinationsPage,
   EditorDestinationsPage,
-  EditorSettingsPage,
+  EDITOR_SETTINGS_HREF,
+  EditorSettingsAboutPage,
+  EditorSettingsHub,
+  EditorSettingsRecipePage,
+  EditorSettingsTermsPage,
   EditorShell,
   EditorSitePage,
   LoginScreen,
@@ -17,8 +21,11 @@ import {
   type EditorDestinationMode,
   type EditorSettingsAbout,
   type EditorSettingsAiLang,
+  type EditorRecipeSheet,
   type EditorSettingsRecipe,
-  type EditorSettingsTermDraft,
+  type EditorSettingsTerm,
+  type EditorTermEditing,
+  type EditorTermRowsProps,
   type SettingsAiLang,
   type SettingsEngine,
   type SettingsSaveTo,
@@ -166,81 +173,180 @@ const WEB_RECIPES: EditorSettingsRecipe[] = [
     { id: "w5q1j8ks", name: "共有用の要約", instruction: "3 行にまとめる。", profile: "light" },
   ], terms: [], samples: [], isDefault: true, modified: true },
   { id: "tpl-3", name: "インサイト整理", guide: "", steps: [{ id: "u3e7z6rh", name: "インサイト", instruction: "気づきを並べる。", profile: "advanced" }], terms: [], samples: [], isDefault: true, modified: false },
-  { id: "r-talk", name: "対談", guide: "二人の声を残す。", steps: [{ id: "s-1", name: "まとめ", instruction: "まとめる。", profile: "standard" }], terms: [], samples: [], isDefault: false, modified: false },
+  { id: "r-talk", name: "対談", guide: "二人の声を残す。", steps: [{ id: "s-1", name: "まとめ", instruction: "まとめる。", profile: "standard" }], terms: [{ term: "鎌倉ひとはこ", reading: "かまくらひとはこ", variants: ["鎌倉一箱"], note: "" }], samples: [{ id: "sample-1", name: "鎌倉の朝市レポート.md", chars: 8200 }, { id: "sample-2", name: "ひとはこ通信 2026-09", chars: 4100, sourceUrl: "https://example.invalid/tsushin" }], isDefault: false, modified: false },
 ];
 
-const WEB_TERMS = [
+const WEB_TERMS: EditorSettingsTerm[] = [
   { term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌"], note: "駅名は「北鎌倉」" },
   { term: "円覚寺", reading: "えんがくじ", variants: [], note: "" },
 ];
 
-/** 編集の下書きは、誤りやすい表記を打ったままの文字列で持つ（配列に分けるのは保存のとき）。 */
-const webTermDrafts = (): EditorSettingsTermDraft[] => WEB_TERMS.map((entry) => ({ ...entry, variants: entry.variants.join("・") }));
+const split = (value: string) => value.split(/[・,，、]/u).map((part) => part.trim()).filter((part) => part.length > 0);
 
-/** editor-web の設定（#108）。開いている編集は `?terms=1` / `?recipe=tpl-1` で決める。 */
+/** 固有名詞の表の動き（1 行ずつ直す。誤りやすい表記は打ったままの文字列で持ち、保存のときに分ける）。 */
+function useDemoTermRows(terms: EditorSettingsTerm[], save: (next: EditorSettingsTerm[]) => void): Omit<EditorTermRowsProps, "label" | "addRow"> {
+  const [editing, setEditing] = useState<EditorTermEditing | null>(null);
+  return {
+    terms,
+    max: 200,
+    busy: false,
+    editing,
+    onOpen: (index) => {
+      const entry = terms[index];
+      if (entry) setEditing({ index, draft: { ...entry, variants: entry.variants.join("・") } });
+    },
+    onAdd: () => setEditing({ index: null, draft: { term: "", reading: "", variants: "", note: "" } }),
+    onDraft: (draft) => setEditing((current) => (current ? { ...current, draft } : current)),
+    onCancel: () => setEditing(null),
+    onSave: () => {
+      if (!editing) return;
+      const entry = { ...editing.draft, variants: split(editing.draft.variants) };
+      save(editing.index === null ? [...terms, entry] : terms.map((item, i) => (i === editing.index ? entry : item)));
+      setEditing(null);
+    },
+    onRemove: () => {
+      if (editing?.index === null || !editing) return;
+      save(terms.filter((_, i) => i !== editing.index));
+      setEditing(null);
+    },
+  };
+}
+
+type WebSettingsView = { page: "hub" } | { page: "about" } | { page: "terms" } | { page: "recipe"; id: string };
+
+function viewOf(href: string): WebSettingsView {
+  if (href === EDITOR_SETTINGS_HREF.about) return { page: "about" };
+  if (href === EDITOR_SETTINGS_HREF.terms) return { page: "terms" };
+  const recipe = /^\/settings\/recipes\/(.+)$/.exec(href);
+  return recipe?.[1] ? { page: "recipe", id: decodeURIComponent(recipe[1]) } : { page: "hub" };
+}
+
+/** editor-web の設定（2026-11-05 の 3 層）。開くページは `?about=1` / `?terms=1` / `?recipe=tpl-1`。 */
 export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: boolean; recipe?: string; about?: boolean } }) {
+  const [view, setView] = useState<WebSettingsView>(forced.recipe ? { page: "recipe", id: forced.recipe } : forced.terms ? { page: "terms" } : forced.about ? { page: "about" } : { page: "hub" });
   const [aiLang, setAiLang] = useState<EditorSettingsAiLang>("same");
-  const [glossary, setGlossary] = useState(WEB_TERMS);
+  const [glossary, setGlossary] = useState<EditorSettingsTerm[]>(WEB_TERMS);
   const [recipes, setRecipes] = useState(WEB_RECIPES);
-  const [termsDraft, setTermsDraft] = useState<EditorSettingsTermDraft[] | null>(forced.terms ? webTermDrafts() : null);
   const [about, setAbout] = useState<EditorSettingsAbout>({ name: "みか", text: "鎌倉で小さな宿を営んでいます。読んだ人が歩きたくなるように、短い文で書きます。" });
-  const [aboutDraft, setAboutDraft] = useState<EditorSettingsAbout | null>(forced.about ? about : null);
-  const opened = forced.recipe ? (WEB_RECIPES.find((recipe) => recipe.id === forced.recipe) ?? null) : null;
-  const [recipeDraft, setRecipeDraft] = useState<EditorSettingsRecipe | null>(opened);
+  const [aboutDraft, setAboutDraft] = useState<EditorSettingsAbout>(about);
+  const [sheet, setSheet] = useState<EditorRecipeSheet | null>(null);
+  const recipe = view.page === "recipe" ? (recipes.find((entry) => entry.id === view.id) ?? recipes[0]!) : null;
+  const [nameDraft, setNameDraft] = useState(recipe?.name ?? "");
+  const [status, setStatus] = useState("");
+  const glossaryRows = useDemoTermRows(glossary, (next) => {
+    setGlossary(next);
+    setStatus("保存しました");
+  });
+  const putRecipe = (next: EditorSettingsRecipe) => {
+    setRecipes(recipes.map((entry) => (entry.id === next.id ? { ...next, modified: entry.isDefault } : entry)));
+    setStatus("保存しました");
+  };
+  const recipeRows = useDemoTermRows(recipe?.terms ?? [], (terms) => recipe && putRecipe({ ...recipe, terms }));
   let serial = 0;
+  const go = (href: string) => {
+    const next = viewOf(href);
+    setView(next);
+    setSheet(null);
+    setStatus("");
+    if (next.page === "about") setAboutDraft(about);
+    if (next.page === "recipe") setNameDraft(recipes.find((entry) => entry.id === next.id)?.name ?? "");
+  };
+  const duplicate = (base: EditorSettingsRecipe) => {
+    const copy = { ...base, id: `r-copy-${recipes.length}`, name: `${base.name}のコピー`, isDefault: false, modified: false };
+    setRecipes([...recipes, copy]);
+    setView({ page: "recipe", id: copy.id });
+    setNameDraft(copy.name);
+  };
   return (
     <SettingsFrame current="settings" title="設定" sidebar={forced.sidebar} pendingInvites={1}>
-      <EditorSettingsPage
-        status=""
-        busy={false}
-        aiLang={aiLang}
-        onAiLang={setAiLang}
-        glossary={glossary}
-        termsDraft={termsDraft}
-        onEditTerms={() => setTermsDraft(glossary.map((entry) => ({ ...entry, variants: entry.variants.join("・") })))}
-        onTermsDraft={setTermsDraft}
-        onCancelTerms={() => setTermsDraft(null)}
-        onSaveTerms={() => {
-          if (termsDraft) {
-            setGlossary(termsDraft.map((entry) => ({ ...entry, variants: entry.variants.split("・").map((part) => part.trim()).filter((part) => part.length > 0) })));
-          }
-          setTermsDraft(null);
-        }}
-        aboutName={about.name}
-        about={about.text}
-        aboutDraft={aboutDraft}
-        onEditAbout={() => setAboutDraft(about)}
-        onAboutDraft={setAboutDraft}
-        onCancelAbout={() => setAboutDraft(null)}
-        onSaveAbout={() => {
-          if (aboutDraft !== null) setAbout(aboutDraft);
-          setAboutDraft(null);
-        }}
-        recipes={recipes}
-        recipeDraft={recipeDraft}
-        recipeValidation={null}
-        onEditRecipe={(id) => setRecipeDraft(recipes.find((recipe) => recipe.id === id) ?? null)}
-        onRecipeDraft={setRecipeDraft}
-        onCancelRecipe={() => setRecipeDraft(null)}
-        onSaveRecipe={() => {
-          if (recipeDraft) setRecipes(recipes.map((recipe) => (recipe.id === recipeDraft.id ? { ...recipeDraft, modified: recipe.isDefault } : recipe)));
-          setRecipeDraft(null);
-        }}
-        onDuplicateRecipe={(id) => {
-          const base = recipes.find((recipe) => recipe.id === id);
-          if (base) setRecipes([...recipes, { ...base, id: `r-copy-${recipes.length}`, name: `${base.name}のコピー`, isDefault: false, modified: false }]);
-        }}
-        onResetRecipe={(id) => setRecipes(recipes.map((recipe) => (recipe.id === id ? { ...recipe, modified: false } : recipe)))}
-        onRemoveRecipe={(id) => setRecipes(recipes.filter((recipe) => recipe.id !== id))}
-        onAddRecipe={() => setRecipes([...recipes, { id: `r-new-${recipes.length}`, name: "新しい手順", guide: "", steps: [{ id: "s-new", name: "まとめ", instruction: "", profile: "standard" }], terms: [], samples: [], isDefault: false, modified: false }])}
-        newStepId={() => `s-${(serial += 1)}`}
-        usage={{ month: "2026-10", inputTokens: 128_400, outputTokens: 12_900, costUsd: 4.21, limitUsd: 5, nearLimit: true }}
-        usageNote={null}
-        transcription={{ engine: "deepgram", timeoutSec: 1200, maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30, extensions: ["m4a", "mp3", "wav", "aac", "ogg", "flac"] }}
-        storageUsage={{ totalBytes: "0", imageBytes: "0", audioBytes: "0" }}
-        storageUsageNote={null}
-        limits={{ glossary: 200, recipes: 20, steps: 12, aboutChars: 2_000, aboutNameChars: 80 }}
-      />
+      {view.page === "hub" && (
+        <EditorSettingsHub
+          status={status}
+          busy={false}
+          aiLang={aiLang}
+          onAiLang={setAiLang}
+          aboutName={about.name}
+          about={about.text}
+          glossary={glossary}
+          recipes={recipes}
+          canAddRecipe={recipes.length < 20}
+          onAddRecipe={() => {
+            const added: EditorSettingsRecipe = { id: `r-new-${recipes.length}`, name: "新しい手順", guide: "", steps: [{ id: "s-new", name: "まとめ", instruction: "", profile: "standard" }], terms: [], samples: [], isDefault: false, modified: false };
+            setRecipes([...recipes, added]);
+            go(EDITOR_SETTINGS_HREF.recipe(added.id));
+          }}
+          usage={{ month: "2026-10", inputTokens: 128_400, outputTokens: 12_900, costUsd: 4.21, limitUsd: 5, nearLimit: true }}
+          usageNote={null}
+          storageUsage={{ totalBytes: "105472", imageBytes: "0", audioBytes: "105472" }}
+          storageUsageNote={null}
+          audio={{ maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30 }}
+          onNavigate={go}
+        />
+      )}
+      {view.page === "about" && (
+        <EditorSettingsAboutPage
+          status={status}
+          busy={false}
+          value={aboutDraft}
+          onChange={setAboutDraft}
+          limits={{ aboutChars: 2_000, aboutNameChars: 80 }}
+          onSave={() => {
+            setAbout(aboutDraft);
+            go(EDITOR_SETTINGS_HREF.hub);
+          }}
+          onNavigate={go}
+        />
+      )}
+      {view.page === "terms" && <EditorSettingsTermsPage status={status} rows={glossaryRows} onNavigate={go} />}
+      {recipe && (
+        <EditorSettingsRecipePage
+          status={status}
+          busy={false}
+          recipe={recipe}
+          canDuplicate={recipes.length < 20}
+          maxSteps={12}
+          nameDraft={nameDraft}
+          nameError={null}
+          onNameDraft={setNameDraft}
+          onCommitName={() => nameDraft.trim() && nameDraft !== recipe.name && putRecipe({ ...recipe, name: nameDraft })}
+          onDuplicate={() => duplicate(recipe)}
+          onReset={() => putRecipe({ ...(WEB_RECIPES.find((entry) => entry.id === recipe.id) ?? recipe) })}
+          onRemove={() => {
+            setRecipes(recipes.filter((entry) => entry.id !== recipe.id));
+            go(EDITOR_SETTINGS_HREF.hub);
+          }}
+          onSteps={(steps) => putRecipe({ ...recipe, steps })}
+          newStepId={() => `s-${Date.now().toString(36)}-${(serial += 1)}`}
+          sheet={sheet}
+          onSheet={setSheet}
+          stepErrors={sheet?.kind === "step" && sheet.draft.instruction.trim() === "" ? { instruction: "指示を書いてください。" } : null}
+          onSaveStep={() => {
+            if (sheet?.kind !== "step") return;
+            putRecipe({ ...recipe, steps: sheet.index === null ? [...recipe.steps, sheet.draft] : recipe.steps.map((step, i) => (i === sheet.index ? sheet.draft : step)) });
+            setSheet(null);
+          }}
+          onSaveGuide={() => {
+            if (sheet?.kind !== "guide") return;
+            putRecipe({ ...recipe, guide: sheet.draft });
+            setSheet(null);
+          }}
+          onImport={() => {
+            if (sheet?.kind !== "import") return;
+            const name = sheet.file?.name ?? sheet.url.trim();
+            putRecipe({ ...recipe, samples: [...recipe.samples, { id: `sample-${recipe.samples.length + 1}`, name, chars: 4100, ...(sheet.file ? {} : { sourceUrl: name }) }] });
+            setSheet(null);
+          }}
+          onExtract={() => setSheet({ kind: "extract" })}
+          extraction={recipe.samples.length > 0 ? { sampleIds: recipe.samples.map((sample) => sample.id), guide: "## 構成\n見出しを 4〜6 本。", candidates: [{ term: "朝市", reading: "あさいち", variants: [], note: "" }] } : null}
+          selectedExtractionTerms={[]}
+          onToggleExtractionTerm={() => undefined}
+          onApplyExtractedGuide={() => putRecipe({ ...recipe, guide: "## 構成\n見出しを 4〜6 本。" })}
+          onApplyExtractedTerms={() => undefined}
+          onRemoveSample={(id) => putRecipe({ ...recipe, samples: recipe.samples.filter((sample) => sample.id !== id) })}
+          terms={recipeRows}
+          onNavigate={go}
+        />
+      )}
     </SettingsFrame>
   );
 }
