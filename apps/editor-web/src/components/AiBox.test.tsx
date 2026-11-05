@@ -777,3 +777,109 @@ describe("AiPanel", () => {
     expect(field().value).toContain(text);
   });
 });
+
+describe("AiPanel: 分割ビューの置き場所（設計 §5.5）", () => {
+  type Placement = NonNullable<Parameters<typeof AiPanel>[0]["placement"]>;
+  async function renderPlaced(placement: Placement | undefined, onPagesChanged?: (ids: readonly string[]) => void, ai: AttachedAi = context()) {
+    if (!container) {
+      container = document.createElement("div");
+      container.setAttribute("data-docs-app-root", "");
+      container.setAttribute("data-docs-shared-ui", "");
+      document.body.append(container);
+      root = createRoot(container);
+    }
+    await act(async () => {
+      root!.render(<div className="es-root"><AiPanel pageId={PAGE_1} context={ai} steps={null} placement={placement} onPagesChanged={onPagesChanged} /></div>);
+    });
+  }
+  const placed = (over: Partial<Placement> = {}): Placement => ({ at: "right", onMove: vi.fn(), open: false, onOpenChange: vi.fn(), ...over });
+  const moveItems = () => [...container!.querySelectorAll<HTMLButtonElement>(".es-ai-history .es-ai-menu-row")].filter((item) => /移す|浮かせる/.test(item.textContent ?? "")).map((item) => item.textContent);
+
+  it("置き場所を渡さなければ、見出しは掴めず、会話メニューに移す項目を出さない（従来どおり）", async () => {
+    defaultServer();
+    await renderPlaced(undefined);
+    await until(() => !button("会話履歴と切り替え").disabled);
+    expect(container!.querySelector(".es-ai-head")!.hasAttribute("draggable")).toBe(false);
+    await click(button("会話履歴と切り替え"));
+    expect(moveItems()).toEqual([]);
+    expect(container!.querySelector(".es-ai-sep")).toBeNull();
+  });
+
+  it("見出しを掴める（AI 用の型を載せる）。会話メニューの下の区切りのあとに、今いない場所だけ「〜へ移す」", async () => {
+    defaultServer();
+    const placement = placed({ at: "right" });
+    await renderPlaced(placement);
+    await until(() => !button("会話履歴と切り替え").disabled);
+    const head = container!.querySelector<HTMLElement>(".es-ai-head")!;
+    expect(head.getAttribute("draggable")).toBe("true");
+    const types: Record<string, string> = {};
+    const start = new Event("dragstart", { bubbles: true, cancelable: true });
+    Object.defineProperty(start, "dataTransfer", { value: { setData: (type: string, value: string) => (types[type] = value), effectAllowed: "all" } });
+    await act(async () => void head.dispatchEvent(start));
+    expect(types).toEqual({ "application/x-niho-panel-ai": "ai" });
+
+    await click(button("会話履歴と切り替え"));
+    expect(container!.querySelector(".es-ai-history .es-ai-sep")).not.toBeNull();
+    expect(moveItems()).toEqual(["左のドックへ移す", "メインの下に浮かせる"]);
+    await click([...container!.querySelectorAll<HTMLButtonElement>(".es-ai-menu-row")].find((item) => item.textContent === "メインの下に浮かせる")!);
+    expect(placement.onMove).toHaveBeenCalledWith("float");
+    expect(container!.querySelector(".es-ai-history")).toBeNull();
+  });
+
+  it("置き場所を変えても作り直さない（書きかけ・会話が残る）", async () => {
+    defaultServer({ list: json(200, { conversations: [summary(CHAT_1)] }) });
+    // 開いているページ（の橋渡し）は同じまま、置き場所だけを替える
+    const ai = context();
+    await renderPlaced(placed({ at: "right" }), undefined, ai);
+    await until(() => logText().includes(CHAT_1));
+    setValue("書きかけの依頼");
+    const before = field();
+    await renderPlaced(placed({ at: "left" }), undefined, ai);
+    await renderPlaced(placed({ at: "float", open: false }), undefined, ai);
+    await renderPlaced(undefined, undefined, ai);
+    expect(field()).toBe(before);
+    expect(field().value).toBe("書きかけの依頼");
+    expect(logText()).toContain(CHAT_1);
+  });
+
+  it("浮かせているときは掴む所と ⌃。⌃ で開閉、送ると開き、Esc で 1 行に戻る", async () => {
+    defaultServer();
+    const ai = context();
+    const placement = placed({ at: "float", open: false });
+    await renderPlaced(placement, undefined, ai);
+    await until(() => !button("新しい会話").disabled);
+    const grip = container!.querySelector<HTMLElement>(".es-ai-compose-actions .es-grip")!;
+    expect(grip.getAttribute("draggable")).toBe("true");
+    const toggle = button("会話を開く");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await click(toggle);
+    expect(placement.onOpenChange).toHaveBeenLastCalledWith(true);
+
+    setValue("相談したい");
+    await press("Enter");
+    await until(() => logText().includes("返答しました"));
+    expect(placement.onOpenChange).toHaveBeenCalledTimes(2);
+
+    const open = placed({ at: "float", open: true });
+    await renderPlaced(open, undefined, ai);
+    expect(button("会話を畳む").getAttribute("aria-expanded")).toBe("true");
+    await press("Escape");
+    expect(open.onOpenChange).toHaveBeenLastCalledWith(false);
+    expect(document.activeElement).toBe(field());
+  });
+
+  it("AI がページを書き換えた・元に戻したら、直したページの id を知らせる", async () => {
+    const onPagesChanged = vi.fn();
+    const changes = [{ pageId: PAGE_2, title: "取材メモ", change: "edited", version: 3, revision: 4, chars: 20, delta: 12, undoneAt: null }];
+    defaultServer({ chat: () => chatResponse("取材メモも直しました", { changes }) });
+    await renderPlaced(placed(), onPagesChanged);
+    await until(() => !button("メッセージを送る").disabled || field().value === "");
+    setValue("取材メモも直して");
+    await press("Enter");
+    await until(() => logText().includes("取材メモも直しました"));
+    expect(onPagesChanged).toHaveBeenLastCalledWith([PAGE_2]);
+    await click([...container!.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent === "元に戻す")!);
+    await until(() => logText().includes("元に戻しました"));
+    expect(onPagesChanged).toHaveBeenLastCalledWith([PAGE_1]);
+  });
+});

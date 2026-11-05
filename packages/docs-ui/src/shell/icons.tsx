@@ -142,6 +142,27 @@ const PATHS: Record<ShellIconName, ReactNode> = {
       <path d="M12 11v5M12 8h.01" />
     </>
   ),
+  // 掴む所（⋮⋮）。点は塗る
+  grip: (
+    <g fill="currentColor" stroke="none">
+      <circle cx="9" cy="6" r="1.6" />
+      <circle cx="15" cy="6" r="1.6" />
+      <circle cx="9" cy="12" r="1.6" />
+      <circle cx="15" cy="12" r="1.6" />
+      <circle cx="9" cy="18" r="1.6" />
+      <circle cx="15" cy="18" r="1.6" />
+    </g>
+  ),
+  swap: <path d="M5 8h13l-3-3M19 16H6l3 3" />,
+  x: <path d="M6 6l12 12M18 6 6 18" />,
+  float: (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+      <rect x="7" y="13" width="10" height="4" rx="1.5" />
+    </>
+  ),
+  "caret-up": <path d="m6 15 6-6 6 6" />,
+  "caret-down": <path d="m6 9 6 6 6-6" />,
 };
 
 /** 装飾のアイコン。意味は隣の文字か、ボタンの aria-label が持つ。 */

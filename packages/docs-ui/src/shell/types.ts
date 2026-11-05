@@ -93,4 +93,10 @@ export type ShellIconName =
   | "check"
   | "edit"
   | "trash"
-  | "info";
+  | "info"
+  | "grip"
+  | "swap"
+  | "x"
+  | "float"
+  | "caret-up"
+  | "caret-down";

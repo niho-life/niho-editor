@@ -1,4 +1,5 @@
 import { useRef, useState, type DragEvent as ReactDragEvent, type ReactNode } from "react";
+import { SHELL_DND, type ShellDockSide } from "./dock-layout";
 import { Icon } from "./icons";
 import { ShellMenu } from "./menu";
 import { NewPageMenu, type NewPageKind } from "./new-page-menu";
@@ -34,6 +35,17 @@ export type ShellSidebarProps = {
    * 渡さなければ出さない（ページを開いていない画面・設定）。
    */
   photos?: ReactNode;
+  /**
+   * 右に並べる（設計 §5.5。デスクトップだけ渡す）。渡すと、行を本文へドラッグできる（ページ用の型 SHELL_DND.page も載せる）・
+   * ⌥クリック・行で ⌥Enter で右に並べ、行の右クリック（ContextMenu キー・Shift+F10 でも）で「開く」「右に並べて開く」のメニュー。
+   * id は今右に並べているページ（その行に「右に表示中」と出し、メニューは「右を閉じる」）。
+   */
+  side?: { id?: string; onOpen: (id: string) => void; onClose: () => void };
+  /**
+   * 一覧のパネルの置き場所（設計 §5.5。デスクトップだけ渡す）。渡すと、上段（掴む所 ⋮⋮）を掴んでドックを移れ、
+   * 「一覧のメニュー」に「〜のドックへ移す」を出す（ドラッグしない人の代替）。
+   */
+  panel?: { at: ShellDockSide; onMove: (to: ShellDockSide) => void };
   me: {
     /** 本人の名前。左下には出さず、メニューの中に出す（`shellAccountItems(…, …, name)`）。 */
     name: string;
@@ -78,7 +90,15 @@ export type ShellDropTarget = { id: string; where: "before" | "after" | "into" }
 /** ドラッグの状態（どの行を動かしているか・どこに印を出すか）。 */
 type DragState = { dragId: string | null; over: ShellDropTarget | null };
 
+/** 右に並べる操作（ShellSidebarProps.side から作る）。 */
+type RowActions = {
+  sideId?: string;
+  onOpenSide: (id: string) => void;
+  onMenu: (id: string, at: { x: number; y: number }, trigger: HTMLElement | null) => void;
+};
+
 type DragProps = {
+  rowActions?: RowActions;
   drag?: {
     state: DragState;
     onStart: (id: string) => void;
@@ -118,7 +138,7 @@ export function nestListItems(items: readonly ShellListItem[]): TreeNode[] {
   return roots;
 }
 
-function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag }: { nodes: TreeNode[] } & Pick<ShellSidebarProps, "currentId" | "onSelect" | "onToggleFolder"> & DragProps) {
+function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, rowActions }: { nodes: TreeNode[] } & Pick<ShellSidebarProps, "currentId" | "onSelect" | "onToggleFolder"> & DragProps) {
   const rowClass = (id: string) => {
     if (!drag) return "es-dirow";
     const { dragId, over } = drag.state;
@@ -127,17 +147,29 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag }: 
   };
   return (
     <ul>
-      {nodes.map(({ item, children }) => (
+      {nodes.map(({ item, children }) => {
+        const onSide = rowActions?.sideId === item.id;
+        return (
         <li key={item.id}>
           <div
             className={rowClass(item.id)}
-            draggable={drag ? true : undefined}
+            draggable={drag || rowActions ? true : undefined}
             onDragStart={
-              drag
+              drag || rowActions
                 ? (event) => {
-                    event.dataTransfer?.setData("text/plain", item.id);
-                    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-                    drag.onStart(item.id);
+                    if (drag) event.dataTransfer?.setData("text/plain", item.id);
+                    // 本文へ落とす（右に並べる・ここで開く）ためのページ用の型。並べ替え（move）と両方を許す
+                    if (rowActions) event.dataTransfer?.setData(SHELL_DND.page, item.id);
+                    if (event.dataTransfer) event.dataTransfer.effectAllowed = rowActions ? "copyMove" : "move";
+                    drag?.onStart(item.id);
+                  }
+                : undefined
+            }
+            onContextMenu={
+              rowActions
+                ? (event) => {
+                    event.preventDefault();
+                    rowActions.onMenu(item.id, { x: event.clientX, y: event.clientY }, event.currentTarget.querySelector<HTMLElement>(".es-di"));
                   }
                 : undefined
             }
@@ -191,25 +223,41 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag }: 
             )}
             <button
               type="button"
-              className={`es-di${item.id === currentId ? " es-di--on" : ""}${item.sub || item.busy ? "" : " es-di--one"}`}
+              className={`es-di${item.id === currentId ? " es-di--on" : ""}${item.sub || item.busy || onSide ? "" : " es-di--one"}`}
               aria-current={item.id === currentId ? "page" : undefined}
-              onClick={() => onSelect?.(item.id)}
+              onClick={(event) => (event.altKey && rowActions ? rowActions.onOpenSide(item.id) : onSelect?.(item.id))}
+              onKeyDown={
+                rowActions
+                  ? (event) => {
+                      if (event.key === "Enter" && event.altKey) {
+                        event.preventDefault();
+                        rowActions.onOpenSide(item.id);
+                      } else if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+                        event.preventDefault();
+                        const box = event.currentTarget.getBoundingClientRect();
+                        rowActions.onMenu(item.id, { x: box.left + 12, y: box.bottom + 4 }, event.currentTarget);
+                      }
+                    }
+                  : undefined
+              }
             >
               <span className={`es-di-t${item.title ? "" : " es-di-t--untitled"}`}>{item.title || "無題"}</span>
               <span className="es-when">{item.when}</span>
-              {(item.sub || item.busy) && (
+              {(item.sub || item.busy || onSide) && (
                 <span className="es-di-sub">
                   {/* 手順が動いている行の回るマーク。状態の言葉は sub の文字が持つので、マークは支援技術から隠す */}
                   {item.busy && <i className="es-busy" aria-hidden="true" />}
                   {item.sub?.dest && <i className={`es-dest es-dest--${item.sub.dest}`} aria-hidden="true" />}
                   {item.sub?.text}
+                  {onSide && <em className="es-di-side">右に表示中</em>}
                 </span>
               )}
             </button>
           </div>
-          {children.length > 0 && <ShellSidebarRows nodes={children} currentId={currentId} onSelect={onSelect} onToggleFolder={onToggleFolder} drag={drag} />}
+          {children.length > 0 && <ShellSidebarRows nodes={children} currentId={currentId} onSelect={onSelect} onToggleFolder={onToggleFolder} drag={drag} rowActions={rowActions} />}
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 }
@@ -220,9 +268,39 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag }: 
  * 1行は題名と時刻。2行目は公開先・録音・作成中のときだけ。下は本人の行ひとつ。
  * 一覧は 1 本の木（フォルダ＝子を持てるページ）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
  */
-export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, onDrop, canDrop, listEnd, recent, photos, me }: ShellSidebarProps) {
+export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, onDrop, canDrop, listEnd, recent, photos, side, panel, me }: ShellSidebarProps) {
   const newButton = useRef<HTMLButtonElement | null>(null);
   const meButton = useRef<HTMLButtonElement | null>(null);
+  const panelButton = useRef<HTMLButtonElement | null>(null);
+  const rowMenuTrigger = useRef<HTMLElement | null>(null);
+  // 行の右クリックのメニュー（どの行か・どこに出すか）と、「一覧のメニュー」
+  const [rowMenu, setRowMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [panelMenu, setPanelMenu] = useState(false);
+  const rowActions: RowActions | undefined = side
+    ? {
+        sideId: side.id,
+        onOpenSide: side.onOpen,
+        onMenu: (id, at, trigger) => {
+          rowMenuTrigger.current = trigger;
+          setRowMenu({ id, ...at });
+        },
+      }
+    : undefined;
+  const rowMenuItems = (id: string): ShellMenuItem[] => {
+    const open: ShellMenuItem = { id: "open", label: "開く", icon: "doc" };
+    if (id === currentId) return [open];
+    if (id === side?.id) return [open, { id: "close-side", label: "右を閉じる", icon: "x" }];
+    return [open, { id: "side", label: "右に並べて開く", icon: "panel", hint: "⌥クリック" }];
+  };
+  const pickRowMenu = (id: string, choice: string) => {
+    setRowMenu(null);
+    // メニューの項目は消えるので、フォーカスは行へ戻す（開いたページ・右のページへ移るのはそのあと）
+    rowMenuTrigger.current?.focus();
+    if (choice === "open") onSelect?.(id);
+    else if (choice === "side") side?.onOpen(id);
+    else if (choice === "close-side") side?.onClose();
+  };
+  const otherDock: ShellDockSide | null = panel ? (panel.at === "left" ? "right" : "left") : null;
   const [dragState, setDragState] = useState<DragState>({ dragId: null, over: null });
   const drag: DragProps["drag"] = onDrop
     ? {
@@ -243,7 +321,19 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
     : undefined;
   return (
     <aside className="es-sb" aria-label="ページ">
-      <div className="es-sb-top">
+      <div
+        className="es-sb-top"
+        draggable={panel && !search?.open ? true : undefined}
+        onDragStart={
+          panel && !search?.open
+            ? (event) => {
+                if (!event.dataTransfer) return;
+                event.dataTransfer.setData(SHELL_DND.list, "list");
+                event.dataTransfer.effectAllowed = "move";
+              }
+            : undefined
+        }
+      >
         {search?.open ? (
           <div className="es-sb-find" role="search">
             <Icon name="search" />
@@ -264,7 +354,41 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
           </div>
         ) : (
           <>
+            {panel && (
+              <span className="es-grip" aria-hidden="true" title="ドラッグでドックを移す">
+                <Icon name="grip" />
+              </span>
+            )}
             <span className="es-sp" />
+            {panel && otherDock && (
+              <span className="es-newwrap">
+                <button
+                  ref={panelButton}
+                  type="button"
+                  className="es-ib"
+                  aria-label="一覧のメニュー"
+                  title="一覧のメニュー"
+                  aria-haspopup="menu"
+                  aria-expanded={panelMenu}
+                  onClick={() => setPanelMenu((open) => !open)}
+                >
+                  <Icon name="more" />
+                </button>
+                {panelMenu && (
+                  <ShellMenu
+                    label="一覧のメニュー"
+                    className="es-menu--right"
+                    items={[{ id: otherDock, label: `${otherDock === "left" ? "左" : "右"}のドックへ移す`, icon: otherDock === "left" ? "side" : "panel" }]}
+                    trigger={panelButton}
+                    onSelect={(id) => {
+                      setPanelMenu(false);
+                      panel.onMove(id as ShellDockSide);
+                    }}
+                    onClose={() => setPanelMenu(false)}
+                  />
+                )}
+              </span>
+            )}
             {onCollapse && (
               <button type="button" className="es-ib" aria-label="一覧をしまう" title="一覧をしまう" onClick={onCollapse}>
                 <Icon name="side" />
@@ -304,9 +428,20 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
             {recent.open && <ShellSidebarRows nodes={nestListItems(recent.items)} currentId={currentId} onSelect={onSelect} />}
           </div>
         )}
-        <ShellSidebarRows nodes={nestListItems(items)} currentId={currentId} onSelect={onSelect} onToggleFolder={onToggleFolder} drag={drag} />
+        <ShellSidebarRows nodes={nestListItems(items)} currentId={currentId} onSelect={onSelect} onToggleFolder={onToggleFolder} drag={drag} rowActions={rowActions} />
         {listEnd}
       </nav>
+      {rowMenu && side && (
+        <ShellMenu
+          label="ページのメニュー"
+          className="es-menu--at"
+          style={{ left: Math.max(8, Math.min(rowMenu.x, window.innerWidth - 240)), top: Math.max(8, Math.min(rowMenu.y, window.innerHeight - 130)) }}
+          items={rowMenuItems(rowMenu.id)}
+          trigger={rowMenuTrigger}
+          onSelect={(choice) => pickRowMenu(rowMenu.id, choice)}
+          onClose={() => setRowMenu(null)}
+        />
+      )}
       {photos}
       <div className="es-sb-foot">
         {/* 左下は「設定」。1 人しか使わないアプリで一番良い場所を名前が占める理由がないので、名前はメニューの中に出す（#37 T9） */}

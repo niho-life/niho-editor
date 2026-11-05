@@ -40,8 +40,10 @@ import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
 import { useFolderFields, type FolderFieldsState } from "@/lib/use-folder-fields";
 import { usePageShare } from "@/lib/use-page-share";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
+import { useShellLayout } from "@/lib/use-shell-layout";
 import { HistorySheet } from "./HistorySheet";
 import { InfoPanel } from "./InfoPanel";
+import { SidePage } from "./SidePage";
 import { PageInfo } from "./PageInfo";
 import { usePagePublish } from "./PagePublish";
 import { BUSY_STYLE } from "./sheet-parts";
@@ -53,6 +55,8 @@ export type { AttachedPage };
 const NARROW_QUERY = "(max-width: 900px)";
 
 const PAGE_PATH = /^\/p\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+/** 右に並べたページ（`?side=`）の id の形。 */
+const SIDE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** 設定系のページ（本人の行のメニューの項目と、ヘッダーの題名）。 */
 const SETTINGS_ROUTES = [
@@ -245,6 +249,9 @@ function DeleteConfirm(props: { busy: boolean; error: string | null; onConfirm: 
 /** 保存の失敗だけをヘッダーに文字で出す（保存済み・保存中は状態の丸だけ。読み上げは丸の live region が持つ）。 */
 const SAVE_FAILURES: ReadonlySet<SaveStatus> = new Set<SaveStatus>(["offline", "error", "conflict", "signedOut"]);
 
+/** 右のページと入れ替える前に、いまのメインの変更を保存できなかったときの一言（入れ替えはしない）。 */
+export const SWAP_UNSAVED_TEXT = "入れ替える前に変更を保存できませんでした";
+
 /** 並べ替えを 1 歩ずつ送る上限（左の一覧のドラッグ）。 */
 const MAX_ORDER_STEPS = 50;
 
@@ -436,6 +443,9 @@ type FrameSheet = { kind: "move" | "folder-fields" | "capacity"; id: string };
  *   （一覧から別のページを開いたら閉じる。閉じるのはヘッダーの同じボタン）。
  * - 公開に関する欄（リード・カバー画像・言語・英語版）は公開のシートの中だけ。文字数とページの情報は本文の列の右下（./PageInfo.tsx）。
  * - フォルダへの出し入れと並びは、左の一覧のドラッグ（キーボード・スマホは「…」の「移動…」）。
+ * - 分割ビュー（設計 §5.5。900px 以上だけ）: `/p/{メイン}?side={右}` で右に読むだけのページ（./SidePage.tsx）を並べる。付け外しは
+ *   `history.replaceState`（履歴に積まない）、入れ替えはメインの移動（push）。一覧と AI の置き場所・幅・浮かせた AI は
+ *   src/lib/use-shell-layout.ts が端末ごとに覚え、EditorShell の dock に渡す（一覧と AI は作り直さない）。
  */
 export function EditorFrame({ initial, children }: { initial: FrameInitial; children: ReactNode }) {
   const router = useRouter();
@@ -508,6 +518,20 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const currentId = PAGE_PATH.exec(pathname)?.[1];
   const settings = SETTINGS_ROUTES.find((route) => pathname === route.path || pathname.startsWith(`${route.path}/`));
   const sidebarOpen = narrow ? pathname === "/" || listFor === pathname : !collapsed;
+  // 右に並べたページ（設計 §5.5。`/p/{メイン}?side={右}`）。デスクトップで、ページを開いていて、UUID の形で、メインと違うときだけ出す。
+  // 900px 未満では出さない（URL はそのまま）
+  const sideParam = searchParams.get("side")?.toLowerCase() ?? null;
+  const sideId = !narrow && currentId && sideParam && SIDE_ID.test(sideParam) && sideParam !== currentId.toLowerCase() ? sideParam : null;
+  // AI が書き換えたのが右のページなら読み直す（AI の依頼は終わるまでに右のページが替わることがあるので、今の id で比べる）
+  const [sideRefresh, setSideRefresh] = useState(0);
+  const sideIdRef = useRef(sideId);
+  useEffect(() => {
+    sideIdRef.current = sideId;
+  });
+  const onAiPagesChanged = useCallback((ids: readonly string[]) => {
+    const side = sideIdRef.current;
+    if (side && ids.some((id) => id.toLowerCase() === side)) setSideRefresh((count) => count + 1);
+  }, []);
 
   // 続きを読む（1 回に 1 つ。失敗したら止め、次に末尾が見えたときにもう一度）
   const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
@@ -725,9 +749,45 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     [],
   );
 
+  // 右の付け外しは履歴に積まない（`history.replaceState` は Next の router に入り、useSearchParams も替わる。ページは読み直さない）
+  const setSideUrl = useCallback((id: string | null) => {
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set("side", id);
+    else url.searchParams.delete("side");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+  const openSide = (id: string) => {
+    if (!currentId || id.toLowerCase() === currentId.toLowerCase()) return;
+    setSideUrl(id);
+  };
+  const closeSide = () => setSideUrl(null);
+  // メインと入れ替える（⇄・右のページの帯を真ん中へ・一覧で右のページを開く）。いまのメインの届いていない変更を保存してから移る
+  // （右に移ったページはサーバーから読むので）。メインが替わるのは画面の移動なので、履歴に積む。
+  // 保存できなかった（通信の失敗・競合など）ときは移らない: 移ると元のメインは右で読むだけになり、直前の変更ではなく古い本文が出て、
+  // 保存の失敗や競合を直す画面からも離れてしまう。ヘッダーに一言出し、保存できたら消す（どのページの一言かも持つ）
+  const [swapNote, setSwapNote] = useState<string | null>(null);
+  const swapping = useRef(false);
+  const swapSide = async () => {
+    if (!sideId || !currentId || swapping.current) return;
+    const [main, side] = [currentId, sideId];
+    swapping.current = true;
+    try {
+      if (!(await saveFirst())) {
+        setSwapNote(main);
+        return;
+      }
+      setSwapNote(null);
+      router.push(`/p/${side}?side=${main}`);
+    } finally {
+      swapping.current = false;
+    }
+  };
+
   const select = (id: string) => {
     if (id === currentId) setListFor(null);
-    else router.push(`/p/${id}`);
+    else if (sideId && id.toLowerCase() === sideId) void swapSide();
+    // 右に並べているページは、メインを替えても残す
+    else router.push(`/p/${id}${sideId ? `?side=${sideId}` : ""}`);
   };
 
   const pickNew = (kind: NewPageKind) => {
@@ -970,6 +1030,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     : undefined;
   const railPage = attached && attached.id !== null && attached.id === railId ? attached : null;
   const railShown = railSummary !== undefined && (narrow ? railFor === pathname : railOpenWide);
+  // 分割ビュー（設計 §5.5）: 一覧・AI の置き場所と幅、浮かせた AI。端末ごとに覚える（src/lib/use-shell-layout.ts）。
+  // 900px 未満は今のまま（EditorShell が従来の 1 枚表示にする。覚えた配置は使わない）
+  const layout = useShellLayout({ wide: !narrow, list: sidebarOpen, ai: railShown, side: sideId !== null });
   // 入れられるフォルダ（読み込んである上の段のページ）。入れ先が無く、いま上の段にいるなら「移動…」の「フォルダ」を出さない
   const railFolders = useMemo(() => (railSummary ? folderOptions(list.pages, railSummary.id) : []), [railSummary, list.pages]);
   const canFolder = railSummary !== undefined && (railFolders.length > 0 || railSummary.parent !== null);
@@ -1052,7 +1115,32 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           sidebarOpen={sidebarOpen}
           railOpen={railShown}
           toolbar={editorBar && narrow ? <ShellMobileToolbar {...editorBar} compact /> : undefined}
-          rail={railSummary ? <InfoPanel page={railPage} aiSteps={aiSteps?.ownerId === railId ? aiSteps : null} /> : undefined}
+          rail={
+            railSummary ? (
+              <InfoPanel
+                page={railPage}
+                aiSteps={aiSteps?.ownerId === railId ? aiSteps : null}
+                placement={
+                  narrow ? undefined : { at: layout.place.ai, onMove: (to) => layout.move("ai", to), open: layout.float.open, onOpenChange: layout.setFloatOpen }
+                }
+                onPagesChanged={onAiPagesChanged}
+              />
+            ) : undefined
+          }
+          dock={{
+            wide: !narrow,
+            place: layout.place,
+            fit: layout.fit,
+            widths: layout.widths,
+            onWidth: layout.setWidth,
+            peek: layout.peek,
+            onPeek: layout.setPeek,
+            onMove: layout.move,
+            side: sideId ? <SidePage key={sideId} id={sideId} refresh={sideRefresh} onSwap={() => void swapSide()} onClose={closeSide} /> : undefined,
+            onDropPage: (id, where) => (where === "side" ? openSide(id) : select(id)),
+            onDropSide: () => void swapSide(),
+            float: { ...layout.float, onHeight: layout.setFloatHeight },
+          }}
           corner={
             railSummary ? (
               <PageInfo
@@ -1094,6 +1182,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 ) : null
               }
               photos={photos}
+              side={!narrow && currentId ? { id: sideId ?? undefined, onOpen: openSide, onClose: closeSide } : undefined}
+              panel={narrow ? undefined : { at: layout.place.list, onMove: (to) => layout.move("list", to) }}
               me={{
                 ...initial.me,
                 open: meOpen,
@@ -1129,6 +1219,11 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                   {menu.note && (
                     <span role="alert" style={MENU_NOTE_STYLE}>
                       {menu.note}
+                    </span>
+                  )}
+                  {swapNote !== null && swapNote === currentId && attached?.status !== "saved" && (
+                    <span role="alert" style={MENU_NOTE_STYLE}>
+                      {SWAP_UNSAVED_TEXT}
                     </span>
                   )}
                   {restoredNote && (
