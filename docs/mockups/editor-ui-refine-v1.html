@@ -1,0 +1,654 @@
+<!doctype html>
+<!--
+  mock: NIHO editor の UI/UX リファイン v1（PC と 320px）
+  論点:
+    - 画面から説明文をなくす。容量・翻訳の決まりは ⓘ を押したときのモーダルだけに置く。
+    - 「保存済み」「保存中」を出さない。保存に失敗したとき（オフライン保持など）だけ右上に琥珀で一言。
+    - 本文の青い囲いをなくす。題名と本文だけの Notion 風の紙面にする。
+    - 右サイドバーは「AIと作る」だけにする。公開用リード・カバー画像・英語版・発信先は
+      「公開」を押したときのシート（ポップオーバー）に移す。
+    - ページを削除・書き出し（Markdown / Google ドキュメント / 写真つき zip）・履歴・複製・リンクは
+      右上の「⋯」に集める。「状態を読み直す」は置かない（自動で読み直す）。
+    - フォルダの選択は右サイドバーから消し、左サイドバーの行をドラッグして入れ子にする。
+    - 文字数は本文の列の右下に小さく出し、押すと容量・作成・更新を見られる。
+    - 書式のバーは選んだときだけ出す。上のバーは挿入（＋・画像・録音）だけ。
+  作っていない:
+    - 上の黒い帯は mock 用（URL と切替）。本物の画面には無い。
+    - 本文の保存・公開・AI の送信・書き出し・履歴・複製・削除・共有は押しても何も起きない（見た目だけ）。
+    - 「＋」のブロック一覧と選択時の書式バーは見た目と簡単な動きだけ。表・チェックリストは入れない。
+    - 左サイドバーのドラッグは入れ子と並べ替えの見た目だけ（保存しない）。検索は開かない。
+    - AI の会話履歴・モデルの切替・工程の一覧は固定の見た目。
+    - 録音の画面・設定・発信先・履歴の画面は作らない。
+    - 画像は入れていない（カバー画像は「なし」固定。カバーを選んだときだけ出る掲載許諾のチェックと「外す」は作っていない）。
+    - フォルダのページだけに出る「背景（登場人物・固有名詞）」は、⋯ の項目にする想定だが、このモックは普通のページなので出していない。
+    - 右上の状態（自分だけ／公開中／更新あり）の切替は mock 用。本物は公開の結果で変わる。
+  参照: docs/architecture/editor-niho-life-design.md §4 §5.1 §5.3 §5.4 §6 §8.1 §11 /
+        packages/ui/src/styles/editor-tokens.css / docs/mockups/editor-niho-life-v7.html
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>NIHO editor UI リファイン v1</title>
+<style>
+/* 色は packages/ui/src/styles/editor-tokens.css と同じ値。生の緑は増やさない。 */
+:root{
+  --ink:#2a2a26;--ink2:#54544d;--mute:#6e6d66;--faint:#898880;
+  --white:#fff;--canvas:#fffdfa;--shell:#fcfaf5;--sand:#f7f7f4;--sand2:#f5f3ee;
+  --line:#f1f1ed;--line2:#e7e7e2;--line3:#dbdbd5;--track:#f2efe8;--track-ink:#63605a;
+  --moss:#56751e;--pale:#EEF6E1;--leaf:#B2D67C;--deep:#63A109;
+  --grad:linear-gradient(140deg,#7DBA3A 0%,#63A109 100%);--grad-h:linear-gradient(140deg,#74B033 0%,#5C9508 100%);
+  --amber:#C8713A;--amber-ink:#a55827;--amber-pale:#FAF0E6;
+  --blue:#1E4EA8;--blue-pale:#EAF2FF;--red:#B42318;--red-pale:#fdebec;
+  --sans:"Hiragino Maru Gothic ProN","Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;
+  --mono:ui-monospace,Menlo,monospace;
+  --sbw:244px;--aiw:320px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font:14px/1.6 var(--sans);color:var(--ink);background:var(--canvas);-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4,p,ul,ol,dl,dd{margin:0}
+ul,ol{padding:0;list-style:none}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0;padding:0}
+b,strong{font-weight:600}
+:focus-visible{outline:2px solid var(--moss);outline-offset:2px;border-radius:6px}
+[contenteditable]:focus{outline:none}
+[hidden]{display:none!important}
+.ico{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.sp{flex:1}
+kbd{font:11px var(--mono);color:var(--faint)}
+
+/* ===== 共通の部品 ===== */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:34px;padding:0 15px;border-radius:999px;background:var(--grad);color:#fff;font-weight:600;font-size:13.5px;white-space:nowrap}
+.btn:hover{background:var(--grad-h)}
+.btn.line{background:#fff;color:var(--ink);box-shadow:inset 0 0 0 1.5px var(--line3)}
+.btn.line:hover{background:var(--sand);box-shadow:inset 0 0 0 1.5px var(--line3)}
+.btn.quiet{background:none;color:var(--ink2)}
+.btn.quiet:hover{background:var(--sand)}
+.btn.sm{height:30px;padding:0 12px;font-size:13px}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn:disabled:hover{background:var(--grad)}
+.ib{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:var(--ink2);flex:none;position:relative}
+.ib:hover,.ib.on{background:var(--sand2);color:var(--ink)}
+.ib[data-tip]::after{content:attr(data-tip);position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);white-space:nowrap;background:var(--ink);color:#fff;font-size:11.5px;font-weight:600;padding:3px 8px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .12s;z-index:30}
+.ib[data-tip]:hover::after,.ib[data-tip]:focus-visible::after{opacity:1}
+.menu{position:absolute;z-index:40;min-width:220px;background:#fff;border:1px solid var(--line2);border-radius:12px;box-shadow:0 12px 36px rgba(28,28,26,.12);padding:6px;display:none}
+.menu.open{display:block}
+.menu button,.menu .it{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:7px 10px;border-radius:8px;font-size:13.5px;color:var(--ink)}
+.menu button:hover,.menu .it:hover{background:var(--sand)}
+.menu button .ico{width:16px;height:16px;color:var(--ink2)}
+.menu button small{margin-left:auto;color:var(--faint);font-size:11.5px}
+.menu button.danger{color:var(--red)}
+.menu button.danger .ico{color:var(--red)}
+.menu hr{border:0;border-top:1px solid var(--line);margin:5px 4px}
+.menu .sub{position:relative}
+.menu .sub>button::after{content:"›";margin-left:auto;color:var(--faint);font-size:14px}
+.menu .sub .menu{left:calc(100% + 2px);top:-6px;min-width:190px}
+.menu .sub:hover>.menu{display:block}
+.pop{position:absolute;z-index:40;background:#fff;border:1px solid var(--line2);border-radius:14px;box-shadow:0 14px 40px rgba(28,28,26,.14);display:none}
+.pop.open{display:block}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.dot.pub{background:var(--moss)}.dot.upd{background:var(--amber)}.dot.ltd{background:var(--blue)}
+
+/* ===== mock bar（本物には無い） ===== */
+.mock{position:sticky;top:0;z-index:100;overflow:hidden;display:flex;align-items:center;gap:10px;height:40px;padding:0 12px;background:#141413;color:#fff;font-size:12.5px}
+.mock .url{flex:1;min-width:0;background:rgba(255,255,255,.08);border-radius:8px;padding:4px 10px;font-family:var(--mono);font-size:11.5px;color:rgba(255,255,255,.55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mock .url b{color:#fff;font-weight:600}
+.variant-switch{display:flex;align-items:center;gap:6px}
+.variant-switch span{color:rgba(255,255,255,.5);margin-left:6px}
+.variant-switch button{height:24px;padding:0 10px;border-radius:999px;color:rgba(255,255,255,.75);font-weight:600;font-size:12px;border:1px solid rgba(255,255,255,.18);white-space:nowrap;flex:none}
+.variant-switch button.on{background:#fff;color:#141413;border-color:#fff}
+@media (max-width:820px){.mock .url{display:none}.variant-switch span{display:none}}
+
+/* ===== shell ===== */
+.ws{display:grid;grid-template-columns:var(--sbw) minmax(0,1fr);min-height:calc(100vh - 40px)}
+.ws.nosb{grid-template-columns:minmax(0,1fr)}
+.ws.nosb .sb{display:none}
+.sb{position:sticky;top:40px;height:calc(100vh - 40px);display:flex;flex-direction:column;background:var(--shell);border-right:1px solid var(--line)}
+.sb-top{display:flex;align-items:center;gap:6px;padding:12px 10px 4px 14px}
+.sb-top .brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;flex:1;min-width:0}
+.sb-top .brand i{width:20px;height:20px;border-radius:6px;background:var(--grad);flex:none}
+.sb-top .ib{color:var(--faint)}
+.sb-act{padding:6px 8px 4px}
+.sb-act button{display:flex;align-items:center;gap:9px;width:100%;height:30px;padding:0 8px;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--ink2)}
+.sb-act button:hover{background:var(--sand2);color:var(--ink)}
+.sb-act button .ico{width:16px;height:16px;color:var(--faint)}
+.sb-act button kbd{margin-left:auto}
+.sb-list{flex:1;overflow:auto;padding:6px 8px 10px}
+.sb-list h5{margin:10px 8px 4px;font-size:11px;font-weight:600;color:var(--faint);letter-spacing:.06em}
+.row{position:relative;display:flex;align-items:center;gap:6px;height:32px;padding:0 6px 0 calc(8px + var(--d,0) * 18px);border-radius:8px;cursor:pointer;user-select:none}
+.row:hover{background:var(--sand2)}
+.row.on{background:#fff;box-shadow:0 1px 2px rgba(28,28,26,.06),0 0 0 1px var(--line)}
+.row .grip{width:14px;height:14px;color:var(--line3);opacity:0;flex:none;cursor:grab}
+.row:hover .grip{opacity:1}
+.row .ico.leaf{width:15px;height:15px;color:var(--faint)}
+.row b{flex:1;min-width:0;font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row b.untitled{color:var(--mute)}
+.row .when{font-size:11.5px;color:var(--faint);white-space:nowrap}
+.row .mk{width:14px;height:14px;color:var(--moss)}
+.row .mk.rec{color:var(--mute)}
+.row .more{width:22px;height:22px;border-radius:6px;display:none;place-items:center;color:var(--faint)}
+.row .more:hover{background:var(--line2);color:var(--ink)}
+.row:hover .when{display:none}
+.row:hover .more{display:grid}
+.row.drag{opacity:.4}
+.row.into{box-shadow:inset 0 0 0 2px var(--leaf);background:var(--pale)}
+.row.before::before,.row.after::after{content:"";position:absolute;left:calc(8px + var(--d,0) * 18px);right:6px;height:2px;background:var(--deep);border-radius:2px}
+.row.before::before{top:-1px}.row.after::after{bottom:-1px}
+.sb-foot{border-top:1px solid var(--line);padding:8px 10px}
+.sb-me{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:6px 8px;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--ink2)}
+.sb-me:hover{background:var(--sand2);color:var(--ink)}
+.sb-me .av{width:22px;height:22px;border-radius:50%;background:var(--pale);color:var(--moss);display:grid;place-items:center;font-size:11px;font-weight:700}
+
+/* ===== document ===== */
+.doc{position:relative;display:flex;flex-direction:column;min-width:0;min-height:calc(100vh - 40px)}
+.dt{position:sticky;top:40px;z-index:20;display:flex;align-items:center;gap:4px;height:46px;padding:0 10px 0 8px;background:var(--canvas)}
+.dt .crumb{font-size:13px;color:var(--mute);max-width:36vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-left:4px}
+.dt .crumb.untitled{color:var(--faint)}
+.dt .ins{display:flex;align-items:center;gap:2px;margin-left:8px;padding-left:10px;border-left:1px solid var(--line2)}
+.dt .ins .ib{color:var(--faint)}
+.dt .ins .ib:hover{color:var(--ink)}
+.save{font-size:12px;color:var(--faint);opacity:0;transition:opacity .25s;margin-right:6px;white-space:nowrap}
+.save:not(.on):not(.off){display:none}
+.save.on{opacity:1}
+.save.off{color:var(--amber-ink);opacity:1}
+.state{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 10px;border-radius:8px;font-size:13px;font-weight:600;color:var(--ink2);white-space:nowrap;flex:none}
+.state:hover{background:var(--sand)}
+.state .cv{color:var(--faint);font-size:10px}
+.pubbtn{height:30px;padding:0 13px;border-radius:8px;font-weight:600;font-size:13.5px;color:var(--ink);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:none}
+.pubbtn:hover{background:var(--sand)}
+.pubbtn.primary{background:var(--grad);color:#fff;border-radius:999px;padding:0 14px}
+.pubbtn.primary:hover{background:var(--grad-h)}
+
+.dbody{display:grid;grid-template-columns:minmax(0,1fr) 0;flex:1;transition:grid-template-columns .2s}
+.dbody.open{grid-template-columns:minmax(0,1fr) var(--aiw)}
+.canvas{padding:52px 56px 140px;min-width:0}
+.canvas .in{max-width:680px;margin:auto}
+.tt{font-weight:600;font-size:34px;line-height:1.25;letter-spacing:-.01em;min-height:1.25em}
+.bd{font-size:16px;line-height:1.95;margin-top:14px;min-height:40vh}
+.bd p{margin:0 0 .35em}
+.bd h2{font-size:22px;font-weight:600;line-height:1.4;margin:1.2em 0 .3em}
+.bd h3{font-size:18px;font-weight:600;margin:1em 0 .2em}
+.bd ul{list-style:disc;padding-left:22px}
+.bd ol{list-style:decimal;padding-left:22px}
+.bd li{margin:.15em 0}
+.bd code{font:13.5px var(--mono);background:var(--sand);border-radius:5px;padding:1px 5px;color:var(--ink2)}
+.bd a{color:var(--moss);text-decoration:underline;text-underline-offset:3px}
+.bd blockquote{border-left:3px solid var(--leaf);padding-left:14px;margin:.6em 0;color:var(--ink2)}
+.ph:empty::before{content:attr(data-ph);color:var(--faint);pointer-events:none}
+.ph.blank::before{content:attr(data-ph);color:var(--faint);pointer-events:none}
+.bd.ph.blank br{display:none}
+.bd::selection,.bd *::selection{background:#dce9f7}
+
+/* 文字数は列の右下に小さく */
+.count{position:fixed;right:18px;bottom:14px;z-index:15;font-size:12px;color:var(--faint);padding:4px 9px;border-radius:999px;background:color-mix(in srgb,var(--canvas) 85%,transparent);backdrop-filter:blur(6px)}
+.count:hover{color:var(--ink2);background:var(--sand)}
+.dbody.open .count{right:calc(var(--aiw) + 18px)}
+.count-pop{right:18px;bottom:48px;width:300px;padding:14px 16px}
+.dbody.open .count-pop{right:calc(var(--aiw) + 18px)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:13px;align-items:center}
+.kv dt{color:var(--mute);font-size:12px;font-weight:600}
+.kv dd{display:flex;align-items:center;gap:8px}
+.bar{flex:1;height:5px;border-radius:3px;background:var(--track);overflow:hidden}
+.bar i{display:block;height:100%;width:11%;background:var(--leaf);border-radius:3px}
+.info{width:22px;height:22px;border-radius:50%;display:inline-grid;place-items:center;color:var(--faint);flex:none}
+.info:hover{background:var(--sand2);color:var(--ink2)}
+.info .ico{width:14px;height:14px}
+
+/* 選んだときだけの書式バー */
+.selbar{position:absolute;z-index:30;display:none;align-items:center;gap:1px;background:#fff;border:1px solid var(--line2);border-radius:10px;box-shadow:0 8px 24px rgba(28,28,26,.12);padding:3px}
+.selbar.open{display:flex}
+.selbar button{height:28px;min-width:28px;padding:0 8px;border-radius:7px;color:var(--ink2);font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center}
+.selbar button:hover{background:var(--sand);color:var(--ink)}
+.selbar .sep{width:1px;height:16px;background:var(--line2);margin:0 3px}
+.selbar .ico{width:15px;height:15px}
+
+/* ===== AI（右） ===== */
+.ai{position:sticky;top:86px;align-self:start;height:calc(100vh - 86px);border-left:1px solid var(--line);background:var(--canvas);display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.ai .hd{display:flex;align-items:center;gap:2px;height:40px;padding:0 8px 0 16px;font-size:13px;font-weight:600;flex:none}
+.ai .hd span{flex:1}
+.thread{flex:1;overflow:auto;padding:4px 16px;display:flex;flex-direction:column;gap:14px}
+.composer{padding:10px 12px 12px;flex:none}
+.composer .box{border:1px solid var(--line2);border-radius:14px;background:#fff;padding:9px 10px 7px}
+.composer textarea{width:100%;border:0;outline:none;resize:none;font-size:13.5px;line-height:1.6;min-height:48px;max-height:240px;background:none;padding:0 2px;display:block}
+.composer textarea::placeholder{color:var(--faint)}
+.composer .foot{display:flex;align-items:center;gap:4px;margin-top:4px}
+.composer .foot .ib{width:28px;height:28px;color:var(--faint)}
+.model{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 9px;border-radius:999px;font-size:12px;font-weight:600;color:var(--mute)}
+.model:hover{background:var(--sand);color:var(--ink2)}
+.model .cv{font-size:10px;color:var(--faint)}
+.send{width:28px;height:28px;border-radius:50%;background:var(--grad);color:#fff;display:grid;place-items:center;margin-left:auto}
+.send:hover{background:var(--grad-h)}
+.send .ico{width:15px;height:15px;stroke-width:2.2}
+
+/* ===== 公開のシート（ポップオーバー） ===== */
+.sheet{right:10px;top:50px;width:400px;max-height:calc(100vh - 110px);display:none;flex-direction:column;overflow:hidden}
+.sheet.open{display:flex}
+.sheet .sh{display:flex;align-items:center;gap:8px;padding:14px 12px 8px 18px;font-size:15px;font-weight:600;flex:none}
+.sheet .sbody{overflow:auto;padding:0 18px 6px}
+.sheet .sec{padding:12px 0;border-top:1px solid var(--line)}
+.sheet .sec:first-child{border-top:0;padding-top:4px}
+.sheet h4{font-size:11.5px;font-weight:600;color:var(--mute);margin-bottom:7px;display:flex;align-items:center;gap:4px}
+.sheet h4 .sp{flex:1}
+.dst{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:10px;cursor:pointer;margin:0 -8px}
+.dst:hover{background:var(--sand)}
+.dst i{width:28px;height:28px;border-radius:8px;flex:none}
+.dst.exp i{background:var(--grad)}.dst.site i{background:var(--line3)}
+.dst b{display:block;font-size:13.5px;line-height:1.3}
+.dst small{display:block;font-size:12px;color:var(--mute)}
+.dst .chk{margin-left:auto;width:18px;height:18px;border-radius:50%;border:1.5px solid var(--line3);flex:none}
+.dst.on .chk{border:5.5px solid var(--moss)}
+.dst a{margin-left:auto;font-size:12.5px;font-weight:600;color:var(--moss);white-space:nowrap}
+.need{display:grid;gap:4px}
+.need li{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:9px;background:var(--amber-pale);font-size:13px;color:var(--ink)}
+.need li::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--amber);flex:none}
+.need li.ok{background:var(--pale)}
+.need li.ok::before{background:var(--moss)}
+.need li button{margin-left:auto;font-weight:600;font-size:12.5px;color:var(--moss)}
+.field{display:grid;gap:5px}
+.area{width:100%;border:1px solid var(--line2);border-radius:10px;padding:8px 11px;background:#fff;font-size:13.5px;line-height:1.6;outline:none;resize:vertical;min-height:64px}
+.area:focus{border-color:var(--ink2)}
+.area::placeholder{color:var(--faint)}
+.cnt{font-size:11.5px;color:var(--faint);text-align:right}
+.rowf{display:flex;align-items:center;gap:8px;font-size:13.5px;min-height:30px}
+.rowf.url{align-items:flex-start;padding-top:4px}.rowf.url .lbl{padding-top:1px}
+.rowf .lbl{color:var(--mute);font-size:12px;font-weight:600;width:76px;flex:none}
+.rowf .val{color:var(--ink2)}
+.rowf .val.none{color:var(--faint)}
+.rowf .act{margin-left:auto;font-weight:600;font-size:12.5px;color:var(--moss);padding:3px 8px;border-radius:6px}
+.rowf .act:hover{background:var(--pale)}
+.rowf select{border:1px solid var(--line2);border-radius:8px;padding:4px 8px;background:#fff;font-size:13px;color:var(--ink2)}
+.sheet code{font:12px var(--mono);color:var(--mute);word-break:break-all}
+.sheet .sf{display:flex;align-items:center;gap:8px;padding:12px 18px 14px;border-top:1px solid var(--line);flex:none}
+.sheet .sf .left{font-size:12.5px;color:var(--amber-ink);font-weight:600}
+.sheet .sf .ok{font-size:12.5px;color:var(--moss);font-weight:600}
+
+/* ===== ⓘ モーダル ===== */
+.veil{position:fixed;inset:0;z-index:90;background:rgba(20,20,18,.3);display:none;place-items:center;padding:20px}
+.veil.open{display:grid}
+.modal{width:min(100%,460px);background:#fff;border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.22);padding:20px 22px 18px}
+.modal h2{font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px}
+.modal h2 .ib{margin-left:auto}
+.modal .body{margin-top:10px;font-size:13.5px;line-height:1.8;color:var(--ink2);display:grid;gap:8px}
+
+/* ===== ブロック一覧（＋） ===== */
+.blocks{left:8px;top:44px;min-width:200px}
+.blocks button kbd{margin-left:auto}
+
+/* ===== スマホ ===== */
+@media (max-width:900px){
+  :root{--sbw:100vw}
+  .ws{grid-template-columns:minmax(0,1fr)}
+  .sb{position:fixed;inset:40px 0 0 0;z-index:50;width:min(100vw,300px);box-shadow:0 0 0 100vw rgba(20,20,18,.3);display:none}
+  .ws.sbopen .sb{display:flex}
+  .dt{padding:0 6px}
+  .dt .crumb{display:none}
+  .dt .ins{margin-left:2px;padding-left:6px}
+  .canvas{padding:28px 18px 120px}
+  .tt{font-size:26px}
+  .dbody.open{grid-template-columns:minmax(0,1fr) 0}
+  .ai{position:fixed;inset:40px 0 0 0;z-index:50;height:calc(100vh - 40px);align-self:auto;border-left:0;display:none}
+  .dbody.open .ai{display:flex}
+  .ai .hd{padding-left:12px}
+  .count,.dbody.open .count{right:12px;bottom:10px}
+  .count-pop,.dbody.open .count-pop{right:12px;left:12px;width:auto}
+  .sheet{position:fixed;left:0;right:0;top:auto;bottom:0;width:auto;max-height:84vh;border-radius:18px 18px 0 0}
+  .menu.dots{right:8px}
+}
+@media (max-width:360px){.pubbtn{padding:0 9px}.state{padding:0 7px}}
+</style>
+</head>
+<body>
+
+<div class="mock">
+  <span>mock</span>
+  <div class="url">editor.niho.life<b>/p/8f2c9a</b></div>
+  <div class="variant-switch">
+    <span>右</span>
+    <button class="on" data-v="ai" data-val="open">AI</button>
+    <button data-v="ai" data-val="closed">なし</button>
+    <span>状態</span>
+    <button class="on" data-v="st" data-val="private">自分だけ</button>
+    <button data-v="st" data-val="pub">公開中</button>
+    <button data-v="st" data-val="upd">更新あり</button>
+  </div>
+</div>
+
+<div class="ws" id="ws">
+  <!-- 左 -->
+  <aside class="sb" aria-label="ページ">
+    <div class="sb-top">
+      <div class="brand"><i></i>NIHO editor</div>
+      <button class="ib" id="sbclose" data-tip="閉じる" aria-label="サイドバーを閉じる"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+    </div>
+    <div class="sb-act">
+      <button><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>検索<kbd>⌘K</kbd></button>
+      <button><svg class="ico" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新しいページ<kbd>⌘N</kbd></button>
+    </div>
+    <ul class="sb-list" id="list">
+      <li class="row on" draggable="true" style="--d:0"><svg class="ico grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.4" fill="currentColor"/><circle cx="15" cy="6" r="1.4" fill="currentColor"/><circle cx="9" cy="12" r="1.4" fill="currentColor"/><circle cx="15" cy="12" r="1.4" fill="currentColor"/><circle cx="9" cy="18" r="1.4" fill="currentColor"/><circle cx="15" cy="18" r="1.4" fill="currentColor"/></svg><b class="untitled">無題</b><span class="when">たった今</span><button class="more" aria-label="メニュー">⋯</button></li>
+      <li class="row" draggable="true" style="--d:0"><svg class="ico grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.4" fill="currentColor"/><circle cx="15" cy="6" r="1.4" fill="currentColor"/><circle cx="9" cy="12" r="1.4" fill="currentColor"/><circle cx="15" cy="12" r="1.4" fill="currentColor"/><circle cx="9" cy="18" r="1.4" fill="currentColor"/><circle cx="15" cy="18" r="1.4" fill="currentColor"/></svg><b>鎌倉の朝の散歩</b><svg class="ico mk" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c3 3 3 13 0 16M12 4c-3 3-3 13 0 16"/></svg><span class="when">昨日</span><button class="more" aria-label="メニュー">⋯</button></li>
+      <li class="row" draggable="true" style="--d:1"><svg class="ico grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.4" fill="currentColor"/><circle cx="15" cy="6" r="1.4" fill="currentColor"/><circle cx="9" cy="12" r="1.4" fill="currentColor"/><circle cx="15" cy="12" r="1.4" fill="currentColor"/><circle cx="9" cy="18" r="1.4" fill="currentColor"/><circle cx="15" cy="18" r="1.4" fill="currentColor"/></svg><svg class="ico mk rec" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><b>散歩の録音 11/4</b><span class="when">昨日</span><button class="more" aria-label="メニュー">⋯</button></li>
+      <li class="row" draggable="true" style="--d:0"><svg class="ico grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.4" fill="currentColor"/><circle cx="15" cy="6" r="1.4" fill="currentColor"/><circle cx="9" cy="12" r="1.4" fill="currentColor"/><circle cx="15" cy="12" r="1.4" fill="currentColor"/><circle cx="9" cy="18" r="1.4" fill="currentColor"/><circle cx="15" cy="18" r="1.4" fill="currentColor"/></svg><b>来週の段取り</b><span class="when">昨日</span><button class="more" aria-label="メニュー">⋯</button></li>
+      <li class="row" draggable="true" style="--d:0"><svg class="ico grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.4" fill="currentColor"/><circle cx="15" cy="6" r="1.4" fill="currentColor"/><circle cx="9" cy="12" r="1.4" fill="currentColor"/><circle cx="15" cy="12" r="1.4" fill="currentColor"/><circle cx="9" cy="18" r="1.4" fill="currentColor"/><circle cx="15" cy="18" r="1.4" fill="currentColor"/></svg><b>読書メモ</b><span class="when">2日前</span><button class="more" aria-label="メニュー">⋯</button></li>
+      <li class="row" draggable="true" style="--d:0"><svg class="ico grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.4" fill="currentColor"/><circle cx="15" cy="6" r="1.4" fill="currentColor"/><circle cx="9" cy="12" r="1.4" fill="currentColor"/><circle cx="15" cy="12" r="1.4" fill="currentColor"/><circle cx="9" cy="18" r="1.4" fill="currentColor"/><circle cx="15" cy="18" r="1.4" fill="currentColor"/></svg><b>由比ヶ浜の夕方</b><span class="when">2日前</span><button class="more" aria-label="メニュー">⋯</button></li>
+      <li class="row" draggable="true" style="--d:0"><svg class="ico grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.4" fill="currentColor"/><circle cx="15" cy="6" r="1.4" fill="currentColor"/><circle cx="9" cy="12" r="1.4" fill="currentColor"/><circle cx="15" cy="12" r="1.4" fill="currentColor"/><circle cx="9" cy="18" r="1.4" fill="currentColor"/><circle cx="15" cy="18" r="1.4" fill="currentColor"/></svg><b>受入テスト 2026-11-03</b><span class="when">3日前</span><button class="more" aria-label="メニュー">⋯</button></li>
+      <li class="row" draggable="true" style="--d:1"><svg class="ico grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.4" fill="currentColor"/><circle cx="15" cy="6" r="1.4" fill="currentColor"/><circle cx="9" cy="12" r="1.4" fill="currentColor"/><circle cx="15" cy="12" r="1.4" fill="currentColor"/><circle cx="9" cy="18" r="1.4" fill="currentColor"/><circle cx="15" cy="18" r="1.4" fill="currentColor"/></svg><svg class="ico mk rec" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><b>受入の録音</b><span class="when">3日前</span><button class="more" aria-label="メニュー">⋯</button></li>
+    </ul>
+    <div class="sb-foot">
+      <button class="sb-me"><span class="av">N</span>設定</button>
+    </div>
+  </aside>
+
+  <!-- 中央 + 右 -->
+  <main class="doc" id="doc">
+    <header class="dt">
+      <button class="ib" id="sbopen" data-tip="ページ" aria-label="サイドバー"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+      <span class="crumb untitled" id="crumb">無題</span>
+      <div class="ins">
+        <button class="ib" id="plus" data-tip="ブロック" aria-label="ブロックを挿入"><svg class="ico" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+        <button class="ib" data-tip="画像" aria-label="画像"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-8 8"/></svg></button>
+        <button class="ib" data-tip="録音" aria-label="録音"><svg class="ico" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+        <div class="menu blocks" id="blocks">
+          <button>見出し<kbd>⌘⌥1</kbd></button>
+          <button>小見出し<kbd>⌘⌥2</kbd></button>
+          <button>箇条書き<kbd>-</kbd></button>
+          <button>番号付き<kbd>1.</kbd></button>
+          <button>チェックリスト<kbd>[]</kbd></button>
+          <button>引用<kbd>&gt;</kbd></button>
+          <button>コード<kbd>```</kbd></button>
+          <button>表</button>
+          <hr>
+          <button>画像</button>
+          <button>録音</button>
+        </div>
+      </div>
+      <span class="sp"></span>
+      <span class="save" id="save"></span>
+      <!-- 状態と公開（variant で切替） -->
+      <button class="pubbtn" id="pubbtn" data-st="private">公開</button>
+      <button class="state" id="state" hidden><span class="dot pub"></span><span id="stlabel">公開中</span><span class="cv">▾</span></button>
+      <button class="pubbtn primary" id="updbtn" hidden>更新を公開</button>
+      <button class="ib" id="aitoggle" data-tip="AIと作る" aria-label="AIと作る"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></svg></button>
+      <button class="ib" id="dots" data-tip="その他" aria-label="その他"><svg class="ico" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/></svg></button>
+
+      <!-- ⋯ -->
+      <div class="menu dots" id="dotsmenu" style="right:10px;top:44px">
+        <button><svg class="ico" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>リンクをコピー</button>
+        <button><svg class="ico" viewBox="0 0 24 24"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.2 10.8 7.6-4.6M8.2 13.2l7.6 4.6"/></svg>共有<small>読み取り専用</small></button>
+        <div class="sub">
+          <button><svg class="ico" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5"/><path d="M5 20h14"/></svg>書き出し</button>
+          <div class="menu">
+            <button>Markdown</button>
+            <button>Google ドキュメント</button>
+            <button>写真つき zip</button>
+          </div>
+        </div>
+        <button><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>履歴</button>
+        <button><svg class="ico" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>複製</button>
+        <button id="infoitem"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>ページの情報</button>
+        <hr>
+        <button class="danger"><svg class="ico" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>削除<small>ゴミ箱に 30 日</small></button>
+      </div>
+
+      <!-- 公開のシート -->
+      <div class="pop sheet" id="sheet" role="dialog" aria-label="公開">
+        <div class="sh">公開<span class="sp"></span><button class="ib" id="sheetclose" aria-label="閉じる"><svg class="ico" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+        <div class="sbody">
+          <div class="sec">
+            <h4>発信先</h4>
+            <div class="dst exp on" data-dst="exp"><i></i><div><b>NIHO Experience</b><small>experience.niho.life/journal</small></div><span class="chk"></span></div>
+            <div class="dst site" data-dst="site"><i></i><div><b>自分のサイト</b><small>まだ接続していない</small></div><a>接続する ›</a></div>
+          </div>
+          <div class="sec" id="needsec">
+            <h4>公開の前に</h4>
+            <ul class="need">
+              <li>英語版<button>作る</button></li>
+              <li>カテゴリ<button>選ぶ</button></li>
+              <li>本文に見出し<button>本文へ</button></li>
+            </ul>
+          </div>
+          <div class="sec">
+            <h4>リード<span class="sp"></span><span class="cnt" id="leadcnt">0 / 160</span></h4>
+            <textarea class="area" id="lead" placeholder="一覧に出る短い紹介"></textarea>
+          </div>
+          <div class="sec">
+            <div class="rowf"><span class="lbl">カバー画像</span><select><option>なし</option></select></div>
+            <div class="rowf"><span class="lbl">カテゴリ</span><select><option>選ぶ</option><option>暮らし</option><option>食</option><option>まち</option></select></div>
+            <div class="rowf"><span class="lbl">英語版</span><span class="val none">なし</span><button class="act">作る</button><button class="info" data-modal="en" aria-label="英語版について"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg></button></div>
+            <div class="rowf"><span class="lbl">言語</span><select><option>日本語</option><option>English</option></select></div>
+            <div class="rowf"><span class="lbl">範囲</span><select><option>公開</option><option>限定公開</option></select></div>
+            <div class="rowf url"><span class="lbl">URL</span><code>experience.niho.life/journal/<span id="slug">untitled</span></code></div>
+          </div>
+        </div>
+        <div class="sf">
+          <span class="left" id="sfleft">あと 3 つ</span>
+          <span class="sp"></span>
+          <button class="btn sm" id="sfbtn" disabled>公開する</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="dbody open" id="dbody">
+      <div class="canvas">
+        <div class="in">
+          <h1 class="tt ph blank" id="title" contenteditable="true" data-ph="無題" spellcheck="false"></h1>
+          <div class="bd ph blank" id="body" contenteditable="true" data-ph="書きはじめる。「/」でブロック" spellcheck="false"></div>
+        </div>
+      </div>
+
+      <!-- 右：AIと作る -->
+      <aside class="ai" aria-label="AIと作る">
+        <div class="hd"><span>AIと作る</span>
+          <button class="ib" data-tip="新しい会話" aria-label="新しい会話"><svg class="ico" viewBox="0 0 24 24"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17z"/><path d="m13.5 7.5 3 3"/></svg></button>
+          <button class="ib" data-tip="会話" aria-label="会話の一覧"><svg class="ico" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/></svg></button>
+          <button class="ib aiclose" data-tip="閉じる" aria-label="閉じる"><svg class="ico" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <div class="thread"></div>
+        <div class="composer">
+          <div class="box">
+            <textarea rows="2" placeholder="直したいこと・作りたいもの…"></textarea>
+            <div class="foot">
+              <button class="ib" data-tip="工程・スキル" aria-label="工程・スキル"><svg class="ico" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+              <button class="model">Claude Code · Sonnet 4.6<span class="cv">▾</span></button>
+              <button class="send" aria-label="送る"><svg class="ico" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </aside>
+      <!-- 文字数（右下） -->
+      <button class="count" id="count">0 字</button>
+      <div class="pop count-pop" id="countpop">
+      <dl class="kv">
+        <dt>文字数</dt><dd id="cnt2">0 字</dd>
+        <dt>容量</dt><dd><span>3.2 MB</span><span class="bar"><i></i></span><button class="info" data-modal="size" aria-label="容量について"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg></button></dd>
+        <dt>作成</dt><dd>11月5日 9:12</dd>
+        <dt>更新</dt><dd>たった今</dd>
+      </dl>
+      </div>
+
+    </div>
+
+    <!-- 選んだときだけの書式バー -->
+    <div class="selbar" id="selbar">
+      <button data-cmd="bold"><b>B</b></button>
+      <button data-cmd="italic"><i>I</i></button>
+      <button data-cmd="strikeThrough"><s>S</s></button>
+      <button data-cmd="code" aria-label="コード"><svg class="ico" viewBox="0 0 24 24"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 5l-4 14"/></svg></button>
+      <button data-cmd="link" aria-label="リンク"><svg class="ico" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></button>
+      <span class="sep"></span>
+      <button data-cmd="h2">H</button>
+      <button data-cmd="ul" aria-label="箇条書き"><svg class="ico" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.2" fill="currentColor"/><circle cx="4.5" cy="12" r="1.2" fill="currentColor"/><circle cx="4.5" cy="18" r="1.2" fill="currentColor"/></svg></button>
+    </div>
+  </main>
+</div>
+
+<!-- ⓘ モーダル -->
+<div class="veil" id="veil">
+  <div class="modal" role="dialog" aria-modal="true" id="modal">
+    <h2><span id="mtitle"></span><button class="ib" id="mclose" aria-label="閉じる"><svg class="ico" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></h2>
+    <div class="body" id="mbody"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+  const ws=$('#ws'), dbody=$('#dbody'), title=$('#title'), body=$('#body'), crumb=$('#crumb');
+
+  /* ---- variant 切替（mock 用） ---- */
+  const STATES={
+    private:{pub:true,state:false,upd:false},
+    pub:{pub:false,state:true,upd:false,label:'公開中',dot:'pub'},
+    upd:{pub:false,state:true,upd:true,label:'更新あり',dot:'upd'}
+  };
+  function setState(k){
+    const s=STATES[k];
+    $('#pubbtn').hidden=!s.pub; $('#state').hidden=!s.state; $('#updbtn').hidden=!s.upd;
+    if(s.state){$('#stlabel').textContent=s.label;$('#state .dot').className='dot '+s.dot;}
+    $('#sfbtn').textContent=k==='private'?'公開する':(k==='upd'?'更新を公開':'保存');
+    $('#needsec').style.display=k==='private'?'':'none';
+    $('#sfleft').style.display=k==='private'?'':'none';
+    $('#sfbtn').disabled=k==='private';
+  }
+  $$('.variant-switch button').forEach(b=>b.addEventListener('click',()=>{
+    $$('.variant-switch button[data-v="'+b.dataset.v+'"]').forEach(x=>x.classList.toggle('on',x===b));
+    if(b.dataset.v==='ai') dbody.classList.toggle('open',b.dataset.val==='open');
+    if(b.dataset.v==='st') setState(b.dataset.val);
+  }));
+  setState('private');
+
+  /* ---- サイドバー・AI の開閉 ---- */
+  const mobile=()=>matchMedia('(max-width:900px)').matches;
+  $('#sbclose').addEventListener('click',()=>{ws.classList.remove('sbopen');if(!mobile())ws.classList.add('nosb');});
+  $('#sbopen').addEventListener('click',()=>{if(mobile())ws.classList.toggle('sbopen');else ws.classList.toggle('nosb');});
+  $('#aitoggle').addEventListener('click',()=>dbody.classList.toggle('open'));
+  $('.aiclose').addEventListener('click',()=>dbody.classList.remove('open'));
+  if(mobile()) dbody.classList.remove('open');
+
+  /* ---- ポップオーバー ---- */
+  const pops=[['#dots','#dotsmenu'],['#pubbtn','#sheet'],['#state','#sheet'],['#updbtn','#sheet'],['#count','#countpop'],['#plus','#blocks']];
+  function closeAll(except){ $$('.menu.open,.pop.open').forEach(p=>{if(p!==except)p.classList.remove('open');}); }
+  pops.forEach(([t,p])=>{
+    $(t).addEventListener('click',e=>{e.stopPropagation();const el=$(p);const was=el.classList.contains('open');closeAll();if(!was)el.classList.add('open');});
+  });
+  $('#sheetclose').addEventListener('click',()=>$('#sheet').classList.remove('open'));
+  $('#infoitem').addEventListener('click',e=>{e.stopPropagation();closeAll();$('#countpop').classList.add('open');});
+  document.addEventListener('click',e=>{ if(!e.target.closest('.menu,.pop')) closeAll(); });
+  $$('.menu.open,.pop').forEach(p=>p.addEventListener('click',e=>e.stopPropagation()));
+  $('#sheet').addEventListener('click',e=>e.stopPropagation());
+  $('#countpop').addEventListener('click',e=>e.stopPropagation());
+  $('#dotsmenu').addEventListener('click',e=>e.stopPropagation());
+  $('#blocks').addEventListener('click',e=>{e.stopPropagation();closeAll();});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeAll();$('#veil').classList.remove('open');}});
+
+  /* 発信先 */
+  $$('.dst').forEach(d=>d.addEventListener('click',()=>{
+    $$('.dst').forEach(x=>x.classList.toggle('on',x===d));
+    const site=d.dataset.dst==='site';
+    $('#needsec').style.display=site?'none':'';
+    $('#sfleft').style.display=site?'none':'';
+    $('#sfbtn').disabled=!site;
+  }));
+  $('#lead').addEventListener('input',e=>{$('#leadcnt').textContent=[...e.target.value].length+' / 160';});
+
+  /* ---- ⓘ モーダル ---- */
+  const MODALS={
+    en:{t:'英語版について',b:['保存済みの題名・リード・本文・画像の代替テキストとキャプションを Anthropic API へ送り、従量対象の英語案を作ります。候補は確認して採用するまで、ページや公開版を変更しません。','上限は 20,000 文字・256 項目です。コード・画像 ID・URL・リンク・書式・クレジット・許諾は翻訳せず維持します。','録音を含む本文は、文章のページに分けてから英語案を作ってください。未対応の構造や欠落した結果は全体を採用しません。']},
+    size:{t:'容量について',b:['1 ページ 30 MiB まで（題名・リード・本文・本文とカバーの画像・アップロード中の画像）。','録音の音声は別枠で、ページの容量には数えません。']}
+  };
+  $$('[data-modal]').forEach(b=>b.addEventListener('click',e=>{
+    e.stopPropagation();const m=MODALS[b.dataset.modal];
+    $('#mtitle').textContent=m.t;$('#mbody').innerHTML=m.b.map(p=>'<p>'+p+'</p>').join('');
+    $('#veil').classList.add('open');
+  }));
+  $('#mclose').addEventListener('click',()=>$('#veil').classList.remove('open'));
+  $('#veil').addEventListener('click',e=>{if(e.target===$('#veil'))$('#veil').classList.remove('open');});
+
+  /* ---- 保存中の表示（打ったときだけ）・文字数・題名の反映 ---- */
+  let saveT;
+  function textOf(el){return (el.innerText||'').replace(/\s+/g,'');}
+  function refresh(){
+    [title,body].forEach(el=>el.classList.toggle('blank',textOf(el).length===0));
+    const n=[...textOf(title)+textOf(body)].length;
+    const s=n.toLocaleString('ja-JP')+' 字';
+    $('#count').textContent=s;$('#cnt2').textContent=s;
+    const t=(title.innerText||'').trim();
+    crumb.textContent=t||'無題';crumb.classList.toggle('untitled',!t);
+    $('#list .row.on b').textContent=t||'無題';$('#list .row.on b').classList.toggle('untitled',!t);
+    $('#slug').textContent=t?'asa-no-sanpo':'untitled';
+  }
+  /* 保存の状態は普段は出さない。失敗したときだけ .save.off に文言を入れる（モックでは再現しない） */
+  function saving(){}
+  [title,body].forEach(el=>{
+    el.addEventListener('input',()=>{refresh();saving();});
+    el.addEventListener('paste',e=>{e.preventDefault();document.execCommand('insertText',false,(e.clipboardData||window.clipboardData).getData('text'));});
+  });
+  title.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();body.focus();}});
+  body.addEventListener('keydown',e=>{if(e.key==='/'&&textOf(body).length===0){e.preventDefault();closeAll();$('#blocks').classList.add('open');}});
+  refresh();
+
+  /* ---- 選んだときだけの書式バー ---- */
+  const selbar=$('#selbar');
+  function placeSel(){
+    const sel=getSelection();
+    if(!sel||sel.rangeCount===0||sel.isCollapsed||!body.contains(sel.anchorNode)){selbar.classList.remove('open');return;}
+    const r=sel.getRangeAt(0).getBoundingClientRect();
+    const d=$('#doc').getBoundingClientRect();
+    selbar.classList.add('open');
+    const w=selbar.offsetWidth;
+    let x=r.left-d.left+r.width/2-w/2; x=Math.max(8,Math.min(x,d.width-w-8));
+    selbar.style.left=x+'px';selbar.style.top=(r.top-d.top-selbar.offsetHeight-8)+'px';
+  }
+  document.addEventListener('selectionchange',()=>requestAnimationFrame(placeSel));
+  $$('#selbar button').forEach(b=>b.addEventListener('mousedown',e=>{
+    e.preventDefault();const c=b.dataset.cmd;
+    if(c==='h2')document.execCommand('formatBlock',false,'h2');
+    else if(c==='ul')document.execCommand('insertUnorderedList');
+    else if(c==='code'){const s=getSelection();if(s.rangeCount){const r=s.getRangeAt(0);const code=document.createElement('code');code.textContent=r.toString();r.deleteContents();r.insertNode(code);}}
+    else if(c==='link')document.execCommand('createLink',false,'https://');
+    else document.execCommand(c);
+    refresh();saving();
+  }));
+
+  /* ---- 左サイドバー：ドラッグで入れ子・並べ替え ---- */
+  const list=$('#list');let dragEl=null;
+  const depth=el=>+getComputedStyle(el).getPropertyValue('--d')||0;
+  list.addEventListener('dragstart',e=>{dragEl=e.target.closest('.row');if(!dragEl)return;dragEl.classList.add('drag');e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain','');});
+  list.addEventListener('dragend',()=>{if(dragEl)dragEl.classList.remove('drag');dragEl=null;$$('.row',list).forEach(r=>r.classList.remove('into','before','after'));});
+  list.addEventListener('dragover',e=>{
+    const row=e.target.closest('.row');if(!row||row===dragEl||!dragEl)return;e.preventDefault();
+    const r=row.getBoundingClientRect(),y=(e.clientY-r.top)/r.height;
+    $$('.row',list).forEach(x=>x.classList.remove('into','before','after'));
+    row.classList.add(y<.25?'before':y>.75?'after':'into');
+  });
+  list.addEventListener('drop',e=>{
+    const row=e.target.closest('.row');if(!row||!dragEl||row===dragEl)return;e.preventDefault();
+    const mode=row.classList.contains('before')?'before':row.classList.contains('after')?'after':'into';
+    const d=depth(row);
+    if(mode==='before'){row.before(dragEl);dragEl.style.setProperty('--d',d);}
+    else if(mode==='after'){row.after(dragEl);dragEl.style.setProperty('--d',d);}
+    else{row.after(dragEl);dragEl.style.setProperty('--d',Math.min(d+1,3));}
+    $$('.row',list).forEach(x=>x.classList.remove('into','before','after'));
+  });
+  $$('#list .row').forEach(r=>r.addEventListener('click',e=>{if(e.target.closest('.more'))return;$$('#list .row').forEach(x=>x.classList.toggle('on',x===r));}));
+
+  /* ---- mock 用：URL の # で状態を開く（例 #text&open=sheet&st=upd&ai=closed） ---- */
+  const h=new URLSearchParams(location.hash.slice(1));
+  if(h.has('text')){
+    title.textContent='鎌倉の朝の散歩';
+    body.innerHTML='<p>朝の散歩は、海まで歩いてから戻る。今日は材木座の方まで足を伸ばした。</p><p>波は静かで、サーファーが三人。帰りに豆腐屋で寄り道した。</p><h2>気づいたこと</h2><ul><li>朝 6 時台は犬の散歩の人が多い</li><li>由比ヶ浜より材木座のほうが風が弱い</li></ul>';
+    refresh();
+  }
+  if(h.get('ai')==='closed'){dbody.style.transition='none';dbody.classList.remove('open');}
+  if(h.get('ai')==='open'){dbody.style.transition='none';dbody.classList.add('open');}
+  if(h.get('st'))setState(h.get('st'));
+  if(h.get('open')){const m={sheet:'#sheet',dots:'#dotsmenu',count:'#countpop',blocks:'#blocks'}[h.get('open')];if(m)$(m).classList.add('open');}
+  if(h.get('modal')){const b=$('[data-modal="'+h.get('modal')+'"]');if(b)b.click();}
+  $$('.variant-switch button').forEach(b=>{if(b.dataset.v==='ai')b.classList.toggle('on',(b.dataset.val==='open')===dbody.classList.contains('open'));if(b.dataset.v==='st')b.classList.toggle('on',b.dataset.val===(h.get('st')||'private'));});
+})();
+</script>
+</body>
+</html>
