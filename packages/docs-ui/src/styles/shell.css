@@ -133,6 +133,11 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ditw{flex:0 0 auto;width:18px;align-self:stretch;display:flex;align-items:center;justify-content:center;border-radius:6px;font-size:12px;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ditw:hover{background:var(--ed-sand-2)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di{flex:1 1 0;min-width:0}
+/* 行の「…」（右に並べて開く。設計 §5.5）。ふだんは隠し、行に乗る・フォーカス・メニューを開いている間だけ出す。触る端末（hover なし）では常に出す */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di-more{flex:none;margin-top:4px;color:var(--ed-ink-mute);opacity:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di-more:hover{background:var(--ed-sand-2)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow:hover .es-di-more,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow:focus-within .es-di-more,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di-more[aria-expanded="true"]{opacity:1}
+@media (hover:none){:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di-more{opacity:1}}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-psfolder select{width:100%;border:1px solid var(--ed-line-2);border-radius:10px;padding:6px 8px;background:var(--ed-white);font:inherit;font-size:13px;color:var(--ed-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-foot{position:relative;border-top:1px solid var(--ed-line);padding:8px 10px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:7px 8px;border-radius:10px}
