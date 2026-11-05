@@ -29,13 +29,22 @@ vi.mock("next/navigation", () => ({
 }));
 
 // AI の通信・race は AiBox.test.tsx で本物を検証する。枠のテストでは常設の境界だけを見る。
+// 分割ビューのテストのため、枠が渡した props（置き場所・AI がページを直した知らせ）を覚えておく
+type AiMockProps = {
+  placement?: { at: string; onMove: (to: "left" | "right" | "float") => void; open: boolean; onOpenChange: (open: boolean) => void };
+  onPagesChanged?: (ids: readonly string[]) => void;
+};
+const aiMock = vi.hoisted(() => ({ props: null as AiMockProps | null }));
 vi.mock("./AiBox", () => ({
-  AiPanel: () => (
-    <section aria-label="AIとの会話">
-      <h2>AIと作る</h2>
-      <textarea aria-label="AIへのメッセージ" />
-    </section>
-  ),
+  AiPanel: (props: AiMockProps) => {
+    aiMock.props = props;
+    return (
+      <section aria-label="AIとの会話">
+        <h2>AIと作る</h2>
+        <textarea aria-label="AIへのメッセージ" />
+      </section>
+    );
+  },
 }));
 
 /** jsdom に無い IntersectionObserver の代わり。callback を手で呼んで「末尾が見えた」にする。 */
@@ -2751,5 +2760,218 @@ describe("EditorFrame: このページの写真（サイドバーの下）と、
       await vi.advanceTimersByTimeAsync(6000);
     });
     expect(sends().filter((call) => call.url.endsWith("/discard"))).toEqual([]);
+  });
+});
+
+describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの配置。設計 §5.5）", () => {
+  const A = "00000000-0000-4000-8000-0000000000a1";
+  const B = "00000000-0000-4000-8000-0000000000b1";
+  const C = "00000000-0000-4000-8000-0000000000c1";
+  const UPDATED_AT = "2026-11-05T01:00:00.000Z";
+  const LAYOUT_KEY = "niho-editor:layout:v1";
+
+  /** ページの中の PageEditor の代わり（枠に登録すると、AI のレールが出る）。 */
+  function FakePage({ id }: { id: string }) {
+    const { attachPage } = useEditorFrame();
+    useEffect(
+      () =>
+        attachPage({
+          id,
+          status: "saved",
+          flush: vi.fn(async () => true),
+          revision: () => 1,
+          reopen: vi.fn(),
+          shared: null,
+          setShared: vi.fn(),
+          lang: "ja",
+          setLang: vi.fn(),
+          langNote: null,
+          text: { read: () => "", subscribe: () => () => undefined },
+        }),
+      [attachPage, id],
+    );
+    return <p>合成の本文</p>;
+  }
+  const sideJson = (title: string, text: string, revision = 2) =>
+    new Response(JSON.stringify({ page: { id: B, title, blocks: [{ type: "paragraph", content: [{ type: "text", text }] }], revision, updatedAt: UPDATED_AT } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  const pages = () => [page(A, "メインのページ"), page(B, "右のページ"), page(C, "三つ目")];
+  const sideReads = (fetcher: ReturnType<typeof vi.fn>) => (fetcher.mock.calls as unknown as [string][]).filter(([url]) => url === `/api/pages/${B}`).length;
+  const rowButton = (title: string) => [...container!.querySelectorAll<HTMLButtonElement>(".es-sb-list .es-di")].find((button) => button.querySelector(".es-di-t")?.textContent === title)!;
+  const tick = () => act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+  const shellRoot = () => container!.querySelector<HTMLElement>("[data-editor-shell]")!;
+  let fetcher: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    nav.pathname = `/p/${A}`;
+    window.history.replaceState(null, "", `/p/${A}`);
+    window.localStorage.clear();
+    // 広い画面（1680px）。jsdom の既定（1024px）では一覧が細い列に畳まれる
+    vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(1680);
+    fetcher = vi.fn(async (url: string) => (url === `/api/pages/${B}` ? sideJson("右のページ", "取材メモの本文") : new Response("{}", { status: 404 })));
+    vi.stubGlobal("fetch", fetcher);
+  });
+  afterEach(() => {
+    window.localStorage.clear();
+    window.history.replaceState(null, "", "/");
+    vi.unstubAllGlobals();
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    vi.restoreAllMocks();
+  });
+
+  it("?side= に別のページの UUID があれば、右に読むだけのページを出す（題名は 1 か所、一覧の行に「右に表示中」）", async () => {
+    nav.search = `side=${B}`;
+    await mount({ pages: pages() }, <FakePage id={A} />);
+    await tick();
+    expect(shellRoot().dataset).toMatchObject({ layout: "dock", wide: "true" });
+    const side = container!.querySelector<HTMLElement>(".es-side")!;
+    expect(side.getAttribute("aria-label")).toBe("右に並べたページ");
+    expect([...side.querySelectorAll(".es-side-tt")].map((node) => node.textContent)).toEqual(["右のページ"]);
+    expect(side.querySelector('[aria-label="右のページの本文"]')!.textContent).toBe("取材メモの本文");
+    expect(side.querySelector('[aria-label="右のページの本文"]')!.getAttribute("contenteditable")).toBe("false");
+    expect(sideReads(fetcher)).toBe(1);
+    expect(rowButton("右のページ").querySelector(".es-di-side")?.textContent).toBe("右に表示中");
+    // 境目（左のドック｜メイン｜右のページ｜右のドック）
+    expect([...container!.querySelectorAll('[role="separator"]')].map((node) => node.getAttribute("aria-label"))).toEqual([
+      "左のドックの幅",
+      "右に並べたページの幅",
+      "右のドックの幅",
+    ]);
+  });
+
+  it("side がメインと同じ・UUID の形でない・900px 未満なら出さない（URL は消さない）", async () => {
+    nav.search = `side=${A}`;
+    await mount({ pages: pages() }, <FakePage id={A} />);
+    await tick();
+    expect(container!.querySelector(".es-side")).toBeNull();
+    await moveTo(`/p/${A}`, "side=not-a-page");
+    await tick();
+    expect(container!.querySelector(".es-side")).toBeNull();
+    expect(sideReads(fetcher)).toBe(0);
+    await act(async () => root!.unmount());
+    root = null;
+    container!.remove();
+
+    narrow = true;
+    nav.search = `side=${B}`;
+    await mount({ pages: pages(), initialNarrow: true }, <FakePage id={A} />);
+    await tick();
+    expect(shellRoot().dataset.wide).toBe("false");
+    expect(container!.querySelector(".es-side, .es-sash, [role=\"separator\"]")).toBeNull();
+    expect(sideReads(fetcher)).toBe(0);
+    expect(nav.replace).not.toHaveBeenCalled();
+    // 狭い画面では、置き場所の操作も出さない（AI の置き場所・一覧のメニュー・行の右クリック）
+    expect(aiMock.props?.placement).toBeUndefined();
+    expect(container!.querySelector('button[aria-label="一覧のメニュー"]')).toBeNull();
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    await act(async () => void rowButton("三つ目").dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("一覧でメインを替えても右のページは残す。右のページを一覧で開くとメインと入れ替える", async () => {
+    nav.search = `side=${B}`;
+    await mount({ pages: pages() }, <FakePage id={A} />);
+    await tick();
+    await act(async () => rowButton("三つ目").click());
+    expect(nav.push).toHaveBeenLastCalledWith(`/p/${C}?side=${B}`);
+    await act(async () => rowButton("右のページ").click());
+    await tick();
+    expect(nav.push).toHaveBeenLastCalledWith(`/p/${B}?side=${A}`);
+  });
+
+  it("⇄ は入れ替え（画面の移動）、× と「右に並べて開く」は履歴に積まずに ?side= を付け外す", async () => {
+    nav.search = `side=${B}`;
+    window.history.replaceState(null, "", `/p/${A}?side=${B}`);
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    await mount({ pages: pages() }, <FakePage id={A} />);
+    await tick();
+    await act(async () => container!.querySelector<HTMLButtonElement>('button[aria-label="メインと入れ替える"]')!.click());
+    await tick();
+    expect(nav.push).toHaveBeenLastCalledWith(`/p/${B}?side=${A}`);
+    await act(async () => container!.querySelector<HTMLButtonElement>('button[aria-label="右のページを閉じる"]')!.click());
+    expect(replaceState).toHaveBeenLastCalledWith(null, "", `/p/${A}`);
+    expect(nav.push).toHaveBeenCalledTimes(1);
+
+    // 行の右クリック → 右に並べて開く
+    await act(async () => void rowButton("三つ目").closest(".es-dirow")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 80 })));
+    const menu = container!.querySelector<HTMLElement>('[role="menu"][aria-label="ページのメニュー"]')!;
+    await act(async () => [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent?.startsWith("右に並べて開く"))!.click());
+    expect(replaceState).toHaveBeenLastCalledWith(null, "", `/p/${A}?side=${C}`);
+    // ⌥クリックでも同じ（メインは替えない）
+    await act(async () => void rowButton("右のページ").dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true })));
+    expect(replaceState).toHaveBeenLastCalledWith(null, "", `/p/${A}?side=${B}`);
+    expect(nav.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("AI を左のドック・メインの下へ移しても、作り直さず書きかけが残る。置き場所は端末に覚える", async () => {
+    await mount({ pages: pages() }, <FakePage id={A} />);
+    await tick();
+    const presence = container!.querySelector<HTMLElement>(".es-rail-presence")!;
+    expect(presence.dataset.dock).toBe("right");
+    const draft = presence.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')!;
+    draft.value = "動かしても残す書きかけ";
+    expect(aiMock.props?.placement?.at).toBe("right");
+
+    await act(async () => aiMock.props!.placement!.onMove("left"));
+    expect(presence.dataset.dock).toBe("left");
+    expect(JSON.parse(window.localStorage.getItem(LAYOUT_KEY)!).place).toEqual({ list: "left", ai: "left" });
+    await act(async () => aiMock.props!.placement!.onMove("float"));
+    expect(presence.dataset).toMatchObject({ dock: "float", float: "bar" });
+    expect(shellRoot().dataset.ai).toBe("float");
+    await act(async () => aiMock.props!.placement!.onOpenChange(true));
+    expect(presence.dataset.float).toBe("open");
+    expect(presence.querySelector('[role="separator"][aria-label="AIの高さ"]')).not.toBeNull();
+
+    const after = container!.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')!;
+    expect(after).toBe(draft);
+    expect(after.value).toBe("動かしても残す書きかけ");
+  });
+
+  it("一覧は「一覧のメニュー」から右のドックへ移せる（同じドックに 2 つなら一覧が上・AI が下）", async () => {
+    await mount({ pages: pages() }, <FakePage id={A} />);
+    await tick();
+    await act(async () => container!.querySelector<HTMLButtonElement>('button[aria-label="一覧のメニュー"]')!.click());
+    await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="一覧のメニュー"] [role="menuitem"]')][0]!.click());
+    expect(container!.querySelector<HTMLElement>(".es-pane")!.dataset.dock).toBe("right");
+    expect(container!.querySelector<HTMLElement>(".es-pane")!.style.gridRow).toBe("1 / 3");
+    expect(container!.querySelector<HTMLElement>(".es-rail-presence")!.style.gridRow).toBe("3 / 4");
+    expect(JSON.parse(window.localStorage.getItem(LAYOUT_KEY)!).place.list).toBe("right");
+    // 「一覧をしまう」と「一覧を出す」は、右のドックにいても効く
+    await act(async () => container!.querySelector<HTMLButtonElement>('button[aria-label="一覧をしまう"]')!.click());
+    expect(container!.querySelector<HTMLElement>(".es-pane")!.hidden).toBe(true);
+    await act(async () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="一覧を出す"]')!.click());
+    expect(container!.querySelector<HTMLElement>(".es-pane")!.hidden).toBe(false);
+  });
+
+  it("覚えた配置で始める。壊れた値なら既定", async () => {
+    window.localStorage.setItem(LAYOUT_KEY, JSON.stringify({ v: 1, place: { list: "right", ai: "left" }, widths: { left: 300, right: 320, side: 400 }, float: { open: false, height: 360 } }));
+    await mount({ pages: pages() }, <FakePage id={A} />);
+    await tick();
+    expect(container!.querySelector<HTMLElement>(".es-pane")!.dataset.dock).toBe("right");
+    expect(container!.querySelector<HTMLElement>(".es-rail-presence")!.dataset.dock).toBe("left");
+    await act(async () => root!.unmount());
+    root = null;
+    container!.remove();
+
+    window.localStorage.setItem(LAYOUT_KEY, "{壊れた");
+    await mount({ pages: pages() }, <FakePage id={A} />);
+    await tick();
+    expect(container!.querySelector<HTMLElement>(".es-pane")!.dataset.dock).toBe("left");
+    expect(container!.querySelector<HTMLElement>(".es-rail-presence")!.dataset.dock).toBe("right");
+  });
+
+  it("AI が右のページを書き換えたら読み直す（ほかのページなら読まない）", async () => {
+    nav.search = `side=${B}`;
+    await mount({ pages: pages() }, <FakePage id={A} />);
+    await tick();
+    expect(sideReads(fetcher)).toBe(1);
+    await act(async () => aiMock.props!.onPagesChanged!([C]));
+    await tick();
+    expect(sideReads(fetcher)).toBe(1);
+    await act(async () => aiMock.props!.onPagesChanged!([A, B]));
+    await tick();
+    expect(sideReads(fetcher)).toBe(2);
   });
 });

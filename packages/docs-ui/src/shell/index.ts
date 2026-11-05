@@ -3,6 +3,32 @@
  * props 駆動の表示部品だけ。DocsHost・fetch・保存は持たない。スタイルは niho-docs-ui/styles/shell.css（読むのは呼ぶ側）。
  */
 export { EditorShell, type EditorShellProps } from "./editor-shell";
+export { ShellSash, ShellSidePane, type EditorShellDock, type ShellSashProps, type ShellSidePaneProps } from "./dock";
+export {
+  SHELL_DND,
+  SHELL_DOCK_DEFAULT,
+  SHELL_DOCK_MAX,
+  SHELL_DOCK_MIN,
+  SHELL_DOCK_PLACE,
+  SHELL_DOCK_STRIP,
+  SHELL_FLOAT_HEIGHT,
+  clampDockWidth,
+  computeShellDock,
+  dockPanels,
+  dockWidthRange,
+  panelDropTarget,
+  panelGhostRect,
+  placeOf,
+  type ShellAiPlace,
+  type ShellDockFit,
+  type ShellDockInput,
+  type ShellDockPlace,
+  type ShellDockSide,
+  type ShellDockWidthKey,
+  type ShellDockWidths,
+  type ShellPanelId,
+  type ShellPanelTarget,
+} from "./dock-layout";
 export { Icon } from "./icons";
 export { ShellMenu, useMenuDismiss, type ShellMenuProps } from "./menu";
 export { StatusDot } from "./status-dot";

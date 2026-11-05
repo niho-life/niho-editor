@@ -2,10 +2,8 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { useState } from "react";
-import { EditorContent, useEditor } from "@tiptap/react";
-import { docFromBlocks } from "@/editor/doc";
-import { buildPageExtensions } from "@/editor/page-extensions";
 import type { ConflictPage } from "@/lib/pages-client";
+import { ReadOnlyBody } from "./ReadOnlyBody";
 
 /** 競合の応答の保存時刻を、端末のローカル時刻の HH:mm にする（読めなければ null）。 */
 export function clockOf(iso: string): string | null {
@@ -71,7 +69,7 @@ export function ConflictBand(props: {
             <p data-latest-title="">
               <strong>{props.page.title || "無題"}</strong>
             </p>
-            <ReadOnlyBody blocks={props.page.blocks} />
+            <ReadOnlyBody blocks={props.page.blocks} label="最新版の本文" />
             <Dialog.Close asChild>
               <button type="button">閉じる</button>
             </Dialog.Close>
@@ -82,25 +80,3 @@ export function ConflictBand(props: {
   );
 }
 
-/** 最新版の本文（同じ schema の読み取り専用の TipTap）。 */
-function ReadOnlyBody(props: { blocks: unknown[] }) {
-  const [unreadable, setUnreadable] = useState(false);
-  const editor = useEditor(
-    {
-      extensions: buildPageExtensions(),
-      content: docFromBlocks(props.blocks),
-      editable: false,
-      immediatelyRender: false,
-      enableContentCheck: true,
-      onContentError: () => setUnreadable(true),
-      editorProps: { attributes: { class: "doc", "aria-label": "最新版の本文", "aria-readonly": "true" } },
-    },
-    [props.blocks],
-  );
-  if (unreadable) return <p>この本文はここでは表示できません。</p>;
-  return (
-    <div className="be">
-      <EditorContent editor={editor} />
-    </div>
-  );
-}
