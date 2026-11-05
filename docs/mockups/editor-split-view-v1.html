@@ -1,0 +1,1018 @@
+<!doctype html>
+<!-- editor.niho.life の分割ビューとパネル配置（ドック）の操作モック。合成データのみ。保存・通信・AI の呼び出しはしない。 -->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>NIHO editor 分割ビュー v1</title>
+<style>
+@font-face { font-family: "NIHO Sans"; font-weight: 100 500; src: local("Hiragino Maru Gothic ProN W4"), local("HiraMaruProN-W4"); }
+@font-face { font-family: "NIHO Sans"; font-weight: 600 700; src: local("Hiragino Sans W6"), local("HiraginoSans-W6"); }
+/* 色は packages/ui/src/styles/editor-tokens.css（--ed-*）と niho-ui の token の値。生の色は増やさない。 */
+:root {
+  color-scheme: light;
+  --font: "NIHO Sans", "Hiragino Maru Gothic ProN", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+  --mono: ui-monospace, Menlo, monospace;
+  --ink: #2a2a26; --ink-sub: #54544d; --ink-mute: #6e6d66; --ink-faint: #898880;
+  --white: #fff; --canvas: #fffdfa; --shell: #fcfaf5; --sand: #f7f7f4; --sand2: #f5f3ee;
+  --line: #f1f1ed; --line2: #e7e7e2; --line3: #dbdbd5;
+  --accent-ink: #56751e; --accent-soft: #eef6e1; --leaf: #7dba3a;
+  --primary: linear-gradient(140deg, #7dba3a 0%, #63a109 100%); --primary-h: linear-gradient(140deg, #74b033 0%, #5c9508 100%);
+  --amber-ink: #a55827; --amber-soft: #faf0e6; --blue-ink: #1e4ea8; --blue-soft: #eaf2ff;
+  --stage: #f1f1ed;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { font: 14px/1.6 var(--font); color: var(--ink); background: var(--stage); -webkit-font-smoothing: antialiased; }
+h1, h2, h3, p, ul, ol, dl, dd { margin: 0; }
+button, textarea { font: inherit; color: inherit; }
+button { background: none; border: 0; padding: 0; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--leaf); outline-offset: 2px; border-radius: 6px; }
+.ico { width: 17px; height: 17px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ico.f { fill: currentColor; stroke: none; }
+.sp { flex: 1; }
+
+/* ===== 試作の切り替え（アプリの外） ===== */
+.top { position: sticky; top: 0; z-index: 50; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 12px 16px; background: rgba(241,241,237,.96); border-bottom: 1px solid var(--line3); }
+.top h1 { font-size: 14px; font-weight: 700; margin-right: 4px; }
+.ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--ink-mute); }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 16px; background: #e4e4de; }
+.seg button { height: 28px; padding: 0 11px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--white); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.seg button:disabled { opacity: .45; cursor: not-allowed; }
+.reset { height: 28px; padding: 0 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); box-shadow: inset 0 0 0 1px var(--line3); background: var(--white); }
+.hint { flex-basis: 100%; font-size: 12px; color: var(--ink-mute); }
+.stage { padding: 20px 16px 28px; display: flex; justify-content: center; overflow: hidden; }
+.fitbox { flex: none; }
+.fit { transform-origin: top left; }
+.addr { display: flex; align-items: center; gap: 8px; height: 30px; margin-bottom: 8px; padding: 0 12px; border-radius: 8px; background: var(--white); border: 1px solid var(--line2); font-size: 12px; color: var(--ink-mute); }
+.addr code { font: 12px var(--mono); color: var(--ink-sub); }
+.notes { max-width: 860px; margin: 0 auto 56px; padding: 0 16px; font-size: 13px; color: var(--ink-sub); }
+.notes h2 { font-size: 14px; color: var(--ink); margin-bottom: 8px; }
+.notes ol { padding-left: 1.4em; display: grid; gap: 4px; }
+.notes b { color: var(--ink); }
+
+/* ===== アプリの枠: 左ドック｜メイン｜サブ｜右ドック（境目は幅 0 の列） ===== */
+.app { position: relative; display: grid; grid-template-rows: 100%; height: 820px; background: var(--canvas); border: 1px solid var(--line3); border-radius: 12px; overflow: hidden; }
+.app > * { min-width: 0; min-height: 0; }
+#dockL { grid-column: 1; grid-row: 1; } #s1 { grid-column: 2; grid-row: 1; } #main { grid-column: 3; grid-row: 1; }
+#s2 { grid-column: 4; grid-row: 1; } #sub { grid-column: 5; grid-row: 1; } #s3 { grid-column: 6; grid-row: 1; } #dockR { grid-column: 7; grid-row: 1; }
+.ib { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: var(--ink-sub); flex: none; }
+.ib:hover { background: var(--sand2); color: var(--ink); }
+.ib.xs { width: 26px; height: 26px; }
+.btn { height: 30px; padding: 0 14px; border-radius: 999px; background: var(--primary); color: #fff; font-weight: 600; font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex: none; }
+.btn:hover { background: var(--primary-h); }
+.btn.line { background: var(--white); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line3); }
+.btn.line:hover { background: var(--sand); }
+.chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 999px; background: var(--sand); font-size: 12px; font-weight: 600; color: var(--ink-sub); white-space: nowrap; flex: none; }
+.chip .ico { width: 14px; height: 14px; }
+
+/* ドック: 節（ShellRailSection と同じ）の縦積み。開閉できる節と、残りの高さを使う節（fill）がひとつ */
+.dock { position: relative; display: flex; flex-direction: column; background: var(--canvas); z-index: 5; }
+#dockL { border-right: 1px solid var(--line2); }
+#dockR { border-left: 1px solid var(--line2); }
+.dock-top { height: 48px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 8px; border-bottom: 1px solid var(--line); }
+.dock-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.dock-strip { display: none; flex-direction: column; align-items: center; gap: 6px; padding: 10px 0; }
+.strip-secs { display: grid; gap: 6px; }
+.dock.is-strip .dock-body { display: none; }
+.dock.is-strip .dock-strip { display: flex; }
+.dock.is-strip .dock-top { justify-content: center; padding: 0; }
+.dock.is-strip .dock-top .sp { display: none; }
+.dock.is-peek { position: absolute; top: 0; bottom: 0; width: var(--peek-w); z-index: 30; box-shadow: 0 16px 48px rgba(0,0,0,.16); }
+#dockL.is-peek { left: 0; } #dockR.is-peek { right: 0; }
+.dock.is-peek .dock-body { display: flex; }
+.dock.is-peek .dock-strip { display: none; }
+.dock.is-peek .dock-top { justify-content: flex-start; padding: 0 8px; }
+.dock.is-peek .dock-top .sp { display: block; }
+
+.sec { display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--line); background: var(--canvas); }
+.sec:first-child { border-top: 0; }
+.sec.is-fill { flex: 1 1 0; }
+.sec.is-open:not(.is-fill) { flex: 0 1 auto; max-height: 50%; }
+.sec:not(.is-open) { flex: none; }
+.sec-hd { height: 42px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 6px 0 2px; }
+.grip { width: 14px; display: grid; place-items: center; color: var(--ink-faint); cursor: grab; opacity: 0; transition: opacity .12s; }
+.grip .ico { width: 12px; height: 12px; }
+.sec-hd:hover .grip, .sec-hd:focus-within .grip { opacity: 1; }
+.sec-tg { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 8px; border-radius: 8px; font-size: 13px; font-weight: 600; text-align: left; white-space: nowrap; }
+button.sec-tg:hover { background: var(--sand2); }
+.sec-tg .sum { margin-left: auto; font-size: 12px; font-weight: 400; color: var(--ink-mute); }
+.sec-tg .cv { font-size: 12px; color: var(--ink-mute); }
+.sec[data-grabbed] { opacity: .5; }
+.sec-bd { flex: 1; min-height: 0; overflow: auto; }
+
+/* ページの一覧 */
+.list-bd { display: flex; flex-direction: column; overflow: hidden; }
+.tree { flex: 1; min-height: 0; overflow: auto; padding: 2px 0 10px; }
+.row { position: relative; display: flex; align-items: center; gap: 0; margin: 1px 6px; padding-left: calc(var(--d) * 14px); border-radius: 10px; }
+.row:hover { background: var(--sand); }
+.row.on { background: var(--line); }
+.row.on .t { font-weight: 600; }
+.row .tw { width: 16px; flex: none; align-self: flex-start; padding-top: 9px; font-size: 12px; line-height: 1.4; color: var(--ink-mute); text-align: center; }
+.di { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 0 8px; padding: 7px 4px; text-align: left; cursor: pointer; }
+.di .t { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.di .w { font-size: 12px; color: var(--ink-mute); }
+.di .s { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-mute); }
+.tag-side { font-style: normal; font-size: 12px; font-weight: 600; padding: 0 7px; border-radius: 999px; background: var(--blue-soft); color: var(--blue-ink); }
+.rowmore { opacity: 0; margin-right: 2px; }
+.row:hover .rowmore, .row:focus-within .rowmore { opacity: 1; }
+.app[data-dragging="page"] .row.dragging { opacity: .45; }
+.foot { flex: none; border-top: 1px solid var(--line); padding: 8px 10px; }
+.me { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border-radius: 10px; font-size: 13px; }
+.me:hover { background: var(--sand); }
+.av { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-ink); font-size: 12px; font-weight: 700; flex: none; }
+
+
+/* AIと作る */
+.ai-bd { display: flex; flex-direction: column; overflow: hidden; }
+.thread { flex: 1; min-height: 60px; overflow: auto; padding: 10px 13px 14px; display: flex; flex-direction: column; gap: 12px; }
+.ai-empty { margin: auto; font-size: 12.5px; color: var(--ink-mute); text-align: center; }
+.msg { flex: none; font-size: 12.5px; line-height: 1.75; overflow-wrap: anywhere; }
+.msg.u { align-self: flex-end; max-width: 92%; padding: 8px 11px; border: 1px solid var(--line2); border-radius: 12px 12px 3px 12px; }
+.msg.a { padding: 0 3px; }
+.chg { margin-top: 8px; padding: 8px 9px; border: 1px solid var(--line2); border-radius: 8px; font-size: 12px; }
+.chg button { margin-top: 4px; color: var(--accent-ink); font-size: 12px; }
+.composer { flex: none; margin: 0 12px 11px; padding: 8px; border: 1px solid var(--line2); border-radius: 10px; background: var(--white); }
+/* AI をメインの下に浮かせる（D）。メインの本文の列と同じ幅で、本文の下に浮かべた高さぶんの余白を足す（キャレットを隠さない） */
+.main { position: relative; }
+.aifloat { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); width: min(680px, calc(100% - 48px)); z-index: 15; display: flex; flex-direction: column; max-height: calc(100% - 72px); background: var(--white); border: 1px solid var(--line2); border-radius: 14px; box-shadow: 0 10px 32px rgba(0,0,0,.12); }
+.aifloat[data-state="open"] { height: var(--float-open, 360px); }
+.aifloat .sec { flex: 1 1 auto; border: 0; background: transparent; border-radius: 14px; }
+.aifloat .sec-bd { overflow: hidden; }
+.aifloat[data-state="bar"] .sec-hd, .aifloat[data-state="bar"] .thread { display: none; }
+.aifloat .composer { margin: 0 10px 10px; }
+.aifloat[data-state="bar"] .composer { margin: 0; border: 0; padding: 8px 10px; }
+.aifloat[data-state="bar"] .composer textarea { min-height: 0; height: 26px; resize: none; overflow: hidden; }
+.fl-only { display: none; }
+.aifloat .fl-only { display: grid; place-items: center; }
+.fl-ico { color: var(--accent-ink); flex: none; }
+.fl-rs { position: absolute; left: 24px; right: 24px; top: -5px; height: 10px; cursor: row-resize; z-index: 2; border-radius: 6px; }
+.fl-rs::after { content: ""; position: absolute; left: 50%; top: 3px; width: 36px; height: 4px; margin-left: -18px; border-radius: 4px; background: var(--line3); }
+.fl-rs:hover::after, .fl-rs:focus-visible::after, .fl-rs.drag::after { background: var(--leaf); }
+.aifloat[data-state="bar"] .fl-rs { display: none; }
+.main.has-float .body { padding-bottom: calc(var(--float-h, 72px) + 40px); }
+.composer textarea { display: block; width: 100%; min-height: 48px; border: 0; outline: 0; resize: vertical; padding: 2px 3px; background: transparent; font-size: 12.5px; line-height: 1.6; }
+.cmp-row { display: flex; align-items: center; gap: 6px; padding-top: 4px; min-width: 0; }
+.refrow { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.refchip { display: inline-flex; align-items: center; gap: 4px; height: 24px; max-width: 100%; padding: 0 9px 0 6px; border-radius: 999px; font-size: 12px; color: var(--ink-sub); box-shadow: inset 0 0 0 1px var(--line3); min-width: 0; }
+.refchip .ico { width: 13px; height: 13px; }
+.refchip span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.refchip[aria-pressed="true"] { background: var(--blue-soft); color: var(--blue-ink); box-shadow: none; }
+.tag-plan { flex: none; font-style: normal; font-size: 12px; font-weight: 600; color: var(--amber-ink); background: var(--amber-soft); border-radius: 4px; padding: 0 5px; }
+.send { width: 28px; height: 28px; margin-left: auto; border-radius: 50%; display: grid; place-items: center; background: var(--primary); color: #fff; flex: none; }
+.send .ico { width: 15px; height: 15px; }
+
+/* メインとサブ */
+.pane { display: flex; flex-direction: column; min-width: 0; background: var(--canvas); container-type: inline-size; }
+.hd { height: 48px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); min-width: 0; }
+.tools { display: flex; gap: 2px; align-items: center; }
+.tb { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font-size: 13px; font-weight: 700; color: var(--ink-sub); }
+.tb:hover { background: var(--sand2); }
+.saved { font-size: 12px; color: var(--ink-mute); white-space: nowrap; }
+.body { flex: 1; min-height: 0; overflow: auto; padding: 28px 40px 80px; }
+.doc { max-width: 680px; margin: 0 auto; font-size: 15.5px; line-height: 1.85; outline: none; }
+.doc h1 { font-size: 28px; line-height: 1.35; margin: 0 0 18px; font-weight: 700; }
+.doc h2 { font-size: 19px; margin: 26px 0 8px; font-weight: 700; }
+.doc p { margin: 0 0 14px; }
+.doc ul { margin: 0 0 14px; padding-left: 1.3em; list-style: disc; }
+.doc .tr { display: grid; grid-template-columns: 52px minmax(0,1fr); gap: 0 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+.doc .tr time { font: 12px var(--mono); color: var(--accent-ink); padding-top: 3px; }
+.doc .tr b { display: block; font-size: 12px; color: var(--ink-mute); font-weight: 600; }
+.doc .ph { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin: 0 0 14px; }
+.doc .ph figure { margin: 0; }
+.doc .ph i { display: block; aspect-ratio: 4 / 3; border-radius: 8px; background: var(--sand2); }
+.doc .ph figcaption { font-size: 12px; color: var(--ink-mute); margin-top: 4px; }
+.doc .added { background: var(--accent-soft); border-radius: 4px; }
+@container (max-width: 640px) { .tools .opt, .saved { display: none; } .body { padding: 28px 24px 80px; } }
+.sub { background: var(--shell); }
+.sub .hd { gap: 8px; }
+.sub .doc { font-size: 14.5px; line-height: 1.8; }
+.sub .doc h1 { font-size: 28px; line-height: 1.35; margin: 0 0 18px; }
+.sub .body { padding: 28px 28px 80px; }
+.sub-hd { cursor: grab; padding-left: 6px; }
+.sub-hd button { cursor: pointer; }
+.sub-hd .grip { opacity: .7; }
+.sub-hd:hover .grip, .sub-hd:focus-within .grip { opacity: 1; }
+
+/* 境目: 幅 0 の列に 8px のつまみ。フォーカスとドラッグ中は幅を出す */
+.split { position: relative; z-index: 20; width: 0; outline: none; }
+.split::before { content: ""; position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; }
+.split::after { content: ""; position: absolute; top: 0; bottom: 0; left: -1px; width: 2px; background: transparent; transition: background .12s; pointer-events: none; }
+.split:hover::after, .split.drag::after, .split:focus-visible::after { background: var(--leaf); }
+.split .tip { position: absolute; top: 58px; left: 0; transform: translateX(-50%); display: none; white-space: nowrap; font-size: 12px; font-weight: 600; background: var(--ink); color: #fff; border-radius: 6px; padding: 2px 8px; pointer-events: none; }
+.split.drag .tip, .split:focus-visible .tip { display: block; }
+
+/* ドラッグ中の落とし先 */
+.drop { position: absolute; top: 0; bottom: 0; z-index: 25; display: none; gap: 10px; padding: 10px; }
+.app[data-dragging="page"] .drop, .app[data-dragging="pane"] .drop { display: flex; }
+.app[data-dragging="pane"] .dz[data-zone="side"] { display: none; }
+.app[data-dragging="pane"] #sub { opacity: .55; }
+.dz { min-width: 0; border: 2px dashed var(--line3); border-radius: 14px; display: grid; place-content: center; text-align: center; gap: 4px; background: rgba(255,253,250,.86); font-size: 15px; font-weight: 700; color: var(--ink-sub); }
+.dz small { font-size: 12px; font-weight: 400; color: var(--ink-mute); }
+.dz.hot { border-color: var(--leaf); background: rgba(238,246,225,.94); color: var(--accent-ink); }
+/* パネルを掴んだとき: 近づけた場所に、落とすと入る形を先に出す（Cursor・Claude の分割ビューと同じ） */
+.ghost { position: absolute; z-index: 36; display: none; place-content: center; text-align: center; gap: 2px; border: 2px solid var(--leaf); border-radius: 12px; background: rgba(238,246,225,.8); font-size: 14px; font-weight: 700; color: var(--accent-ink); pointer-events: none; transition: left .12s, top .12s, width .12s, height .12s; }
+.ghost small { font-size: 12px; font-weight: 400; color: var(--ink-sub); }
+.ghost.on { display: grid; }
+.sec-hd { cursor: grab; }
+.sec-hd button { cursor: pointer; }
+.fl-grab { cursor: grab; }
+
+.menu { position: absolute; z-index: 45; min-width: 210px; background: var(--white); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.12); padding: 6px; }
+.menu button { display: flex; align-items: center; gap: 8px; width: 100%; height: 34px; padding: 0 10px; border-radius: 8px; font-size: 13px; text-align: left; white-space: nowrap; }
+.menu button:hover, .menu button:focus-visible { background: var(--sand); outline: none; }
+.menu button[aria-disabled="true"] { color: var(--ink-mute); cursor: default; }
+.menu button[aria-disabled="true"]:hover { background: none; }
+.menu .k { margin-left: auto; padding-left: 12px; font-size: 12px; color: var(--ink-mute); }
+.menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
+.toast { position: absolute; left: 50%; bottom: 18px; z-index: 46; transform: translate(-50%, 8px); max-width: 80%; padding: 9px 14px; border-radius: 10px; background: var(--ink); color: #fff; font-size: 12.5px; opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+/* スマホ（900px 未満は今のまま） */
+.phone { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+.ph { position: relative; width: 390px; height: 780px; border: 1px solid var(--line3); border-radius: 28px; overflow: hidden; background: var(--canvas); display: flex; flex-direction: column; }
+.ph-hd { height: 52px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+.ph-t { flex: 1; min-width: 0; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ph-page { flex: 1; min-height: 0; overflow: auto; padding: 18px 20px 30px; }
+.ph-page .doc { font-size: 15px; }
+.ph-page .doc h1 { font-size: 23px; }
+.ph-bar { height: 50px; flex: none; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-around; }
+.ph-list { position: absolute; inset: 0; background: var(--canvas); display: none; flex-direction: column; }
+.ph[data-view="list"] .ph-list { display: flex; }
+.ph-tree { flex: 1; overflow: auto; padding: 6px 0; }
+.ph-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 0 8px; width: calc(100% - 12px); margin: 1px 6px; padding: 10px 10px 10px calc(10px + var(--d) * 14px); border-radius: 10px; text-align: left; }
+.ph-row:hover, .ph-row[aria-current] { background: var(--sand); }
+.ph-row .t { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ph-row .w { font-size: 12px; color: var(--ink-mute); }
+.ph-scrim { position: absolute; inset: 0; background: rgba(42,42,38,.28); display: none; }
+.ph-sheet { position: absolute; left: 0; right: 0; bottom: 0; height: 72%; background: var(--white); border-radius: 18px 18px 0 0; box-shadow: 0 -10px 30px rgba(0,0,0,.12); display: none; flex-direction: column; }
+.ph[data-view="sheet"] .ph-scrim, .ph[data-view="sheet"] .ph-sheet { display: flex; }
+.ph-sheet .sh-hd { height: 48px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.ph-sheet .thread { flex: 1; }
+.ph-note { width: 300px; font-size: 13px; color: var(--ink-sub); display: grid; gap: 8px; }
+.ph-note b { color: var(--ink); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-side" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></symbol>
+  <symbol id="i-side-r" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
+  <symbol id="i-grip" viewBox="0 0 24 24"><circle cx="8" cy="5" r="2"/><circle cx="16" cy="5" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="8" cy="19" r="2"/><circle cx="16" cy="19" r="2"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+  <symbol id="i-ai" viewBox="0 0 24 24"><path d="M11 3.5l1.9 5 5 1.9-5 1.9-1.9 5-1.9-5-5-1.9 5-1.9z"/><path d="M19 15v5M16.5 17.5h5"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></symbol>
+  <symbol id="i-swap" viewBox="0 0 24 24"><path d="M5 8h13l-3-3M19 16H6l3 3"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-float" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><rect x="7" y="13" width="10" height="4" rx="1.5"/></symbol>
+</svg>
+
+<header class="top">
+  <h1>NIHO editor 分割ビュー v1</h1>
+  <div class="ctl">配置
+    <div class="seg" id="presetSeg" role="group" aria-label="配置">
+      <button type="button" data-preset="A" title="今と同じ。左に一覧、右に AI">A 標準</button>
+      <button type="button" data-preset="B" title="メインの右に読むだけのページ。AI は右端のまま">B 参照しながら書く</button>
+      <button type="button" data-preset="C" title="AI を左のドックへ。メインの右に読むだけのページ">C AI を左へ</button>
+      <button type="button" data-preset="D" title="AI をメインの下に浮かせる。右のドックは使わない">D AI を浮かせる</button>
+    </div>
+  </div>
+  <div class="ctl">画面
+    <div class="seg" id="sizeSeg" role="group" aria-label="画面の幅">
+      <button type="button" data-size="1680">大 1680</button>
+      <button type="button" data-size="1440">ノート 1440</button>
+      <button type="button" data-size="1280">小 1280</button>
+      <button type="button" data-size="390">スマホ</button>
+    </div>
+  </div>
+  <button type="button" class="reset" id="reset">はじめに戻す</button>
+  <p class="hint">一覧の行を本文へドラッグ（右クリック・「…」・⌥クリックでも）→ 右に並べる。右のページの上の帯（⋮⋮）を真ん中へドラッグ → メインに置く。境目はドラッグか矢印キー。パネル（一覧・AI）は見出しを掴んで左右の端へ近づけるとそのドックへ、AI はメインの下端へ近づけると浮かせて置けます。</p>
+</header>
+
+<div class="stage"><div class="fitbox" id="fitbox"><div class="fit" id="fit">
+  <div id="desk">
+    <div class="addr"><span>editor.niho.life</span><code id="addr"></code></div>
+    <div class="app" id="app" data-dragging="">
+      <aside class="dock" id="dockL" aria-label="左のドック">
+        <div class="dock-top"><span class="sp"></span><button type="button" class="ib" data-act="collapse" data-side="left" aria-label="左のドックをしまう"><svg class="ico"><use href="#i-side"/></svg></button></div>
+        <div class="dock-body"></div>
+        <div class="dock-strip"><div class="strip-secs"></div></div>
+      </aside>
+      <div class="split" id="s1" role="separator" tabindex="0" aria-orientation="vertical" aria-label="左のドックの幅" aria-controls="dockL" data-kind="left"><span class="tip"></span></div>
+      <main class="pane main" id="main" aria-label="メイン（編集）">
+        <div class="hd">
+          <div class="tools" role="toolbar" aria-label="書式">
+            <button type="button" class="tb" aria-label="見出し">H</button>
+            <button type="button" class="tb" aria-label="太字">B</button>
+            <button type="button" class="tb" aria-label="斜体"><i>I</i></button>
+            <button type="button" class="tb opt" aria-label="箇条書き"><svg class="ico"><use href="#i-list"/></svg></button>
+            <button type="button" class="tb opt" aria-label="画像"><svg class="ico"><use href="#i-image"/></svg></button>
+            <button type="button" class="tb opt" aria-label="録音"><svg class="ico"><use href="#i-mic"/></svg></button>
+          </div>
+          <span class="sp"></span>
+          <span class="chip"><svg class="ico"><use href="#i-lock"/></svg>自分だけ</span>
+          <button type="button" class="btn">公開</button>
+          <button type="button" class="ib" aria-label="その他"><svg class="ico f"><use href="#i-dots"/></svg></button>
+        </div>
+        <div class="body"><article class="doc" id="mainDoc" contenteditable="true" role="textbox" aria-multiline="true" aria-label="本文" spellcheck="false"></article></div>
+        <div class="aifloat" id="aiFloat" data-state="bar" hidden><div class="fl-rs" role="separator" tabindex="0" aria-orientation="horizontal" aria-label="AIの高さ"></div></div>
+      </main>
+      <div class="split" id="s2" role="separator" tabindex="0" aria-orientation="vertical" aria-label="右に並べたページの幅" aria-controls="sub" data-kind="sub"><span class="tip"></span></div>
+      <section class="pane sub" id="sub" aria-label="右に並べたページ">
+        <div class="hd sub-hd" draggable="true" title="真ん中へドラッグするとメインに置きます">
+          <span class="grip" aria-hidden="true"><svg class="ico f"><use href="#i-grip"/></svg></span>
+          <span class="sp"></span>
+          <button type="button" class="ib" data-act="swap" aria-label="メインと入れ替える" title="メインと入れ替える"><svg class="ico"><use href="#i-swap"/></svg></button>
+          <button type="button" class="ib" data-act="closeSub" aria-label="右のページを閉じる"><svg class="ico"><use href="#i-x"/></svg></button>
+        </div>
+        <div class="body" tabindex="0" aria-label="右のページの本文"><article class="doc" id="subDoc"></article></div>
+      </section>
+      <div class="split" id="s3" role="separator" tabindex="0" aria-orientation="vertical" aria-label="右のドックの幅" aria-controls="dockR" data-kind="right"><span class="tip"></span></div>
+      <aside class="dock" id="dockR" aria-label="右のドック">
+        <div class="dock-top"><button type="button" class="ib" data-act="collapse" data-side="right" aria-label="右のドックをしまう"><svg class="ico"><use href="#i-side-r"/></svg></button><span class="sp"></span></div>
+        <div class="dock-body"></div>
+        <div class="dock-strip"><div class="strip-secs"></div></div>
+      </aside>
+
+      <div class="drop" id="drop" aria-hidden="true"><div class="dz" data-zone="main"></div><div class="dz" data-zone="side"></div></div>
+      <div class="ghost" id="ghost" aria-hidden="true"></div>
+      <div class="menu" id="menu" role="menu" hidden></div>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <div class="phone" id="phone" hidden>
+    <div class="ph" id="ph" data-view="page">
+      <div class="ph-hd">
+        <button type="button" class="ib" data-ph="list" aria-label="一覧へ"><svg class="ico"><use href="#i-back"/></svg></button>
+        <b class="ph-t" id="phT"></b>
+        <button type="button" class="ib" data-ph="sheet" aria-label="このページの設定と AI"><svg class="ico"><use href="#i-ai"/></svg></button>
+      </div>
+      <div class="ph-page"><article class="doc" id="phDoc"></article></div>
+      <div class="ph-bar" role="toolbar" aria-label="書式">
+        <button type="button" class="tb" aria-label="見出し">H</button><button type="button" class="tb" aria-label="太字">B</button>
+        <button type="button" class="tb" aria-label="箇条書き"><svg class="ico"><use href="#i-list"/></svg></button>
+        <button type="button" class="tb" aria-label="画像"><svg class="ico"><use href="#i-image"/></svg></button>
+        <button type="button" class="tb" aria-label="録音"><svg class="ico"><use href="#i-mic"/></svg></button>
+      </div>
+      <div class="ph-list">
+        <div class="ph-hd"><b class="ph-t">ページ</b><button type="button" class="ib" aria-label="探す"><svg class="ico"><use href="#i-search"/></svg></button><button type="button" class="ib" aria-label="新しいページ"><svg class="ico"><use href="#i-plus"/></svg></button></div>
+        <nav class="ph-tree" id="phTree" aria-label="ページの一覧"></nav>
+      </div>
+      <div class="ph-scrim" data-ph="page"></div>
+      <div class="ph-sheet" role="dialog" aria-label="このページの設定と AI">
+        <div class="sh-hd"><b>このページの設定と AI</b><span class="sp"></span><button type="button" class="btn line sm" data-ph="page">閉じる</button></div>
+        <div class="thread" id="phThread"></div>
+      </div>
+    </div>
+    <div class="ph-note">
+      <p><b>900px 未満は今のまま。</b>一覧・ページ・設定と AI（下からのシート）のどれか 1 つを全画面で出します。</p>
+      <p>分割とドックの移動は出しません。行のメニューにも「右に並べて開く」を出しません。PC で決めた配置は、この幅では使わずに覚えておくだけです。</p>
+    </div>
+  </div>
+</div></div></div>
+
+<section class="notes" aria-labelledby="notesH">
+  <h2 id="notesH">この試作で見ること</h2>
+  <ol>
+    <li><b>右に並べる</b>：一覧の行を本文へドラッグすると「ここで開く」「右に並べる」が出ます。行の「…」・右クリック・⌥クリックでも同じことができます（ドラッグできない人と iPad 向け）。</li>
+    <li><b>右のページを真ん中へ</b>：右のページの上の帯（⋮⋮）を掴んで真ん中へ落とすと、そのページがメインに入り、いまのメインは右へ移ります（⇄ ボタンでも同じ）。右は読むだけで、書式の帯・保存の表示・公開はメインだけ。</li>
+    <li><b>幅</b>：境目をドラッグ。フォーカスして ← →（Shift で大きく）、Home / End で最小・最大、ダブルクリックか Enter で既定の幅。</li>
+    <li><b>AI を浮かせる（D）</b>：メインの下端に、本文と同じ幅で浮かびます。ふだんは入力欄 1 行だけで、送るか ⌃ で上へ広がり、上端の取っ手で高さを変えられます（Esc で 1 行に戻る）。本文の下には浮かべた高さぶんの余白を足し、書いている位置を隠しません。右のドックは使わないので、横幅はメインと右のページへ回ります。</li>
+    <li><b>パネルを好きな所へ</b>：一覧・AI の見出しを掴むと、近づけた場所に「落とすと入る形」が出ます。左右の端ならそのドック、AI だけはメインの下端で浮かせる形。浮かせた AI は入力欄の左の ✦ を掴めば戻せます。ドラッグしない人は「…」→「〜のドックへ移す」「メインの下に浮かせる」。AI の入力欄に書きかけの文は、移しても消えません（実装でも作り直さずに DOM を付け替える）。</li>
+    <li><b>入りきらないとき</b>：「ノート 1440」「小 1280」で、AI のないドックから細い列に畳みます。細い列のアイコンを押すと上に重ねて開きます。画面が広がれば元の幅に戻ります。</li>
+    <li><b>URL</b>：上の欄のとおり <code>/p/{メイン}?side={右}</code>。再読み込み・戻るで並びが残ります。</li>
+    <li><span class="tag-plan">案</span> AI 欄の「参考：右のページ」チップ：右のページを AI の参考資料に足す案（決定待ち。書き込みの対象には入れない）。</li>
+  </ol>
+</section>
+
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s);
+  const all = (s, r = document) => Array.from(r.querySelectorAll(s));
+  const ico = (n, cls = "") => `<svg class="ico ${cls}" aria-hidden="true"><use href="#i-${n}"/></svg>`;
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+  /* ---------- 合成データ ---------- */
+  const PAGES = [
+    { id: "kamakura", ref: "a10f3c2e", title: "鎌倉の体験", depth: 0, folder: true, when: "10/30", sub: "フォルダ",
+      html: `<h1>鎌倉の体験</h1><p>鎌倉で受け入れている体験のまとめ。このフォルダの記事を書くとき、AI はここを背景として読みます。</p><h2>登場人物</h2><ul><li>案内の方：段葛の近くに住む、朝さんぽのガイド</li><li>聞き手：編集部</li></ul><h2>固有名詞と表記</h2><ul><li>段葛（だんかずら）</li><li>若宮大路</li><li>由比ヶ浜（「由比ガ浜」と書かない）</li></ul>` },
+    { id: "asa", ref: "3f2a91c0", title: "鎌倉の朝さんぽ", depth: 1, when: "5分前", sub: "記事",
+      html: `<h1>鎌倉の朝さんぽ</h1><p>朝6時、まだ観光客のいない若宮大路を歩く。段葛の桜並木は、葉が色づき始めていた。</p><p>鶴岡八幡宮の手前で右へ折れ、小町通りの裏道へ。シャッターの下りた店の前を、ジョギングの人が何人も通り過ぎていく。</p><h2>朝ごはんは由比ヶ浜で</h2><p>海沿いのパン屋は7時開店。<span class="added">土日は開店前に少し列ができるので、早めに着いておきたい。</span>焼きたてのクロワッサンを持って浜に出ると、サーファーがもう沖に並んでいた。</p><ul><li>歩いた距離：約3.2km</li><li>かかった時間：1時間半</li></ul>` },
+    { id: "memo", ref: "8c1d44e2", title: "取材メモ 10/28", depth: 1, when: "昨日", sub: "録音",
+      html: `<h1>取材メモ 10/28</h1><div class="tr"><time>00:00</time><p><b>聞き手</b>今日は朝6時に駅を出て、段葛から歩いてみます。</p></div><div class="tr"><time>00:42</time><p><b>案内の方</b>この時間は地元の人の散歩道なんですよ。犬を連れた方が多いです。</p></div><div class="tr"><time>02:15</time><p><b>聞き手</b>パン屋さんは何時からですか？</p></div><div class="tr"><time>02:18</time><p><b>案内の方</b>7時です。土日は開店前に少し並びますね。</p></div><div class="tr"><time>05:30</time><p><b>聞き手</b>浜に出ると、もうサーファーが沖にいますね。</p></div><div class="tr"><time>06:02</time><p><b>案内の方</b>冬でも毎朝いますよ。夕方より朝のほうが波が穏やかなんです。</p></div>` },
+    { id: "points", ref: "51be07d9", title: "朝さんぽ 要点", depth: 2, when: "昨日", sub: "手順",
+      html: `<h1>朝さんぽ 要点</h1><ul><li>6時に駅を出て段葛へ。地元の人の散歩道</li><li>パン屋は7時開店。土日は開店前に列</li><li>由比ヶ浜のサーファーは冬でも毎朝</li><li>全体で約3.2km、1時間半</li></ul>` },
+    { id: "photo", ref: "c7e2a0b4", title: "写真の候補", depth: 1, when: "10/29",
+      html: `<h1>写真の候補</h1><div class="ph"><figure><i></i><figcaption>段葛の並木</figcaption></figure><figure><i></i><figcaption>小町通りの裏道</figcaption></figure><figure><i></i><figcaption>焼きたてのクロワッサン</figcaption></figure><figure><i></i><figcaption>朝の由比ヶ浜</figcaption></figure></div><p>カバーは「朝の由比ヶ浜」が第一候補。掲載の許諾は案内の方に確認済み。</p>` },
+    { id: "cafe", ref: "0d93f6a1", title: "江ノ電沿いのカフェ", depth: 0, when: "10/27", sub: "公開中",
+      html: `<h1>江ノ電沿いのカフェ</h1><p>極楽寺の駅から坂を下りたところに、線路沿いの小さなカフェがある。窓際の席からは、数分おきに電車が目の前を通る。</p><p>おすすめは季節の果物のタルト。秋は無花果。</p>` },
+    { id: "hayama", ref: "e4a8b215", title: "葉山 港の朝市", depth: 0, when: "10/25",
+      html: `<h1>葉山 港の朝市</h1><p>日曜の朝だけ開く港の市場。地元の漁師さんの干物と、近くの農家の野菜が並ぶ。</p><p>8時を過ぎると人気の品は売り切れる。</p>` },
+    { id: "aki", ref: "9b6c3d70", title: "秋の企画（下書き）", depth: 0, when: "10/20",
+      html: `<h1>秋の企画（下書き）</h1><ul><li>朝さんぽの続編（北鎌倉）</li><li>港の朝市の取材日を決める</li><li>写真はカバーを横長にそろえる</li></ul>` },
+  ];
+  for (const p of PAGES) p.orig = p.html;
+  const byId = Object.fromEntries(PAGES.map((p) => [p.id, p]));
+  const THREADS = {
+    asa: [
+      { r: "u", t: "右の取材メモを見て、パン屋の開店時間と土日の様子を「朝ごはんは由比ヶ浜で」の段落に足して" },
+      { r: "a", t: "取材メモ 10/28 の 02:15〜02:18 をもとに、1 文足しました。", chg: "鎌倉の朝さんぽ を直しました（+38 字）" },
+    ],
+  };
+
+  const SEC_ORDER = ["list", "ai"];
+  const SEC_NAME = { list: "ページ", ai: "AIと作る" };
+  const SEC_ICON = { list: "file", ai: "ai" };
+  const SIDE_NAME = { left: "左", right: "右" };
+  const TIP = { left: "左のドック", right: "右のドック", sub: "右のページ" };
+  const MIN = { main: 480, sub: 320, dock: 240 };
+  const MAX = { dock: 480, sub: 760 };
+  const DEF = { left: 272, right: 340, sub: 420 };
+  const STRIP = 48;
+  const PRESETS = {
+    A: { docks: { left: { secs: ["list"], w: 272, collapsed: false }, right: { secs: ["ai"], w: 340, collapsed: false } }, sub: null, open: { list: true } },
+    B: { docks: { left: { secs: ["list"], w: 272, collapsed: false }, right: { secs: ["ai"], w: 340, collapsed: false } }, sub: "memo", open: { list: true } },
+    D: { docks: { left: { secs: ["list"], w: 272, collapsed: false }, right: { secs: [], w: 340, collapsed: false } }, sub: "memo", open: { list: true }, floatAi: true },
+    C: { docks: { left: { secs: ["list", "ai"], w: 340, collapsed: false }, right: { secs: [], w: 340, collapsed: false } }, sub: "memo", open: { list: true } },
+  };
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+
+  /* ---------- 要素 ---------- */
+  const app = $("#app");
+  const dockEl = { left: $("#dockL"), right: $("#dockR") };
+  const splitEl = { left: $("#s1"), sub: $("#s2"), right: $("#s3") };
+  const mainDoc = $("#mainDoc"), subDoc = $("#subDoc"), subEl = $("#sub"), menu = $("#menu");
+  const GRIP = `<span class="grip" aria-hidden="true" title="ドラッグで反対のドックへ">${ico("grip", "f")}</span>`;
+  const mkSec = (sec, html) => { const e = document.createElement("section"); e.className = "sec"; e.dataset.sec = sec; e.setAttribute("aria-label", SEC_NAME[sec]); e.innerHTML = html; return e; };
+  const secEl = {
+    list: mkSec("list", `<div class="sec-hd" draggable="true">${GRIP}<button type="button" class="sec-tg" data-act="sectg" data-sec="list">${ico("file")}ページ<span class="cv" aria-hidden="true">▾</span></button><button type="button" class="ib xs" aria-label="探す" title="探す ⌘K">${ico("search")}</button><button type="button" class="ib xs" aria-label="新しいページ" title="新しいページ ⌘N">${ico("plus")}</button><button type="button" class="ib xs" data-act="secmenu" data-sec="list" aria-label="ページの節のメニュー" aria-haspopup="menu">${ico("dots", "f")}</button></div><div class="sec-bd list-bd"><nav class="tree" aria-label="ページの一覧"></nav></div>`),
+    ai: mkSec("ai", `<div class="sec-hd" draggable="true">${GRIP}<span class="sec-tg">${ico("ai")}AIと作る</span><button type="button" class="ib xs" aria-label="新しい会話" title="新しい会話">${ico("pencil")}</button><button type="button" class="ib xs" data-act="secmenu" data-sec="ai" aria-label="AIと作るの節のメニュー" aria-haspopup="menu">${ico("dots", "f")}</button></div><div class="sec-bd ai-bd"><div class="thread"></div><div class="composer"><textarea rows="2" aria-label="AIに頼む"></textarea><div class="cmp-row"><span class="fl-only fl-ico fl-grab" draggable="true" aria-hidden="true" title="ドラッグで移す">${ico("ai")}</span><span class="refrow"><button type="button" class="refchip" data-act="refai" aria-pressed="true"><span></span></button><em class="tag-plan" title="決定待ちの案">案</em></span><button type="button" class="ib xs fl-only fl-tg" data-act="floatTg" aria-expanded="false" aria-label="会話を開く">${ico("up")}</button><button type="button" class="send" data-act="send" aria-label="送る">${ico("send")}</button></div></div></div>`),
+  };
+
+  // 本人の行（設定）は一覧と同じドックの下端に置く（一覧を畳んでも残る）
+  const footEl = document.createElement("div");
+  footEl.className = "foot";
+  footEl.innerHTML = `<button type="button" class="me"><span class="av" aria-hidden="true">編</span><b>設定</b></button>`;
+
+  /* ---------- 状態 ---------- */
+  let st, cur = null, prevAuto = null, scale = 1, drag = null, menuTrigger = null, toastTimer = 0;
+  const fresh = () => ({ size: 1680, preset: "B", main: "asa", sub: "memo", subW: DEF.sub, refAi: true, peek: null, docks: clone(PRESETS.B.docks), open: { ...PRESETS.B.open }, phView: "page", floatAi: false, floatOpen: false, floatH: 360 });
+
+  function applyPreset(key) {
+    const p = PRESETS[key];
+    st.preset = key; st.docks = clone(p.docks); st.open = { ...p.open }; st.peek = null; st.floatAi = !!p.floatAi; st.floatOpen = false;
+    if (!p.sub) st.sub = null;
+    else if (!st.sub) st.sub = p.sub !== st.main ? p.sub : PAGES.find((x) => x.id !== st.main && !x.folder).id;
+    render();
+  }
+
+  /* 幅の割り当て: 本人の幅は覚えたまま、入らない間だけ畳む。畳む順は「AI のないドック → 右のページを最小まで → AI のドック」 */
+  function compute() {
+    const W = st.size, auto = { left: false, right: false };
+    const has = (s) => st.docks[s].secs.length > 0, hasAi = (s) => st.docks[s].secs.includes("ai");
+    const dw = (s) => (!has(s) ? 0 : st.docks[s].collapsed || auto[s] ? STRIP : st.docks[s].w);
+    const room = () => W - MIN.main - dw("left") - dw("right");
+    const want = st.sub ? st.subW : 0;
+    let S = want;
+    const fitS = () => { if (st.sub) S = Math.max(MIN.sub, Math.min(want, room())); };
+    for (const s of ["left", "right"].filter((x) => !hasAi(x))) if (room() < S && has(s) && !st.docks[s].collapsed) auto[s] = true;
+    fitS();
+    for (const s of ["left", "right"].filter(hasAi)) if (room() < S && has(s) && !st.docks[s].collapsed) { auto[s] = true; fitS(); }
+    const L = dw("left"), R = dw("right");
+    return { W, L, R, S, M: W - L - R - S, auto };
+  }
+  const minOf = (k) => (k === "sub" ? MIN.sub : MIN.dock);
+  function maxOf(k) {
+    const c = cur || compute();
+    const others = k === "left" ? c.R + c.S : k === "right" ? c.L + c.S : c.L + c.R;
+    return Math.max(minOf(k), Math.min(k === "sub" ? MAX.sub : MAX.dock, c.W - others - MIN.main));
+  }
+  const getW = (k) => (k === "sub" ? st.subW : st.docks[k].w);
+  function setW(k, w) {
+    w = Math.round(Math.min(maxOf(k), Math.max(minOf(k), w)));
+    if (k === "sub") st.subW = w; else st.docks[k].w = w;
+    layout();
+  }
+
+  /* ---------- 描画 ---------- */
+  function renderDocks() {
+    for (const side of ["left", "right"]) {
+      const d = st.docks[side], el = dockEl[side], body = $(".dock-body", el);
+      const secs = SEC_ORDER.filter((s) => d.secs.includes(s));
+      const now = Array.from(body.children).filter((n) => n.dataset.sec).map((n) => n.dataset.sec);
+      // 並びが変わったときだけ付け替える（同じ要素を動かすので、AI の書きかけ・会話・スクロールは残る）
+      if (now.join() !== secs.join()) secs.forEach((s) => body.appendChild(secEl[s]));
+      if (secs.includes("list") && body.lastElementChild !== footEl) body.appendChild(footEl);
+      const fill = ["ai", "list"].find((s) => secs.includes(s) && (s === "ai" || st.open[s]));
+      for (const s of secs) {
+        const e = secEl[s], open = s === "ai" || st.open[s];
+        e.classList.toggle("is-open", open);
+        e.classList.toggle("is-fill", s === fill);
+        const tg = $("button.sec-tg", e);
+        if (tg) tg.setAttribute("aria-expanded", String(open));
+        $(".sec-bd", e).hidden = !open;
+        const sum = $(".sum", e);
+        if (sum) sum.hidden = open;
+      }
+      $(".strip-secs", el).innerHTML = secs.map((s) => `<button type="button" class="ib" data-act="strip" data-side="${side}" data-sec="${s}" aria-label="${SEC_NAME[s]}を開く" title="${SEC_NAME[s]}">${ico(SEC_ICON[s])}</button>`).join("");
+    }
+    // AI を浮かせる: 同じ要素をメインの中の器へ付け替える（書きかけ・会話は残る）
+    const fl = $("#aiFloat");
+    fl.hidden = !st.floatAi;
+    $("#main").classList.toggle("has-float", st.floatAi);
+    if (st.floatAi) {
+      if (secEl.ai.parentElement !== fl) fl.appendChild(secEl.ai);
+      secEl.ai.classList.add("is-open", "is-fill");
+      $(".sec-bd", secEl.ai).hidden = false;
+      fl.dataset.state = st.floatOpen ? "open" : "bar";
+      fl.style.setProperty("--float-open", `${st.floatH}px`);
+      $(".fl-rs", fl).setAttribute("aria-valuenow", String(st.floatH));
+      const tg = $(".fl-tg", secEl.ai);
+      tg.setAttribute("aria-expanded", String(st.floatOpen));
+      tg.setAttribute("aria-label", st.floatOpen ? "会話を畳む" : "会話を開く");
+      tg.innerHTML = ico(st.floatOpen ? "down" : "up");
+      const th = $(".thread", secEl.ai);
+      th.scrollTop = th.scrollHeight;
+    }
+  }
+
+  function renderTree() {
+    $(".tree", secEl.list).innerHTML = PAGES.map((p) => {
+      const on = p.id === st.main, side = p.id === st.sub;
+      const sub = p.sub || side ? `<span class="s">${p.sub ? esc(p.sub) : ""}${side ? `<em class="tag-side">右に表示中</em>` : ""}</span>` : "";
+      return `<div class="row${on ? " on" : ""}" data-id="${p.id}" draggable="true" style="--d:${p.depth}"><span class="tw" aria-hidden="true">${p.folder ? "▾" : ""}</span><button type="button" class="di" data-act="open" data-id="${p.id}"${on ? ' aria-current="page"' : ""}><span class="t">${esc(p.title)}</span><span class="w">${esc(p.when)}</span>${sub}</button><button type="button" class="ib xs rowmore" data-act="rowmenu" data-id="${p.id}" aria-label="${esc(p.title)} のメニュー" aria-haspopup="menu">${ico("dots", "f")}</button></div>`;
+    }).join("");
+  }
+
+  function renderPanes() {
+    if (mainDoc.dataset.id !== st.main) {
+      const old = mainDoc.dataset.id;
+      if (old) byId[old].html = mainDoc.innerHTML; // 試作: 直した本文を覚えておく（入れ替えると右に出る）
+      mainDoc.dataset.id = st.main;
+      mainDoc.innerHTML = byId[st.main].html;
+      $("#main .body").scrollTop = 0;
+    }
+    if (st.sub && subDoc.dataset.id !== st.sub) {
+      const p = byId[st.sub];
+      subDoc.dataset.id = st.sub;
+      subDoc.innerHTML = p.html; // 題名は本文の上（メインの題名と同じ高さ）の 1 か所だけ
+      subEl.setAttribute("aria-label", `右に並べたページ：${p.title}`);
+      $("#sub .body").scrollTop = 0;
+    }
+    if (!st.sub) subDoc.dataset.id = "";
+    $("#addr").textContent = `/p/${byId[st.main].ref}` + (st.sub ? `?side=${byId[st.sub].ref}` : "");
+  }
+
+  function threadHtml(id) {
+    const msgs = THREADS[id] || [];
+    if (!msgs.length) return `<p class="ai-empty">このページの会話はまだありません</p>`;
+    return msgs.map((m) => (m.r === "u" ? `<div class="msg u">${esc(m.t)}</div>` : `<div class="msg a">${esc(m.t)}${m.chg ? `<div class="chg">${esc(m.chg)}<br><button type="button">元に戻す</button></div>` : ""}</div>`)).join("");
+  }
+  function renderAi() {
+    const th = $(".thread", secEl.ai);
+    th.innerHTML = threadHtml(st.main);
+    th.scrollTop = th.scrollHeight;
+    const row = $(".refrow", secEl.ai);
+    row.hidden = !st.sub;
+    if (st.sub) {
+      const b = $(".refchip", row);
+      b.setAttribute("aria-pressed", String(st.refAi));
+      b.innerHTML = `${ico(st.refAi ? "check" : "plus")}<span>参考：${esc(byId[st.sub].title)}</span>`;
+      b.title = st.refAi ? "右のページを AI の参考資料に入れている（押すと外す）" : "右のページを AI の参考資料に入れる";
+    }
+  }
+
+  function renderPhone() {
+    $("#ph").dataset.view = st.phView;
+    $("#phT").textContent = byId[st.main].title;
+    $("#phDoc").innerHTML = byId[st.main].html;
+    $("#phTree").innerHTML = PAGES.map((p) => `<button type="button" class="ph-row" data-ph-open="${p.id}" style="--d:${p.depth}"${p.id === st.main ? ' aria-current="page"' : ""}><span class="t">${esc(p.title)}</span><span class="w">${esc(p.when)}</span></button>`).join("");
+    $("#phThread").innerHTML = threadHtml(st.main);
+  }
+
+  function setSplit(kind, show, val) {
+    const el = splitEl[kind];
+    el.hidden = !show;
+    el.setAttribute("aria-valuenow", String(Math.round(val)));
+    el.setAttribute("aria-valuemin", String(minOf(kind)));
+    el.setAttribute("aria-valuemax", String(maxOf(kind)));
+    el.setAttribute("aria-valuetext", `${Math.round(val)}px`);
+    $(".tip", el).textContent = `${TIP[kind]} ${Math.round(val)}px`;
+  }
+
+  function layout() {
+    if (st.size === 390) { fit(); return; }
+    const c = compute();
+    cur = c;
+    app.style.width = `${c.W}px`;
+    app.style.gridTemplateColumns = `${c.L}px 0px ${c.M}px 0px ${c.S}px 0px ${c.R}px`;
+    for (const side of ["left", "right"]) {
+      const w = side === "left" ? c.L : c.R, el = dockEl[side], strip = w === STRIP, peek = st.peek === side && strip;
+      el.hidden = w === 0;
+      el.classList.toggle("is-strip", strip);
+      el.classList.toggle("is-peek", peek);
+      el.style.setProperty("--peek-w", `${st.docks[side].w}px`);
+      $('[data-act="collapse"]', el).setAttribute("aria-label", `${SIDE_NAME[side]}のドックを${strip && !peek ? "広げる" : "しまう"}`);
+    }
+    if (st.peek && !dockEl[st.peek].classList.contains("is-peek")) st.peek = null;
+    setSplit("left", c.L > STRIP, st.docks.left.w);
+    setSplit("sub", c.S > 0, c.S);
+    setSplit("right", c.R > STRIP, st.docks.right.w);
+    subEl.hidden = !st.sub;
+    if (prevAuto) {
+      const newly = ["left", "right"].filter((s) => c.auto[s] && !prevAuto[s]);
+      if (newly.length) toast(`幅が足りないので「${newly.map((s) => st.docks[s].secs.map((x) => SEC_NAME[x]).join("・")).join("」「")}」を細い列に畳みました。広がれば戻ります`);
+    }
+    prevAuto = c.auto;
+    fit();
+  }
+
+  function fit() {
+    const phone = st.size === 390, f = $("#fit"), box = $("#fitbox");
+    const avail = Math.max(280, document.documentElement.clientWidth - 32);
+    const W = phone ? (avail >= 714 ? 714 : 390) : st.size;
+    scale = Math.min(1, avail / W);
+    f.style.width = `${W}px`;
+    f.style.transform = `scale(${scale})`;
+    box.style.width = `${W * scale}px`;
+    box.style.height = `${f.offsetHeight * scale}px`;
+  }
+
+  function render() {
+    const phone = st.size === 390;
+    $("#desk").hidden = phone;
+    $("#phone").hidden = !phone;
+    renderDocks(); renderTree(); renderPanes(); renderAi();
+    if (phone) renderPhone();
+    all("#presetSeg button").forEach((b) => { b.setAttribute("aria-pressed", String(!phone && b.dataset.preset === st.preset)); b.disabled = phone; });
+    all("#sizeSeg button").forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.size) === st.size)));
+    layout();
+  }
+
+  function toast(m) {
+    const t = $("#toast");
+    t.textContent = m;
+    t.classList.add("on");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove("on"), 3400);
+  }
+
+  /* ---------- 操作 ---------- */
+  function openMain(id) {
+    if (id === st.main) return;
+    if (id === st.sub) return swap();
+    st.main = id; render();
+  }
+  function openSub(id) {
+    if (id === st.main) { toast("メインで開いているページは右に置けません"); return; }
+    st.sub = id; render();
+  }
+  function swap() {
+    if (!st.sub) return;
+    [st.main, st.sub] = [st.sub, st.main];
+    render();
+    toast("メインと入れ替えました");
+  }
+  function closeSub() { st.sub = null; render(); }
+  function moveSec(sec, side) {
+    for (const s of ["left", "right"]) st.docks[s].secs = st.docks[s].secs.filter((x) => x !== sec);
+    if (side === "float") { st.floatAi = true; st.floatOpen = false; }
+    else {
+      if (sec === "ai") st.floatAi = false;
+      st.docks[side].secs.push(sec);
+      st.docks[side].collapsed = false;
+    }
+    if (sec !== "ai") st.open[sec] = true;
+    st.peek = null;
+    render();
+    toast(side === "float" ? "「AIと作る」をメインの下に浮かせました" : `「${SEC_NAME[sec]}」を${SIDE_NAME[side]}のドックへ移しました`);
+    if (side === "float") $("textarea", secEl.ai).focus();
+    else ($("button.sec-tg", secEl[sec]) || $(".sec-hd button", secEl[sec]))?.focus();
+  }
+  const aiAt = () => (st.floatAi ? "float" : st.docks.left.secs.includes("ai") ? "left" : "right");
+  function expandDock(side) {
+    st.docks[side].collapsed = false;
+    layout();
+    if (dockEl[side].classList.contains("is-strip")) { st.peek = side; layout(); }
+  }
+
+  /* メニュー（行の「…」・右クリック・節の「…」） */
+  function showMenu(items, x, y, trigger) {
+    menuTrigger = trigger || null;
+    menu.innerHTML = items.map((it, i) => (it === "-" ? "<hr>" : `<button type="button" role="menuitem" data-i="${i}"${it.disabled ? ' aria-disabled="true"' : ""}>${it.icon ? ico(it.icon) : ""}${esc(it.label)}${it.k ? `<span class="k">${esc(it.k)}</span>` : ""}</button>`)).join("");
+    menu._items = items;
+    menu.hidden = false;
+    const W = app.clientWidth, H = app.clientHeight;
+    menu.style.left = `${Math.max(8, Math.min(x, W - menu.offsetWidth - 8))}px`;
+    menu.style.top = `${Math.min(y, H - menu.offsetHeight - 8)}px`;
+    menu.querySelector('button:not([aria-disabled="true"])')?.focus();
+  }
+  function closeMenu(restore = true) {
+    if (menu.hidden) return;
+    menu.hidden = true;
+    if (restore && menuTrigger && document.contains(menuTrigger)) menuTrigger.focus();
+    menuTrigger = null;
+  }
+  const appPoint = (cx, cy) => { const r = app.getBoundingClientRect(); return [(cx - r.left) / scale, (cy - r.top) / scale]; };
+  function rowMenu(id, x, y, trigger) {
+    const isMain = id === st.main;
+    const items = [{ label: isMain ? "メインで開いています" : "開く", icon: "file", disabled: isMain, act: () => openMain(id) }];
+    if (id === st.sub) items.push({ label: "右を閉じる", icon: "x", act: closeSub });
+    else items.push({ label: isMain ? "右に並べて開く（メインのページは不可）" : "右に並べて開く", icon: "side-r", k: "⌥クリック", disabled: isMain, act: () => openSub(id) });
+    showMenu(items, x, y, trigger);
+  }
+  function secMenu(sec, trigger) {
+    const at = sec === "ai" ? aiAt() : st.docks.left.secs.includes(sec) ? "left" : "right";
+    const items = (sec === "ai" ? ["left", "right", "float"] : ["left", "right"]).filter((t) => t !== at).map((t) => ({
+      label: t === "float" ? "メインの下に浮かせる" : `${SIDE_NAME[t]}のドックへ移す`, icon: t === "float" ? "float" : t === "left" ? "side" : "side-r", act: () => moveSec(sec, t),
+    }));
+    if (sec !== "ai") items.push({ label: st.open[sec] ? "畳む" : "開く", icon: "list", act: () => { st.open[sec] = !st.open[sec]; renderDocks(); } });
+    const r = trigger.getBoundingClientRect();
+    const [x, y] = appPoint(r.left, r.bottom + 4);
+    showMenu(items, x - 160, y, trigger);
+  }
+  menu.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-i]");
+    if (!b || b.getAttribute("aria-disabled") === "true") return;
+    const it = menu._items[Number(b.dataset.i)];
+    closeMenu(false);
+    it.act();
+  });
+  menu.addEventListener("keydown", (e) => {
+    const btns = all('button:not([aria-disabled="true"])', menu), i = btns.indexOf(document.activeElement);
+    if (e.key === "ArrowDown") { e.preventDefault(); btns[(i + 1) % btns.length]?.focus(); }
+    if (e.key === "ArrowUp") { e.preventDefault(); btns[(i - 1 + btns.length) % btns.length]?.focus(); }
+    if (e.key === "Tab") closeMenu(false);
+  });
+
+  app.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-act]");
+    if (!t || menu.contains(t)) return;
+    const act = t.dataset.act;
+    if (act === "open") { if (e.altKey) openSub(t.dataset.id); else openMain(t.dataset.id); }
+    else if (act === "rowmenu") { const r = t.getBoundingClientRect(); const [x, y] = appPoint(r.left, r.bottom + 4); rowMenu(t.dataset.id, x, y, t); }
+    else if (act === "swap") swap();
+    else if (act === "closeSub") closeSub();
+    else if (act === "sectg") { st.open[t.dataset.sec] = !st.open[t.dataset.sec]; renderDocks(); }
+    else if (act === "secmenu") secMenu(t.dataset.sec, t);
+    else if (act === "refai") { st.refAi = !st.refAi; renderAi(); }
+    else if (act === "floatTg") { st.floatOpen = !st.floatOpen; renderDocks(); }
+    else if (act === "send") sendAi();
+    else if (act === "collapse") {
+      const s = t.dataset.side, el = dockEl[s];
+      if (st.peek === s) st.peek = null;
+      else if (el.classList.contains("is-strip")) { expandDock(s); return; }
+      else st.docks[s].collapsed = true;
+      layout();
+    } else if (act === "strip") {
+      const s = t.dataset.side, sec = t.dataset.sec;
+      if (sec !== "ai") st.open[sec] = true;
+      renderDocks();
+      expandDock(s);
+    }
+  });
+  app.addEventListener("contextmenu", (e) => {
+    const row = e.target.closest(".row");
+    if (!row) return;
+    e.preventDefault();
+    const [x, y] = appPoint(e.clientX, e.clientY);
+    rowMenu(row.dataset.id, x, y, $(".di", row));
+  });
+  document.addEventListener("pointerdown", (e) => {
+    if (!menu.hidden && !menu.contains(e.target)) closeMenu(false);
+    if (st.peek && !dockEl[st.peek].contains(e.target)) { st.peek = null; layout(); }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (!menu.hidden) { closeMenu(); return; }
+    if (st.peek) { const s = st.peek; st.peek = null; layout(); $('[data-act="collapse"]', dockEl[s]).focus(); return; }
+    if (st.floatAi && st.floatOpen && $("#aiFloat").contains(document.activeElement)) { st.floatOpen = false; renderDocks(); $("textarea", secEl.ai).focus(); }
+  });
+  subDoc.addEventListener("dblclick", () => toast("直すときは、右の上の帯（⋮⋮）を真ん中へドラッグ（⇄ でも）"));
+
+  function sendAi() {
+    const ta = $("textarea", secEl.ai), v = ta.value.trim();
+    if (!v) return;
+    (THREADS[st.main] ||= []).push({ r: "u", t: v }, { r: "a", t: "（試作）返答は固定です。実際は、このページを直して版を残します。" });
+    ta.value = "";
+    if (st.floatAi) st.floatOpen = true; // 浮かせているときは、送ったら上へ広げて返答を見せる
+    renderAi();
+    renderDocks();
+  }
+  $("textarea", secEl.ai).addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendAi(); }
+  });
+
+  /* ---------- ドラッグ＆ドロップ ---------- */
+  function placeDrop() {
+    const c = cur, d = $("#drop"), zm = $('[data-zone="main"]', d), zs = $('[data-zone="side"]', d);
+    d.style.left = `${c.L}px`;
+    d.style.width = `${c.M + c.S}px`;
+    if (drag?.kind === "pane") {
+      // 右のページを掴んだ: 真ん中（メイン）だけが落とし先。いまのメインは右へ移る
+      d.style.width = `${c.M}px`;
+      zm.style.flex = "1 1 0";
+      zm.innerHTML = "メインに置く<small>いまのメインは右へ移ります</small>";
+      return;
+    }
+    zm.style.flex = st.sub ? `${c.M} 1 0` : "3 1 0";
+    zs.style.flex = st.sub ? `${c.S} 1 0` : "2 1 0";
+    zm.innerHTML = "ここで開く<small>メインを替える</small>";
+    zs.innerHTML = st.sub ? "右のページを替える" : "右に並べる<small>メインはそのまま</small>";
+  }
+  // パネル（一覧・AI）を掴んでいる間は、指の位置から入る場所を決める。
+  // 左右の端に近づけたらそのドック、AI だけはメインの下端に近づけたら浮かせる。真ん中では何も起きない
+  const secFrom = (sec) => (sec === "ai" ? aiAt() : st.docks.left.secs.includes(sec) ? "left" : "right");
+  function secTarget(x, y) {
+    const c = cur, H = app.clientHeight, EDGE = 140;
+    if (drag.sec === "ai" && x > c.L && x < c.L + c.M && y > H - 200) return "float";
+    if (x < Math.max(c.L, EDGE)) return "left";
+    if (x > c.W - Math.max(c.R, EDGE)) return "right";
+    return null;
+  }
+  function showGhost(t) {
+    const g = $("#ghost"), c = cur, H = app.clientHeight;
+    if (!t || t === secFrom(drag.sec)) { g.classList.remove("on"); return false; }
+    let r;
+    if (t === "float") {
+      const w = Math.min(680, c.M - 48);
+      r = { x: c.L + (c.M - w) / 2, y: H - 16 - 76, w, h: 76 };
+      g.innerHTML = "メインの下に浮かせる";
+    } else {
+      const now = t === "left" ? c.L : c.R, w = now > STRIP ? now : st.docks[t].w;
+      r = { x: t === "left" ? 6 : c.W - w - 6, y: 6, w, h: H - 12 };
+      g.innerHTML = `${SIDE_NAME[t]}のドック<small>「${esc(SEC_NAME[drag.sec])}」を入れる</small>`;
+    }
+    Object.assign(g.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+    g.classList.add("on");
+    return true;
+  }
+  app.addEventListener("dragover", (e) => {
+    if (drag?.kind !== "sec") return;
+    const [x, y] = appPoint(e.clientX, e.clientY);
+    drag.target = secTarget(x, y);
+    if (showGhost(drag.target)) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }
+  });
+  app.addEventListener("drop", (e) => {
+    if (drag?.kind !== "sec") return;
+    const t = drag.target, sec = drag.sec;
+    if (!t || t === secFrom(sec)) return;
+    e.preventDefault();
+    endDrag();
+    moveSec(sec, t);
+  });
+  function endDrag() {
+    drag = null;
+    app.dataset.dragging = "";
+    all(".hot", app).forEach((n) => n.classList.remove("hot"));
+    all(".row.dragging", app).forEach((n) => n.classList.remove("dragging"));
+    all(".sec[data-grabbed]", app).forEach((n) => delete n.dataset.grabbed);
+    $("#ghost").classList.remove("on");
+  }
+  app.addEventListener("dragstart", (e) => {
+    const pane = e.target.closest?.(".sub-hd"), row = e.target.closest?.(".row"), hd = e.target.closest?.(".sec-hd, .fl-grab");
+    if (pane && st.sub) {
+      drag = { kind: "pane", id: st.sub };
+      e.dataTransfer.setData("text/x-niho-page", st.sub);
+      e.dataTransfer.setData("text/plain", byId[st.sub].title);
+      e.dataTransfer.effectAllowed = "move";
+      setTimeout(() => { if (drag) { placeDrop(); app.dataset.dragging = "pane"; } }, 0);
+    } else if (row) {
+      drag = { kind: "page", id: row.dataset.id };
+      e.dataTransfer.setData("text/x-niho-page", row.dataset.id);
+      e.dataTransfer.setData("text/plain", byId[row.dataset.id].title);
+      e.dataTransfer.effectAllowed = "copyMove";
+      row.classList.add("dragging");
+      setTimeout(() => { if (drag) { placeDrop(); app.dataset.dragging = "page"; } }, 0);
+    } else if (hd) {
+      const sec = hd.closest(".sec").dataset.sec;
+      drag = { kind: "sec", sec };
+      e.dataTransfer.setData("text/x-niho-section", sec);
+      e.dataTransfer.effectAllowed = "move";
+      secEl[sec].dataset.grabbed = "1";
+      setTimeout(() => { if (drag) app.dataset.dragging = "sec"; }, 0);
+    }
+  });
+  app.addEventListener("dragend", endDrag);
+  for (const z of all(".dz", app)) {
+    const accepts = () => drag && (drag.kind === "page" || (drag.kind === "pane" && z.dataset.zone === "main"));
+    z.addEventListener("dragenter", (e) => { if (accepts()) { e.preventDefault(); z.classList.add("hot"); } });
+    z.addEventListener("dragover", (e) => { if (accepts()) { e.preventDefault(); e.dataTransfer.dropEffect = drag.kind === "page" ? "copy" : "move"; z.classList.add("hot"); } });
+    z.addEventListener("dragleave", (e) => { if (!z.contains(e.relatedTarget)) z.classList.remove("hot"); });
+    z.addEventListener("drop", (e) => {
+      if (!accepts()) return;
+      e.preventDefault();
+      const d = drag;
+      endDrag();
+      if (d.kind === "pane") swap();
+      else if (d.kind === "page") {
+        if (z.dataset.zone === "main") openMain(d.id); else openSub(d.id);
+      }
+    });
+  }
+
+  /* ---------- 境目 ---------- */
+  for (const [kind, el] of Object.entries(splitEl)) {
+    const sign = kind === "left" ? 1 : -1; // 左のドックは右へ動かすと広がる。右のページ・右のドックは左へ動かすと広がる
+    el.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      el.setPointerCapture(e.pointerId);
+      el.focus({ preventScroll: true });
+      const x0 = e.clientX, w0 = getW(kind);
+      el.classList.add("drag");
+      const move = (ev) => setW(kind, w0 + sign * (ev.clientX - x0) / scale);
+      const up = () => { el.classList.remove("drag"); el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up); };
+      el.addEventListener("pointermove", move);
+      el.addEventListener("pointerup", up);
+      el.addEventListener("pointercancel", up);
+    });
+    el.addEventListener("dblclick", () => setW(kind, DEF[kind]));
+    el.addEventListener("keydown", (e) => {
+      const step = e.shiftKey ? 64 : 16;
+      let w = getW(kind);
+      if (e.key === "ArrowRight") w += step * sign;
+      else if (e.key === "ArrowLeft") w -= step * sign;
+      else if (e.key === "Home") w = minOf(kind);
+      else if (e.key === "End") w = maxOf(kind);
+      else if (e.key === "Enter") w = DEF[kind];
+      else return;
+      e.preventDefault();
+      setW(kind, w);
+    });
+  }
+
+  /* ---------- 浮かせた AI の高さ ---------- */
+  {
+    const fl = $("#aiFloat"), rs = $(".fl-rs", fl), main = $("#main");
+    const maxH = () => Math.max(200, main.clientHeight - 120);
+    const setH = (h) => { st.floatH = Math.round(Math.min(maxH(), Math.max(160, h))); fl.style.setProperty("--float-open", `${st.floatH}px`); rs.setAttribute("aria-valuenow", String(st.floatH)); rs.setAttribute("aria-valuetext", `${st.floatH}px`); };
+    rs.setAttribute("aria-valuemin", "160");
+    rs.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      rs.setPointerCapture(e.pointerId);
+      const y0 = e.clientY, h0 = st.floatH;
+      rs.classList.add("drag");
+      const move = (ev) => setH(h0 - (ev.clientY - y0) / scale);
+      const up = () => { rs.classList.remove("drag"); rs.removeEventListener("pointermove", move); rs.removeEventListener("pointerup", up); rs.removeEventListener("pointercancel", up); };
+      rs.addEventListener("pointermove", move);
+      rs.addEventListener("pointerup", up);
+      rs.addEventListener("pointercancel", up);
+    });
+    rs.addEventListener("keydown", (e) => {
+      const step = e.shiftKey ? 96 : 24;
+      if (e.key === "ArrowUp") setH(st.floatH + step);
+      else if (e.key === "ArrowDown") setH(st.floatH - step);
+      else if (e.key === "Home") setH(160);
+      else if (e.key === "End") setH(maxH());
+      else return;
+      e.preventDefault();
+    });
+    // 本文の下の余白を、浮かべた高さに合わせる（書いている位置を箱の裏に隠さない）
+    new ResizeObserver(() => main.style.setProperty("--float-h", `${fl.offsetHeight}px`)).observe(fl);
+  }
+
+  /* ---------- スマホ ---------- */
+  $("#ph").addEventListener("click", (e) => {
+    const open = e.target.closest("[data-ph-open]");
+    if (open) { st.main = open.dataset.phOpen; st.phView = "page"; renderPhone(); return; }
+    const t = e.target.closest("[data-ph]");
+    if (!t) return;
+    st.phView = t.dataset.ph;
+    renderPhone();
+  });
+
+  /* ---------- 試作の切り替え ---------- */
+  $("#presetSeg").addEventListener("click", (e) => { const b = e.target.closest("button[data-preset]"); if (b && !b.disabled) applyPreset(b.dataset.preset); });
+  $("#sizeSeg").addEventListener("click", (e) => { const b = e.target.closest("button[data-size]"); if (!b) return; st.size = Number(b.dataset.size); st.peek = null; render(); });
+  $("#reset").addEventListener("click", () => { const size = st.size; for (const p of PAGES) p.html = p.orig; st = fresh(); st.size = size; mainDoc.dataset.id = ""; subDoc.dataset.id = ""; prevAuto = null; render(); });
+  window.addEventListener("resize", fit);
+
+  // 撮影用: #preset=C&size=1440&sub=photo のように渡せる（headless Chrome 用。内蔵ブラウザでは hash が消える）
+  st = fresh();
+  const q = new URLSearchParams(location.hash.slice(1));
+  if (PRESETS[q.get("preset")]) { st.preset = q.get("preset"); st.docks = clone(PRESETS[st.preset].docks); st.open = { ...PRESETS[st.preset].open }; st.sub = PRESETS[st.preset].sub; st.floatAi = !!PRESETS[st.preset].floatAi; }
+  if (q.get("float") === "open") st.floatOpen = true;
+  if ([1680, 1440, 1280, 390].includes(Number(q.get("size")))) st.size = Number(q.get("size"));
+  if (q.has("sub")) st.sub = byId[q.get("sub")] && q.get("sub") !== st.main ? q.get("sub") : null;
+  if (["list", "sheet"].includes(q.get("ph"))) st.phView = q.get("ph");
+  render();
+})();
+</script>
+</body>
+</html>

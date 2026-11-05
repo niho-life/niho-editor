@@ -8,7 +8,7 @@ import { isShellWindow, type ShellBridge } from "niho-desktop-bridge/shell-bridg
 import type { ShellAiEngine, ShellAiEngineName } from "niho-desktop-bridge/shell-contract";
 import { validateBlocks } from "niho-docs-ui/page/blocks";
 import { blocksToMarkdown } from "niho-docs-ui/page/markdown";
-import { Icon } from "niho-docs-ui/shell";
+import { Icon, SHELL_DND, type ShellAiPlace } from "niho-docs-ui/shell";
 import { MAX_CHAT_INPUT_CHARS } from "@/ai/chat-limits";
 import type { AiDiffState, AttachedAi, AttachedAiStep, AttachedAiSteps } from "@/lib/attached-page";
 import {
@@ -214,14 +214,37 @@ function nextEnabled(items: readonly MenuItem[], from: number, direction: 1 | -1
   return from;
 }
 
+/** 分割ビュー（設計 §5.5）での「AIと作る」の置き場所。 */
+export type AiPanelPlacement = {
+  /** 今の置き場所（左右のドックか、メインの下に浮かせる）。 */
+  at: ShellAiPlace;
+  /** 会話メニューの「〜へ移す」（今いない場所だけ出す）。 */
+  onMove: (to: ShellAiPlace) => void;
+  /** 浮かせているとき、会話を出しているか（出していなければ入力欄 1 行）。 */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+};
+
+/** 移す先の名前（会話メニューの項目）。 */
+const PLACE_TEXT: Record<ShellAiPlace, string> = { left: "左のドックへ移す", right: "右のドックへ移す", float: "メインの下に浮かせる" };
+const PLACE_ICON: Record<ShellAiPlace, "side" | "panel" | "float"> = { left: "side", right: "panel", float: "float" };
+
 export type AiPanelProps = {
   pageId: string | null;
   context: AttachedAi | null;
   steps: AttachedAiSteps | null;
+  /**
+   * 分割ビューの置き場所（デスクトップだけ渡す）。渡すと、見出しを掴んで動かせ、会話メニューの下に「〜へ移す」を出す。
+   * 浮かせているときは、ふだんは入力欄 1 行（掴む所と ⌃）で、送るか ⌃ で会話を出し、Esc で 1 行に戻す。
+   * 置き場所を変えてもこの部品は作り直されない（EditorShell が木の同じ位置に描く）ので、会話・書きかけ・実行中の依頼は残る。
+   */
+  placement?: AiPanelPlacement;
+  /** AI がページを書き換えた・元に戻した（右に並べたページを読み直すため）。直したページの id。 */
+  onPagesChanged?: (pageIds: readonly string[]) => void;
 };
 
 /** 右レール下半分の常設 AI。レールを閉じても EditorShell が unmount しないため draft と実行状態を保つ。 */
-export function AiPanel({ pageId, context, steps }: AiPanelProps) {
+export function AiPanel({ pageId, context, steps, placement, onPagesChanged }: AiPanelProps) {
   const [thread, setThread] = useState<AiChatMessage[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<AiChatSummary[]>([]);
@@ -264,6 +287,23 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
   const editedRef = useRef(false);
   const diffForRef = useRef<{ messageId: string; pageId: string } | null>(null);
   const lastDiffRef = useRef<AiDiffState | null>(null);
+  // 依頼の途中で置き場所・右のページが替わっても、終わったときの今の値に知らせる
+  const placementRef = useRef(placement);
+  const pagesChangedRef = useRef(onPagesChanged);
+  useEffect(() => {
+    placementRef.current = placement;
+    pagesChangedRef.current = onPagesChanged;
+  });
+  const floating = placement?.at === "float";
+  const floatBar = floating && !placement.open;
+  /** 浮かせて 1 行にしているときは、送ったら上へ広げて返答を見せる。 */
+  const reveal = () => {
+    const now = placementRef.current;
+    if (now?.at === "float" && !now.open) now.onOpenChange(true);
+  };
+  const pagesChanged = (ids: readonly string[]) => {
+    if (ids.length > 0) pagesChangedRef.current?.(ids);
+  };
 
   const readMacEngines = useCallback(async () => {
     const { detectShell } = await import("niho-desktop-bridge/tauri-shell-transport");
@@ -391,13 +431,14 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
     const field = textareaRef.current;
     if (!field) return;
     const lineHeight = Number.parseFloat(getComputedStyle(field).lineHeight) || 20;
-    const min = lineHeight * 2 + 8;
+    // 浮かせて 1 行にしているときは 1 行から
+    const min = lineHeight * (floatBar ? 1 : 2) + 8;
     const max = lineHeight * 10 + 8;
     field.style.height = "auto";
     field.style.maxHeight = `${max}px`;
     field.style.height = `${Math.min(max, Math.max(min, field.scrollHeight))}px`;
     field.style.overflowY = field.scrollHeight > max ? "auto" : "hidden";
-  }, [text]);
+  }, [text, floatBar]);
 
   useLayoutEffect(() => {
     const node = threadRef.current;
@@ -602,6 +643,7 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
     const controller = new AbortController();
     controllerRef.current = controller;
     closeMenus();
+    reveal();
     setBusy("working");
     setStatus("");
     setLive(liveTurn(value));
@@ -634,6 +676,7 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
       if (native && macRoute !== "server") setResumeSession(nextResume);
       setThread((current) => appendTurn(current, value, answer));
       setText("");
+      pagesChanged(answer.changes.map((change) => change.pageId));
       if (answer.page) await context.bridge.replace(answer.page, { saved: true });
       if (generation !== generationRef.current) return;
       setStatus(answer.resultCode === "revision_conflict" ? "ページが更新されました。もう一度お試しください" :
@@ -664,6 +707,7 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
     controllerRef.current = controller;
     flightRef.current = true;
     closeMenus();
+    reveal();
     setBusy("compact");
     setStatus("ここまでの会話を要約しています…");
     try {
@@ -691,6 +735,7 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
       }
       if (answer.page || answer.changes.length > 0) {
         setThread((current) => appendTurn(current, COMPACT_PROMPT, answer));
+        pagesChanged(answer.changes.map((change) => change.pageId));
         if (answer.page) await context.bridge.replace(answer.page, { saved: true });
         if (generation !== generationRef.current) return;
         setText(keptDraft);
@@ -752,6 +797,7 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
         ? { ...item, changes: item.changes.map((change) => answer.undone.includes(change.pageId) ? { ...change, undoneAt: new Date().toISOString() } : change) }
         : item));
       setStatus(answer.undone.length > 0 ? AI_TEXT.undone : AI_TEXT.undoKept);
+      pagesChanged(answer.undone);
     } catch (error) {
       await fail(error, generation);
     } finally {
@@ -822,6 +868,7 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
     controllerRef.current = controller;
     flightRef.current = true;
     closeMenus();
+    reveal();
     setBusy("step");
     setStatus(`「${selectedStep.label}」を開始しています…`);
     try {
@@ -909,11 +956,29 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
   return (
     <section className="es-cd es-cd--open es-cd--fill es-ai-panel" aria-label="AIと作る" onKeyDown={(event) => {
       if (event.key !== "Escape" || composing(event)) return;
-      // 実行先の窓を閉じたら、開いたボタンへ戻る
-      if (engineOpen) enginePillRef.current?.focus();
-      closeMenus();
+      if (menuOpen || historyOpen || engineOpen) {
+        // 実行先の窓を閉じたら、開いたボタンへ戻る
+        if (engineOpen) enginePillRef.current?.focus();
+        closeMenus();
+        return;
+      }
+      // 浮かせて会話を出しているときの Esc は、入力欄 1 行に戻す
+      if (floating && placement.open) {
+        event.preventDefault();
+        placement.onOpenChange(false);
+        textareaRef.current?.focus();
+      }
     }}>
-      <h2 className="es-ai-head">
+      <h2
+        className="es-ai-head"
+        draggable={placement ? true : undefined}
+        onDragStart={placement ? (event) => {
+          if (!event.dataTransfer) return;
+          event.dataTransfer.setData(SHELL_DND.ai, "ai");
+          event.dataTransfer.effectAllowed = "move";
+        } : undefined}
+      >
+        {placement && <span className="es-grip" aria-hidden="true" title="ドラッグで置き場所を変える"><Icon name="grip" /></span>}
         <span>AIと作る</span>
         <span className="es-sp" />
         <button type="button" className="es-ib es-ib--sm" aria-label="新しい会話" disabled={busy !== null || sessionLoading} onClick={newConversation}>
@@ -949,6 +1014,20 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
                 <span>{sessionError}</span>
                 {failedSessionId && <button type="button" disabled={sessionLoading} onClick={() => void switchConversation(failedSessionId)}>再試行</button>}
               </div>
+            )}
+            {placement && (
+              <>
+                <hr className="es-ai-sep" />
+                {(["left", "right", "float"] as const).filter((to) => to !== placement.at).map((to) => (
+                  <button key={to} type="button" className="es-ai-menu-row" onClick={() => {
+                    setHistoryOpen(false);
+                    placement.onMove(to);
+                  }}>
+                    <Icon name={PLACE_ICON[to]} />
+                    <span>{PLACE_TEXT[to]}</span>
+                  </button>
+                ))}
+              </>
             )}
           </div>
         )}
@@ -1002,6 +1081,21 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
             onKeyDown={onKeyDown}
           />
           <div className="es-ai-compose-actions">
+            {floating && (
+              <span
+                className="es-grip es-grip--on"
+                draggable
+                aria-hidden="true"
+                title="ドラッグで置き場所を変える"
+                onDragStart={(event) => {
+                  if (!event.dataTransfer) return;
+                  event.dataTransfer.setData(SHELL_DND.ai, "ai");
+                  event.dataTransfer.effectAllowed = "move";
+                }}
+              >
+                <Icon name="grip" />
+              </span>
+            )}
             <button type="button" className="es-ib es-ib--sm" aria-label="工程とスキルを開く" aria-expanded={menuOpen} disabled={unavailable || busy !== null} onClick={() => {
               setMenuOpen((open) => !open);
               setMenuQuery("");
@@ -1084,6 +1178,11 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
                 )}
                 <button type="button" className="es-ai-link" onClick={() => void refreshMacEngines()}>CLI の状態を読み直す</button>
               </div>
+            )}
+            {floating && (
+              <button type="button" className="es-ib es-ib--sm es-ai-float-tg" aria-label={placement.open ? "会話を畳む" : "会話を開く"} aria-expanded={placement.open} onClick={() => placement.onOpenChange(!placement.open)}>
+                <Icon name={placement.open ? "caret-down" : "caret-up"} />
+              </button>
             )}
             {busy === "working" || busy === "compact"
               ? <button type="button" className="es-ai-send es-ai-send--stop" aria-label="止める" onClick={() => controllerRef.current?.abort()}><span className="es-ai-stop-mark" aria-hidden="true" /></button>
