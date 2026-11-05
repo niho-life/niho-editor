@@ -15,6 +15,9 @@ use std::time::Duration;
 const STATUS_TIME_LIMIT: Duration = Duration::from_secs(20);
 const STATUS_KILL_GRACE: Duration = Duration::from_millis(500);
 const STATUS_OUTPUT_MAX_BYTES: usize = 256 * 1024;
+/// `codex debug models` の出力の上限。カタログはモデルごとの長い指示・説明を含み、0.163.0 では約 630 KiB あった
+/// （2026-11-05。STATUS_OUTPUT_MAX_BYTES では末尾だけが残って JSON が読めず、一覧が空になり、画面が古い控えの一覧に戻っていた）。
+const CODEX_MODELS_OUTPUT_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 /// `claude --help` で確かめるフラグ。`--system-prompt-file` と `--thinking-display` は Claude Code が `--help` から
 /// 隠している（Desktop #15707・#16748）ので含めない（含めると絶対に検出できない）。
@@ -104,12 +107,23 @@ pub(crate) fn unknown_codex_features(features_list: &str) -> Vec<String> {
 }
 
 fn run_cli(runtime: &Runtime, provider: Provider, cli: &Path, args: &[&str]) -> Result<Captured, CaptureError> {
+  run_cli_capped(runtime, provider, cli, args, STATUS_OUTPUT_MAX_BYTES)
+}
+
+/// 出力の上限を決めて CLI を動かす（出力は末尾 `max_bytes` だけ残る）。
+fn run_cli_capped(
+  runtime: &Runtime,
+  provider: Provider,
+  cli: &Path,
+  args: &[&str],
+  max_bytes: usize,
+) -> Result<Captured, CaptureError> {
   let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
   run_capture(
     provider_command(runtime, provider, cli, &args, &[]),
     STATUS_TIME_LIMIT,
     STATUS_KILL_GRACE,
-    STATUS_OUTPUT_MAX_BYTES,
+    max_bytes,
   )
 }
 
@@ -265,7 +279,13 @@ pub fn provider_status_with(runtime: &Runtime, provider: Provider) -> ProviderSt
           };
           if provider == Provider::CodexCli {
             // 使えるモデルの一覧（取れなければ空。画面は控えの一覧を出す）
-            status.models = match run_cli(runtime, provider, &cli, &["debug", "models"]) {
+            status.models = match run_cli_capped(
+              runtime,
+              provider,
+              &cli,
+              &["debug", "models"],
+              CODEX_MODELS_OUTPUT_MAX_BYTES,
+            ) {
               Ok(output) if output.status.success() => parse_codex_models(&String::from_utf8_lossy(&output.stdout)),
               _ => Vec::new(),
             };

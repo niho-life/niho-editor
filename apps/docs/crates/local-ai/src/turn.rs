@@ -16,7 +16,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// 指示の上限（標準入力で渡す）。
-pub(crate) const MAX_USER_PROMPT_BYTES: usize = 4_000_000;
+pub const MAX_USER_PROMPT_BYTES: usize = 4_000_000;
 /// システムプロンプトの上限（codex は argv に載るため）。
 pub const MAX_SYSTEM_PROMPT_BYTES: usize = 200_000;
 /// モデル名の長さの上限（文字数）。
