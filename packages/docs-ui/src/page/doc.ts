@@ -1,4 +1,5 @@
 import type { Editor, JSONContent } from "@tiptap/core";
+import { PRESERVE_AI_MARKS_META } from "./ai-mark";
 
 /**
  * 保存されている blocks（限定 AST。blocks.ts）と TipTap の doc の行き来。
@@ -45,6 +46,7 @@ export function imageAttrsOf(node: unknown): ImageAttrs | null {
 /**
  * 本文を blocks に差し替える（端末の下書き・AI の採用の結果・競合の応答のページ）。今の schema で読めなければ載せずに false。
  * 載せたこと自体は Undo の対象にしない（直後の Undo で載せた本文を消さない）。onUpdate（自動保存・下書き）も起こさない。
+ * 載せた本文の `ai`（AI が足した語の印）は剥がさない（`preserveAiMarks`。ai-mark.ts）。
  */
 export function replaceBlocks(editor: Editor, blocks: unknown[]): boolean {
   const doc = docFromBlocks(blocks);
@@ -53,6 +55,6 @@ export function replaceBlocks(editor: Editor, blocks: unknown[]): boolean {
   } catch {
     return false;
   }
-  editor.chain().setMeta("addToHistory", false).setContent(doc, { emitUpdate: false }).run();
+  editor.chain().setMeta("addToHistory", false).setMeta(PRESERVE_AI_MARKS_META, true).setContent(doc, { emitUpdate: false }).run();
   return true;
 }

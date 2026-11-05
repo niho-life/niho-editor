@@ -288,6 +288,14 @@
   font-family: var(--font-family-mono);
 }
 
+/* AI が足した語（ai-mark.ts の span[data-ai]）は灰色で見せる。⋯ メニューで切ると画面が be--ai-plain を付けて普通の色に戻す */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc span[data-ai] {
+  color: var(--ed-ink-mute);
+}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be.be--ai-plain .doc span[data-ai] {
+  color: inherit;
+}
+
 /* ── 「/」のメニュー ── */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be-slash {
   position: fixed;

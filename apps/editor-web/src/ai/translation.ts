@@ -1,5 +1,6 @@
 import type { Block, PageKind } from "@niho/editor-store";
 import { validateBlocks } from "../ast/blocks";
+import { stripAiMarks } from "./block-diff";
 
 /** Provider を呼ぶ前に検査する管理翻訳の固定上限。省略・clamp はしない。 */
 export const TRANSLATION_MAX_CODEPOINTS = 20_000;
@@ -54,7 +55,8 @@ function addField(fields: TranslationField[], path: string, value: unknown): voi
  * codeBlock は利用者のコード、recording は asset 参照なので翻訳しない。未知構造は validateBlocks が先に拒否する。
  */
 export function planManagedTranslation(page: TranslationPageSnapshot): TranslationPlanResult {
-  const accepted = validateBlocks(page.blocks);
+  // AI が足した語の印（ai）は翻訳しない。印で分かれた文は 1 つにまとめて訳す（applyManagedTranslation も同じ形で path を辿る）
+  const accepted = validateBlocks(stripAiMarks(page.blocks));
   if (!accepted.ok) return { ok: false, reason: "unknown_structure" };
   const fields: TranslationField[] = [];
   const omissions = new Set<string>();
@@ -181,6 +183,8 @@ function replaceAtPath(page: { title: string; lead: string | null; blocks: Block
 /** 入力 snapshot の既知 field だけを差し替え、限定 AST をもう一度検査する。 */
 export function applyManagedTranslation(page: TranslationPageSnapshot, fields: readonly TranslationField[]): TranslationCandidate | null {
   const next = structuredClone(page) as { kind: PageKind; title: string; lead: string | null; blocks: Block[]; cover: string | null };
+  // planManagedTranslation と同じく、ai を外してまとめた本文の path に書く
+  next.blocks = stripAiMarks(next.blocks);
   for (const field of fields) {
     // asset fallback alt は採用時に独立 target asset metadata へ写す。page AST の形には入れない。
     if (field.path.startsWith("assets[")) continue;

@@ -23,6 +23,7 @@ import {
 } from "@niho/editor-store";
 // 画面の部品に触れない Markdown の往復（docs-ui。Mac の保管庫と同じ変換を使う）
 import { blocksToMarkdown, markdownToBlocks } from "niho-docs-ui/page/markdown";
+import { markAiInserted } from "../ai/block-diff";
 import type { AiComposeBackend } from "../ai/config";
 import {
   MAX_CHAT_INPUT_CHARS,
@@ -31,6 +32,7 @@ import {
   buildChatSystem,
   isChatToolName,
   runChatTurn,
+  type ChatEvent,
   type ChatHistoryTurn,
   type ChatItem,
   type ChatRun,
@@ -155,6 +157,15 @@ const PAGE_HAS_PARTS = "このページの本文には、文字だけにでき�
  */
 type WorkspaceEntry = ChatWorkspacePage & { writable: boolean };
 
+/**
+ * AI が足した語だけに `ai` mark を付けた本文（ai/block-diff.ts）。付けた結果が保存の検査を通らなければ
+ * （大きさの上限など）、`ai` 無しの本文をそのまま使う（安全側。印が無くても本文は同じ）。
+ */
+function withAiMarks(before: readonly Block[], after: Block[]): Block[] {
+  const marked = parseBlocks(markAiInserted(before, after));
+  return marked.ok ? marked.value : after;
+}
+
 function createToolRunner(deps: {
   store: ChatPagesStore;
   owner: OwnerId;
@@ -205,7 +216,7 @@ function createToolRunner(deps: {
       // 書く前の本文を版に残す（人が元に戻せる）
       const version = await store.createVersion(owner, target.id, "ai");
       if (!version) return { ok: false, result: "そのページはもうありません。", page: current.title };
-      const saved = await store.savePage(owner, target.id, { blocks: blocks.value }, { baseRevision: deviceRevision ?? current.revision });
+      const saved = await store.savePage(owner, target.id, { blocks: withAiMarks(current.blocks, blocks.value) }, { baseRevision: deviceRevision ?? current.revision });
       if (!saved) return { ok: false, result: "そのページはもうありません。", page: current.title };
       if (saved.status === "page_full") return { ok: false, result: "ページ全体の30 MiB上限を超えるため保存できませんでした。本文や画像を減らしてください。", page: current.title };
       if (saved.status !== "saved") return { ok: false, result: "別の画面で保存されたので書けませんでした。read_page で読み直してください。", page: current.title, conflict: true };
@@ -233,7 +244,7 @@ function createToolRunner(deps: {
     const blocks = parseBlocks(parsed.blocks);
     if (!blocks.ok) return { ok: false, result: "本文が大きすぎるか、保存できない形です。" };
     const title = input.title.trim().slice(0, 200);
-    const created = await store.createPage(owner, { title, blocks: blocks.value });
+    const created = await store.createPage(owner, { title, blocks: withAiMarks([], blocks.value) });
     const chars = Array.from(input.markdown).length;
     deps.changes.set(created.id, { pageId: created.id, title: created.title, change: "created", version: null, revision: created.revision, chars, delta: chars });
     // 作ったページも、その依頼の中では読み書きできる
@@ -309,58 +320,137 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
     if (backend.route === "server" && overLimit(await usage.get(owner, month), limitUsd)) return jsonResponse(429, { error: "quota_exceeded" });
 
     const settings = (await deps.settings?.()?.(owner)) ?? DEFAULT_EDITOR_SETTINGS;
-    const changes = new Map<string, ChatChangeInput & { title: string }>();
-    const run = await runChatTurn({
-      client: backend.client,
-      system: buildChatSystem({ glossary: settings.glossary, about: { name: settings.aboutName, text: settings.about }, ...(settings.aiLang === "same" ? {} : { lang: settings.aiLang }) }),
-      messages: buildChatMessages(historyOf(past?.messages ?? []), input.value.text, { id: open.id, title: open.title, kind: open.kind }),
-      run: createToolRunner({ store, owner, workspace, changes }),
-      // 往復のたびに上限を見る（会話が長くても 1 人 1 か月の上限は同じ意味で働く）
-      // 上限を見るのはサーバーの API の経路だけ（CLI は利用者のサブスクで従量が出ないので止めない）
-      beforeCall: async () => backend.route !== "server" || !overLimit(await usage.get(owner, month), limitUsd),
-      onUsage: async (report) => {
-        await usage.record(owner, month, usageDelta(backend, report), backend.route);
-      },
-      signal: request.signal,
-    });
+    const respond = async (onEvent?: (event: ChatEvent) => void): Promise<unknown> => {
+      const changes = new Map<string, ChatChangeInput & { title: string }>();
+      const run = await runChatTurn({
+        client: backend.client,
+        system: buildChatSystem({ glossary: settings.glossary, about: { name: settings.aboutName, text: settings.about }, ...(settings.aiLang === "same" ? {} : { lang: settings.aiLang }) }),
+        messages: buildChatMessages(historyOf(past?.messages ?? []), input.value.text, { id: open.id, title: open.title, kind: open.kind }),
+        run: createToolRunner({ store, owner, workspace, changes }),
+        // 往復のたびに上限を見る（会話が長くても 1 人 1 か月の上限は同じ意味で働く）
+        // 上限を見るのはサーバーの API の経路だけ（CLI は利用者のサブスクで従量が出ないので止めない）
+        beforeCall: async () => backend.route !== "server" || !overLimit(await usage.get(owner, month), limitUsd),
+        onUsage: async (report) => {
+          await usage.record(owner, month, usageDelta(backend, report), backend.route);
+        },
+        signal: request.signal,
+        ...(onEvent ? { onEvent } : {}),
+      });
 
-    const written = [...changes.values()];
-    const turn = await recorded(route, () =>
-      chats.append(owner, {
-        pageId: id,
-        conversationId,
-        input: input.value.text,
-        reply: run.reply,
-        items: itemsOf(run),
-        result: run.result,
-        resultCode: run.code,
-        author: { route: backend.route, engine: backend.engine },
-        changes: written.map((change) => ({
-          pageId: change.pageId,
-          change: change.change,
-          version: change.version ?? null,
-          revision: change.revision,
-          chars: change.chars,
-          delta: change.delta,
-        })),
-      }),
-    );
-    // 開いているページが変わっていれば、画面に載せ替えるために今の本文を返す
-    const page = written.some((change) => change.pageId === id) ? await store.getPage(owner, id) : null;
-    const totals = await usage.get(owner, month);
-    return jsonResponse(200, {
-      conversation: turn ? { id: turn.conversation.id, messageId: turn.result.id } : null,
-      message: turn
-        ? turn.result
-        : { id: null, role: "assistant", text: run.reply, items: run.items, result: run.result, resultCode: run.code, changes: [] },
-      page,
-      usage: {
-        month,
-        costUsd: totals.costMicroUsd / 1e6,
-        limitUsd,
-        nearLimit: limitUsd !== null && totals.costMicroUsd * 5 >= Math.round(limitUsd * 1e6) * 4,
-      },
-    });
+      const written = [...changes.values()];
+      const turn = await recorded(route, () =>
+        chats.append(owner, {
+          pageId: id,
+          conversationId,
+          input: input.value.text,
+          reply: run.reply,
+          items: itemsOf(run),
+          result: run.result,
+          resultCode: run.code,
+          author: { route: backend.route, engine: backend.engine },
+          changes: written.map((change) => ({
+            pageId: change.pageId,
+            change: change.change,
+            version: change.version ?? null,
+            revision: change.revision,
+            chars: change.chars,
+            delta: change.delta,
+          })),
+        }),
+      );
+      // 開いているページが変わっていれば、画面に載せ替えるために今の本文を返す
+      const page = written.some((change) => change.pageId === id) ? await store.getPage(owner, id) : null;
+      const totals = await usage.get(owner, month);
+      return {
+        conversation: turn ? { id: turn.conversation.id, messageId: turn.result.id } : null,
+        message: turn
+          ? turn.result
+          : { id: null, role: "assistant", text: run.reply, items: run.items, result: run.result, resultCode: run.code, changes: [] },
+        page,
+        usage: {
+          month,
+          costUsd: totals.costMicroUsd / 1e6,
+          limitUsd,
+          nearLimit: limitUsd !== null && totals.costMicroUsd * 5 >= Math.round(limitUsd * 1e6) * 4,
+        },
+      };
+    };
+
+    // 画面が `Accept: text/event-stream` で頼んだときだけ、途中の文と道具を流す（最後の done は 200 の JSON と同じ本文）
+    if (wantsEventStream(request)) return chatEventStream(route, request.signal, respond);
+    return jsonResponse(200, await respond());
+  });
+}
+
+/** SSE の ping の間隔（途中の proxy に切られないように）。 */
+export const CHAT_STREAM_PING_MS = 15_000;
+
+function wantsEventStream(request: Request): boolean {
+  return (request.headers.get("accept") ?? "").toLowerCase().includes("text/event-stream");
+}
+
+function sseEvent(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+/**
+ * AI チャットの SSE の応答。`text`（文の差分）・`tool`（道具の前後）を流し、終わりに `done`（200 の JSON と同じ本文）。
+ * 途中の例外は `error`（`{"error":"internal"}`。ログは route と失敗の名前だけ）。依頼の中断（request.signal）で止める。
+ */
+function chatEventStream(route: string, signal: AbortSignal, work: (onEvent: (event: ChatEvent) => void) => Promise<unknown>): Response {
+  const encoder = new TextEncoder();
+  let closed = false;
+  let ping: ReturnType<typeof setInterval> | undefined;
+  let stop: () => void = () => undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const write = (chunk: string) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(chunk));
+        } catch {
+          closed = true;
+        }
+      };
+      const onAbort = () => stop();
+      stop = () => {
+        if (closed) return;
+        closed = true;
+        clearInterval(ping);
+        signal.removeEventListener("abort", onAbort);
+        try {
+          controller.close();
+        } catch {
+          // もう閉じている
+        }
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      ping = setInterval(() => write(": ping\n\n"), CHAT_STREAM_PING_MS);
+      void (async () => {
+        try {
+          const body = await work((event) => {
+            if (event.type === "text") write(sseEvent("text", { text: event.text }));
+            else write(sseEvent("tool", { tool: event.tool, page: event.page, ok: event.ok, phase: event.phase }));
+          });
+          write(sseEvent("done", body));
+        } catch (error) {
+          if (!signal.aborted) {
+            console.error("editor-web: request failed", { route, name: error instanceof Error ? error.name : "unknown" });
+            write(sseEvent("error", { error: "internal" }));
+          }
+        } finally {
+          stop();
+        }
+      })();
+    },
+    cancel() {
+      closed = true;
+      clearInterval(ping);
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", "x-accel-buffering": "no" },
   });
 }
 

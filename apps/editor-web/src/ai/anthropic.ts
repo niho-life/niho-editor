@@ -105,6 +105,11 @@ export type ConverseInput = {
   /** Claude 4.6+ / 5+ の工程 profile に対応する思考量。 */
   outputConfig?: { effort: "low" | "medium" | "high" };
   signal?: AbortSignal;
+  /**
+   * 書いている文の差分を受け取る（AI チャットの思考の中継）。渡すと streaming で呼び、文が届くたびに呼ぶ。
+   * 結果（Turn）は streaming でないときと同じ形。
+   */
+  onText?: (delta: string) => void;
 };
 
 /** モデルが呼んだ道具 1 回（`input` はモデルが作った値なので信用しない）。 */
@@ -192,6 +197,7 @@ function readMessage(message: unknown, requested: string): Completion {
 
 /** Messages API の本文（model と max_tokens はここで足す）。 */
 type MessagesBody = {
+  stream?: true;
   system: string;
   messages: unknown[];
   tools?: unknown[];
@@ -225,7 +231,30 @@ function readTurn(message: Record<string, unknown>, requested: string): Turn {
   };
 }
 
-async function send(options: AnthropicOptions, body: MessagesBody, maxTokens: number, signal: AbortSignal | undefined): Promise<Record<string, unknown>> {
+/** 応答の本文を読む口。`touch` は届いたことを知らせる（時間切れのタイマーを張り直す）。 */
+type ReadBody = (
+  response: Response,
+  hooks: { touch: () => void; interrupted: (fallback: AnthropicErrorKind, details?: FailureDetails) => unknown; onCancel: (cancel: () => void) => void },
+) => Promise<Record<string, unknown>>;
+
+const readJson: ReadBody = async (response, { interrupted }) => {
+  let message: unknown;
+  try {
+    message = await response.json();
+  } catch {
+    throw interrupted("invalid_output", { reason: "bad_body" });
+  }
+  if (!isPlainObject(message)) throw failure("invalid_output", { reason: "bad_body" });
+  return message;
+};
+
+async function send(
+  options: AnthropicOptions,
+  body: MessagesBody,
+  maxTokens: number,
+  signal: AbortSignal | undefined,
+  read: ReadBody = readJson,
+): Promise<Record<string, unknown>> {
   signal?.throwIfAborted();
   // 鍵は呼ぶたびに読む。無ければ呼ばない
   const key = options.env.ANTHROPIC_API_KEY?.trim() ?? "";
@@ -233,11 +262,23 @@ async function send(options: AnthropicOptions, body: MessagesBody, maxTokens: nu
 
   const controller = new AbortController();
   let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
+  let cancelBody: (() => void) | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = timeoutMs(options.env);
+  // 時間切れは「最後に届いてから limit」（streaming はチャンクごとに張り直す）
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      cancelBody?.();
+    }, limit);
+  };
+  arm();
+  const onAbort = () => {
     controller.abort();
-  }, timeoutMs(options.env));
-  const onAbort = () => controller.abort();
+    cancelBody?.();
+  };
   signal?.addEventListener("abort", onAbort, { once: true });
   // 呼び出し元の中断は呼び出し元の理由のまま、時間切れは timeout、それ以外は fallback の失敗
   const interrupted = (fallback: AnthropicErrorKind, details?: FailureDetails): unknown => {
@@ -264,18 +305,160 @@ async function send(options: AnthropicOptions, body: MessagesBody, maxTokens: nu
       await response.body?.cancel().catch(() => undefined);
       throw failure(statusKind(response.status), { status: response.status });
     }
-    let message: unknown;
-    try {
-      message = await response.json();
-    } catch {
-      throw interrupted("invalid_output", { reason: "bad_body" });
-    }
-    if (!isPlainObject(message)) throw failure("invalid_output", { reason: "bad_body" });
-    return message;
+    return await read(response, {
+      touch: arm,
+      interrupted,
+      onCancel: (cancel) => {
+        cancelBody = cancel;
+      },
+    });
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
   }
+}
+
+/** streaming の中の 1 ブロック（文か道具）。 */
+type StreamBlock = { type: "text"; text: string } | { type: "tool_use"; id: string; name: string; json: string; input: unknown } | { type: "other" };
+
+/**
+ * streaming（`text/event-stream`）の応答を読み、streaming でない応答と同じ形の message に組み立てる
+ * （そのあと readTurn に通す）。文の差分は `onText` に渡す。届いた本文はログ・例外に出さない。
+ */
+function readStream(onText: (delta: string) => void, requested: string): ReadBody {
+  return async (response, { touch, interrupted, onCancel }) => {
+    const stream = response.body;
+    if (!stream) throw failure("invalid_output", { reason: "bad_body" });
+    const reader = stream.getReader();
+    onCancel(() => {
+      reader.cancel().catch(() => undefined);
+    });
+    const decoder = new TextDecoder();
+    const blocks: StreamBlock[] = [];
+    let model = requested;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let stopReason: string | null = null;
+    let stopped = false;
+    let buffer = "";
+    const usageNow = (): AiUsageReport => ({ model, inputTokens, outputTokens });
+    const badBody = () => failure("invalid_output", { reason: "bad_body", usage: usageNow() });
+
+    const handle = (data: Record<string, unknown>) => {
+      const index = typeof data.index === "number" ? data.index : -1;
+      switch (data.type) {
+        case "message_start": {
+          const message = isPlainObject(data.message) ? data.message : {};
+          if (typeof message.model === "string" && message.model.length > 0) model = message.model;
+          const usage = isPlainObject(message.usage) ? message.usage : {};
+          inputTokens = tokens(usage.input_tokens);
+          outputTokens = tokens(usage.output_tokens);
+          return;
+        }
+        case "content_block_start": {
+          const block = isPlainObject(data.content_block) ? data.content_block : {};
+          if (index < 0) return;
+          if (block.type === "text") {
+            const text = typeof block.text === "string" ? block.text : "";
+            blocks[index] = { type: "text", text };
+            if (text) onText(text);
+          } else if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
+            blocks[index] = { type: "tool_use", id: block.id, name: block.name, json: "", input: {} };
+          } else blocks[index] = { type: "other" };
+          return;
+        }
+        case "content_block_delta": {
+          const delta = isPlainObject(data.delta) ? data.delta : {};
+          const block = blocks[index];
+          if (!block) return;
+          if (delta.type === "text_delta" && block.type === "text" && typeof delta.text === "string") {
+            block.text += delta.text;
+            if (delta.text) onText(delta.text);
+          } else if (delta.type === "input_json_delta" && block.type === "tool_use" && typeof delta.partial_json === "string") {
+            block.json += delta.partial_json;
+          }
+          return;
+        }
+        case "content_block_stop": {
+          const block = blocks[index];
+          if (block?.type !== "tool_use") return;
+          try {
+            block.input = block.json.trim() === "" ? {} : JSON.parse(block.json);
+          } catch {
+            throw badBody();
+          }
+          return;
+        }
+        case "message_delta": {
+          const delta = isPlainObject(data.delta) ? data.delta : {};
+          if (typeof delta.stop_reason === "string") stopReason = delta.stop_reason;
+          const usage = isPlainObject(data.usage) ? data.usage : {};
+          if (usage.output_tokens !== undefined) outputTokens = tokens(usage.output_tokens);
+          if (usage.input_tokens !== undefined) inputTokens = Math.max(inputTokens, tokens(usage.input_tokens));
+          return;
+        }
+        case "message_stop":
+          stopped = true;
+          return;
+        case "error":
+          // 上流が途中で失敗した（本文は持ち出さない）
+          throw failure("server");
+        default:
+          // ping など
+          return;
+      }
+    };
+
+    const flushEvent = (raw: string) => {
+      const lines = raw.split(/\r?\n/);
+      const data = lines
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).replace(/^ /, ""))
+        .join("\n");
+      if (data === "") return;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(data);
+      } catch {
+        throw badBody();
+      }
+      if (isPlainObject(parsed)) handle(parsed);
+    };
+
+    try {
+      while (!stopped) {
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await reader.read();
+        } catch {
+          throw interrupted("network");
+        }
+        if (chunk.done) break;
+        touch();
+        buffer += decoder.decode(chunk.value, { stream: true });
+        let boundary = /\r?\n\r?\n/.exec(buffer);
+        while (boundary && !stopped) {
+          const raw = buffer.slice(0, boundary.index);
+          buffer = buffer.slice(boundary.index + boundary[0].length);
+          flushEvent(raw);
+          boundary = /\r?\n\r?\n/.exec(buffer);
+        }
+      }
+      if (!stopped && buffer.trim() !== "") flushEvent(buffer);
+    } catch (error) {
+      // 失敗したら残りは読まない
+      await reader.cancel().catch(() => undefined);
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+    // 途切れた（message_stop が来ない）のは、時間切れか中断なら timeout・その理由、それ以外は壊れた本文
+    if (!stopped) throw interrupted("invalid_output", { reason: "bad_body", usage: usageNow() });
+    const content = blocks
+      .filter((block): block is Exclude<StreamBlock, { type: "other" }> => block !== undefined && block.type !== "other")
+      .map((block) => (block.type === "text" ? { type: "text", text: block.text } : { type: "tool_use", id: block.id, name: block.name, input: block.input }));
+    return { model, content, stop_reason: stopReason, usage: { input_tokens: inputTokens, output_tokens: outputTokens } };
+  };
 }
 
 function boundedMaxTokens(options: AnthropicOptions, asked: number | undefined): number {
@@ -300,7 +483,10 @@ export function createAnthropicClient(options: AnthropicOptions): AnthropicClien
         ...(input.thinking ? { thinking: input.thinking } : {}),
         ...(input.outputConfig ? { output_config: input.outputConfig } : {}),
       };
-      const message = await send(options, body, boundedMaxTokens(options, input.maxTokens), input.signal);
+      const maxTokens = boundedMaxTokens(options, input.maxTokens);
+      const message = input.onText
+        ? await send(options, { ...body, stream: true }, maxTokens, input.signal, readStream(input.onText, options.model))
+        : await send(options, body, maxTokens, input.signal);
       return readTurn(message, options.model);
     },
   };

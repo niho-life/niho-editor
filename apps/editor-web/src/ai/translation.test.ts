@@ -114,3 +114,29 @@ describe("managed translation field contract", () => {
     expect(prompt.user).toContain(fields[0]!.text);
   });
 });
+
+describe("AI が足した語の印（ai）と翻訳", () => {
+  it("ai で分かれた文は 1 つの field にまとめて訳し、訳した本文に ai を残さない", () => {
+    const source: TranslationPageSnapshot = {
+      kind: "note",
+      title: "合成",
+      lead: null,
+      cover: null,
+      blocks: [{ type: "paragraph", content: [{ type: "text", text: "前の" }, { type: "text", text: "AI の語", marks: [{ type: "ai" }] }, { type: "text", text: "太字", marks: [{ type: "bold" }, { type: "ai" }] }] }],
+    };
+    const planned = planManagedTranslation(source);
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    expect(planned.plan.fields).toEqual([
+      { path: "title", text: "合成" },
+      { path: "blocks[0].content[0].text", text: "前のAI の語" },
+      { path: "blocks[0].content[1].text", text: "太字" },
+    ]);
+    const applied = applyManagedTranslation(source, [
+      { path: "title", text: "Synthetic" },
+      { path: "blocks[0].content[0].text", text: "Before the AI words" },
+      { path: "blocks[0].content[1].text", text: "bold" },
+    ]);
+    expect(applied?.blocks).toEqual([{ type: "paragraph", content: [{ type: "text", text: "Before the AI words" }, { type: "text", text: "bold", marks: [{ type: "bold" }] }] }]);
+  });
+});
