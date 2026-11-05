@@ -2685,6 +2685,41 @@ describe("EditorFrame: このページの写真（サイドバーの下）と、
     expect(candidates()).toEqual([Y]);
   });
 
+  it("on the desktop home it waits for where the home goes, then spares that page (the redirect target is not deleted under it)", async () => {
+    const X = "00000000-0000-4000-8000-0000000000d5";
+    window.localStorage.setItem(LEFT_EMPTY_PAGES_KEY, JSON.stringify([NEW, X]));
+    server();
+    nav.pathname = "/";
+    await mount({ pages: [page(NEW, ""), page(X, "")] }, <p>ホーム</p>);
+    await tick();
+    await tick();
+    // `/` のあいだは頼まない（最後に開いたページへ移る途中で、移り先がまだ決まっていない）
+    expect(sends().filter((call) => call.url.endsWith("/discard"))).toEqual([]);
+    expect(candidates()).toEqual([NEW, X]);
+    // 最後に開いたページ NEW へ移った: NEW は捨てず（候補からも外す）、ほかの X だけ捨てる
+    nav.pathname = `/p/${NEW}`;
+    await rerender(<p>合成の中身</p>);
+    await tick();
+    await tick();
+    expect(sends().filter((call) => call.url.endsWith("/discard")).map((call) => call.url)).toEqual([`/api/pages/${X}/discard`]);
+    expect(rows()).toEqual(["無題"]);
+    expect(candidates()).toEqual([]);
+  });
+
+  it("on the narrow home (the list screen, nothing redirects) it discards the candidates right away", async () => {
+    narrow = true;
+    const X = "00000000-0000-4000-8000-0000000000d5";
+    window.localStorage.setItem(LEFT_EMPTY_PAGES_KEY, JSON.stringify([NEW, X]));
+    server();
+    nav.pathname = "/";
+    await mount({ pages: [page(NEW, ""), page(X, "")], initialNarrow: true }, <p>ホーム</p>);
+    await tick();
+    await tick();
+    expect(sends().filter((call) => call.url.endsWith("/discard")).map((call) => call.url).sort()).toEqual([NEW, X].map((id) => `/api/pages/${id}/discard`).sort());
+    expect(rows()).toEqual([]);
+    expect(candidates()).toEqual([]);
+  });
+
   it("does not ask when the new page got a title, nor for a page this tab did not create", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     server();

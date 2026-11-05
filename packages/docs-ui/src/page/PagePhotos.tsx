@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Icon } from "../shell/icons";
 import { ShellSheet } from "../shell/sheet";
 import { IMAGE_ACCEPT, IMAGE_ALT_MAX_CHARS, IMAGE_CREDIT_MAX_CHARS, IMAGE_MAX_BYTES, IMAGE_PAGE_MAX_COUNT, isAllowedImageSize, isAllowedImageType } from "./image-limits";
@@ -69,7 +69,11 @@ type Pending = {
   problem: ImageProblem | null;
 };
 
-type Loaded = { pageId: string; entries: PageImageEntry[] | null; error: boolean };
+/**
+ * 読んだ一覧（entries。読めていないとき null）と、一覧とは別に持つ「上がり終わったのに一覧にまだ無い写真」（fresh）。
+ * 一覧を読めていない（読み込み中・失敗）間に上がり終わった写真を、パネルから消さないために持つ。
+ */
+type Loaded = { pageId: string; entries: PageImageEntry[] | null; error: boolean; fresh: PageImageEntry[] };
 
 const CHECK = (
   <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -110,13 +114,16 @@ function releasePreview(preview: string | null): void {
   }
 }
 
+/** 上がり終わった写真が無いときの空の並び（毎回新しい配列にしない）。 */
+const NO_ENTRIES: PageImageEntry[] = [];
+
 let pendingSeq = 0;
 
 export function PagePhotos({ pageId, images, srcOf, body, open, onOpenChange, height, onHeightChange, narrow = false, onInserted, onUploadingChange }: PagePhotosProps) {
   const bodyId = useId();
   const section = useRef<HTMLElement | null>(null);
   const picker = useRef<HTMLInputElement | null>(null);
-  const [loaded, setLoaded] = useState<Loaded>({ pageId, entries: null, error: false });
+  const [loaded, setLoaded] = useState<Loaded>({ pageId, entries: null, error: false, fresh: [] });
   const [pending, setPending] = useState<Pending[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
@@ -138,7 +145,16 @@ export function PagePhotos({ pageId, images, srcOf, body, open, onOpenChange, he
 
   const list = images.list;
   const remove = images.remove;
-  const entries = loaded.pageId === pageId ? loaded.entries : null;
+  // 読めた一覧（本文の知らない写真を見つける・読み直すときの根拠はこれだけ）
+  const listed = loaded.pageId === pageId ? loaded.entries : null;
+  const fresh = loaded.pageId === pageId ? loaded.fresh : NO_ENTRIES;
+  // パネルに出す一覧: 読めた一覧に、上がり終わったがまだ一覧に無い写真（新しい順で先頭）を足す。一覧が読めていなくても、上がった写真は出す
+  const entries = useMemo(() => {
+    if (!listed) return fresh.length > 0 ? fresh : null;
+    if (fresh.length === 0) return listed;
+    const known = new Set(listed.map((item) => item.assetId));
+    return [...fresh.filter((item) => !known.has(item.assetId)), ...listed];
+  }, [listed, fresh]);
   const loadError = loaded.pageId === pageId && loaded.error;
   const mine = pending.filter((item) => item.pageId === pageId);
   const active = mine.filter((item) => item.status !== "failed").length;
@@ -148,9 +164,15 @@ export function PagePhotos({ pageId, images, srcOf, body, open, onOpenChange, he
   const reload = useCallback(() => {
     if (!list) return;
     const target = pageId;
+    const startedAt = Date.now();
     void list(target).then((result) => {
       if (pageRef.current !== target) return;
-      setLoaded(result ? { pageId: target, entries: result, error: false } : { pageId: target, entries: null, error: true });
+      setLoaded((current) => {
+        const kept = current.pageId === target ? current.fresh : NO_ENTRIES;
+        if (!result) return { pageId: target, entries: null, error: true, fresh: kept };
+        // 読み始めたあとに上がり終わった写真は、この一覧に無いかもしれないので残す（それより前のものは一覧が正）
+        return { pageId: target, entries: result, error: false, fresh: kept.filter((item) => Date.parse(item.createdAt) >= startedAt) };
+      });
     });
   }, [list, pageId]);
 
@@ -170,13 +192,13 @@ export function PagePhotos({ pageId, images, srcOf, body, open, onOpenChange, he
 
   // 本文の画像ボタン・貼り付け・ドロップで新しく上がった写真は、パネルにも出す（知らない写真が本文に出たら一覧を読み直す）
   useEffect(() => {
-    if (!open || !entries) return;
-    const known = new Set(entries.map((entry) => entry.assetId.toLowerCase()));
+    if (!open || !listed) return;
+    const known = new Set([...listed, ...fresh].map((entry) => entry.assetId.toLowerCase()));
     const unknown = [...uses.keys()].filter((id) => !known.has(id)).sort().join(",");
     if (unknown === "" || unknown === unknownKey.current) return;
     unknownKey.current = unknown;
     reload();
-  }, [open, entries, uses, reload]);
+  }, [open, listed, fresh, uses, reload]);
 
   // 上げている途中の写真があるか
   const uploadingNow = active > 0;
@@ -197,11 +219,17 @@ export function PagePhotos({ pageId, images, srcOf, body, open, onOpenChange, he
         setPending((current) => current.filter((entry) => entry.key !== item.key));
         releasePreview(item.preview);
         const entry: PageImageEntry = { assetId: result.assetId, meta: result.meta, bytes: item.file.size, contentType: item.file.type, createdAt: new Date().toISOString() };
-        setLoaded((current) =>
-          current.pageId === item.pageId && current.entries
-            ? { ...current, entries: [entry, ...current.entries.filter((known) => known.assetId !== entry.assetId)] }
-            : current,
-        );
+        setLoaded((current) => {
+          const without = (rows: PageImageEntry[]) => rows.filter((known) => known.assetId !== entry.assetId);
+          if (current.pageId === item.pageId) {
+            // 一覧を読めていれば一覧へ。読めていない（読み込み中・失敗）間は、別に持って、読めたときに合わせる
+            return current.entries
+              ? { ...current, entries: [entry, ...without(current.entries)] }
+              : { ...current, fresh: [entry, ...without(current.fresh)] };
+          }
+          // 開いたページの一覧をまだ読み始めていない（読み込みより先に上がり終わった）。ほかのページを見ているなら何もしない
+          return pageRef.current === item.pageId ? { pageId: item.pageId, entries: null, error: false, fresh: [entry] } : current;
+        });
       });
     },
     [images],
@@ -492,9 +520,10 @@ export function PagePhotos({ pageId, images, srcOf, body, open, onOpenChange, he
           used={uses.get(viewed.assetId.toLowerCase()) ?? 0}
           onClose={() => setViewing(null)}
           onMeta={(meta) =>
-            setLoaded((current) =>
-              current.entries ? { ...current, entries: current.entries.map((entry) => (entry.assetId === viewed.assetId ? { ...entry, meta } : entry)) } : current,
-            )
+            setLoaded((current) => {
+              const patch = (rows: PageImageEntry[]) => rows.map((entry) => (entry.assetId === viewed.assetId ? { ...entry, meta } : entry));
+              return { ...current, entries: current.entries ? patch(current.entries) : null, fresh: patch(current.fresh) };
+            })
           }
           onInserted={() => {
             setViewing(null);
@@ -504,7 +533,10 @@ export function PagePhotos({ pageId, images, srcOf, body, open, onOpenChange, he
             setViewing(null);
             // 本文から消した分の ✓ をすぐ外す（まとめて数える時計を待つと、消した写真を「知らない写真」として読み直してしまう）
             setUses(body.uses());
-            setLoaded((current) => (current.entries ? { ...current, entries: current.entries.filter((entry) => entry.assetId !== viewed.assetId) } : current));
+            setLoaded((current) => {
+              const drop = (rows: PageImageEntry[]) => rows.filter((entry) => entry.assetId !== viewed.assetId);
+              return { ...current, entries: current.entries ? drop(current.entries) : null, fresh: drop(current.fresh) };
+            });
             setNotice(removedFromBody > 0 ? `写真を外し、本文の ${removedFromBody} か所からも消しました。` : "写真をパネルから外しました。");
           }}
         />

@@ -256,6 +256,52 @@ describe("このページの写真（パネル）", () => {
     expect(tiles()).toHaveLength(1);
   });
 
+  it("keeps a photo that finished uploading while the list could not be read, and shows it once when the list is read again", async () => {
+    const { images, uploads } = stubImages();
+    vi.mocked(images.list!).mockResolvedValueOnce(null);
+    await mount({ pageId: PAGE, images, srcOf, body: stubBody(), startOpen: true });
+    expect(host!.querySelector('[role="alert"]')!.textContent).toContain("写真を読み込めませんでした");
+    await act(async () => chooseFiles([png("読めない間.png")]));
+    await flush();
+    expect(uploads).toEqual(["読めない間.png"]);
+    // 一覧が読めていなくても、上がった写真はパネルに出る（消えない）。読めなかった案内と「もう一度」も残る
+    expect(tiles().map((tile) => tile.dataset.assetId)).toEqual([ids[51]]);
+    expect(host!.querySelector('[role="alert"]')).not.toBeNull();
+    // 読み直したら一覧が正（上がった写真が一覧に入っていれば、二重に出さない）
+    vi.mocked(images.list!).mockResolvedValueOnce([entry(ids[51]!), entry(ids[0]!)]);
+    await click(button("もう一度"));
+    expect(tiles().map((tile) => tile.dataset.assetId)).toEqual([ids[51], ids[0]]);
+    expect(host!.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("keeps a photo that finished uploading before the first list came back, even when that list does not have it yet", async () => {
+    const { images } = stubImages();
+    let resolveList: (value: PageImageEntry[]) => void = () => undefined;
+    vi.mocked(images.list!).mockImplementationOnce(() => new Promise<PageImageEntry[]>((resolve) => (resolveList = resolve)));
+    await mount({ pageId: PAGE, images, srcOf, body: stubBody(), startOpen: true });
+    expect(host!.textContent).toContain("読み込んでいます");
+    await act(async () => chooseFiles([png("先に上がった.png")]));
+    await flush();
+    expect(tiles().map((tile) => tile.dataset.assetId)).toEqual([ids[51]]);
+    // 読み始めたあとに上がった写真は、その一覧に無くても残る（古い一覧で消さない）
+    await act(async () => resolveList([entry(ids[0]!)]));
+    await flush();
+    expect(tiles().map((tile) => tile.dataset.assetId)).toEqual([ids[51], ids[0]]);
+  });
+
+  it("removes a photo that was kept outside the list the same way as a listed one", async () => {
+    const { images } = stubImages();
+    vi.mocked(images.list!).mockResolvedValueOnce(null);
+    await mount({ pageId: PAGE, images, srcOf, body: stubBody(), startOpen: true });
+    await act(async () => chooseFiles([png("外す.png")]));
+    await flush();
+    await click(tiles()[0]!);
+    await click(button("パネルから外す", dialog()!));
+    await click(button("外す", dialog()!));
+    expect(images.remove).toHaveBeenCalledWith(PAGE, ids[51]);
+    expect(tiles()).toEqual([]);
+  });
+
   it("refuses the 101st photo: the plus is not pressable and says why", async () => {
     const { images } = stubImages({ entries: ids.map((id) => entry(id)) });
     await mount({ pageId: PAGE, images, srcOf, body: stubBody(), startOpen: true });

@@ -664,11 +664,18 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const frame = useMemo<EditorFrameApi>(() => ({ narrow, ...api }), [narrow, api]);
 
   // 前に `pagehide`（タブを閉じる・再読み込み）で離れた、何も足していないページを捨てる（src/lib/left-empty-pages.ts）。
-  // 開いたときに 1 回だけ。今開いているページ（再読み込み・最後に開いたページへ戻った）は候補から外すだけで捨てない
-  const openedPath = useRef(pathname);
+  // 開いたときに 1 回だけ。今開いているページ（再読み込み・最後に開いたページへ戻った）は候補から外すだけで捨てない。
+  // デスクトップの `/` は最後に開いたページへ移る途中（HomeRedirect。移り先はサーバーが先に読んでいる）なので、
+  // 移り先が決まって pathname が変わるまで待つ（待たずに捨てると、移り先の空のページを消して 404 にしてしまう）
+  const discardedOnOpen = useRef(false);
   useEffect(() => {
-    const opened = PAGE_PATH.exec(openedPath.current)?.[1] ?? null;
+    if (discardedOnOpen.current) return;
+    if (pathname === "/" && !isNarrowNow()) return;
+    discardedOnOpen.current = true;
+    const opened = PAGE_PATH.exec(pathname)?.[1] ?? null;
     void discardLeftEmptyCandidates(opened, api.pageRemoved);
+  }, [pathname, api]);
+  useEffect(() => {
     // 戻る（bfcache）でこの画面がそのまま戻ってきたら、開いているページを候補から外す（別のタブが捨てないように）
     const onShow = (event: PageTransitionEvent) => {
       const current = PAGE_PATH.exec(window.location.pathname)?.[1];
@@ -676,7 +683,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     };
     window.addEventListener("pageshow", onShow);
     return () => window.removeEventListener("pageshow", onShow);
-  }, [api]);
+  }, []);
 
   // 常設の書式の帯にも aria-haspopup="menu" のボタンがあるので、「その他」は名前で選ぶ
   const focusMore = useCallback(() => frameRoot.current?.querySelector<HTMLButtonElement>('.es-dt button[aria-label="その他"]')?.focus(), []);
