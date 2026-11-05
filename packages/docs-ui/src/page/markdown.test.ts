@@ -79,6 +79,24 @@ describe("限定 AST ↔ Markdown", () => {
     expect(roundTrip(blocks)).toEqual(blocks);
   });
 
+  it("GitHub の注記の書き方（目印の次の行から本文）も囲みとして読む", () => {
+    const callout = (value: string): Block => ({ type: "callout", content: [{ type: "paragraph", content: [text(value)] }] });
+    for (const markdown of ["> [!note]\n> 合成の注記\n", "> [!NOTE]\n> 合成の注記\n"]) {
+      const result = markdownToBlocks(markdown);
+      expect(result.ok, markdown).toBe(true);
+      if (!result.ok) return;
+      expect(result.blocks, markdown).toEqual([callout("合成の注記")]);
+    }
+    // 目印の行のあとの段落も、囲みの中に入る
+    const two = markdownToBlocks("> [!note]\n> 一つ目\n>\n> 二つ目\n");
+    expect(two.ok && two.blocks).toEqual([
+      { type: "callout", content: [{ type: "paragraph", content: [text("一つ目")] }, { type: "paragraph", content: [text("二つ目")] }] },
+    ]);
+    // 目印の後ろに文字が続く行は目印ではない（ふつうの引用）
+    const inline = markdownToBlocks("> [!note] 合成の注記\n");
+    expect(inline.ok && inline.blocks[0]?.type).toBe("blockquote");
+  });
+
   it("番号付きの起点を保つ", () => {
     const blocks: Block[] = [
       {
@@ -167,6 +185,23 @@ describe("限定 AST ↔ Markdown", () => {
       const result = markdownToBlocks(markdown);
       expect(result.ok, markdown).toBe(false);
     }
+  });
+
+  it("AI の本文向けの clamp は、見出しの段階だけを 2・3 にそろえ、ほかの対応外はそのまま断る", () => {
+    const heading = (level: number, value: string): Block => ({ type: "heading", attrs: { level }, content: [text(value)] });
+    const result = markdownToBlocks("# 題名\n\n段落\n\n#### 四\n\n###### 六\n\n> # 引用の中\n", { headings: "clamp" });
+    expect(result.ok, result.ok ? "" : result.reason).toBe(true);
+    if (!result.ok) return;
+    expect(result.blocks).toEqual([
+      heading(2, "題名"),
+      { type: "paragraph", content: [text("段落")] },
+      heading(3, "四"),
+      heading(3, "六"),
+      { type: "blockquote", content: [heading(2, "引用の中")] },
+    ]);
+    // 既定（strict）は今までどおり断る。画像は clamp でも断る
+    expect(markdownToBlocks("# 題名").ok).toBe(false);
+    expect(markdownToBlocks("![alt](niho-docs-asset:photo.jpg)", { headings: "clamp" }).ok).toBe(false);
   });
 
   it("HTML は（旧い画面と同じく）文字のまま持つ", () => {

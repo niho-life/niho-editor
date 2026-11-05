@@ -672,6 +672,34 @@ describe("POST /api/pages/{id}/ai/chat/turns (この Mac の CLI の結果)", ()
     expect(store.rows.get(page.id)!.blocks).toEqual([p("もとの本文")]);
   });
 
+  it("levels the CLI's headings to 2 and 3 (a `#` title, `####`) instead of refusing the whole write", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")] });
+    const chats = memoryConversations(store);
+    const markdown = "# 合成の題名\n\n朝の段落\n\n#### 合成の小見出し\n\n> [!note]\n> 合成の注記\n";
+    const response = await deviceTurn(page.id, body(page.id, markdown), deps("user-a", store, { conversations: chats }));
+    expect(response.status).toBe(200);
+    expect(chats.turns.at(-1)).toMatchObject({ result: "done", resultCode: null });
+    const h = (level: number, text: string): Block => ({ type: "heading", attrs: { level }, content: [{ type: "text", text }] });
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([
+      h(2, "合成の題名"),
+      p("朝の段落"),
+      h(3, "合成の小見出し"),
+      { type: "callout", content: [p("合成の注記")] },
+    ]);
+  });
+
+  it("still refuses an image in the CLI's markdown and leaves the page as it was", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")] });
+    const chats = memoryConversations(store);
+    const response = await deviceTurn(page.id, body(page.id, "## 合成\n\n![合成](https://example.com/a.png)\n"), deps("user-a", store, { conversations: chats }));
+    expect(response.status).toBe(200);
+    expect(chats.turns.at(-1)).toMatchObject({ result: "stopped", resultCode: "write_refused" });
+    expect(store.rows.get(page.id)!.blocks).toEqual([p("もとの本文")]);
+    expect(store.versions).toEqual([]);
+  });
+
   it("refuses a CLI write made against an older page revision", async () => {
     const store = memoryStore();
     const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")] });
