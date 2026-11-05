@@ -37,7 +37,7 @@ export type ShellSidebarProps = {
   photos?: ReactNode;
   /**
    * 右に並べる（設計 §5.5。デスクトップだけ渡す）。渡すと、行を本文へドラッグできる（ページ用の型 SHELL_DND.page も載せる）・
-   * ⌥クリック・行で ⌥Enter で右に並べ、行の右クリック（ContextMenu キー・Shift+F10 でも）で「開く」「右に並べて開く」のメニュー。
+   * ⌥クリック・行で ⌥Enter で右に並べ、行の「…」・右クリック（ContextMenu キー・Shift+F10 でも）で「開く」「右に並べて開く」のメニュー。
    * id は今右に並べているページ（その行に「右に表示中」と出し、メニューは「右を閉じる」）。
    */
   side?: { id?: string; onOpen: (id: string) => void; onClose: () => void };
@@ -93,8 +93,11 @@ type DragState = { dragId: string | null; over: ShellDropTarget | null };
 /** 右に並べる操作（ShellSidebarProps.side から作る）。 */
 type RowActions = {
   sideId?: string;
+  /** 今メニューを開いている行（その行の「…」を aria-expanded にする）。 */
+  menuId?: string;
   onOpenSide: (id: string) => void;
   onMenu: (id: string, at: { x: number; y: number }, trigger: HTMLElement | null) => void;
+  onMenuClose: () => void;
 };
 
 type DragProps = {
@@ -253,6 +256,24 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
                 </span>
               )}
             </button>
+            {rowActions && (
+              // 行の「…」（設計 §5.5）。右クリック・⌥クリックを知らない人・iPad の入り口。ふだんは隠し、行に乗る・フォーカスすると出す
+              <button
+                type="button"
+                className="es-ib es-ib--sm es-di-more"
+                aria-label={`${item.title || "無題"} のメニュー`}
+                aria-haspopup="menu"
+                aria-expanded={rowActions.menuId === item.id}
+                onClick={(event) => {
+                  // 開いているときにもう一度押すと閉じる（外のクリックとしては閉じない。menu.tsx の useMenuDismiss）
+                  if (rowActions.menuId === item.id) return rowActions.onMenuClose();
+                  const box = event.currentTarget.getBoundingClientRect();
+                  rowActions.onMenu(item.id, { x: box.left, y: box.bottom + 4 }, event.currentTarget);
+                }}
+              >
+                <Icon name="more" />
+              </button>
+            )}
           </div>
           {children.length > 0 && <ShellSidebarRows nodes={children} currentId={currentId} onSelect={onSelect} onToggleFolder={onToggleFolder} drag={drag} rowActions={rowActions} />}
         </li>
@@ -279,16 +300,23 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
   const rowActions: RowActions | undefined = side
     ? {
         sideId: side.id,
+        menuId: rowMenu?.id,
         onOpenSide: side.onOpen,
         onMenu: (id, at, trigger) => {
           rowMenuTrigger.current = trigger;
           setRowMenu({ id, ...at });
         },
+        onMenuClose: () => setRowMenu(null),
       }
     : undefined;
   const rowMenuItems = (id: string): ShellMenuItem[] => {
     const open: ShellMenuItem = { id: "open", label: "開く", icon: "doc" };
-    if (id === currentId) return [open];
+    // メインのページは右に置けない。できないことは消さずに、理由を添えて無効で出す（モックの rowMenu()）
+    if (id === currentId)
+      return [
+        { ...open, label: "メインで開いています", disabled: true },
+        { id: "side", label: "右に並べて開く", icon: "panel", disabled: true },
+      ];
     if (id === side?.id) return [open, { id: "close-side", label: "右を閉じる", icon: "x" }];
     return [open, { id: "side", label: "右に並べて開く", icon: "panel", hint: "⌥クリック" }];
   };

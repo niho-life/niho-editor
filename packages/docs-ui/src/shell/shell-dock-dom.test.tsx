@@ -461,14 +461,58 @@ describe("一覧の右に並べる操作とパネルの移動（ShellSidebar）"
     key(row(host, "取材メモ").querySelector(".es-di")!, "Enter", { altKey: true });
     expect(side.onOpen).toHaveBeenCalledTimes(3);
 
-    // メインのページは右に置けない。右のページは「右を閉じる」
+    // メインのページは右に置けない（理由を添えて無効で出す）。右のページは「右を閉じる」
     key(row(host, "鎌倉の朝さんぽ").querySelector(".es-di")!, "F10", { shiftKey: true });
-    expect([...host.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["開く"]);
+    const mainItems = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+    expect(mainItems.map((item) => item.textContent)).toEqual(["メインで開いています", "右に並べて開く"]);
+    expect(mainItems.map((item) => item.getAttribute("aria-disabled"))).toEqual(["true", "true"]);
+    act(() => mainItems[1]!.click());
+    expect(side.onOpen).toHaveBeenCalledTimes(3);
+    expect(onSelect).not.toHaveBeenCalled();
     key(document.activeElement!, "Escape");
     key(row(host, "写真の候補").querySelector(".es-di")!, "ContextMenu");
     expect([...host.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["開く", "右を閉じる"]);
     act(() => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')][1]!.click());
     expect(side.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("行の「…」でも同じメニュー（右クリック・⌥クリックを知らない人の入り口）。もう一度押すと閉じる", () => {
+    const side = { onOpen: vi.fn(), onClose: vi.fn() };
+    const { host, render } = mount(<ShellSidebar items={items} currentId="a" side={side} me={me} />);
+    const more = row(host, "取材メモ").querySelector<HTMLButtonElement>(".es-di-more")!;
+    expect(more.getAttribute("aria-label")).toBe("取材メモ のメニュー");
+    expect(more.getAttribute("aria-haspopup")).toBe("menu");
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+
+    act(() => more.click());
+    const menu = host.querySelector<HTMLElement>('[role="menu"][aria-label="ページのメニュー"]')!;
+    expect([...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["開く", "右に並べて開く⌥クリック"]);
+    expect(more.getAttribute("aria-expanded")).toBe("true");
+    act(() => more.click());
+    expect(host.querySelector('[role="menu"]')).toBeNull();
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+
+    act(() => more.click());
+    act(() => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')][1]!.click());
+    expect(side.onOpen).toHaveBeenLastCalledWith("b");
+    // 選んだあとは「…」へフォーカスを戻す
+    expect(document.activeElement).toBe(more);
+
+    // メインのページの行にも出し（並びをそろえる）、項目は理由つきの無効。右に出しているページの行は「右を閉じる」
+    act(() => row(host, "鎌倉の朝さんぽ").querySelector<HTMLButtonElement>(".es-di-more")!.click());
+    expect([...host.querySelectorAll('[role="menuitem"]')].map((item) => item.getAttribute("aria-disabled"))).toEqual(["true", "true"]);
+    key(document.activeElement!, "Escape");
+    render(<ShellSidebar items={items} currentId="a" side={{ ...side, id: "c" }} me={me} />);
+    act(() => row(host, "写真の候補").querySelector<HTMLButtonElement>(".es-di-more")!.click());
+    expect([...host.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["開く", "右を閉じる"]);
+    act(() => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')][1]!.click());
+    expect(side.onClose).toHaveBeenCalledTimes(1);
+
+    // 題名のない行は「無題 のメニュー」。side を渡さない（スマホ）なら「…」は出さない
+    render(<ShellSidebar items={[{ id: "d", title: "", when: "今" }]} side={side} me={me} />);
+    expect(host.querySelector(".es-di-more")!.getAttribute("aria-label")).toBe("無題 のメニュー");
+    render(<ShellSidebar items={items} currentId="a" me={me} />);
+    expect(host.querySelector(".es-di-more")).toBeNull();
   });
 
   it("行のドラッグはページ用の型を載せる（検索の結果のように並べ替えない行でも）", () => {

@@ -156,6 +156,8 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
       currentId={isStart ? undefined : page.id}
       onSelect={(itemId) => navigate(itemId === "new" ? "new" : `page:${itemId}`)}
       onCollapse={() => setSidebarOpen(false)}
+      // 右に並べる（設計 §5.5。editor-web と同じくデスクトップでページを開いているときだけ）。行の「…」を axe・はみ出しの確認に載せる
+      side={!isStart && !isNarrow() ? { onOpen: () => undefined, onClose: () => undefined } : undefined}
       newMenu={{
         open: newMenu,
         onToggle: () => setNewMenu((v) => !v),

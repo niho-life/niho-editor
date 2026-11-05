@@ -133,6 +133,11 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ditw{flex:0 0 auto;width:18px;align-self:stretch;display:flex;align-items:center;justify-content:center;border-radius:6px;font-size:12px;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ditw:hover{background:var(--ed-sand-2)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di{flex:1 1 0;min-width:0}
+/* 行の「…」（右に並べて開く。設計 §5.5）。ふだんは隠し、行に乗る・フォーカス・メニューを開いている間だけ出す。触る端末（hover なし）では常に出す */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di-more{flex:none;margin-top:4px;color:var(--ed-ink-mute);opacity:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di-more:hover{background:var(--ed-sand-2)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow:hover .es-di-more,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow:focus-within .es-di-more,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di-more[aria-expanded="true"]{opacity:1}
+@media (hover:none){:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di-more{opacity:1}}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-psfolder select{width:100%;border:1px solid var(--ed-line-2);border-radius:10px;padding:6px 8px;background:var(--ed-white);font:inherit;font-size:13px;color:var(--ed-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-foot{position:relative;border-top:1px solid var(--ed-line);padding:8px 10px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:7px 8px;border-radius:10px}
@@ -918,6 +923,9 @@
 /* 一覧の行: 右に並べているページの印と、右クリックのメニュー（押した位置に出す） */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-side{margin-left:6px;padding:0 7px;border-radius:999px;background:var(--ed-blue-soft);color:var(--ed-ink-sub);font-style:normal;font-size:12px;font-weight:600}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-menu--at{position:fixed;right:auto;width:230px;z-index:60}
+/* 行のメニューの、いまはできない項目（メインのページを右に並べる）。消さずに薄く出す */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-menu--at .es-mi[aria-disabled="true"]{color:var(--ed-ink-mute);cursor:default}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-menu--at .es-mi[aria-disabled="true"]:hover{background:none}
 /* AI をメインの下に浮かせる。本文と同じ幅（最大 680px）で、ふだんは入力欄 1 行。開くと会話を出し、上端の取っ手で高さを変える */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-dock="float"]{grid-column:3;grid-row:2/-1;align-self:end;justify-self:center;width:min(680px,calc(100% - 48px));max-height:calc(100% - 72px);margin-bottom:16px;z-index:15;background:var(--ed-white);border:1px solid var(--ed-line-2);border-radius:14px;box-shadow:0 10px 32px rgba(0,0,0,.12)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-float="open"]{height:var(--es-float-open,360px)}

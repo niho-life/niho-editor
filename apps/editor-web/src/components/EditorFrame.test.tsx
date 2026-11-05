@@ -246,7 +246,7 @@ describe("EditorFrame", () => {
     expect(container!.querySelector(".es-ttl")?.textContent).toBe("合成の題名");
     expect(container!.querySelector('[aria-current="page"]')?.textContent).toContain("合成の題名");
 
-    await act(async () => container!.querySelectorAll<HTMLButtonElement>(".es-sb-list li button")[1]!.click());
+    await act(async () => container!.querySelectorAll<HTMLButtonElement>(".es-sb-list li button.es-di")[1]!.click());
     expect(nav.push).toHaveBeenLastCalledWith("/p/00000000-0000-4000-8000-000000000002");
 
     await clickSidebarAct("新しいページ");
