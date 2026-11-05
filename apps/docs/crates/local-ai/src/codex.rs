@@ -22,7 +22,7 @@
 
 use crate::classify::{classify_codex_failure, error_event};
 use crate::claude::file_name_only;
-use crate::process::{is_uuid, run_capture, run_child, PrivateDir, TURN_DIR_PREFIX};
+use crate::process::{is_uuid, run_child, run_child_within, ChildExit, PrivateDir, TURN_DIR_PREFIX};
 use crate::turn::{Breach, FolderAccess, StreamHandler, TurnCtx};
 use crate::types::{Effort, Provider, ReasonCode, StopReason, TurnEvent, Usage};
 use serde_json::Value;
@@ -53,7 +53,8 @@ pub(crate) const DISABLED_FEATURES: [&str; 18] = [
   "skill_mcp_dependency_install",
 ];
 
-/// `codex features list` を待つ時間・残す出力の大きさ・読む機能の数の上限。
+/// `codex features list` を待つ時間（この子だけの上限。停止・ターンの時間切れ・アプリの終了では先に止まる）・残す出力の大きさ・
+/// 読む機能の数の上限。
 const FEATURES_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
 const FEATURES_OUTPUT_MAX_BYTES: usize = 256 * 1024;
 const MAX_FEATURES: usize = 512;
@@ -513,6 +514,47 @@ impl StreamHandler for CodexConverter {
   }
 }
 
+/// `codex features list` の stdout を集める（[`FEATURES_OUTPUT_MAX_BYTES`] を超えたら読めなかったことにする）。
+#[derive(Default)]
+struct FeaturesList {
+  text: String,
+  overflow: bool,
+}
+
+impl StreamHandler for FeaturesList {
+  fn process_line(&mut self, line: &str) -> Vec<TurnEvent> {
+    let line = line.trim_end_matches(['\r', '\n']);
+    if self.overflow || self.text.len() + line.len() + 1 > FEATURES_OUTPUT_MAX_BYTES {
+      self.overflow = true;
+    } else {
+      self.text.push_str(line);
+      self.text.push('\n');
+    }
+    Vec::new()
+  }
+
+  fn breach(&self) -> Option<&Breach> {
+    None
+  }
+
+  // 一覧の読み取りでは最後のイベントを作らない（停止・時間切れは本体の CodexConverter で終える）
+  fn stopped(&self, _elapsed_ms: u64) -> TurnEvent {
+    error_event(
+      Provider::CodexCli,
+      ReasonCode::NotConfigured,
+      Some(FEATURES_UNREADABLE_MESSAGE),
+    )
+  }
+
+  fn conclude(&self, _stderr: &str, _elapsed_ms: u64) -> TurnEvent {
+    error_event(
+      Provider::CodexCli,
+      ReasonCode::NotConfigured,
+      Some(FEATURES_UNREADABLE_MESSAGE),
+    )
+  }
+}
+
 pub(crate) fn run(ctx: &TurnCtx, emit: &mut dyn FnMut(TurnEvent)) -> TurnEvent {
   let dir = match PrivateDir::create(&ctx.runtime.scratch_dir, TURN_DIR_PREFIX) {
     Ok(dir) => dir,
@@ -528,15 +570,26 @@ pub(crate) fn run(ctx: &TurnCtx, emit: &mut dyn FnMut(TurnEvent)) -> TurnEvent {
       Err(err) => return ctx.setup_failed(format!("instructions file: {err}")),
     }
   };
-  // 今の版で有効な機能を読む（読めなければ起動しない）。切る機能は版に依らずここで決める
-  let listed = run_capture(
+  let mut converter = match &ctx.folder {
+    Some(folder) => CodexConverter::with_folder(ctx.req.resume_session.clone(), folder.clone()),
+    None => CodexConverter::new(ctx.req.resume_session.clone()),
+  };
+  // 今の版で有効な機能を読む（読めなければ起動しない）。切る機能は版に依らずここで決める。ターンの子として動かすので、
+  // 停止・ターンの時間切れ・アプリの終了で止まり、そのときは停止・時間切れとして終える（読めなかったことにしない）
+  let mut list = FeaturesList::default();
+  let listed = run_child_within(
+    ctx,
     ctx.command(&["features".to_string(), "list".to_string()], &[]),
-    FEATURES_TIME_LIMIT,
-    ctx.runtime.kill_grace,
-    FEATURES_OUTPUT_MAX_BYTES,
+    Vec::new(),
+    &mut list,
+    &mut |_| {},
+    Some(std::time::Instant::now() + FEATURES_TIME_LIMIT),
   );
+  if ctx.running.is_stop_requested() || ctx.running.is_timed_out() {
+    return ctx.finish(&converter, None);
+  }
   let enabled = match listed {
-    Ok(output) if output.status.success() => enabled_features(&String::from_utf8_lossy(&output.stdout)),
+    ChildExit::Exited { exit_code: Some(0), .. } if !list.overflow => enabled_features(&list.text),
     _ => None,
   };
   let Some(enabled) = enabled else {
@@ -555,10 +608,6 @@ pub(crate) fn run(ctx: &TurnCtx, emit: &mut dyn FnMut(TurnEvent)) -> TurnEvent {
   if args.iter().map(String::len).sum::<usize>() > MAX_ARGV_BYTES {
     return ctx.error(ReasonCode::TransientFailure, Some("依頼の引数が長すぎます。"));
   }
-  let mut converter = match &ctx.folder {
-    Some(folder) => CodexConverter::with_folder(ctx.req.resume_session.clone(), folder.clone()),
-    None => CodexConverter::new(ctx.req.resume_session.clone()),
-  };
   if ctx.running.is_stop_requested() {
     return ctx.finish(&converter, None);
   }

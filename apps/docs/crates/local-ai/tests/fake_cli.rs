@@ -1185,10 +1185,11 @@ fn shutdown_stops_running_turns() {
 // codex
 
 /// `codex features list` の偽物（0.163.0 の形。段階は 2 語のこともある）。`$OUT/codex-features-broken` があれば読めない一覧
-/// （別の出力と exit 2）を返す。どの `CODEX_HOME` で読んだかを写す。
+/// （別の出力と exit 2）を、`$OUT/codex-features-hang` があれば返す前に 30 秒止まる。どの `CODEX_HOME` で読んだかを写す。
 const CODEX_FEATURES: &str = r#"if [ "$1" = features ] && [ "$2" = list ]; then
   printf '%s' "${CODEX_HOME:-}" > "$OUT/codex-features-home.txt"
   if [ -f "$OUT/codex-features-broken" ]; then echo "error: unrecognized subcommand 'features'" >&2; exit 2; fi
+  if [ -f "$OUT/codex-features-hang" ]; then touch "$OUT/codex-features-started"; sleep 30; fi
   cat <<'FEATURES'
 agent_message_board                      under development  false
 apps                                     stable             true
@@ -1421,6 +1422,59 @@ fn codex_does_not_start_when_the_features_list_cannot_be_read() {
   assert!(h.logs().iter().any(|line| line.starts_with("features_unreadable")));
   // 一覧はアプリの置き場（CODEX_HOME）で読む
   assert_eq!(h.read_out("codex-features-home.txt"), h.codex_home().to_string_lossy());
+}
+
+#[test]
+fn codex_stop_while_reading_the_features_list_ends_as_stopped() {
+  // 一覧の読み取りもターンの子なので、停止で止まり、停止として終わる（読めなかったことにしない）。exec は動かない
+  let _guard = global_lock();
+  let h = Harness::new("codex-features-stop");
+  fs::write(h.dir.join("out").join("codex-features-hang"), "").unwrap();
+  h.fake("codex", "touch \"$OUT/codex-exec-ran\"\nexit 0");
+  let started = Instant::now();
+  let (handle, events) = h.start(h.request(Provider::CodexCli, "gpt-5.5"));
+  wait_until(Duration::from_secs(10), "the features list to start", || {
+    h.dir.join("out").join("codex-features-started").exists()
+  });
+  assert!(handle.stop());
+  handle.wait();
+  assert!(
+    started.elapsed() < Duration::from_secs(10),
+    "stop must end the features list"
+  );
+  let events = events.lock().unwrap().clone();
+  assert_one_terminal_last(&events);
+  assert!(
+    matches!(
+      events.last(),
+      Some(TurnEvent::Done {
+        stop_reason: StopReason::Stopped,
+        ..
+      })
+    ),
+    "{events:?}"
+  );
+  assert!(!h.dir.join("out").join("codex-exec-ran").exists());
+  assert!(!h.logs().iter().any(|line| line.starts_with("features_unreadable")));
+}
+
+#[test]
+fn codex_features_list_follows_the_turn_time_limit() {
+  // ターンの残り時間が一覧の上限（15 秒）より短ければ、ターンの時間で止めて時間切れとして終わる
+  let _guard = global_lock();
+  let h = Harness::new("codex-features-timeout");
+  fs::write(h.dir.join("out").join("codex-features-hang"), "").unwrap();
+  h.fake("codex", "touch \"$OUT/codex-exec-ran\"\nexit 0");
+  let mut req = h.request(Provider::CodexCli, "gpt-5.5");
+  req.timeout = Duration::from_millis(1500);
+  let started = Instant::now();
+  let events = h.run(req);
+  assert!(
+    started.elapsed() < Duration::from_secs(10),
+    "the turn time limit must end the features list"
+  );
+  assert_eq!(error_of(&events).0, ReasonCode::TimedOut);
+  assert!(!h.dir.join("out").join("codex-exec-ran").exists());
 }
 
 #[test]
