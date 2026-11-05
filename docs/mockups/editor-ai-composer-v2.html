@@ -1,0 +1,585 @@
+<!doctype html>
+<!--
+  mock: NIHO editor の AI コンポーザー v2（PC。直接反映＋「変更を見る」、Claude のチャットと同じ地の文の会話）
+  色と文字: このモックは単体で開けるよう、色を :root の仮値（hex）で持つ。実装（docs-ui / editor-web）では packages/ui/src/styles/tokens.css の token を引き、生の hex は足さない。文字は 12px 以上にそろえてある。
+  mock: NIHO editor の AI コンポーザー v2（PC。直接反映＋「変更を見る」、Claude のチャットと同じ地の文の会話）
+  v1（採用・却下の hunk 方式）はオーナーの判断で取り下げ。NIHO アプリの記事制作 workbench の形
+  （版を保存 → 「変更を見る」「元に戻す」、差分は本文側に inline）に合わせた。
+  論点（上の帯の「場面」で切り替える。開くと自動で 1 回流れる。「やり直す」で再生）:
+    推敲       … 「ですます調にそろえて、繰り返しを削って」。右では AI が何を読んで何をどう直すつもりかを地の文で話しながら
+                 （思考の中継。畳まない・消さない）、本文に直接反映していく。足した語は灰色で流れ込み、消す語はその場で消える。
+                 終わると返答と「版 5 を保存しました · −18 字  変更を見る  元に戻す」。「変更を見る」で本文が差分表示
+                 （消した語＝取り消し線、足した語＝薄緑の下地＋下線、本文の上に「AI の変更（版 5）を表示中 · 閉じる」）。
+                 灰色の語の中に自分で打った文字は黒。「元に戻す」で書き換え前へ。
+    肉付け     … 人が 5 行（各章の書き出し）だけ書いた記事。@ で録音の文字起こしを渡し、「各行を章の書き出しにして、録音から肉付けして」。
+                 章ごとに見出しと前後の段落が灰色で流れ込み、人の 5 行は一字も変わらない。資料に無い事実は〔要確認〕。段落末に時刻の出典。
+    選んで指示 … 本文の 2 段落を選んで右で「もっと短く」。選択は入力欄のチップになり、変更は選んだ段落だけ。
+  作っていない:
+    - 上の黒い帯は mock 用。保存・公開・検索・新しい会話・工程の実行は動かない（見た目だけ）。
+    - 思考の中継・返答・本文の変更は固定の合成文で、モデルは呼ばない。「止める」（送信ボタンが四角になる）は流れを止めるだけ。
+    - AI が書いている間、本文は読み取り専用。灰色の文の中で打った文字を黒にするのはキーボード直打ち（英数）だけで、IME の変換中は扱わない。
+    - 「変更を見る」は最後の版だけ。⋯ の「AI の文を灰色で見せる」以外の項目は押しても動かない。320px は崩れない程度で、比較は PC 幅を想定。
+  参照: idea/active/2026-11-05-ai-composer-design.md（設計と実現性）/ docs/mockups/editor-ui-refine-v1.html（ベース）/
+        niho-app/apps/web/components/article-authoring/article-agent-chat-rail.tsx（版の行・入力欄の参考）/ 設計 §6
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>NIHO editor AI コンポーザー v2</title>
+<style>
+:root{
+  --ink:#2a2a26;--ink2:#54544d;--mute:#6e6d66;--faint:#898880;
+  --white:#fff;--canvas:#fffdfa;--shell:#fcfaf5;--sand:#f7f7f4;--sand2:#f5f3ee;
+  --line:#f1f1ed;--line2:#e7e7e2;--line3:#dbdbd5;--track:#f2efe8;
+  --moss:#56751e;--pale:#EEF6E1;--leaf:#B2D67C;--deep:#63A109;
+  --grad:linear-gradient(140deg,#7DBA3A 0%,#63A109 100%);--grad-h:linear-gradient(140deg,#74B033 0%,#5C9508 100%);
+  --amber:#C8713A;--amber-ink:#a55827;--amber-pale:#FAF0E6;
+  --sans:"Hiragino Maru Gothic ProN","Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;
+  --mono:ui-monospace,Menlo,monospace;
+  --sbw:244px;--aiw:380px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font:14px/1.6 var(--sans);color:var(--ink);background:var(--canvas);-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4,p,ul,ol{margin:0}
+ul,ol{padding:0;list-style:none}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0;padding:0}
+b,strong{font-weight:600}
+:focus-visible{outline:2px solid var(--moss);outline-offset:2px;border-radius:6px}
+[contenteditable]:focus{outline:none}
+[hidden]{display:none!important}
+.ico{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.sp{flex:1}
+kbd{font:12px var(--mono);color:var(--faint)}
+.ib{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:var(--ink2);flex:none;position:relative}
+.ib:hover,.ib.on{background:var(--sand2);color:var(--ink)}
+.ib[data-tip]::after{content:attr(data-tip);position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);white-space:nowrap;background:var(--ink);color:#fff;font-size:12px;font-weight:600;padding:3px 8px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .12s;z-index:30}
+.ib[data-tip]:hover::after{opacity:1}
+.menu{position:absolute;z-index:40;min-width:200px;background:#fff;border:1px solid var(--line2);border-radius:12px;box-shadow:0 12px 36px rgba(28,28,26,.12);padding:6px;display:none}
+.menu.open{display:block}
+.menu button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:7px 10px;border-radius:8px;font-size:13.5px;color:var(--ink)}
+.menu button:hover{background:var(--sand)}
+.menu button .ico{width:16px;height:16px;color:var(--ink2)}
+.menu button .chk{width:16px;text-align:center;color:var(--moss);font-weight:700}
+.menu button small{margin-left:auto;color:var(--faint);font-size:12px}
+.menu hr{border:0;border-top:1px solid var(--line);margin:5px 4px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes blink{50%{opacity:0}}
+
+/* mock bar */
+.mock{position:sticky;top:0;z-index:100;overflow:hidden;display:flex;align-items:center;gap:10px;height:40px;padding:0 12px;background:#141413;color:#fff;font-size:12.5px}
+.mock .url{flex:1;min-width:0;background:rgba(255,255,255,.08);border-radius:8px;padding:4px 10px;font-family:var(--mono);font-size:12px;color:rgba(255,255,255,.55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mock .url b{color:#fff;font-weight:600}
+.variant-switch{display:flex;align-items:center;gap:6px}
+.variant-switch span{color:rgba(255,255,255,.5);margin-left:6px}
+.variant-switch button{height:24px;padding:0 10px;border-radius:999px;color:rgba(255,255,255,.75);font-weight:600;font-size:12px;border:1px solid rgba(255,255,255,.18);white-space:nowrap;flex:none}
+.variant-switch button.on{background:#fff;color:#141413;border-color:#fff}
+.variant-switch button.all{border-style:dashed}
+
+/* shell */
+.ws{display:grid;grid-template-columns:var(--sbw) minmax(0,1fr);min-height:calc(100vh - 40px)}
+.ws.sbhide{grid-template-columns:minmax(0,1fr)}
+.ws.sbhide .sb{display:none}
+.sb{position:sticky;top:40px;height:calc(100vh - 40px);display:flex;flex-direction:column;background:var(--shell);border-right:1px solid var(--line)}
+.sb-top{display:flex;align-items:center;gap:6px;padding:10px 10px 2px 14px}
+.sb-top .brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;flex:1;min-width:0}
+.sb-top .brand i{width:20px;height:20px;border-radius:6px;background:var(--grad);flex:none}
+.sb-act{padding:4px 8px 2px}
+.sb-act button{display:flex;align-items:center;gap:9px;width:100%;height:30px;padding:0 8px;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--ink2)}
+.sb-act button:hover{background:var(--sand2);color:var(--ink)}
+.sb-act button .ico{width:16px;height:16px;color:var(--faint)}
+.sb-act button kbd{margin-left:auto}
+.sb-list{flex:1;overflow:auto;padding:6px 8px 10px}
+.row{position:relative;display:flex;align-items:center;gap:6px;height:32px;padding:0 6px 0 calc(8px + var(--d,0) * 18px);border-radius:8px;cursor:pointer;user-select:none}
+.row:hover{background:var(--sand2)}
+.row.on{background:#fff;box-shadow:0 1px 2px rgba(28,28,26,.06),0 0 0 1px var(--line)}
+.row b{flex:1;min-width:0;font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .when{font-size:12px;color:var(--faint);white-space:nowrap}
+.row .mk{width:14px;height:14px;color:var(--mute)}
+.sb-foot{border-top:1px solid var(--line);padding:8px 10px}
+.sb-me{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:6px 8px;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--ink2)}
+.sb-me:hover{background:var(--sand2);color:var(--ink)}
+.sb-me .av{width:22px;height:22px;border-radius:50%;background:var(--pale);color:var(--moss);display:grid;place-items:center;font-size:12px;font-weight:700}
+
+/* document */
+.doc{position:relative;display:flex;flex-direction:column;min-width:0;min-height:calc(100vh - 40px)}
+.dt{position:sticky;top:40px;z-index:20;display:flex;align-items:center;gap:4px;height:46px;padding:0 10px 0 8px;background:var(--canvas)}
+.dt .crumb{font-size:13px;color:var(--mute);max-width:30vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-left:4px}
+.dt .ins{display:flex;align-items:center;gap:2px;margin-left:8px;padding-left:10px;border-left:1px solid var(--line2)}
+.dt .ins .ib{color:var(--faint)}
+.dt .ins .ib:hover{color:var(--ink)}
+.pubbtn{height:30px;padding:0 13px;border-radius:8px;font-weight:600;font-size:13.5px;color:var(--ink);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:none}
+.pubbtn:hover{background:var(--sand)}
+#moremenu{right:10px;left:auto;top:44px}
+
+.dbody{display:grid;grid-template-columns:minmax(0,1fr) 0;flex:1;position:relative}
+.dbody.open{grid-template-columns:minmax(0,1fr) var(--aiw)}
+.canvas{padding:52px 56px 160px;min-width:0;position:relative}
+.canvas .in{max-width:680px;margin:auto;position:relative}
+.tt{font-weight:600;font-size:34px;line-height:1.25;letter-spacing:-.01em;min-height:1.25em}
+.bd{font-size:16px;line-height:1.95;margin-top:14px;min-height:40vh}
+.bd p{margin:0 0 .35em}
+.bd h2{font-size:22px;font-weight:600;line-height:1.4;margin:1.2em 0 .3em}
+.bd ::selection{background:#dce9f7}
+.bd[contenteditable="false"]{cursor:default}
+/* AI が書いた印（灰色） */
+.bd .ai{color:var(--mute)}
+body.nogray .bd .ai{color:inherit}
+.bd span.ai{position:relative}
+.bd span.ai:hover::after{content:"AI が書いた";position:absolute;left:0;top:calc(100% + 2px);font-size:12px;font-weight:600;color:var(--faint);background:#fff;border:1px solid var(--line2);border-radius:6px;padding:1px 7px;white-space:nowrap;z-index:6;pointer-events:none}
+.bd .typing::after{content:"";display:inline-block;width:2px;height:1em;background:var(--mute);vertical-align:-3px;margin-left:2px;animation:blink 1s steps(2) infinite}
+.bd cite{font-style:normal;font:12px var(--mono);color:var(--faint);margin-left:8px;user-select:none;vertical-align:1px}
+.bd .chk{font-size:12.5px;color:var(--amber-ink);background:var(--amber-pale);border-radius:4px;padding:0 5px;margin:0 2px;user-select:none}
+/* 変更を見る */
+.diffbar{display:none;position:sticky;top:86px;z-index:12;align-items:center;gap:10px;margin:0 0 14px;padding:7px 12px;border-radius:10px;background:var(--pale);color:var(--moss);font-size:12.5px;font-weight:600}
+body.diff .diffbar{display:flex}
+.diffbar button{margin-left:auto;color:var(--moss);text-decoration:underline;text-underline-offset:3px;font-weight:600}
+.bd del{color:var(--faint);text-decoration:line-through;text-decoration-thickness:1.5px}
+.bd ins{color:var(--ink);text-decoration:underline;text-decoration-color:var(--deep);text-decoration-thickness:2px;text-underline-offset:4px;background:var(--pale);border-radius:3px;box-shadow:0 0 0 2px var(--pale)}
+.bd .added{background:var(--pale);box-shadow:inset 3px 0 0 var(--leaf);padding-left:12px;margin-left:-15px;border-radius:0 6px 6px 0}
+
+/* 文字数 */
+.count{position:fixed;right:18px;bottom:14px;z-index:15;font-size:12px;color:var(--faint);padding:4px 9px;border-radius:999px;background:var(--canvas)}
+.dbody.open ~ .count{right:calc(var(--aiw) + 18px)}
+
+/* 右パネル */
+.rp{position:sticky;top:86px;align-self:start;height:calc(100vh - 86px);border-left:1px solid var(--line);background:var(--canvas);display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.divider{position:absolute;left:-4px;top:0;bottom:0;width:8px;cursor:col-resize;z-index:5}
+.divider:hover,.divider.on{background:linear-gradient(90deg,transparent 3px,var(--line3) 3px,var(--line3) 5px,transparent 5px)}
+.rp .hd{display:flex;align-items:center;gap:2px;height:40px;padding:0 8px 0 14px;flex:none;font-weight:600;font-size:13.5px}
+.thread{flex:1;overflow:auto;padding:6px 16px 10px;display:flex;flex-direction:column;gap:12px}
+.msg{font-size:13.5px;line-height:1.7}
+.msg.me{align-self:flex-end;max-width:92%;background:var(--pale);border-radius:16px 4px 16px 16px;padding:8px 12px}
+.msg.me .chips{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:5px}
+.msg.bot{color:var(--ink);display:flex;flex-direction:column;gap:8px}
+.msg.bot p{margin:0}
+.pre{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;background:#fff;color:var(--moss);font-size:12px;font-weight:600;margin-right:6px;vertical-align:1px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:999px;background:#fff;color:var(--moss);font-size:12px;font-weight:600;white-space:nowrap}
+.composer .chip{background:var(--pale)}
+.chip .ico{width:13px;height:13px}
+.chip .x{color:var(--moss);opacity:.7;font-size:14px;margin-left:1px}
+/* 作業中の 1 行 */
+.work{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--mute);min-height:20px}
+.work i{width:11px;height:11px;border-radius:50%;border:2px solid var(--moss);border-top-color:transparent;animation:spin .8s linear infinite;flex:none}
+/* 版の行 */
+.verline{font-size:12.5px;color:var(--ink2);display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px}
+.verline em{font-style:normal;color:var(--mute)}
+.verline button{color:var(--moss);font-weight:600;text-decoration:underline;text-underline-offset:3px;min-height:24px}
+.verline button:disabled{color:var(--faint);text-decoration:none;cursor:default}
+.verline .note{color:var(--amber-ink)}
+/* 入力欄 */
+.composer{padding:10px 12px 12px;flex:none;position:relative}
+.composer .box{border:1px solid var(--line2);border-radius:16px;background:#fff;padding:9px 10px 7px}
+.composer .box:focus-within{border-color:var(--line3)}
+.composer .chips{display:none;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.composer .chips.has{display:flex}
+.composer textarea{width:100%;border:0;outline:none;resize:none;font-size:13.5px;line-height:1.6;min-height:48px;background:none;padding:0 2px;display:block}
+.composer textarea::placeholder{color:var(--faint)}
+.composer .foot{display:flex;align-items:center;gap:4px;margin-top:4px}
+.composer .foot .ib{width:28px;height:28px;color:var(--faint)}
+.model{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 9px;border-radius:999px;font-size:12px;font-weight:600;color:var(--mute)}
+.send{width:28px;height:28px;border-radius:50%;background:var(--grad);color:#fff;display:grid;place-items:center;margin-left:auto}
+.send .ico{width:15px;height:15px;stroke-width:2.2}
+.send .sq{display:none;width:10px;height:10px;border-radius:2px;background:#fff}
+.send.stop{background:var(--ink2)}
+.send.stop .ico{display:none}
+.send.stop .sq{display:block}
+#skillmenu{left:12px;bottom:calc(100% - 4px);top:auto;min-width:240px}
+
+@media (max-width:900px){
+  :root{--sbw:100vw}
+  .ws{grid-template-columns:minmax(0,1fr)}
+  .sb{position:fixed;inset:40px 0 0 0;z-index:50;width:min(100vw,300px);box-shadow:0 0 0 100vw rgba(20,20,18,.3);display:none}
+  .ws.sbopen .sb{display:flex}
+  .dt .crumb{display:none}
+  .canvas{padding:28px 18px 120px}
+  .tt{font-size:26px}
+  .bd .added{margin-left:-10px;padding-left:7px}
+  .dbody.open{grid-template-columns:minmax(0,1fr) 0}
+  .rp{position:fixed;inset:40px 0 0 0;z-index:50;height:calc(100vh - 40px);align-self:auto;border-left:0;display:none}
+  .dbody.open .rp{display:flex}
+  .divider{display:none}
+  .count,.dbody.open ~ .count{right:12px;bottom:10px}
+}
+</style>
+</head>
+<body>
+
+<div class="mock">
+  <span>mock</span>
+  <div class="url">editor.niho.life<b id="url">/p/8f2c9a</b></div>
+  <div class="variant-switch" id="scenes">
+    <span>場面</span>
+    <button class="on" data-s="polish">推敲</button>
+    <button data-s="fill">肉付け</button>
+    <button data-s="select">選んで指示</button>
+    <span>速さ</span>
+    <button class="on" data-speed="slow">ゆっくり</button>
+    <button data-speed="fast">速く</button>
+    <button class="all" id="replay">やり直す</button>
+  </div>
+</div>
+
+<div class="ws" id="ws">
+  <aside class="sb" aria-label="ページ">
+    <div class="sb-top">
+      <div class="brand"><i></i>NIHO editor</div>
+      <button class="ib" id="sbclose" data-tip="閉じる" aria-label="サイドバーを閉じる"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+    </div>
+    <div class="sb-act">
+      <button><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>検索<kbd>⌘K</kbd></button>
+      <button><svg class="ico" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新しいページ<kbd>⌘N</kbd></button>
+    </div>
+    <div class="sb-list">
+      <ul id="list">
+        <li class="row" data-page="interview" style="--d:0"><b>海岸林を手入れする人</b><span class="when">たった今</span></li>
+        <li class="row" data-page="rec" style="--d:1"><svg class="ico mk" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><b>散歩の録音 11/4</b><span class="when">昨日</span></li>
+        <li class="row" data-page="walk" style="--d:0"><b>鎌倉の朝の散歩</b><span class="when">昨日</span></li>
+        <li class="row" data-page="plan" style="--d:0"><b>来週の段取り</b><span class="when">2日前</span></li>
+      </ul>
+    </div>
+    <div class="sb-foot"><button class="sb-me"><span class="av">N</span>設定</button></div>
+  </aside>
+
+  <main class="doc" id="doc">
+    <header class="dt">
+      <button class="ib" id="sbopen" data-tip="ページ" aria-label="サイドバー"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+      <span class="crumb" id="crumb"></span>
+      <div class="ins">
+        <button class="ib" data-tip="ブロック" aria-label="ブロックを挿入"><svg class="ico" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+        <button class="ib" data-tip="画像" aria-label="画像"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-8 8"/></svg></button>
+        <button class="ib" data-tip="録音" aria-label="録音"><svg class="ico" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+      </div>
+      <span class="sp"></span>
+      <button class="pubbtn">公開</button>
+      <button class="ib on" id="aitoggle" data-tip="AIと作る" aria-label="AIと作る"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></svg></button>
+      <button class="ib" id="morebtn" data-tip="その他" aria-label="その他"><svg class="ico" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/></svg></button>
+      <div class="menu" id="moremenu">
+        <button id="graytoggle"><span class="chk" id="graychk">✓</span>AI の文を灰色で見せる</button>
+        <hr>
+        <button><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>履歴</button>
+        <button><svg class="ico" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>複製</button>
+        <button><svg class="ico" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>書き出し<small>▸</small></button>
+        <hr>
+        <button><svg class="ico" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>ページを削除</button>
+      </div>
+    </header>
+
+    <div class="dbody open" id="dbody">
+      <div class="canvas" id="canvas">
+        <div class="in">
+          <div class="diffbar" id="diffbar"><span id="difflabel">AI の変更（版 5）を表示中</span><button id="diffclose">閉じる</button></div>
+          <h1 class="tt" id="title" contenteditable="true" spellcheck="false"></h1>
+          <div class="bd" id="body" contenteditable="true" spellcheck="false"></div>
+        </div>
+      </div>
+
+      <aside class="rp" id="right" aria-label="AIと作る">
+        <div class="divider" id="divider" title="幅を変える"></div>
+        <div class="hd">AIと作る<span class="sp"></span>
+          <button class="ib" data-tip="新しい会話" aria-label="新しい会話"><svg class="ico" viewBox="0 0 24 24"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17z"/><path d="m13.5 7.5 3 3"/></svg></button>
+          <button class="ib" id="aiclose" data-tip="閉じる" aria-label="閉じる"><svg class="ico" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <div class="thread" id="thread"></div>
+        <div class="composer">
+          <div class="menu" id="skillmenu">
+            <button><svg class="ico" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>工程を実行<small>▸</small></button>
+            <hr>
+            <button data-skill="polish"><svg class="ico" viewBox="0 0 24 24"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17z"/></svg>推敲<small>文体・重複・読みやすさ</small></button>
+            <button data-skill="fill"><svg class="ico" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h16"/></svg>肉付け<small>書き出しの前後を埋める</small></button>
+            <button><svg class="ico" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg>事実確認<small>本文は直さない</small></button>
+            <hr>
+            <button><svg class="ico" viewBox="0 0 24 24"><path d="M4 12h16M4 6h16M4 18h8"/></svg>ここまでを要約して軽くする</button>
+          </div>
+          <div class="box">
+            <div class="chips" id="chips"></div>
+            <textarea id="input" rows="2" placeholder="直したいこと・作りたいもの…"></textarea>
+            <div class="foot">
+              <button class="ib" id="skillbtn" data-tip="工程・スキル" aria-label="工程・スキル"><svg class="ico" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+              <button class="ib" id="atbtn" data-tip="ページや出典を渡す" aria-label="ページや出典を渡す"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-3.5 7.1"/></svg></button>
+              <button class="model">Claude · Sonnet 4.6<span style="font-size:12px;color:var(--faint)">▾</span></button>
+              <button class="send" id="send" aria-label="送る"><svg class="ico" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg><span class="sq"></span></button>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+    <div class="count" id="count"></div>
+  </main>
+</div>
+
+<script>
+const $=(s,r=document)=>r.querySelector(s);const $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const body=$('#body'),titleEl=$('#title'),thread=$('#thread'),dbody=$('#dbody');
+const state={scn:'polish',fast:false,instant:false,runId:0,abort:false,running:false,ver:4,turn:null,live:null,gray:true};
+
+/* ---------- 合成データ ---------- */
+const WALK={page:'walk',url:'/p/8f2c9a',title:'鎌倉の朝の散歩',blocks:[
+  ['p','朝の散歩は、海まで歩いてから戻る。今日は材木座の方まで足を伸ばした。'],
+  ['p','波は静かで、サーファーが三人いた。帰りに豆腐屋に寄り道をした。豆腐屋は朝七時から開いている。'],
+  ['h2','海岸林のこと'],
+  ['p','海岸林は、台風のあとに倒れた木がまだそのままになっている。そのままになっている木を見るたびに、誰が片づけるのだろうと思う。'],
+  ['p','手入れをしている人がいるらしい。らしい、というのは、まだ会ったことがないからだ。'],
+  ['p','来週、会いに行ってみようと思う。'],
+  ['p','帰り道、豆腐を落とした。']
+]};
+const INTERVIEW={page:'interview',url:'/p/3b7e10',title:'海岸林を手入れする人',blocks:[
+  ['p','材木座の海岸林を、週に一度手入れしている人がいる。'],
+  ['p','きっかけは台風だった。'],
+  ['p','作業は朝六時から。道具はのこぎりと手袋だけ。'],
+  ['p','続ける理由を聞くと、答えは意外なものだった。'],
+  ['p','来年は子どもたちと一緒に植える計画がある。']
+]};
+const MIC='<svg class="ico" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
+const SEL='<svg class="ico" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>';
+const SCN={
+  polish:{doc:WALK,preset:'推敲',instruction:'ですます調にそろえて、繰り返しを削って',chips:[],
+    read:'本文を読んでいます…',
+    think:[
+      '本文を読みました。1〜5 段落目は常体で、最後の「豆腐を落とした。」だけが短い言い切りですね。見出しはそのままにします。',
+      '2 段落目は「豆腐屋は」が 2 文続けて主語なので、2 文目の主語を省きます。3 段落目の「そのままになっている」も 2 回出てくるので 1 回にまとめます。',
+      '4 段落目の「らしい、というのは」は口語の味なので、意味を保ったまま敬体にします。材木座などの固有名詞と数は触りません。'],
+    working:'直しています %…',
+    ops:[
+      {kind:'edit',i:0,parts:['朝の散歩は、海まで歩いてから',{del:'戻る。'},{ins:'戻ります。'},'今日は材木座の方まで足を',{del:'伸ばした。'},{ins:'伸ばしました。'}]},
+      {kind:'edit',i:1,parts:['波は静かで、サーファーが三人',{del:'いた。'},{ins:'いました。'},'帰りに豆腐屋に',{del:'寄り道をした。豆腐屋は朝七時から開いている。'},{ins:'寄り道をしました。朝七時から開いています。'}]},
+      {kind:'edit',i:3,parts:['海岸林は、台風のあとに倒れた木がまだ',{del:'そのままになっている。そのままになっている木を見るたびに、誰が片づけるのだろうと思う。'},{ins:'そのままで、見るたびに誰が片づけるのだろうと思います。'}]},
+      {kind:'edit',i:4,parts:['手入れをしている人がいる',{del:'らしい。らしい、というのは、まだ会ったことがないからだ。'},{ins:'そうです。まだ会ったことはありません。'}]},
+      {kind:'edit',i:5,parts:['来週、会いに行ってみようと',{del:'思う。'},{ins:'思います。'}]}
+    ],
+    reply:'文末をですます調にそろえ、繰り返しを 2 か所削りました。最後の「豆腐を落とした。」は余韻として残しています。',stopReply:'途中まで直したところで止めました。'},
+  select:{doc:WALK,preset:null,instruction:'もっと短く',select:[3,4],chips:[{ico:SEL,label:'選択 2 段落'}],
+    read:'選択を読んでいます…',
+    think:[
+      '選んだのは 3・4 段落目ですね。ほかの段落は触りません。',
+      '3 段落目は「そのままになっている」が 2 回あるので 1 回に。4 段落目は「らしい」の説明を 1 文にします。文体は常体のまま、意味は変えません。'],
+    working:'直しています %…',
+    ops:[
+      {kind:'edit',i:3,parts:['海岸林は、台風',{del:'のあとに倒れた木がまだそのままになっている。そのままになっている木を見るたびに、'},{ins:'で倒れた木がまだそのままだ。見るたびに、'},'誰が片づけるのだろうと思う。']},
+      {kind:'edit',i:4,parts:['手入れをしている人がいるらしい。',{del:'らしい、というのは、まだ会ったことがないからだ。'},{ins:'まだ会ったことはない。'}]}
+    ],
+    reply:'選んだ 2 段落だけ短くしました。',stopReply:'途中で止めました。'},
+  fill:{doc:INTERVIEW,preset:'肉付け',instruction:'各行を章の書き出しにして、録音から肉付けして',chips:[{ico:MIC,label:'散歩の録音 11/4 · 文字起こし'}],
+    read:'文字起こしを読んでいます…',
+    think:[
+      '文字起こしを読みました。23 分ぶんで、前半は林の手入れの話、14 分あたりから続ける理由、終盤に来年の植樹の話が出ています。',
+      '今回のインタビューは「誰に頼まれたわけでもなく続けている」ことが軸になりそうなので、5 行はそのまま各章の書き出しに残し、その前後を文字起こしの言葉で補います。行そのものは直しません。',
+      '台風の年は文字起こしに出てこないので、推測せず〔要確認〕にしておきます。「意外な答え」は 14:05 の「飽きたら辞めます」ですね。この言葉はそのまま引きます。'],
+    working:'第 % 章を書いています…',
+    ops:[
+      {kind:'grp',i:0,heading:'週に一度の手入れ',paras:[
+        {x:'材木座の浜の裏手に、松と常緑樹が混じる細長い林がある。森田さんはここに毎週土曜の朝に来て、倒れた枝を片づけ、歩く道を空けている。',cite:'00:52'},
+        {x:'「誰に頼まれたわけでもないんです」と笑う。三年続けて、今では散歩の人に声をかけられるようになった。',cite:'02:40'}]},
+      {kind:'grp',i:1,heading:'台風のあと',paras:[
+        {x:'台風〔要確認: 年は文字起こしにない〕の翌朝、林の道が倒木でふさがっていた。自分の通り道だったから、まず自分のために片づけた。それが始まりだった。',cite:'03:12'}]},
+      {kind:'grp',i:2,heading:'朝六時の浜',paras:[
+        {x:'人が来る前に終えたいから、朝六時に始める。大きな機械は持たない。のこぎりで切れる太さまでしか手を出さず、それより太い木は市に連絡する。',cite:'08:05'},
+        {x:'手袋は軍手ではなく革。松の枝は思ったより刺さる。',cite:'09:30'}]},
+      {kind:'grp',i:3,heading:'続ける理由',paras:[
+        {x:'「飽きたら辞めます」。それが答えだった。使命感で続けると苦しくなる。今は飽きていないから続けている、それだけだという。',cite:'14:05'}]},
+      {kind:'grp',i:4,heading:'来年の計画',paras:[
+        {x:'来年の春、近くの小学生と一緒に苗を植える話が進んでいる。人数や時期はまだ決まっていない。「植えた木を、その子たちが大人になって見に来てくれたら」と話した。',cite:'20:48'}]}
+    ],
+    reply:'5 行をそれぞれ章の書き出しに残して、録音から前後を補いました。台風の年だけ文字起こしに無いので〔要確認〕にしています。',stopReply:'途中の章まで書いたところで止めました。'}
+};
+
+/* ---------- 描画 ---------- */
+function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function renderPage(doc){
+  titleEl.textContent=doc.title;$('#crumb').textContent=doc.title;$('#url').textContent=doc.url;
+  $$('#list .row').forEach(r=>r.classList.toggle('on',r.dataset.page===doc.page));
+  body.innerHTML=doc.blocks.map(([t,x],i)=>`<${t} data-i="${i}">${esc(x)}</${t}>`).join('');
+  updateCount();
+}
+function countOf(el){return Array.from((el.innerText||el.textContent||'').replace(/\s/g,'')).length;}
+function updateCount(){$('#count').textContent=countOf(body).toLocaleString('ja-JP')+' 字';}
+function blockAt(i){return body.querySelector(`[data-i="${i}"]`);}
+function markChk(el){el.innerHTML=el.innerHTML.replace(/〔要確認[^〕]*〕/g,m=>`<span class="chk" contenteditable="false">${m}</span>`);}
+function chipHtml(c){return `<span class="chip">${c.ico||''}${esc(c.label)}<span class="x">×</span></span>`;}
+function setChips(chips){const el=$('#chips');el.innerHTML=chips.map(chipHtml).join('');el.classList.toggle('has',chips.length>0);}
+function scrollThread(){thread.scrollTop=thread.scrollHeight;}
+function setBusy(on){state.running=on;body.contentEditable=String(!on);$('#send').classList.toggle('stop',on);$('#send').setAttribute('aria-label',on?'止める':'送る');}
+
+/* ---------- 流れ ---------- */
+const d=ms=>state.instant?Promise.resolve():sleep(state.fast?Math.max(8,ms*0.12):ms);
+async function streamText(el,text,alive,per){
+  if(state.instant){el.append(text);return;}
+  const step=state.fast?4:1;
+  for(let i=0;i<text.length;i+=step){if(!alive())return;el.append(text.slice(i,i+step));scrollThread();await sleep(state.fast?6:per);}
+}
+function addUserMsg(scn){
+  const m=document.createElement('div');m.className='msg me';
+  m.innerHTML=(scn.chips.length?`<div class="chips">${scn.chips.map(chipHtml).join('')}</div>`:'')+`<p>${scn.preset?`<span class="pre">/${scn.preset}</span>`:''}${esc(scn.instruction)}</p>`;
+  thread.append(m);scrollThread();
+}
+function botBlock(){const m=document.createElement('div');m.className='msg bot';thread.append(m);return m;}
+function workLine(text){const w=document.createElement('div');w.className='work';w.innerHTML=`<i></i><span>${esc(text)}</span>`;thread.append(w);scrollThread();return w;}
+function verLine(turn){
+  const v=document.createElement('div');v.className='verline';
+  const sign=turn.delta>0?'+':turn.delta<0?'−':'±';
+  v.innerHTML=`<span>版 ${turn.ver} を保存しました</span><em>${sign}${Math.abs(turn.delta).toLocaleString('ja-JP')} 字</em>${turn.stopped?'<em class="note">途中で止めました</em>':''}<button data-act="diff">変更を見る</button><button data-act="undo">元に戻す</button>`;
+  thread.append(v);scrollThread();return v;
+}
+async function applyEdit(op,alive){
+  const el=blockAt(op.i);el.innerHTML='';el.scrollIntoView({block:'nearest'});
+  for(const p of op.parts){
+    if(!alive())return;
+    if(typeof p==='string')el.append(p);
+    else if(p.ins){const s=document.createElement('span');s.className='ai typing';el.append(s);await streamText(s,p.ins,alive,22);s.classList.remove('typing');}
+  }
+  el.normalize();updateCount();
+}
+async function applyGroup(op,alive){
+  const anchor=blockAt(op.i);
+  const h2=document.createElement('h2');h2.className='ai typing';h2.dataset.added='1';anchor.before(h2);
+  h2.scrollIntoView({block:'nearest'});
+  await streamText(h2,op.heading,alive,26);h2.classList.remove('typing');
+  let last=anchor;
+  for(const para of op.paras){
+    if(!alive())break;
+    const p=document.createElement('p');p.className='ai typing';p.dataset.added='1';last.after(p);last=p;
+    p.scrollIntoView({block:'nearest'});
+    await streamText(p,para.x,alive,14);p.classList.remove('typing');markChk(p);
+    if(para.cite){const c=document.createElement('cite');c.contentEditable='false';c.textContent=para.cite;p.append(c);}
+    updateCount();
+  }
+  // 灰色の中に打った文字を黒にできるよう、ブロックの文は span.ai に包む
+  [h2,...$$('p[data-added]',body)].forEach(b=>{if(b.querySelector('span.ai'))return;const cite=b.querySelector('cite');const s=document.createElement('span');s.className='ai';while(b.firstChild&&b.firstChild!==cite)s.append(b.firstChild);b.prepend(s);b.classList.remove('ai');});
+}
+async function run(){
+  const id=++state.runId;state.abort=false;const scn=SCN[state.scn];
+  closeDiff();renderPage(scn.doc);thread.innerHTML='';state.turn=null;setChips([]);$('#input').value='';
+  const alive=()=>id===state.runId&&!state.abort;
+  if(scn.select){selectBlocks(scn.select);setChips(scn.chips);$('#input').value=scn.instruction;await d(900);if(!alive())return;getSelection().removeAllRanges();setChips([]);$('#input').value='';}
+  const snapshot=body.innerHTML,before=countOf(body);
+  addUserMsg(scn);setBusy(true);
+  const bot=botBlock();
+  let work=workLine(scn.read);await d(900);
+  if(!alive())return finish(id,scn,snapshot,before,true,0);
+  work.remove();
+  for(const line of scn.think){if(!alive())break;const p=document.createElement('p');bot.append(p);await streamText(p,line,alive,16);await d(380);}
+  if(!alive())return finish(id,scn,snapshot,before,true,0);
+  work=workLine(scn.working.replace('%',scn.ops[0].kind==='grp'?'1':`1/${scn.ops.length}`));
+  const n=scn.ops.length;let k=0;
+  for(let i=0;i<n;i++){
+    if(!alive())break;
+    work.lastElementChild.textContent=scn.working.replace('%',scn.ops[i].kind==='grp'?String(i+1):`${i+1}/${n}`);
+    if(scn.ops[i].kind==='edit'){await d(500);if(!alive())break;await applyEdit(scn.ops[i],alive);}
+    else await applyGroup(scn.ops[i],alive);
+    k=i+1;await d(260);
+  }
+  work.remove();
+  finish(id,scn,snapshot,before,!alive(),k);
+}
+function finish(id,scn,snapshot,before,stopped,k){
+  if(id!==state.runId)return;
+  $$('.work',thread).forEach(w=>w.remove());
+  $$('.bd .typing').forEach(e=>e.classList.remove('typing'));
+  setBusy(false);
+  state.ver++;
+  state.turn={ver:state.ver,snapshot,ops:scn.ops.slice(0,k),delta:countOf(body)-before,stopped,undone:false};
+  const bot=thread.lastElementChild&&thread.lastElementChild.classList.contains('bot')?thread.lastElementChild:botBlock();
+  const p=document.createElement('p');p.textContent=stopped?scn.stopReply:scn.reply;bot.append(p);
+  state.turn.line=verLine(state.turn);
+  updateCount();scrollThread();
+}
+function selectBlocks([a,b]){const r=document.createRange();r.setStartBefore(blockAt(a));r.setEndAfter(blockAt(b));const s=getSelection();s.removeAllRanges();s.addRange(r);blockAt(a).scrollIntoView({block:'center'});}
+
+/* ---------- 変更を見る・元に戻す ---------- */
+function showDiff(){
+  const t=state.turn;if(!t||t.undone||document.body.classList.contains('diff'))return;
+  state.live=body.innerHTML;
+  body.innerHTML=t.snapshot;
+  for(const op of t.ops){
+    if(op.kind==='edit'){const el=blockAt(op.i);el.innerHTML='';for(const p of op.parts){if(typeof p==='string')el.append(p);else if(p.del){const x=document.createElement('del');x.textContent=p.del;el.append(x);}else{const x=document.createElement('ins');x.textContent=p.ins;el.append(x);}}}
+    else{const anchor=blockAt(op.i);const h2=document.createElement('h2');h2.className='added';h2.textContent=op.heading;anchor.before(h2);let last=anchor;
+      for(const para of op.paras){const p=document.createElement('p');p.className='added';p.textContent=para.x;markChk(p);if(para.cite){const c=document.createElement('cite');c.textContent=para.cite;p.append(c);}last.after(p);last=p;}}
+  }
+  $('#difflabel').textContent=`AI の変更（版 ${t.ver}）を表示中`;
+  document.body.classList.add('diff');body.contentEditable='false';
+  t.line.querySelector('[data-act="diff"]').textContent='変更を閉じる';
+  window.scrollTo({top:0});
+}
+function closeDiff(){
+  if(!document.body.classList.contains('diff'))return;
+  document.body.classList.remove('diff');
+  if(state.live!==null){body.innerHTML=state.live;state.live=null;}
+  if(!state.running)body.contentEditable='true';
+  state.turn?.line?.querySelector('[data-act="diff"]')&&(state.turn.line.querySelector('[data-act="diff"]').textContent='変更を見る');
+  updateCount();
+}
+function undoTurn(){
+  const t=state.turn;if(!t||t.undone)return;
+  closeDiff();body.innerHTML=t.snapshot;t.undone=true;
+  t.line.innerHTML=`<span>版 ${t.ver}</span><em>元に戻しました</em>`;
+  updateCount();
+}
+thread.addEventListener('click',e=>{
+  const b=e.target.closest('.verline button');if(!b)return;
+  if(b.dataset.act==='diff'){document.body.classList.contains('diff')?closeDiff():showDiff();}
+  else if(b.dataset.act==='undo')undoTurn();
+});
+$('#diffclose').addEventListener('click',closeDiff);
+
+/* 灰色の文の中で打った文字は黒 */
+body.addEventListener('beforeinput',e=>{
+  if(e.inputType!=='insertText'||typeof e.data!=='string')return;
+  const sel=getSelection();if(!sel.rangeCount||!sel.isCollapsed)return;
+  const r=sel.getRangeAt(0);const node=r.startContainer;if(node.nodeType!==3)return;
+  const ai=node.parentElement.closest('span.ai');if(!ai)return;
+  e.preventDefault();
+  const tail=document.createRange();tail.setStart(node,r.startOffset);tail.setEnd(ai,ai.childNodes.length);
+  const frag=tail.extractContents();
+  const plain=document.createTextNode(e.data);ai.after(plain);
+  if(frag.textContent.length){const t2=document.createElement('span');t2.className='ai';t2.append(frag);plain.after(t2);}
+  if(!ai.textContent.length)ai.remove();
+  const rr=document.createRange();rr.setStart(plain,plain.length);rr.collapse(true);sel.removeAllRanges();sel.addRange(rr);
+  updateCount();
+});
+body.addEventListener('input',updateCount);
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){$$('.menu.open').forEach(m=>m.classList.remove('open'));if(document.body.classList.contains('diff'))closeDiff();}});
+
+/* ---------- 入力欄・メニュー ---------- */
+$('#send').addEventListener('click',()=>{if(state.running)state.abort=true;else run();});
+$('#input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(!state.running)run();}});
+$('#skillbtn').addEventListener('click',e=>{e.stopPropagation();$('#skillmenu').classList.toggle('open');});
+$('#skillmenu').addEventListener('click',e=>{const b=e.target.closest('[data-skill]');$('#skillmenu').classList.remove('open');if(!b||state.running)return;setScene(b.dataset.skill);run();});
+$('#atbtn').addEventListener('click',()=>setChips([{ico:MIC,label:'散歩の録音 11/4 · 文字起こし'}]));
+$('#morebtn').addEventListener('click',e=>{e.stopPropagation();$('#moremenu').classList.toggle('open');});
+$('#graytoggle').addEventListener('click',()=>{state.gray=!state.gray;document.body.classList.toggle('nogray',!state.gray);$('#graychk').textContent=state.gray?'✓':'';});
+document.addEventListener('click',e=>{if(!e.target.closest('.menu,#morebtn,#skillbtn'))$$('.menu.open').forEach(m=>m.classList.remove('open'));});
+$('#aitoggle').addEventListener('click',()=>{dbody.classList.toggle('open');$('#aitoggle').classList.toggle('on',dbody.classList.contains('open'));});
+$('#aiclose').addEventListener('click',()=>{dbody.classList.remove('open');$('#aitoggle').classList.remove('on');});
+$('#sbclose').addEventListener('click',()=>{$('#ws').classList.add('sbhide');$('#ws').classList.remove('sbopen');});
+$('#sbopen').addEventListener('click',()=>{$('#ws').classList.remove('sbhide');$('#ws').classList.toggle('sbopen');});
+$$('#list .row').forEach(r=>r.addEventListener('click',()=>{if(state.running)return;setScene(r.dataset.page==='interview'?'fill':'polish');run();}));
+
+/* 仕切り */
+(()=>{const dv=$('#divider');let drag=false;
+dv.addEventListener('mousedown',e=>{drag=true;dv.classList.add('on');e.preventDefault();});
+document.addEventListener('mousemove',e=>{if(!drag)return;const w=Math.min(560,Math.max(280,window.innerWidth-e.clientX));document.documentElement.style.setProperty('--aiw',w+'px');});
+document.addEventListener('mouseup',()=>{drag=false;dv.classList.remove('on');});
+dv.addEventListener('dblclick',()=>document.documentElement.style.setProperty('--aiw','380px'));})();
+
+/* ---------- 場面 ---------- */
+function setScene(s){state.scn=s;$$('#scenes [data-s]').forEach(b=>b.classList.toggle('on',b.dataset.s===s));}
+function setSpeed(f){state.fast=f;$$('#scenes [data-speed]').forEach(b=>b.classList.toggle('on',(b.dataset.speed==='fast')===f));}
+$('#scenes').addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b)return;
+  if(b.dataset.s){setScene(b.dataset.s);run();}
+  else if(b.dataset.speed){setSpeed(b.dataset.speed==='fast');}
+  else if(b.id==='replay'){run();}
+});
+(()=>{
+  const tokens=location.hash.replace(/^#/,'').split('&').filter(Boolean);
+  let diff=false;
+  for(const t of tokens){if(SCN[t])setScene(t);if(t==='fast')setSpeed(true);if(t==='done')state.instant=true;if(t==='diff'){state.instant=true;diff=true;}if(t==='nogray')$('#graytoggle').click();}
+  run().then(()=>{state.instant=false;if(diff)showDiff();});
+})();
+</script>
+</body>
+</html>
