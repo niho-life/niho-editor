@@ -540,3 +540,113 @@ export async function sharedImageAsset(db: Queryable, token: string, assetId: st
   if (!row) return null;
   return { objectPath: row.bucket_path, contentType: row.content_type, bytes: Number(row.bytes), alt: row.alt, credit: row.credit };
 }
+
+/** パネル（このページの写真）に出す画像（bucket の場所・sha256・owner は持たない）。 */
+export type PageImageEntry = {
+  assetId: string;
+  bytes: number;
+  contentType: string;
+  alt: string | null;
+  credit: string | null;
+  consent: boolean;
+  createdAt: string;
+};
+
+type PageImageEntryRow = {
+  id: string | null;
+  bytes: string | null;
+  content_type: string | null;
+  alt: string | null;
+  credit: string | null;
+  consent: boolean | null;
+  created_at: Date | null;
+};
+
+// ページの行を必ず 1 行返し（無ければ 0 行＝null）、画像は LATERAL で新しい順に上限まで。$1 owner / $2 page id / $3 上限。
+const LIST_PAGE_IMAGES_SQL = `
+SELECT a.id, a.bytes, a.content_type, a.alt, a.credit, a.consent, a.created_at
+  FROM pages AS p
+  LEFT JOIN LATERAL (
+    SELECT i.id, i.bytes::text AS bytes, i.content_type, i.alt, i.credit, i.consent, i.created_at
+      FROM assets AS i
+     WHERE i.owner = p.owner AND i.page_id = p.id AND i.kind = 'image' AND i.upload_status = 'ready'
+     ORDER BY i.created_at DESC, i.id
+     LIMIT $3
+  ) AS a ON true
+ WHERE p.owner = $1 AND p.id = $2 AND p.deleted_at IS NULL
+ ORDER BY a.created_at DESC, a.id`;
+
+/**
+ * このページの写真（パネル）: 本人の・ゴミ箱でないページの、アップロードの済んだ（ready）画像を新しい順に、最大 100 枚。
+ * 本文で使っているかは問わない（パネルに上げただけの写真も入る）。ページが無い・別の人・不正な id は null（同じ 404）。
+ */
+export async function listPageImages(db: Queryable, owner: OwnerId, pageId: string): Promise<PageImageEntry[] | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId)) return null;
+  try {
+    const result = await db.query<PageImageEntryRow>(LIST_PAGE_IMAGES_SQL, [owner, pageId, PAGE_IMAGE_MAX_COUNT]);
+    if (result.rows.length === 0) return null;
+    return result.rows.flatMap((row) =>
+      row.id === null || row.created_at === null
+        ? []
+        : [
+            {
+              assetId: row.id,
+              bytes: Number(row.bytes),
+              contentType: row.content_type ?? "",
+              alt: row.alt,
+              credit: row.credit,
+              consent: row.consent === true,
+              createdAt: row.created_at.toISOString(),
+            },
+          ],
+    );
+  } catch (error) {
+    if (isInvalidTextRepresentation(error)) return null;
+    throw error;
+  }
+}
+
+/** パネルから外した結果。カバーがその写真だったら、カバーも外した（coverCleared）。 */
+export type DeletedPageImage = { coverCleared: boolean };
+
+/**
+ * パネルから写真を外す: 本人の・ゴミ箱でないページの、そのページの画像の行を消す（アップロード中・済んだものの両方）。
+ * カバーがその写真なら（このページに限らず本人のどのページでも）、同じ transaction でカバーを外す（カバーの FK が資産の削除を
+ * 止めるため。revision は進めない。開いているエディタは自分の保存でカバーを外す）。本文（blocks）の中の画像は消さない（呼ぶ側の
+ * エディタが消して保存する）。
+ * object（bucket の実体）は消さない（取消・purge と同じ。bucket の規則に任せる）。
+ * ページの行を先に押さえるので、開始・完了・保存とすれ違わない。無ければ null（別の人・別のページの画像・不正な id。同じ 404）。
+ */
+export async function deletePageImage(pool: Connectable, owner: OwnerId, pageId: string, assetId: string): Promise<DeletedPageImage | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId) || !isPageId(assetId)) return null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const page = await client.query("SELECT id FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL FOR UPDATE", [owner, pageId]);
+    if (page.rows.length === 0) {
+      await rollback(client);
+      return null;
+    }
+    // カバーの FK は (owner, cover) → 資産で、ページを問わない（複製したページの本文に残った写真を、そのページのカバーに選べる）。
+    // どのページのカバーでも外す（外さないと資産の削除が FK で止まる）。知らせるのはこのページのカバーを外したかだけ
+    const cover = await client.query<{ id: string }>("UPDATE pages SET cover = NULL WHERE owner = $1 AND cover = $2 RETURNING id", [owner, assetId]);
+    const removed = await client.query(
+      "DELETE FROM assets WHERE owner = $1 AND page_id = $2 AND id = $3 AND kind = 'image' RETURNING id",
+      [owner, pageId, assetId],
+    );
+    if (removed.rows.length === 0) {
+      // カバーを外した分も戻す
+      await rollback(client);
+      return null;
+    }
+    await client.query("COMMIT");
+    return { coverCleared: cover.rows.some((row) => row.id === pageId) };
+  } catch (error) {
+    await rollback(client);
+    throw error;
+  } finally {
+    client.release();
+  }
+}

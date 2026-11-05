@@ -23,7 +23,7 @@ import {
 import { stubAuthProvider } from "../auth/stub";
 import { AuthTemporarilyUnavailable, type AuthProvider } from "../auth/types";
 import { PAGE_BODY_MAX_BYTES } from "./http";
-import { createPage, deletePage, getPage, listPages, movePage, patchPage, type PagesApiDeps, type PagesStore } from "./pages-api";
+import { createPage, deletePage, discardPage, getPage, listPages, movePage, patchPage, type PagesApiDeps, type PagesStore } from "./pages-api";
 import { listTrash, restoreFromTrash } from "./trash-api";
 import { getVersion, listVersions, restoreVersion } from "./versions-api";
 
@@ -154,6 +154,14 @@ function memoryStore() {
       if (published.has(id)) return "published";
       Object.assign(row, { deleted: true, deletedAt: new Date().toISOString() });
       return "deleted";
+    },
+    /** EditorStore と同じ約束の簡略版（題名・本文が空なら消す。関わる行の判定は editor-store の DB のテストで確かめる）。 */
+    async discardEmptyPage(owner: string, id: string): Promise<{ discarded: boolean } | null> {
+      const row = visible(owner, id);
+      if (!row) return null;
+      if (row.title.trim() !== "" || row.blocks.length > 0) return { discarded: false };
+      rows.delete(id);
+      return { discarded: true };
     },
     async listTrash(owner: string): Promise<TrashedPage[]> {
       return [...rows.values()]
@@ -505,6 +513,49 @@ describe("/api/pages", () => {
       expect(response.headers.get("x-content-type-options")).toBe("nosniff");
       expect(response.headers.get("content-type")).toBeNull();
     }
+  });
+});
+
+describe("POST /api/pages/{id}/discard", () => {
+  const discard = (id: string, store: MemoryStore | null, userId: string | null = "user-a", headers?: Record<string, string>) =>
+    discardPage(request("POST", `/api/pages/${id}/discard`, undefined, headers), id, deps(userId, store));
+
+  it("deletes an empty page for good and keeps a page with something in it, both 200", async () => {
+    const store = memoryStore();
+    const empty = await store.createPage("user-a");
+    const titled = await store.createPage("user-a", { title: "合成の題名" });
+    const removed = await discard(empty.id, store);
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toEqual({ discarded: true });
+    expect(store.rows.has(empty.id)).toBe(false);
+    // ゴミ箱にも入らない
+    expect(await store.listTrash("user-a")).toEqual([]);
+    const kept = await discard(titled.id, store);
+    expect(kept.status).toBe(200);
+    expect(await kept.json()).toEqual({ discarded: false });
+    expect(store.rows.has(titled.id)).toBe(true);
+  });
+
+  it("needs no body, so a keepalive request from pagehide works", async () => {
+    const store = memoryStore();
+    const empty = await store.createPage("user-a");
+    const keepalive = new Request(`${ORIGIN}/api/pages/${empty.id}/discard`, { method: "POST", headers: { host: "editor.test", origin: ORIGIN }, keepalive: true });
+    expect((await discardPage(keepalive, empty.id, deps("user-a", store))).status).toBe(200);
+  });
+
+  it("answers 401, 403 for another origin, 503 without the store, and the same 404 for someone else's, a missing and a malformed id", async () => {
+    const store = memoryStore();
+    const mine = await store.createPage("user-a");
+    const spy = vi.spyOn(store, "discardEmptyPage");
+    expect((await discard(mine.id, store, null)).status).toBe(401);
+    expect((await discard(mine.id, store, "user-a", { origin: "https://elsewhere.example" })).status).toBe(403);
+    expect(spy).not.toHaveBeenCalled();
+    expect((await discard(mine.id, null)).status).toBe(503);
+    const notFound = await snapshot(await discard(mine.id, store, "user-b"));
+    expect(notFound.status).toBe(404);
+    expect(await snapshot(await discard(randomUUID(), store))).toEqual(notFound);
+    expect(await snapshot(await discard("not-a-uuid", store))).toEqual(notFound);
+    expect(store.rows.has(mine.id)).toBe(true);
   });
 });
 

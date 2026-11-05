@@ -641,14 +641,15 @@ export class EditorStore {
         if (current.revision !== options.baseRevision) return { status: "conflict", page: toPage(current) };
         const accepted = options.accept(stored.blocks);
         if (accepted === null) return { status: "unrestorable" };
-        const restoredCover = stored.metadata_tracked ? stored.cover : current.cover;
+        let restoredCover = stored.metadata_tracked ? stored.cover : current.cover;
         const restoredLead = stored.metadata_tracked ? stored.lead : current.lead;
         if (restoredCover !== null) {
           const cover = await client.query(
             "SELECT 1 FROM assets WHERE owner = $1 AND page_id = $2 AND id = $3 AND kind = 'image' AND upload_status = 'ready'",
             [owner, id, restoredCover],
           );
-          if (cover.rows.length === 0) return { status: "unrestorable" };
+          // カバーの写真がもう無い（パネルから外した）: カバー無しで戻す（その写真が欠けるのは許容。オーナー決定 2026-11-05）
+          if (cover.rows.length === 0) restoredCover = null;
         }
         const charges = await pageImageCharges(client, owner, id);
         if (pageSizeBytes(current.title, accepted, charges, restoredCover, restoredLead) > PAGE_MAX_BYTES) return { status: "page_full" };
@@ -725,6 +726,35 @@ export class EditorStore {
           [owner, ids],
         );
         return "deleted";
+      }),
+    );
+  }
+
+  /**
+   * 何も足していないページを捨てる（「新しいページ」で作って、そのまま離れたとき。オーナー決定 2026-11-05）。
+   * ページの行を `FOR UPDATE` で押さえてから空かを確かめ、空ならゴミ箱に入れずに完全に消す（同じ transaction。保存・画像の開始・
+   * 録音などページを書く処理は同じ行を押さえるか FK でこの行を参照するので、確かめてから消すまでの間に中身は増えない）。
+   *
+   * 空とみなすのは次の全てが揃うときだけ（迷うものは空でないとみなし、消さない）:
+   * - 種類はメモ（note）、親・レシピ・手順の状態・手動の並び・カバーが無い
+   * - 題名とリードは空白だけ、本文は空（中身の無い段落だけ）
+   * - そのページを指す行が無い（資産（画像・録音のどの種類も）・子ページ（ゴミ箱を含む）・版・公開・公開の版・転送・プレビュー・
+   *   共有・手順・録音・文字起こし・AI の会話と変更・ページの欄・翻訳の対応と候補・Google ドキュメントの書き出し）
+   *   「最近開いた」の記録（page_opens）は中身ではないので数えない（一緒に消える）。
+   *
+   * 空でなければ何もしない（`{ discarded: false }`）。本人の・ゴミ箱でないページが無ければ null（同じ 404）。
+   */
+  async discardEmptyPage(owner: OwnerId, id: string): Promise<{ discarded: boolean } | null> {
+    assertOwner(owner);
+    if (!isPageId(id)) return null;
+    return this.#orNull(() =>
+      this.#transaction(async (client): Promise<{ discarded: boolean } | null> => {
+        const current = await lockPage(client, owner, id);
+        if (!current) return null;
+        if (!isBlankPageRow(current)) return { discarded: false };
+        // 行は押さえてあるので、ここから中身（題名・本文など）は変わらない。関わる行が無いことを、新しい snapshot の 1 文で確かめて消す
+        const deleted = await client.query(`DELETE FROM pages p WHERE p.owner = $1 AND p.id = $2 AND p.deleted_at IS NULL AND ${NO_RELATED_ROWS} RETURNING p.id`, [owner, id]);
+        return { discarded: deleted.rows.length > 0 };
       }),
     );
   }
@@ -944,3 +974,61 @@ async function lockPage(client: Queryable, owner: OwnerId, id: string): Promise<
   );
   return result.rows[0] ?? null;
 }
+
+/** 中身の無い段落（`{ type: "paragraph" }`・content が空）。空のページの本文はこれだけを含んでよい。 */
+function isBlankParagraph(block: Block): boolean {
+  if (block.type !== "paragraph") return false;
+  const content = block.content;
+  return content === undefined || content === null || (Array.isArray(content) && content.length === 0);
+}
+
+/** 押さえたページの行が「何も足していない」か（関わる行の有無は NO_RELATED_ROWS が見る）。 */
+function isBlankPageRow(row: PageRow): boolean {
+  return (
+    row.kind === "note" &&
+    row.parent === null &&
+    row.recipe === null &&
+    row.step_status === null &&
+    row.sort_order === 0 &&
+    row.cover === null &&
+    row.title.trim() === "" &&
+    (row.lead === null || row.lead.trim() === "") &&
+    Array.isArray(row.blocks) &&
+    row.blocks.every(isBlankParagraph)
+  );
+}
+
+/**
+ * ページ（p）を指す行が 1 つも無い（discardEmptyPage）。pages を参照する表を migrations から全て並べる。
+ * 表を足したらここにも足す（足し忘れると、その行がある「空でない」ページを消して CASCADE で行も消してしまう）。
+ * `test/discard-empty-page.integration.test.ts` が、DB の外部キーの一覧とこの並び（と DISCARD_IGNORED_TABLES）を突き合わせる。
+ */
+const DISCARD_RELATED_ROWS = [
+  "assets a WHERE a.owner = p.owner AND a.page_id = p.id",
+  "pages c WHERE c.owner = p.owner AND c.parent = p.id",
+  "page_versions v WHERE v.page_id = p.id",
+  "publications pub WHERE pub.page_id = p.id",
+  "publication_versions pv WHERE pv.page_id = p.id",
+  "publication_redirects pr WHERE pr.page_id = p.id",
+  "preview_tokens pt WHERE pt.page_id = p.id",
+  "page_shares s WHERE s.page_id = p.id",
+  "step_runs sr WHERE sr.owner = p.owner AND sr.parent = p.id",
+  "step_attempts sa WHERE sa.page_id = p.id",
+  "page_recordings r WHERE r.page_id = p.id",
+  "page_recording_audios ra WHERE ra.page_id = p.id",
+  "page_recording_candidates rc WHERE rc.page_id = p.id",
+  "transcription_runs tr WHERE tr.page_id = p.id",
+  "ai_conversations ac WHERE ac.page_id = p.id",
+  "ai_message_changes am WHERE am.page_id = p.id",
+  "page_fields pf WHERE pf.owner = p.owner AND pf.page_id = p.id",
+  "page_translation_relations tl WHERE tl.source_page_id = p.id OR tl.target_page_id = p.id",
+  "page_translation_proposals tp WHERE tp.source_page_id = p.id OR tp.target_page_id = p.id",
+  "google_docs_batch_jobs gj WHERE gj.root_page_id = p.id",
+  "google_docs_batch_items gi WHERE gi.page_id = p.id",
+];
+const NO_RELATED_ROWS = DISCARD_RELATED_ROWS.map((from) => `NOT EXISTS (SELECT 1 FROM ${from})`).join("\n   AND ");
+
+/** 空のページを捨てる前に、行が無いことを確かめる表（pages を参照する表）。 */
+export const DISCARD_GUARDED_TABLES: readonly string[] = Object.freeze(DISCARD_RELATED_ROWS.map((from) => from.split(" ")[0]!));
+/** pages を参照するが、空かどうかに数えない表（「最近開いた」の記録。ページと一緒に消える）。 */
+export const DISCARD_IGNORED_TABLES: readonly string[] = Object.freeze(["page_opens"]);

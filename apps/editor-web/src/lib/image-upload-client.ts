@@ -1,4 +1,4 @@
-import type { ImageMeta, ImageProblem, PageImageUploadResult, PageImages } from "niho-docs-ui/page/images";
+import type { ImageMeta, ImageProblem, PageImageEntry, PageImageUploadResult, PageImages } from "niho-docs-ui/page/images";
 import { isAllowedImageSize, isAllowedImageType } from "@/image/image-limits";
 import { imageAssetPath } from "@/image/image-paths";
 
@@ -13,7 +13,7 @@ import { imageAssetPath } from "@/image/image-paths";
  */
 
 /** 口の型は共通（packages/docs-ui の page/images.ts。Mac・Web で同じエディタが読む）。実装（通信）だけがここにある。 */
-export type { ImageMeta, ImageProblem, PageImageUploadResult, PageImages } from "niho-docs-ui/page/images";
+export type { ImageMeta, ImageProblem, PageImageEntry, PageImageUploadResult, PageImages } from "niho-docs-ui/page/images";
 
 export type ImageUploadTicket = {
   url: string;
@@ -201,6 +201,41 @@ export async function cancelImageUpload(pageId: string, assetId: string, fetchIm
   });
 }
 
+/** このページの写真（パネル）。済んだ画像を新しい順に。ページが無い・読めなければ ImageUploadError。 */
+export async function listPageImages(pageId: string, fetchImpl: FetchLike = fetch): Promise<PageImageEntry[]> {
+  const response = await fetchImpl(`/api/pages/${encodeURIComponent(pageId)}/images`, { credentials: "same-origin", cache: "no-store" });
+  if (!response.ok) throw await failure(response);
+  const data = await readJson(response);
+  if (!isPlainObject(data) || !Array.isArray(data.images)) throw new ImageUploadError(500);
+  return data.images.flatMap((value): PageImageEntry[] => {
+    if (!isPlainObject(value) || typeof value.assetId !== "string" || !UUID_PATTERN.test(value.assetId)) return [];
+    return [
+      {
+        assetId: value.assetId,
+        bytes: typeof value.bytes === "number" ? value.bytes : 0,
+        contentType: typeof value.contentType === "string" ? value.contentType : "",
+        createdAt: typeof value.createdAt === "string" ? value.createdAt : "",
+        meta: {
+          alt: typeof value.alt === "string" ? value.alt : null,
+          credit: typeof value.credit === "string" ? value.credit : null,
+          consent: value.consent === true,
+        },
+      },
+    ];
+  });
+}
+
+/** このページの写真から外す（204）。カバーがその写真ならサーバーがカバーも外す。無ければ ImageUploadError（404）。 */
+export async function removePageImage(pageId: string, assetId: string, fetchImpl: FetchLike = fetch): Promise<void> {
+  const response = await fetchImpl(`/api/pages/${encodeURIComponent(pageId)}/images/${encodeURIComponent(assetId)}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  await response.body?.cancel().catch(() => undefined);
+  if (response.status !== 204) throw new ImageUploadError(response.status);
+}
+
 /**
  * エディタに渡す口。上限（種類・大きさ）はここでも先に見て、超えるものは送らない（枚数の上限はサーバーが見る）。
  * 1 枚ごとに開始 → PUT → 完了まで進め、どこかで失敗したら本文には何も入れない（断る理由を返す）。
@@ -230,6 +265,21 @@ export function createPageImages(options: { fetch?: FetchLike } = {}): PageImage
     saveMeta: async (assetId, patch) => {
       try {
         await saveImageMeta(assetId, patch, fetchImpl);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    list: async (pageId) => {
+      try {
+        return await listPageImages(pageId, fetchImpl);
+      } catch {
+        return null;
+      }
+    },
+    remove: async (pageId, assetId) => {
+      try {
+        await removePageImage(pageId, assetId, fetchImpl);
         return true;
       } catch {
         return false;

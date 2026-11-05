@@ -5,7 +5,9 @@ import {
   completeImageUpload,
   createPageImages,
   imageAssetPath,
+  listPageImages,
   putImage,
+  removePageImage,
   saveImageMeta,
   startImageUpload,
   type ImageUploadTicket,
@@ -179,5 +181,29 @@ describe("image upload client", () => {
     const images = createPageImages({ fetch: fetchMock as unknown as typeof fetch });
     expect(await images.upload(pngFile(), PAGE, controller.signal)).toEqual({ ok: false, problem: "failed" });
     expect(calls).toEqual([`/api/pages/${PAGE}/images/start`, TICKET.url, `/api/pages/${PAGE}/images/${ASSET}`]);
+  });
+  it("lists the page's photos (only well-formed ids) and removes one with DELETE", async () => {
+    const list = respond(200, {
+      images: [
+        { assetId: ASSET, bytes: 2048, contentType: "image/png", alt: "合成", credit: null, consent: true, createdAt: "2026-11-05T00:00:00.000Z" },
+        { assetId: "../x", bytes: 1 },
+      ],
+    });
+    expect(await listPageImages(PAGE, list)).toEqual([
+      { assetId: ASSET, bytes: 2048, contentType: "image/png", createdAt: "2026-11-05T00:00:00.000Z", meta: { alt: "合成", credit: null, consent: true } },
+    ]);
+    expect(list).toHaveBeenCalledWith(`/api/pages/${PAGE}/images`, { credentials: "same-origin", cache: "no-store" });
+    const removed = vi.fn(async () => new Response(null, { status: 204 }));
+    await removePageImage(PAGE, ASSET, removed);
+    expect(removed).toHaveBeenCalledWith(`/api/pages/${PAGE}/images/${ASSET}`, { method: "DELETE", credentials: "same-origin", cache: "no-store" });
+    await expect(removePageImage(PAGE, ASSET, respond(404, { error: "not_found" }))).rejects.toBeInstanceOf(ImageUploadError);
+  });
+
+  it("gives the panel list and remove through the port, answering null and false instead of throwing", async () => {
+    const images = createPageImages({ fetch: respond(500, { error: "internal" }) });
+    expect(await images.list!(PAGE)).toBeNull();
+    expect(await images.remove!(PAGE, ASSET)).toBe(false);
+    const ok = createPageImages({ fetch: vi.fn(async () => new Response(null, { status: 204 })) });
+    expect(await ok.remove!(PAGE, ASSET)).toBe(true);
   });
 });

@@ -1,10 +1,13 @@
 import { Node, mergeAttributes, type Editor } from "@tiptap/core";
+import { Fragment, Slice } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { dropPoint } from "@tiptap/pm/transform";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import { IMAGE_ACCEPT, IMAGE_MAX_BYTES, IMAGE_PAGE_MAX_COUNT, PAGE_MAX_BYTES } from "./image-limits";
 import type { ImageProblem, ImageSrcOf, PageImages } from "./images";
 import { ImageNodeView } from "./ImageNodeView";
 import { IMAGE_NODE_NAME, imageNode } from "./doc";
+import { pagePhotoFrom } from "./page-photos";
 import { imageFilesFrom } from "./paste";
 
 /**
@@ -14,6 +17,8 @@ import { imageFilesFrom } from "./paste";
  *   `src` はサーバーの中継（`/api/assets/{id}`）。**外の `<img src>` は読み取らない**（本文に URL を持たせない。hotlink を作らない）。
  * - 入れ方は 3 つ: 貼り付け・ドロップ（ファイル）と、「/」「＋」の一覧の「画像」（ファイル選択）。どれも先に private bucket へ
  *   アップロードし、済んでから資産の id でノードを入れる（アップロードできなかったものは本文に入れない）。
+ * - 「このページの写真」（パネル）のタイルのドロップ（独自の MIME。page-photos.ts）は、もう上がっている資産なので、
+ *   アップロードせずに落とした位置へ入れる。
  * - 上限を超えた・ページがまだ無いなどで入れられないときは、本文を変えずに、本文のすぐ下に理由を出す（下の showImageProblem）。
  *
  * 口（`images`）と `pageId` は `buildPageExtensions()` から渡す。渡されていなければ画像は入れられない（schema は同じ）。
@@ -260,6 +265,23 @@ export const PageImage = Node.create<PageImageOptions>({
           handleDrop: (view, event, _slice, moved) => {
             // エディタの中のノードを動かしているときは files が無い（ProseMirror に任せる）
             if (moved) return false;
+            // パネルのタイル: もう上がっている写真なので、そのまま落とした位置に入れる
+            const photo = pagePhotoFrom(event.dataTransfer);
+            if (photo) {
+              event.preventDefault();
+              const content = imageNode(photo);
+              let at: number | null = null;
+              try {
+                const pos = view.posAtCoords({ left: event.clientX, top: event.clientY });
+                // 段落の途中に落としても割らず、いちばん近いブロックの境目（段落のあいだ）に入れる
+                if (pos) at = dropPoint(view.state.doc, pos.pos, new Slice(Fragment.from(view.state.schema.nodeFromJSON(content)), 0, 0)) ?? pos.pos;
+              } catch {
+                // 置き場の計算ができない（描画の API が無い）: 今の選択の位置に入れる
+              }
+              if (at === null) editor.commands.insertPageImage(photo);
+              else editor.chain().insertContentAt(at, content, { updateSelection: true }).focus().run();
+              return true;
+            }
             const files = imageFilesFrom(event.dataTransfer);
             if (files.length === 0) return false;
             if (!options.images) return false;

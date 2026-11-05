@@ -2,9 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   imageObjectPath,
   type CompleteImageUploadResult,
+  type DeletedPageImage,
   type ImageAsset,
   type ImageMetaPatch,
   type OwnerId,
+  type PageImageEntry,
   type SharedImageAsset,
   type StartImageUploadInput,
   type StartImageUploadResult,
@@ -41,7 +43,10 @@ import { ROBOTS_HEADER_VALUE, errorResponse, expectedOrigin, isSameOriginRequest
 export type ImageStore = {
   startImageUpload: (owner: OwnerId, input: StartImageUploadInput) => Promise<StartImageUploadResult>;
   completeImageUpload: (owner: OwnerId, assetId: string, stored: { sizeBytes: number }) => Promise<CompleteImageUploadResult>;
-  cancelImageUpload: (owner: OwnerId, pageId: string, assetId: string) => Promise<boolean>;
+  /** パネルから外す（アップロード中の取消も同じ）。カバーがその写真ならカバーも外す。無ければ null。 */
+  deletePageImage: (owner: OwnerId, pageId: string, assetId: string) => Promise<DeletedPageImage | null>;
+  /** このページの写真（済んだ画像を新しい順に最大 100 枚）。ページが無ければ null。 */
+  listPageImages: (owner: OwnerId, pageId: string) => Promise<PageImageEntry[] | null>;
   imageAsset: (owner: OwnerId, assetId: string) => Promise<ImageAsset | null>;
   updateImageMeta: (owner: OwnerId, assetId: string, patch: ImageMetaPatch) => Promise<ImageAsset | null>;
   countPageImages: (owner: OwnerId, pageId: string) => Promise<number | null>;
@@ -270,17 +275,46 @@ export function completeImageRoute(request: Request, pageId: string, assetId: st
   });
 }
 
-/** Stop an unfinished upload and release its reservation. A signed ticket may outlive this row;
- * the storage object, if uploaded later, is not deleted by this API. */
-export function cancelImageRoute(request: Request, pageId: string, assetId: string, deps: ImageApiDeps): Promise<Response> {
+/**
+ * DELETE /api/pages/{id}/images/{assetId} — このページの写真から外す（204）。アップロード中の画像の取消（予約を返す）も同じ。
+ * 済んだ画像は資産の行を消し、カバーがその写真ならカバーも外す。本文の中の画像は呼ぶ側のエディタが消して保存する。
+ * 保存先の object は消さない（取消・ゴミ箱の purge と同じ。後から届いた PUT の object も bucket の規則に任せる）。
+ */
+export function deleteImageRoute(request: Request, pageId: string, assetId: string, deps: ImageApiDeps): Promise<Response> {
   return guarded("DELETE /api/pages/[id]/images/[assetId]", async () => {
     const session = await deps.auth().getSession(request);
     if (!session) return errorResponse("unauthorized");
     if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
     const store = deps.store();
     if (!store) return errorResponse("unavailable");
-    if (!(await store.cancelImageUpload(session.userId, pageId, assetId))) return notFoundResponse();
+    if (!(await store.deletePageImage(session.userId, pageId, assetId))) return notFoundResponse();
     return new Response(null, { status: 204, headers: { "Cache-Control": "private, no-store", "X-Robots-Tag": ROBOTS_HEADER_VALUE } });
+  });
+}
+
+/**
+ * GET /api/pages/{id}/images — このページの写真（パネル）。200 `{ images }`。済んだ画像だけを新しい順に最大 100 枚。
+ * 返すのは id・大きさ・種類・alt・クレジット・掲載許諾・上げた時刻だけ（object の場所・sha256・owner は出さない）。
+ */
+export function listImagesRoute(request: Request, pageId: string, deps: ImageApiDeps): Promise<Response> {
+  return guarded("GET /api/pages/[id]/images", async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    const images = await store.listPageImages(session.userId, pageId);
+    if (!images) return notFoundResponse();
+    return jsonResponse(200, {
+      images: images.map((image) => ({
+        assetId: image.assetId,
+        bytes: image.bytes,
+        contentType: image.contentType,
+        alt: image.alt,
+        credit: image.credit,
+        consent: image.consent,
+        createdAt: image.createdAt,
+      })),
+    });
   });
 }
 

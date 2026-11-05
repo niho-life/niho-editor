@@ -91,6 +91,12 @@ export type PageEditorEvents = {
   registerSaveNow?: (saveNow: () => Promise<boolean>) => () => void;
   /** 公開のシートで変えた言語がサーバーに届いた（届いた言語。一覧の言語を替える）。 */
   onLangChange?: (lang: PageLang) => void;
+  /**
+   * 作ってあるページを、何も足さないまま離れた（画面を離れる・`pagehide`）。題名・本文・リード・カバーが空で、本文の画像も
+   * パネルの写真も上げている途中でないときだけ呼ぶ。呼ぶ側がサーバーへ「空なら捨てる」を送る（空かどうかはサーバーが確かめる）。
+   * `keepalive` は `pagehide` のとき（タブを閉じる・別のサイトへ移る）。
+   */
+  onLeftEmpty?: (id: string, options: { keepalive: boolean }) => void;
 };
 
 export type PageEditorProps = {
@@ -102,12 +108,21 @@ export type PageEditorProps = {
   shared?: boolean | null;
 } & PageEditorEvents;
 
+/** 何も足していないか（onLeftEmpty の判定）。空ならページの id と、まだ届いていない保存があるか。空でなければ null。 */
+type LeaveCheck = () => { id: string; busy: () => boolean } | null;
+
 type ScreenProps = PageEditorProps & {
   shared: boolean | null;
   setShared: (shared: boolean) => void;
   /** 版に戻したページで開き直す（言語は版に戻しても変わらないので、今の画面の言語を持っていく）。 */
   reopen: (page: RestoredPage, lang: PageLang) => void;
+  /** 離れるときの判定を外側（PageEditor）へ渡す（開き直しでは離れたことにしない）。 */
+  registerLeaveCheck: (check: LeaveCheck) => void;
 };
+
+/** 離れたあと、まだ届いていない保存を待つ上限（画面の中の移動のとき。pagehide では待たない）。 */
+const LEAVE_SETTLE_MS = 5000;
+const LEAVE_POLL_MS = 100;
 
 const noSubscription = () => () => undefined;
 
@@ -172,6 +187,39 @@ export function PageEditor(props: PageEditorProps) {
     // 戻した（サーバーの更新時刻が進んだ）。一覧の上へ動かす
     savedRef.current?.();
   }, []);
+  // 何も足していないページを離れたら知らせる（画面を離れる・pagehide）。開き直し（版に戻す）は離れたことにしない
+  const leaveCheck = useRef<LeaveCheck | null>(null);
+  const leftEmptyRef = useRef(props.onLeftEmpty);
+  useEffect(() => {
+    leftEmptyRef.current = props.onLeftEmpty;
+  });
+  const registerLeaveCheck = useCallback((check: LeaveCheck) => {
+    leaveCheck.current = check;
+  }, []);
+  useEffect(() => {
+    const leave = (keepalive: boolean) => {
+      const notify = leftEmptyRef.current;
+      const left = notify ? leaveCheck.current?.() : null;
+      if (!notify || !left) return;
+      if (keepalive || !left.busy()) {
+        notify(left.id, { keepalive });
+        return;
+      }
+      // 画面の中の移動: 最後の保存（題名を消した、など）が届いてから頼む（届く前に頼むと、サーバーには前の題名が残っている）
+      const started = Date.now();
+      const wait = () => {
+        if (left.busy() && Date.now() - started < LEAVE_SETTLE_MS) setTimeout(wait, LEAVE_POLL_MS);
+        else notify(left.id, { keepalive: false });
+      };
+      setTimeout(wait, LEAVE_POLL_MS);
+    };
+    const onPageHide = () => leave(true);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      leave(false);
+    };
+  }, []);
   return (
     <EditorScreen
       key={reopened?.count ?? 0}
@@ -181,6 +229,7 @@ export function PageEditor(props: PageEditorProps) {
       shared={shared}
       setShared={setShared}
       reopen={reopen}
+      registerLeaveCheck={registerLeaveCheck}
     />
   );
 }
@@ -221,8 +270,8 @@ export function PageEditor(props: PageEditorProps) {
  * 「この内容で上書き」は、競合の相手と言語が違えば画面の言語も送る。
  */
 function EditorScreen(props: ScreenProps) {
-  const { page, shared, setShared, reopen } = props;
-  const { attachPage, registerTools } = useEditorFrame();
+  const { page, shared, setShared, reopen, registerLeaveCheck } = props;
+  const { attachPage, registerTools, photosUploading } = useEditorFrame();
   const initialLang = page.lang ?? DEFAULT_PAGE_LANG;
   const [title, setTitle] = useState(page.title);
   const [lang, setLang] = useState<PageLang>(initialLang);
@@ -822,6 +871,38 @@ function EditorScreen(props: ScreenProps) {
     </section>
   ), [lead, leadCount, cover, ready, unreadable, coverOptions, refreshCoverOptions, coverConsent, coverMetaBusy, coverError, pageId, lang, changeLang, langNote, flush, savedRevision, revision, compositionStarted, compositionEnded]);
 
+  // パネルから外した写真がカバーなら、カバーも外す（サーバーは外し済み。画面と保存の内容を揃える。同じ自動保存に載せる）
+  const clearCover = useCallback((assetId: string) => {
+    const current = coverRef.current;
+    if (!current || current.toLowerCase() !== assetId.toLowerCase()) return;
+    coverRef.current = null;
+    setCover(null);
+    setCoverMetadata(null);
+    setCoverError(null);
+    autosaveRef.current?.change({ cover: null });
+    keeperRef.current?.touch();
+  }, []);
+
+  // 離れるときの判定（作ってあり、題名・本文・リード・カバーが空で、画像を上げている途中でない）
+  useEffect(() => {
+    registerLeaveCheck(() => {
+      const saver = saverRef.current;
+      const current = editorRef.current;
+      if (!saver || saver.pageId === null || !readyRef.current || unreadableRef.current) return null;
+      if (titleRef.current.trim() !== "" || coverRef.current !== null || (leadRef.current ?? "").trim() !== "") return null;
+      if (!current || current.isDestroyed) return null;
+      let blank = true;
+      current.state.doc.forEach((node) => {
+        if (node.type.name !== "paragraph" || node.content.size > 0) blank = false;
+      });
+      if (!blank) return null;
+      // 本文の画像（貼り付け・ドロップ・画像ボタン）か、パネルの写真を上げている途中
+      if (current.view.dom.parentElement?.querySelector("[data-image-uploading]") || photosUploading?.()) return null;
+      const autosave = autosaveRef.current;
+      return { id: saver.pageId, busy: () => autosave?.hasPending() === true };
+    });
+  }, [registerLeaveCheck, photosUploading]);
+
   const status = statusOf(state);
   useEffect(
     () => attachPage({
@@ -837,9 +918,10 @@ function EditorScreen(props: ScreenProps) {
       langNote,
       text,
       publicationFields,
+      clearCover,
       ai: { editor, bridge: aiBridge, title, kind: page.kind ?? "note", lang, diff: aiDiffBridge },
     }),
-    [attachPage, ready, pageId, status, flush, revision, reopenHere, shared, setShared, lang, changeLang, langNote, text, publicationFields, editor, aiBridge, aiDiffBridge, title, page.kind],
+    [attachPage, ready, pageId, status, flush, revision, reopenHere, shared, setShared, lang, changeLang, langNote, text, publicationFields, clearCover, editor, aiBridge, aiDiffBridge, title, page.kind],
   );
 
   const overwrite = () => {

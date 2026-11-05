@@ -42,6 +42,18 @@ export { buildMarkdownExtensions } from "./markdown-extensions";
 export { checkLinkInput, type LinkInputResult } from "./link-href";
 export { IMAGE_PROBLEM_TEXT, PageImage, showImageProblem, type PageImageOptions } from "./image-node";
 export {
+  PAGE_IMAGE_DRAG_TYPE,
+  encodePagePhotoDrag,
+  insertPageImageAfterCursor,
+  pageImageUses,
+  pagePhotoFrom,
+  pagePhotosBody,
+  removePageImageNodes,
+  updatePageImageNodes,
+  type PagePhotoDrag,
+  type PagePhotosBody,
+} from "./page-photos";
+export {
   IMAGE_ACCEPT,
   IMAGE_ALT_MAX_CHARS,
   IMAGE_CONTENT_TYPES,
@@ -51,9 +63,10 @@ export {
   isAllowedImageSize,
   isAllowedImageType,
 } from "./image-limits";
-export type { ImageMeta, ImageProblem, ImageSrcOf, PageImageUploadResult, PageImages } from "./images";
+export type { ImageMeta, ImageProblem, ImageSrcOf, PageImageEntry, PageImageUploadResult, PageImages } from "./images";
 export { blocksToMarkdown, markdownToBlocks, pageMarkdownSchema, type BlocksToMarkdown, type MarkdownToBlocks } from "./markdown";
 export { isMacPlatform, isMod, isSaveShortcut, isSearchShortcut, shortcutOf, type ShortcutId } from "./shortcuts";
 export { SAVE_STATUS_TEXT, headerStatus, type SaveStatus } from "./save-status";
 export { formatWhen } from "./when";
 export { PageChrome } from "./PageChrome";
+export { PAGE_PHOTOS_ADD_TEXT, PAGE_PHOTOS_FULL_TEXT, PAGE_PHOTOS_LABEL, PAGE_PHOTOS_MIN_HEIGHT, PagePhotos, type PagePhotosProps } from "./PagePhotos";

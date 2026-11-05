@@ -10,9 +10,11 @@ import {
   cancelImageUpload,
   completeImageUpload,
   countPageImages,
+  deletePageImage,
   findImageUploadByKey,
   imageAsset,
   imageObjectPath,
+  listPageImages,
   sharedImageAsset,
   startImageUpload,
   updateImageMeta,
@@ -442,5 +444,115 @@ describe("page images on PostgreSQL", { skip: databaseUrl === undefined }, () =>
     const purged = await store.purgeTrash();
     assert.ok(purged.assetPaths.includes(`image/${input.assetId}`), "the object path is reported so the bucket rule can take it");
     assert.equal(await imageAsset(pool, OWNER, input.assetId), null);
+  });
+  const readyImage = async (page: string, owner = OWNER) => {
+    const input = startInput(page);
+    assert.equal((await startImageUpload(pool, owner, input))?.status, "created");
+    assert.equal((await completeImageUpload(pool, owner, input.assetId, { sizeBytes: input.bytes }))?.status, "ok");
+    return input.assetId;
+  };
+
+  it("lists the page's ready images newest first, without uploading ones, and null for someone else's, a missing or a trashed page", async () => {
+    const page = await newPage();
+    assert.deepEqual(await listPageImages(pool, OWNER, page), []);
+    const first = await readyImage(page);
+    const second = await readyImage(page);
+    // 同じ時刻にならないよう、作った時刻をずらす
+    await pool.query("UPDATE assets SET created_at = created_at - interval '1 minute' WHERE id = $1", [first]);
+    await updateImageMeta(pool, OWNER, second, { alt: "合成の写真", credit: "合成の提供元", consent: true });
+    await startImageUpload(pool, OWNER, startInput(page));
+    // 別のページの画像は入らない
+    await readyImage(await newPage());
+    const listed = await listPageImages(pool, OWNER, page);
+    assert.deepEqual(
+      listed?.map((image) => image.assetId),
+      [second, first],
+    );
+    assert.deepEqual(listed?.[0], {
+      assetId: second,
+      bytes: 1024,
+      contentType: "image/png",
+      alt: "合成の写真",
+      credit: "合成の提供元",
+      consent: true,
+      createdAt: listed?.[0]?.createdAt,
+    });
+    assert.equal(Object.hasOwn(listed![0]!, "objectPath"), false, "the bucket location stays on the server");
+    assert.equal(await listPageImages(pool, OTHER, page), null);
+    assert.equal(await listPageImages(pool, OWNER, randomUUID()), null);
+    assert.equal(await listPageImages(pool, OWNER, "not-a-uuid"), null);
+    const trashed = await newPage();
+    await readyImage(trashed);
+    assert.equal(await store.deletePage(OWNER, trashed), "deleted");
+    assert.equal(await listPageImages(pool, OWNER, trashed), null);
+  });
+
+  it("removes a page image (ready or uploading), clears the cover that used it, and refuses another page, owner or a missing image", async () => {
+    const page = await newPage();
+    const used = await readyImage(page);
+    const kept = await readyImage(page);
+    const pending = startInput(page);
+    await startImageUpload(pool, OWNER, pending);
+    const before = (await store.getPage(OWNER, page))!;
+    const saved = await store.savePage(OWNER, page, { blocks: [{ type: "image", attrs: { assetId: used } }], cover: used }, { baseRevision: before.revision });
+    assert.equal(saved?.status, "saved");
+    const revision = saved?.status === "saved" ? saved.page.revision : 0;
+
+    const elsewhere = await newPage();
+    assert.equal(await deletePageImage(pool, OWNER, elsewhere, used), null, "the path's page must own the image");
+    assert.equal(await deletePageImage(pool, OTHER, page, used), null);
+    assert.equal(await deletePageImage(pool, OWNER, page, randomUUID()), null);
+    assert.equal(await deletePageImage(pool, OWNER, page, "not-a-uuid"), null);
+    assert.equal((await store.getPage(OWNER, page))?.cover, used, "a refused delete keeps the cover");
+
+    assert.deepEqual(await deletePageImage(pool, OWNER, page, used), { coverCleared: true });
+    const after = (await store.getPage(OWNER, page))!;
+    assert.equal(after.cover, null);
+    // 本文の中の画像はエディタが消す（store は本文に触らず、revision も進めない）
+    assert.deepEqual(after.blocks, [{ type: "image", attrs: { assetId: used } }]);
+    assert.equal(after.revision, revision);
+    assert.equal(await imageAsset(pool, OWNER, used), null);
+    assert.equal(await deletePageImage(pool, OWNER, page, used), null, "a second delete is the same 404");
+
+    assert.deepEqual(await deletePageImage(pool, OWNER, page, pending.assetId), { coverCleared: false });
+    assert.deepEqual((await listPageImages(pool, OWNER, page))?.map((image) => image.assetId), [kept]);
+    assert.equal(await countPageImages(pool, OWNER, page), 1, "removed photos no longer count toward the 100");
+    // 消した写真を指したままの本文でも、そのまま保存できる
+    assert.equal((await store.savePage(OWNER, page, { title: "合成の題名" }, { baseRevision: revision }))?.status, "saved");
+  });
+
+  it("removes a photo that another page uses as its cover, clearing that cover instead of failing on the cover FK", async () => {
+    const page = await newPage();
+    const photo = await readyImage(page);
+    // 保存は「そのページの写真だけ」をカバーにするが、カバーの FK は (owner, cover) でページを問わない（ゴミ箱の purge も
+    // 別のページのカバーが使う資産を想定している）。その状態を直接作る
+    const other = await newPage();
+    await pool.query("UPDATE pages SET cover = $1 WHERE owner = $2 AND id = $3", [photo, OWNER, other]);
+    assert.equal((await store.getPage(OWNER, other))?.cover, photo);
+
+    assert.deepEqual(await deletePageImage(pool, OWNER, page, photo), { coverCleared: false }, "this page's own cover was not the photo");
+    assert.equal((await store.getPage(OWNER, other))?.cover, null);
+    assert.equal(await imageAsset(pool, OWNER, photo), null);
+  });
+
+  it("restores a version whose cover photo was removed from the panel, without the cover", async () => {
+    const versions = new EditorStore(pool, { autosaveVersionIntervalMs: 0 });
+    const page = await newPage();
+    const photo = await readyImage(page);
+    const start = (await versions.getPage(OWNER, page))!;
+    const withCover = await versions.savePage(OWNER, page, { blocks: [{ type: "image", attrs: { assetId: photo } }], cover: photo }, { baseRevision: start.revision });
+    assert.equal(withCover?.status, "saved");
+    const later = await versions.savePage(OWNER, page, { blocks: [], cover: null }, { baseRevision: withCover?.status === "saved" ? withCover.page.revision : 0 });
+    assert.equal(later?.status, "saved");
+    const list = (await versions.listVersions(OWNER, page))!;
+    const target = list.find((version) => version.blockCount === 1)!;
+    assert.ok(target);
+    assert.deepEqual(await deletePageImage(pool, OWNER, page, photo), { coverCleared: false });
+    const restored = await versions.restoreVersion(OWNER, page, target.version, {
+      baseRevision: later?.status === "saved" ? later.page.revision : 0,
+      accept: (blocks) => blocks as never,
+    });
+    assert.equal(restored?.status, "restored");
+    assert.equal(restored?.status === "restored" && restored.page.cover, null);
   });
 });
