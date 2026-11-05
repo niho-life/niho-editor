@@ -256,9 +256,8 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
                 </span>
               )}
             </button>
-            {rowActions && item.id !== currentId && (
-              // 行の「…」（設計 §5.5）。右クリック・⌥クリックを知らない人・iPad の入り口。ふだんは隠し、行に乗る・フォーカスすると出す。
-              // メインのページの行には出さない（右に置けず、できることが無い）
+            {rowActions && (
+              // 行の「…」（設計 §5.5）。右クリック・⌥クリックを知らない人・iPad の入り口。ふだんは隠し、行に乗る・フォーカスすると出す
               <button
                 type="button"
                 className="es-ib es-ib--sm es-di-more"
@@ -312,7 +311,12 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
     : undefined;
   const rowMenuItems = (id: string): ShellMenuItem[] => {
     const open: ShellMenuItem = { id: "open", label: "開く", icon: "doc" };
-    if (id === currentId) return [open];
+    // メインのページは右に置けない。できないことは消さずに、理由を添えて無効で出す（モックの rowMenu()）
+    if (id === currentId)
+      return [
+        { ...open, label: "メインで開いています", disabled: true },
+        { id: "side", label: "右に並べて開く", icon: "panel", disabled: true },
+      ];
     if (id === side?.id) return [open, { id: "close-side", label: "右を閉じる", icon: "x" }];
     return [open, { id: "side", label: "右に並べて開く", icon: "panel", hint: "⌥クリック" }];
   };

@@ -461,9 +461,14 @@ describe("一覧の右に並べる操作とパネルの移動（ShellSidebar）"
     key(row(host, "取材メモ").querySelector(".es-di")!, "Enter", { altKey: true });
     expect(side.onOpen).toHaveBeenCalledTimes(3);
 
-    // メインのページは右に置けない。右のページは「右を閉じる」
+    // メインのページは右に置けない（理由を添えて無効で出す）。右のページは「右を閉じる」
     key(row(host, "鎌倉の朝さんぽ").querySelector(".es-di")!, "F10", { shiftKey: true });
-    expect([...host.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["開く"]);
+    const mainItems = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+    expect(mainItems.map((item) => item.textContent)).toEqual(["メインで開いています", "右に並べて開く"]);
+    expect(mainItems.map((item) => item.getAttribute("aria-disabled"))).toEqual(["true", "true"]);
+    act(() => mainItems[1]!.click());
+    expect(side.onOpen).toHaveBeenCalledTimes(3);
+    expect(onSelect).not.toHaveBeenCalled();
     key(document.activeElement!, "Escape");
     key(row(host, "写真の候補").querySelector(".es-di")!, "ContextMenu");
     expect([...host.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["開く", "右を閉じる"]);
@@ -493,8 +498,10 @@ describe("一覧の右に並べる操作とパネルの移動（ShellSidebar）"
     // 選んだあとは「…」へフォーカスを戻す
     expect(document.activeElement).toBe(more);
 
-    // メインのページの行には出さない。右に出しているページの行は「右を閉じる」
-    expect(row(host, "鎌倉の朝さんぽ").querySelector(".es-di-more")).toBeNull();
+    // メインのページの行にも出し（並びをそろえる）、項目は理由つきの無効。右に出しているページの行は「右を閉じる」
+    act(() => row(host, "鎌倉の朝さんぽ").querySelector<HTMLButtonElement>(".es-di-more")!.click());
+    expect([...host.querySelectorAll('[role="menuitem"]')].map((item) => item.getAttribute("aria-disabled"))).toEqual(["true", "true"]);
+    key(document.activeElement!, "Escape");
     render(<ShellSidebar items={items} currentId="a" side={{ ...side, id: "c" }} me={me} />);
     act(() => row(host, "写真の候補").querySelector<HTMLButtonElement>(".es-di-more")!.click());
     expect([...host.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["開く", "右を閉じる"]);
