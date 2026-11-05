@@ -1,7 +1,7 @@
-import { MODEL_OPTIONS } from "@niho/docs-core";
+import { MODEL_OPTIONS, effortRule, fitEffort, type Effort, type EffortRule } from "@niho/docs-core";
 import type { ShellBridge } from "niho-desktop-bridge/shell-bridge";
 import type { AiChatEvent } from "./ai-client";
-import { isShellError, type ShellAiEngine, type ShellAiEngineName, type ShellAiEvent, type ShellAiTurn } from "niho-desktop-bridge/shell-contract";
+import { isShellError, type ShellAiEffort, type ShellAiEngine, type ShellAiEngineName, type ShellAiEvent, type ShellAiTurn } from "niho-desktop-bridge/shell-contract";
 
 export const MAC_ENGINE_LABELS: Readonly<Record<ShellAiEngineName, string>> = {
   "cli:claude-code": "Claude Code",
@@ -59,6 +59,23 @@ export function macEngineReady(engine: ShellAiEngine): boolean {
   return engine.installed && engine.authenticated && macEngineModels(engine).length > 0;
 }
 
+/** この CLI・モデルで選べる思考量（docs-core の決まり。CLI が思考量を受けないときは選べるものが無い）。 */
+export function macEffortRule(engine: ShellAiEngine, model: string): EffortRule {
+  if (!engine.effort) return { efforts: [], fixed: null };
+  return effortRule(PROVIDER_OF[engine.engine], model);
+}
+
+/**
+ * 実際に CLI へ渡す思考量。null は「既定」（`effort` を送らず、CLI の設定のまま）。
+ * 思考量がモデル名で決まる（`gemini-3.8-flash-high` など）ときも送らない。モデルに無い段階は、それより低い段階に寄せる。
+ */
+export function macEffortFor(engine: ShellAiEngine, model: string, wanted: Effort | null): Effort | null {
+  if (wanted === null) return null;
+  const rule = macEffortRule(engine, model);
+  if (rule.fixed !== null || rule.efforts.length === 0) return null;
+  return rule.efforts.includes(wanted) ? wanted : fitEffort(PROVIDER_OF[engine.engine], model, wanted);
+}
+
 function errorFromShell(error: unknown): MacAiError {
   if (isShellError(error)) {
     if (error.code === "shell_ai_too_large") return new MacAiError("too_large");
@@ -105,6 +122,8 @@ export async function runMacAiTurn(input: {
   instruction: string;
   conversationId: string | null;
   resumeSession: string | null;
+  /** 思考量。null は既定（送らない）。 */
+  effort?: ShellAiEffort | null;
   signal: AbortSignal;
   onProgress?: (text: string) => void;
   /** 途中の文・道具（サーバー経路の `streamAiChat` と同じ形）。 */
@@ -127,6 +146,7 @@ export async function runMacAiTurn(input: {
     turn = await input.shell.aiTurn(turnId, {
       engine: input.engine,
       model: input.model,
+      ...(input.effort ? { effort: input.effort } : {}),
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       ...(input.resumeSession ? { resumeSession: input.resumeSession } : {}),
       instruction: input.selection === null ? input.instruction : `${input.instruction}\n\n選択範囲を主な対象にしてください。選択範囲は context/selection.md にあります。`,

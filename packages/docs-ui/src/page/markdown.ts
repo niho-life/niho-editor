@@ -13,7 +13,7 @@ import { buildMarkdownExtensions } from "./markdown-extensions";
  * 同じエディタを Mac に載せるために、ここで往復させる。**変換できないものは黙って捨てず、必ず断る**
  * （設計 §12・移行の対応表 §4「変換できない要素は取り込まずに報告する」）。
  *
- * - 読む: 対応外の記法は `{ ok: false }`。見出し 1・4 以下も断る（本文は 2・3 だけ）。
+ * - 読む: 対応外の記法は `{ ok: false }`。見出し 1・4 以下も断る（本文は 2・3 だけ。AI が書いた本文だけは `headings: "clamp"` で 2・3 にそろえる）。
  * - 書く: 限定 AST の中だけを書き出す。画像（資産の id を持つ）は Markdown に置き場が無いので断る（#45 の相談の項目）。
  * - 囲み（`callout`）は Markdown に対応する記法が無いので、引用の中の `[!note]` の行で表す。旧い画面で開いても
  *   引用として読めるだけで、本文は欠けない。
@@ -30,7 +30,10 @@ type Token = ReturnType<MarkdownIt["parse"]>[number];
 type StateCore = Parameters<MarkdownIt["core"]["process"]>[0];
 
 /**
- * 引用の最初の段落が目印だけなら、囲みの token に変える（目印の段落は落とす）。
+ * 引用の最初の段落が目印で始まるなら、囲みの token に変える。
+ * - 目印だけの段落（このエディタが書き出す形。`> [!note]` のあとに空の `>` 行）は、段落ごと落とす。
+ * - 目印の次の行から本文が続く段落（GitHub の注記の書き方。AI はこちらで書きがち）は、目印の行だけを落とす。
+ * 目印の大文字・小文字は問わない（`[!NOTE]` も同じ）。
  * **本文として打った `[!note]` は escape されて `\[!note\]` になる**ので、ここで囲みにはならない
  * （escape は parse のあとに解けるので、解けた文字では見分けられない。token の生の content で見る）。
  */
@@ -39,12 +42,24 @@ function calloutRule(state: StateCore): void {
   for (let index = 0; index < tokens.length; index++) {
     if (tokens[index]?.type !== "blockquote_open") continue;
     const marker = tokens[index + 2];
-    if (tokens[index + 1]?.type !== "paragraph_open" || marker?.type !== "inline" || marker.content !== CALLOUT_MARKER) continue;
-    if (tokens[index + 3]?.type !== "paragraph_close") continue;
+    if (tokens[index + 1]?.type !== "paragraph_open" || marker?.type !== "inline") continue;
+    const firstLine = marker.content.split("\n", 1)[0]!;
+    if (firstLine.toLowerCase() !== CALLOUT_MARKER) continue;
+    const alone = firstLine.length === marker.content.length;
+    if (alone) {
+      if (tokens[index + 3]?.type !== "paragraph_close") continue;
+    } else {
+      // 目印の行とその改行だけを落とし、続きの行はその段落の本文にする
+      const children = marker.children ?? [];
+      const lineEnd = children.findIndex((child) => child.type === "softbreak");
+      if (lineEnd < 0) continue;
+      marker.children = children.slice(lineEnd + 1);
+      marker.content = marker.content.slice(firstLine.length + 1);
+    }
     tokens[index]!.type = "callout_open";
-    // 対応する閉じ（入れ子の引用・囲みを数える）
+    // 対応する閉じ（入れ子の引用・囲みを数える。段落の token は数えに関わらない）
     let depth = 0;
-    for (let close = index + 4; close < tokens.length; close++) {
+    for (let close = index + 1; close < tokens.length; close++) {
       const type = tokens[close]!.type;
       if (type === "blockquote_open" || type === "callout_open") depth++;
       else if (type === "blockquote_close") {
@@ -55,7 +70,7 @@ function calloutRule(state: StateCore): void {
         depth--;
       }
     }
-    tokens.splice(index + 1, 3);
+    if (alone) tokens.splice(index + 1, 3);
   }
 }
 
@@ -305,11 +320,30 @@ const serializer = new MarkdownSerializer(
 export type MarkdownToBlocks = { ok: true; blocks: Block[] } | { ok: false; reason: string };
 export type BlocksToMarkdown = { ok: true; markdown: string } | { ok: false; reason: string };
 
+export type MarkdownToBlocksOptions = {
+  /**
+   * 見出しの段階の扱い。`strict`（既定）は見出し 1 と 4 以下を断る。
+   * `clamp` は AI が書いた本文だけに使う。1 を 2 に、4 以下を 3 にそろえる（AI は記事の先頭に `#` の題名を付けがちで、
+   * 1 か所のために書き換えの全体を断ると、CLI 経由では書き直せないため）。画像などほかの対応外は、どちらでも断る。
+   */
+  headings?: "strict" | "clamp";
+};
+
+/** 見出しの段階を 2・3 に寄せる（引用・囲み・項目の中の見出しも）。`doc.toJSON()` の結果をその場で書き換える。 */
+function clampHeadingLevels(nodes: readonly unknown[]): void {
+  for (const node of nodes) {
+    if (typeof node !== "object" || node === null) continue;
+    const { type, attrs, content } = node as { type?: unknown; attrs?: { level?: unknown }; content?: unknown };
+    if (type === "heading" && attrs && typeof attrs.level === "number") attrs.level = Math.min(3, Math.max(2, attrs.level));
+    if (Array.isArray(content)) clampHeadingLevels(content);
+  }
+}
+
 /**
  * Markdown を限定 AST の blocks にする。対応外の記法（画像・見出し 1 と 4 以下など）があれば断る。
  * 空の本文は空の配列（エディタは空の段落 1 つを置く）。
  */
-export function markdownToBlocks(markdown: string): MarkdownToBlocks {
+export function markdownToBlocks(markdown: string, options: MarkdownToBlocksOptions = {}): MarkdownToBlocks {
   if (markdown.trim().length === 0) return { ok: true, blocks: [] };
   if (malformedTable(markdown)) return { ok: false, reason: "表の列数が揃っていません" };
   let doc: ProseMirrorNode | null;
@@ -320,6 +354,7 @@ export function markdownToBlocks(markdown: string): MarkdownToBlocks {
   }
   if (doc === null) return { ok: false, reason: "Markdown を読めませんでした" };
   const json = doc.toJSON() as { content?: unknown[] };
+  if (options.headings === "clamp") clampHeadingLevels(json.content ?? []);
   // 保存してよい形だけで組み直す（見出しの深さ・リンクの scheme・入れ子の深さはここで断られる）
   return validateBlocks(json.content ?? []);
 }

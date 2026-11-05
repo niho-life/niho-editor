@@ -201,7 +201,8 @@ function createToolRunner(deps: {
       if (!target) return { ok: false, result: "そのページは、この会話では書けません。list_pages の id を使ってください。" };
       if (!target.writable) return { ok: false, result: "そのページは読むだけです（同じフォルダのほかのページ）。書けるのは開いているページとその親・サブページだけです。", page: target.title };
       if (typeof input.markdown !== "string") return { ok: false, result: "markdown に本文の全体を渡してください。", page: target.title };
-      const parsed = markdownToBlocks(input.markdown);
+      // AI は記事の先頭に `#` の題名を付けがちなので、見出しの段階は 2・3 にそろえる（画像などの対応外は断る）
+      const parsed = markdownToBlocks(input.markdown, { headings: "clamp" });
       if (!parsed.ok) return { ok: false, result: `本文を読めませんでした: ${parsed.reason}`, page: target.title };
       const blocks = parseBlocks(parsed.blocks);
       if (!blocks.ok) return { ok: false, result: "本文が大きすぎるか、保存できない形です。", page: target.title };
@@ -239,7 +240,7 @@ function createToolRunner(deps: {
     // create_page
     if (typeof input.title !== "string" || input.title.trim().length === 0) return { ok: false, result: "title にページの題名を渡してください。" };
     if (typeof input.markdown !== "string") return { ok: false, result: "markdown に本文の全体を渡してください。" };
-    const parsed = markdownToBlocks(input.markdown);
+    const parsed = markdownToBlocks(input.markdown, { headings: "clamp" });
     if (!parsed.ok) return { ok: false, result: `本文を読めませんでした: ${parsed.reason}` };
     const blocks = parseBlocks(parsed.blocks);
     if (!blocks.ok) return { ok: false, result: "本文が大きすぎるか、保存できない形です。" };

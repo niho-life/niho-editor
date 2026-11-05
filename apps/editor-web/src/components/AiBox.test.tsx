@@ -32,6 +32,7 @@ afterEach(async () => {
   nativeMock.shell = null;
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
   resizeCallbacks.length = 0;
+  window.localStorage.removeItem("niho-editor:mac-ai-choice");
   vi.unstubAllGlobals();
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
   vi.restoreAllMocks();
@@ -179,6 +180,9 @@ const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.str
 const field = () => container!.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')!;
 const button = (label: string) => container!.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 const logText = () => container!.querySelector('[role="log"]')?.textContent ?? "";
+/** 入力欄の下端の「実行先・モデル・思考量」のボタンと、その窓。 */
+const enginePill = () => container!.querySelector<HTMLButtonElement>(".es-ai-engine-pill");
+const engineDialog = () => container!.querySelector<HTMLElement>('[role="dialog"][aria-label="AI の実行先・モデル・思考量"]');
 
 function setValue(value: string, caret = value.length) {
   act(() => {
@@ -325,12 +329,14 @@ describe("AiPanel", () => {
     let deviceFails = false;
     const server = defaultServer({ device: () => deviceFails ? Promise.reject(new Error("network lost")) : chatResponse("CLI の返答を保存しました") });
     await render();
-    await until(() => container!.querySelector<HTMLSelectElement>('select[aria-label="自由入力チャットの実行先"]')?.value === "cli:codex");
+    await until(() => enginePill()?.textContent?.includes("Codex CLI") ?? false);
     setValue("端末で直す");
     await press("Enter");
     await until(() => logText().includes("CLI の返答を保存しました"));
     expect(server.calls.filter((call) => call.url.endsWith("/ai/chat/turns"))).toHaveLength(1);
     expect(server.calls.find((call) => call.url.endsWith("/ai/chat/turns"))?.body).toMatchObject({ input: "端末で直す", reply: "CLI の返答", engine: "cli:codex" });
+    // 思考量を選んでいなければ（既定）、CLI へ送らない
+    expect(aiTurn.mock.calls[0]?.[1]).not.toHaveProperty("effort");
 
     await click(button("新しい会話"));
     setValue("新しい会話");
@@ -356,6 +362,91 @@ describe("AiPanel", () => {
     await press("Enter");
     await until(() => container!.textContent!.includes("保存結果を確認できませんでした"));
     expect(server.calls.filter((call) => call.url.endsWith("/ai/chat/turns"))).toHaveLength(4);
+  });
+
+  it("puts the Mac route, model and effort behind one button at the bottom of the input, sends the effort, and remembers them on this Mac", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const aiTurn = vi.fn(async (turnId: string, request: Record<string, unknown>) => {
+      void turnId;
+      void request;
+      return {
+        finalEvent: { type: "Done" as const, text: "CLI の返答", stop_reason: "EndTurn" as const, session_id: null, usage: { input_tokens: 1, output_tokens: 1, cost_usd: null, model_used: "sonnet", cost_known: false }, duration_ms: 1, continuations: 0 },
+        page: null,
+        pageRemoved: false,
+        extraFiles: 0,
+      };
+    });
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [
+        { engine: "cli:claude-code", installed: true, authenticated: true, reason: null, models: ["sonnet", "opus"], effort: true, resume: true },
+        { engine: "cli:codex", installed: false, authenticated: false, reason: "cli_not_found", models: [], effort: true, resume: true },
+        { engine: "cli:antigravity", installed: true, authenticated: true, reason: null, models: ["gemini-3.8-flash", "gemini-3.8-flash-high"], effort: true, resume: true },
+      ]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    defaultServer();
+    await render();
+    await until(() => enginePill()?.textContent?.includes("Claude Code · sonnet") ?? false);
+    // 入力欄の上に選択欄は置かない。下端のボタンは押すまで閉じている
+    expect(container!.querySelector("select")).toBeNull();
+    expect(engineDialog()).toBeNull();
+    expect(enginePill()!.getAttribute("aria-expanded")).toBe("false");
+
+    await click(enginePill()!);
+    expect(enginePill()!.getAttribute("aria-expanded")).toBe("true");
+    const route = (value: string) => engineDialog()!.querySelector<HTMLInputElement>(`input[type="radio"][value="${value}"]`)!;
+    const effort = (label: string) => [...engineDialog()!.querySelectorAll<HTMLLabelElement>(".es-ai-effort label")].find((item) => item.textContent === label)!.querySelector("input")!;
+    // 入っていない CLI は選べない。既定の思考量は「既定」
+    expect(route("cli:codex").disabled).toBe(true);
+    expect(route("cli:claude-code").checked).toBe(true);
+    expect(effort("既定").checked).toBe(true);
+    await click(effort("高"));
+    expect(enginePill()!.textContent).toContain("Claude Code · sonnet · 高");
+    const result = await axe.run(container!, { rules: { "color-contrast": { enabled: false } } });
+    expect(result.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical")).toEqual([]);
+
+    // Escape で閉じて、開いたボタンへ戻る
+    await act(async () => {
+      engineDialog()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    expect(engineDialog()).toBeNull();
+    expect(document.activeElement).toBe(enginePill());
+
+    setValue("高い思考量で直す");
+    await press("Enter");
+    await until(() => aiTurn.mock.calls.length === 1);
+    expect(aiTurn.mock.calls[0]?.[1]).toMatchObject({ engine: "cli:claude-code", model: "sonnet", effort: "high" });
+    await until(() => !enginePill()!.disabled);
+
+    // Antigravity の gemini-3.8-flash には「最大」が無い。思考量入りの名前のモデルは、思考量を選ばない
+    await click(enginePill()!);
+    await click(route("cli:antigravity"));
+    expect(effort("最大").disabled).toBe(true);
+    await act(async () => {
+      const select = engineDialog()!.querySelector<HTMLSelectElement>('select[aria-label="CLI のモデル"]')!;
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, "gemini-3.8-flash-high");
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(engineDialog()!.textContent).toContain("このモデルは、思考量が名前で決まっています（高）");
+    expect(enginePill()!.textContent).toContain("Antigravity CLI · gemini-3.8-flash-high");
+
+    // 窓の外を押すと閉じる
+    await act(async () => {
+      field().dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
+    expect(engineDialog()).toBeNull();
+
+    // 開き直しても同じ実行先・モデル。Claude Code に戻すと、前に選んだ「高」のまま
+    await act(async () => root!.unmount());
+    container!.remove();
+    root = null;
+    container = null;
+    await render();
+    await until(() => enginePill()?.textContent?.includes("Antigravity CLI · gemini-3.8-flash-high") ?? false);
+    await click(enginePill()!);
+    await click(route("cli:claude-code"));
+    expect(enginePill()!.textContent).toContain("Claude Code · sonnet · 高");
   });
 
   it("passes saved conversation history to the Mac CLI when no resumable session exists", async () => {
@@ -393,7 +484,7 @@ describe("AiPanel", () => {
       device: () => chatResponse("写真はページへ都度添付する方針。", { conversationId: CHAT_1 }),
     });
     await render();
-    await until(() => container!.querySelector<HTMLSelectElement>('select[aria-label="自由入力チャットの実行先"]')?.value === "cli:codex");
+    await until(() => enginePill()?.textContent?.includes("Codex CLI") ?? false);
     await until(() => logText().includes("NIHO-editorでは写真ライブラリを作らず"));
     await click(button("工程とスキルを開く"));
     await click([...container!.querySelectorAll<HTMLButtonElement>(".es-ai-menu-row")].find((item) => item.textContent?.includes("ここまでを要約して軽くする"))!);
