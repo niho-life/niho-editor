@@ -74,15 +74,16 @@ export function macEngineReady(engine: ShellAiEngine): boolean {
 }
 
 /**
- * CLI の Error の理由（native の `ReasonCode`）から、画面の決まった文を選ぶ。CLI の message はそのまま出さない
- * （CLI の出力の断片を含みうるので）。知らない理由は「終えられませんでした」。
+ * CLI の Error の理由（アプリの契約の `ReasonCode`＝`apps/docs/src-tauri/src/contract.rs`）から、画面の決まった文を選ぶ。
+ * crate の名前ではない（crate の `TimedOut` は `local_ai::app_reason` が `Timeout` に変えて渡す）。CLI の message はそのまま
+ * 出さない（CLI の出力の断片を含みうるので）。知らない理由は「終えられませんでした」。
  */
 const ERROR_OF_REASON: Readonly<Record<string, MacAiErrorCode>> = {
   CliLoginRequired: "auth",
   NotConfigured: "blocked",
   UsageLimitReached: "usage_limit",
   ModelNotFound: "model",
-  TimedOut: "timed_out",
+  Timeout: "timed_out",
   SessionNotFound: "session",
 };
 
