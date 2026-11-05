@@ -73,9 +73,19 @@ describe("Mac CLI chat turn", () => {
     expect(call.aiStop).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the CLI's own model list in its order (newest first)", () => {
+    const codex = { engine: "cli:codex" as const, installed: true, authenticated: true, reason: null, models: ["gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-terra"], effort: true, resume: true };
+    expect(macEngineModels(codex)).toEqual(["gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-terra"]);
+  });
+
   it("requires an authenticated CLI and gives Claude a local fallback model list", () => {
     const claude = { engine: "cli:claude-code" as const, installed: true, authenticated: true, reason: null, models: [], effort: true, resume: true };
     expect(macEngineModels(claude).length).toBeGreaterThan(0);
+    // 既定（先頭）は最新に解決する別名。版つきの古い ID はそのあと、重ねない
+    const models = macEngineModels(claude);
+    expect(models.slice(0, 4)).toEqual(["sonnet", "opus", "fable", "haiku"]);
+    expect(models).toContain("claude-sonnet-4-6");
+    expect(new Set(models).size).toBe(models.length);
     expect(macEngineReady({ ...claude, authenticated: false })).toBe(false);
     expect(new MacAiError("auth").message).not.toContain(PAGE.markdown);
   });

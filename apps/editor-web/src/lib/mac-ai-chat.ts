@@ -46,11 +46,20 @@ const PROVIDER_OF: Readonly<Record<ShellAiEngineName, keyof typeof MODEL_OPTIONS
 
 const SAFE_MODEL = /^(?!-)[a-zA-Z0-9][a-zA-Z0-9._:-]{0,99}$/;
 
-/** CLI が一覧を返せないときだけ、docs-core にある同じ CLI の控えを使う。 */
+/**
+ * Claude Code が最新のモデルに解決する別名。Claude Code は一覧を返さないので控えを使うが、控えの先頭は版つきの古い ID
+ * （claude-sonnet-4-6）なので、別名を先に並べて既定（一覧の先頭）を最新の Sonnet にする。2026-11-05 の Claude Code 2.1.292 で
+ * sonnet → claude-sonnet-5-5・opus → claude-opus-5-5・fable → claude-fable-5-1 に解決した。控えに無い別名は出さない。
+ */
+const CLAUDE_LATEST_ALIASES: readonly string[] = ["sonnet", "opus", "fable", "haiku"];
+
+/** CLI が一覧を返せないときだけ、docs-core にある同じ CLI の控えを使う（CLI の一覧は新しい順のまま）。 */
 export function macEngineModels(engine: ShellAiEngine): string[] {
   const provider = PROVIDER_OF[engine.engine];
   if (!provider || !Array.isArray(engine.models)) return [];
-  const source = engine.models.length > 0 ? engine.models : MODEL_OPTIONS[provider].map((option) => option.id);
+  const fallback = MODEL_OPTIONS[provider].map((option) => option.id);
+  const latestFirst = provider === "claude" ? [...CLAUDE_LATEST_ALIASES.filter((alias) => fallback.includes(alias)), ...fallback] : fallback;
+  const source = engine.models.length > 0 ? engine.models : latestFirst;
   return [...new Set(source.filter((model) => SAFE_MODEL.test(model)))];
 }
 

@@ -343,8 +343,9 @@ pub(crate) fn check(request: &ShellAiTurnRequest) -> CommandResult<Checked> {
     }
   }
   let user_prompt = user_prompt(provider, request);
-  // 同封するときは、標準入力の全体も 1 つの文書と同じ上限に収める（参照まで足すと大きくなりすぎる）
-  if prompt_paths(provider).inline && user_prompt.len() > MAX_DOCUMENT_BYTES {
+  // 同封するときは、標準入力の全体を crate の指示の上限に収める（超えると起動の中で「指示が長すぎます」の一時的な失敗になり、
+  // 画面は大きさの誤りだと伝えられない。1 つの文書の上限 8 MiB より小さい）
+  if prompt_paths(provider).inline && user_prompt.len() > niho_local_ai::MAX_USER_PROMPT_BYTES {
     return Err(too_large());
   }
   Ok(Checked {
@@ -876,11 +877,13 @@ mod tests {
       prompt.contains("`````markdown\n前\n````\n中\n````\n後\n`````"),
       "{prompt}"
     );
-    // 同封した標準入力の全体が上限を超えたら断る（参照を足すと 1 つの文書の上限を超えうる）
+    // 同封した標準入力の全体が crate の指示の上限を超えたら、起動する前に大きさの誤りとして断る
+    // （本文・参照は 1 つずつなら 8 MiB の内でも、合わせると 4,000,000 バイトを超える）
     let mut big = request();
     big.engine = "cli:codex".to_string();
-    big.page.markdown = "x".repeat(MAX_DOCUMENT_BYTES / 2);
-    big.context[0].markdown = "y".repeat(MAX_DOCUMENT_BYTES / 2);
+    big.page.markdown = "x".repeat(niho_local_ai::MAX_USER_PROMPT_BYTES / 2);
+    big.context[0].markdown = "y".repeat(niho_local_ai::MAX_USER_PROMPT_BYTES / 2);
+    assert!(big.page.markdown.len() + big.context[0].markdown.len() < MAX_DOCUMENT_BYTES);
     assert_eq!(check(&big).unwrap_err().code, "shell_ai_too_large");
     big.engine = "cli:claude-code".to_string();
     assert!(check(&big).is_ok());
@@ -1080,6 +1083,88 @@ mod tests {
     assert!(!root.join("page/notes.md").exists());
     again.staged.remove().unwrap();
     assert!(!root.exists());
+    fs::remove_dir_all(&data_dir).unwrap();
+  }
+
+  /// 本物の Codex CLI で、殻と同じ組み立て（check → prepare → turn_request）から 1 往復して本文が直ること。CI では走らない。
+  /// ログイン済みの CODEX_HOME を使う（既定はアプリの `~/Library/Application Support/life.niho.docs/codex-home`、
+  /// `NIHO_REAL_CODEX_HOME` で変えられる）。作業の置き場は一時フォルダに分ける（アプリの置き場を掃除しない）。
+  /// モデルは `NIHO_REAL_CODEX_MODEL`、無ければ CLI の一覧の先頭（`codex debug models` の並び＝最新。画面の既定と同じ）。
+  /// 思考量は画面と同じく渡さない。
+  /// `cargo test -p niho_docs --lib real_codex_edits_the_page -- --ignored --nocapture`
+  #[test]
+  #[ignore]
+  fn real_codex_edits_the_page_through_the_shell_request() {
+    use crate::contract::{LlmRunner, StopReason};
+    let data_dir = temp_data_dir();
+    let codex_home = std::env::var_os("NIHO_REAL_CODEX_HOME")
+      .map(PathBuf::from)
+      .unwrap_or_else(|| {
+        PathBuf::from(std::env::var_os("HOME").expect("HOME"))
+          .join("Library/Application Support/life.niho.docs")
+          .join(crate::local_ai::CODEX_HOME_DIR)
+      });
+    let runner = crate::local_ai::LocalAiRunner::new(niho_local_ai::Runtime {
+      scratch_dir: data_dir.join("local-ai"),
+      codex_home: Some(codex_home),
+      ..niho_local_ai::Runtime::default()
+    });
+    let model = std::env::var("NIHO_REAL_CODEX_MODEL").unwrap_or_else(|_| {
+      let status = runner.provider_status(Provider::CodexCli);
+      assert!(status.installed && status.authenticated, "{status:?}");
+      status.models.first().cloned().expect("CLI のモデルの一覧が空")
+    });
+    println!("model: {model}");
+    let heading = "# 議事録 2026 年 11 月 1 日に行った定例の打ち合わせの記録と、その後の決定事項のまとめ";
+    let mut request = request();
+    request.engine = "cli:codex".to_string();
+    request.model = model;
+    request.effort = None;
+    request.page.markdown = format!("{heading}\n\n本文の段落です。次回は 11 月 8 日。\n");
+    request.instruction = "見出しを短くして".to_string();
+    let checked = check(&request).unwrap();
+    let prepared = prepare(&Staging::new(&data_dir), &checked, &request).unwrap();
+    let (sender, receiver) = mpsc::channel::<TurnEvent>();
+    let started = std::time::Instant::now();
+    let _handle = runner.run_turn(
+      turn_request(&checked, &prepared),
+      Box::new(move |event| {
+        let _ = sender.send(event);
+      }),
+    );
+    let mut events = Vec::new();
+    loop {
+      let event = receiver
+        .recv_timeout(std::time::Duration::from_secs(10 * 60))
+        .expect("イベントが届かない");
+      let terminal = event.is_terminal();
+      let kind = match &event {
+        TurnEvent::ThinkingDelta(_) => "ThinkingDelta".to_string(),
+        TurnEvent::TextDelta(_) => "TextDelta".to_string(),
+        TurnEvent::ToolUse { name, .. } => format!("ToolUse:{name}"),
+        TurnEvent::ToolResult { name, ok, .. } => format!("ToolResult:{name}:{ok}"),
+        TurnEvent::Done { .. } => "Done".to_string(),
+        TurnEvent::Error { .. } => "Error".to_string(),
+      };
+      println!("{:>6} ms {kind}", started.elapsed().as_millis());
+      events.push(event);
+      if terminal {
+        break;
+      }
+    }
+    println!("done: {}", events.last().unwrap().to_wire());
+    let change = read_page(&prepared).unwrap();
+    println!("after: {:?}", change.markdown);
+    let Some(TurnEvent::Done { stop_reason, .. }) = events.last() else {
+      panic!("{:?}", events.last());
+    };
+    assert_eq!(*stop_reason, StopReason::EndTurn);
+    let after = change.markdown.expect("本文が変わっていない");
+    assert!(!after.contains(heading), "{after}");
+    assert!(after.starts_with("# "), "{after}");
+    assert!(after.contains("本文の段落です。次回は 11 月 8 日。"), "{after}");
+    assert_eq!((change.extra_files, change.missing), (0, false));
+    prepared.staged.remove().unwrap();
     fs::remove_dir_all(&data_dir).unwrap();
   }
 }
