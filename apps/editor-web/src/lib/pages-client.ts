@@ -174,3 +174,19 @@ export async function listPagesRequest(cursor: string): Promise<PageChunk> {
   if (!Array.isArray(data.pages) || (data.next !== null && typeof data.next !== "string")) throw new PageRequestError(500);
   return { pages: data.pages as PageChunk["pages"], next: data.next };
 }
+
+/**
+ * 何も足していないページを捨てるよう頼む（「新しいページ」で作って、そのまま離れたとき）。空かどうかはサーバーが確かめ、
+ * 空でなければ何もしない。消したら true。`keepalive` はタブを閉じる・隠れる瞬間（pagehide）に送るとき（本文は送らない）。
+ */
+export async function discardPageRequest(id: string, options: { keepalive?: boolean } = {}): Promise<boolean> {
+  const response = await fetch(`/api/pages/${encodeURIComponent(id)}/discard`, {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+    ...(options.keepalive ? { keepalive: true } : {}),
+  });
+  if (!response.ok) throw new PageRequestError(response.status);
+  const data = (await response.json().catch(() => null)) as { discarded?: unknown } | null;
+  return data?.discarded === true;
+}

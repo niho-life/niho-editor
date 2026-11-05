@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageSummary } from "@niho/editor-store";
 import { ShellSettingsPage } from "niho-docs-ui/shell";
 import { rememberLastPage } from "@/lib/last-page";
-import { readPageRequest, type ConflictPage } from "@/lib/pages-client";
+import { addLeftEmptyCandidate, isRetryableDiscardError, isTabCreatedPage, markTabCreatedPage } from "@/lib/left-empty-pages";
+import { discardPageRequest, readPageRequest, type ConflictPage } from "@/lib/pages-client";
 import { isNarrowNow, useEditorFrame } from "./EditorFrame";
 import { PageEditor } from "./PageEditor";
 import { PageSteps } from "./PageSteps";
@@ -22,6 +23,34 @@ export function HomeRedirect({ lastPageId }: { lastPageId: string | null }) {
     router.replace(lastPageId ? `/p/${lastPageId}` : "/p/new");
   }, [narrow, lastPageId, router]);
   return null;
+}
+
+/**
+ * 何も足していないページを離れたとき（このタブの「新しいページ」で作ったページだけ。オーナー決定 2026-11-05）。
+ * - 画面の中の移動（別のページ・画面へ）: すぐサーバーへ「空なら捨てる」を頼み、消えたら一覧から外す。届かなければ捨てる候補に残す。
+ * - `pagehide`（タブを閉じる・再読み込み・別のサイトへ）: その場では捨てず、捨てる候補に足すだけ。再読み込みの `GET /p/{id}` と
+ *   すれ違うと、開いているページがサーバーでは消えている状態になるため。次にアプリを開いたとき、EditorFrame が今のページ以外を捨てる。
+ * 空かどうかはサーバーが確かめる（src/lib/left-empty-pages.ts）。
+ */
+function useLeftEmpty(): (id: string, options: { keepalive: boolean }) => void {
+  const { pageRemoved } = useEditorFrame();
+  return useCallback(
+    (id: string, { keepalive }: { keepalive: boolean }) => {
+      if (keepalive) {
+        addLeftEmptyCandidate(id);
+        return;
+      }
+      void discardPageRequest(id).then(
+        (discarded) => {
+          if (discarded) pageRemoved(id);
+        },
+        (error: unknown) => {
+          if (isRetryableDiscardError(error)) addLeftEmptyCandidate(id);
+        },
+      );
+    },
+    [pageRemoved],
+  );
 }
 
 /**
@@ -54,6 +83,9 @@ export function OpenPage({
   const frame = useEditorFrame();
   const { pageOpened, pageSaved } = frame;
   const { id } = summary;
+  // このタブの「新しいページ」で作ったページ（再読み込みで開き直したとき）は、何も足さずに離れたら捨てる。既存のページは対象にしない
+  const tabCreated = useMemo(() => isTabCreatedPage(id), [id]);
+  const leftEmpty = useLeftEmpty();
   // 手順の段階が終わって読み直した本文（count が増えるとエディタを作り直す）。どのページの分かも持ち、
   // 別のページへ移ったら使わない（この部品は画面の移動で作り直されないことがある）
   const [replaced, setReplaced] = useState<{ count: number; id: string; page: ConflictPage } | null>(null);
@@ -95,6 +127,13 @@ export function OpenPage({
       onSaved={() => frame.pageSaved(id)}
       registerSaveNow={frame.registerPageSaver}
       onLangChange={(lang) => frame.pageLangChanged(id, lang)}
+      onLeftEmpty={
+        tabCreated
+          ? (left, options) => {
+              if (left === id) leftEmpty(left, options);
+            }
+          : undefined
+      }
     />
   );
   // 手順の帯（#37）はページのいちばん上、録音ページの文字起こし（設計 §7.1。本文の上）はその下。
@@ -132,9 +171,13 @@ export function NewPage() {
   return <NewPageEditor key={count} onCreated={(id) => (created.current = { count, id })} />;
 }
 
-/** 開いたら空でも保存してページを作り、URL を `/p/{id}` に替える（エディタは作り直さないので、変換中の文字とカーソルは残る）。 */
+/**
+ * 開いたら空でも保存してページを作り、URL を `/p/{id}` に替える（エディタは作り直さないので、変換中の文字とカーソルは残る）。
+ * 作ったページはこのタブで作ったページとして覚え、何も足さないまま離れたら捨てる（useLeftEmpty）。
+ */
 function NewPageEditor(props: { onCreated: (id: string) => void }) {
   const frame = useEditorFrame();
+  const leftEmpty = useLeftEmpty();
   const createdRef = useRef<string | null>(null);
   const titleRef = useRef("");
   const query = useSearchParams();
@@ -161,6 +204,8 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
       }}
       onCreated={(id) => {
         createdRef.current = id;
+        // 再読み込みのあと `/p/{id}` で開き直しても、このタブで作ったページと分かるように
+        markTabCreatedPage(id);
         props.onCreated(id);
         frame.pageCreated(id, titleRef.current);
         // 保存が終わる前に別の画面へ移っていたら、その画面の URL は替えない
@@ -174,6 +219,9 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
       registerSaveNow={frame.registerPageSaver}
       onLangChange={(lang) => {
         if (createdRef.current) frame.pageLangChanged(createdRef.current, lang);
+      }}
+      onLeftEmpty={(id, options) => {
+        if (id === createdRef.current) leftEmpty(id, options);
       }}
     />
   );

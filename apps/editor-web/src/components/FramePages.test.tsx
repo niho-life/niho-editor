@@ -8,9 +8,10 @@ type EditorProps = {
   createOnOpen?: boolean;
   onCreated?: (id: string) => void;
   onLangChange?: (lang: "ja" | "en") => void;
+  onLeftEmpty?: (id: string, options: { keepalive: boolean }) => void;
 };
 const editors: EditorProps[] = [];
-const frame = { pageCreated: vi.fn(), pageTitleChanged: vi.fn(), pageSaved: vi.fn(), pageOpened: vi.fn(), pageLangChanged: vi.fn(), narrow: false };
+const frame = { pageCreated: vi.fn(), pageTitleChanged: vi.fn(), pageSaved: vi.fn(), pageOpened: vi.fn(), pageLangChanged: vi.fn(), pageRemoved: vi.fn(), narrow: false };
 /** 手順の帯が「この段階の本文が入れ替わった」と知らせる口（PageSteps のモックが預かる）。 */
 const steps: { onBodyReplaced?: () => void } = {};
 
@@ -43,13 +44,19 @@ vi.mock("./PageSteps", () => ({
     );
   },
 }));
-vi.mock("@/lib/pages-client", () => ({ readPageRequest: vi.fn() }));
+vi.mock("@/lib/pages-client", async (original) => ({
+  ...(await original<typeof import("@/lib/pages-client")>()),
+  readPageRequest: vi.fn(),
+  discardPageRequest: vi.fn(),
+}));
 
 import { rememberLastPage } from "@/lib/last-page";
-import { readPageRequest } from "@/lib/pages-client";
+import { LEFT_EMPTY_PAGES_KEY, TAB_CREATED_PAGES_KEY } from "@/lib/left-empty-pages";
+import { PageRequestError, discardPageRequest, readPageRequest } from "@/lib/pages-client";
 import { NewPage, OpenPage } from "./FramePages";
 
 const readPage = vi.mocked(readPageRequest);
+const discard = vi.mocked(discardPageRequest);
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -59,6 +66,8 @@ beforeEach(() => {
   editors.length = 0;
   vi.clearAllMocks();
   window.history.replaceState(null, "", "/p/new");
+  window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 afterEach(async () => {
@@ -108,6 +117,53 @@ describe("NewPage: the creation redirect belongs to the draft that made the page
   });
 });
 
+describe("NewPage: a page left without anything added is discarded (owner decision 2026-11-05)", () => {
+  const CREATED = "44444444-4444-4444-8444-444444444444";
+  const candidates = () => JSON.parse(window.localStorage.getItem(LEFT_EMPTY_PAGES_KEY) ?? "[]") as string[];
+
+  it("marks the page as made in this tab, and on leaving inside the app asks the server at once and drops it from the list", async () => {
+    discard.mockResolvedValue(true);
+    await mount();
+    await act(async () => editors.at(-1)!.onCreated!(CREATED));
+    expect(JSON.parse(window.sessionStorage.getItem(TAB_CREATED_PAGES_KEY)!)).toEqual([CREATED]);
+    await act(async () => editors.at(-1)!.onLeftEmpty!(CREATED, { keepalive: false }));
+    expect(discard).toHaveBeenCalledWith(CREATED);
+    expect(frame.pageRemoved).toHaveBeenCalledWith(CREATED);
+    expect(candidates()).toEqual([]);
+  });
+
+  it("on pagehide (close, reload) does not discard: it only adds the page to the candidates for the next start", async () => {
+    await mount();
+    await act(async () => editors.at(-1)!.onCreated!(CREATED));
+    await act(async () => editors.at(-1)!.onLeftEmpty!(CREATED, { keepalive: true }));
+    await act(async () => editors.at(-1)!.onLeftEmpty!(CREATED, { keepalive: true }));
+    expect(discard).not.toHaveBeenCalled();
+    expect(candidates()).toEqual([CREATED]);
+  });
+
+  it("keeps the row when the page is not empty, and keeps a candidate when the request did not get through", async () => {
+    discard.mockResolvedValueOnce(false).mockRejectedValueOnce(new TypeError("offline")).mockRejectedValueOnce(new PageRequestError(404));
+    await mount();
+    await act(async () => editors.at(-1)!.onCreated!(CREATED));
+    await act(async () => editors.at(-1)!.onLeftEmpty!(CREATED, { keepalive: false }));
+    expect(candidates()).toEqual([]);
+    await act(async () => editors.at(-1)!.onLeftEmpty!(CREATED, { keepalive: false }));
+    expect(candidates()).toEqual([CREATED]);
+    window.localStorage.clear();
+    await act(async () => editors.at(-1)!.onLeftEmpty!(CREATED, { keepalive: false }));
+    expect(candidates()).toEqual([]);
+    expect(frame.pageRemoved).not.toHaveBeenCalled();
+  });
+
+  it("never asks for a page it did not create (before creation, or another id)", async () => {
+    await mount();
+    await act(async () => editors.at(-1)!.onLeftEmpty!(CREATED, { keepalive: false }));
+    await act(async () => editors.at(-1)!.onCreated!(CREATED));
+    await act(async () => editors.at(-1)!.onLeftEmpty!("55555555-5555-4555-8555-555555555555", { keepalive: false }));
+    expect(discard).not.toHaveBeenCalled();
+  });
+});
+
 describe("OpenPage: the steps band, the transcript, then the title and body", () => {
   const PAGE = "33333333-3333-4333-8333-333333333333";
   const summary = (kind: "note" | "rec" | "step", parent: string | null = null) => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent, stepStatus: null, sortOrder: 0, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
@@ -135,6 +191,22 @@ describe("OpenPage: the steps band, the transcript, then the title and body", ()
     const host = await open("note");
     expect(order(host)).toEqual([`${PAGE}:note:none`, "editor"]);
     expect(host.querySelector("[data-transcript]")).toBeNull();
+    // 既にあるページ（このタブの「新しいページ」で作っていない）は、空でも捨てない
+    expect(editors.at(-1)!.onLeftEmpty).toBeUndefined();
+  });
+
+  it("treats a page made in this tab (opened again after a reload) like a new page: leaving it empty discards it", async () => {
+    discard.mockResolvedValue(true);
+    window.sessionStorage.setItem(TAB_CREATED_PAGES_KEY, JSON.stringify([PAGE]));
+    await open("note");
+    const leave = editors.at(-1)!.onLeftEmpty!;
+    await act(async () => leave(PAGE, { keepalive: false }));
+    expect(discard).toHaveBeenCalledWith(PAGE);
+    expect(frame.pageRemoved).toHaveBeenCalledWith(PAGE);
+    // タブを閉じるときは候補に足すだけ
+    await act(async () => leave(PAGE, { keepalive: true }));
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(window.localStorage.getItem(LEFT_EMPTY_PAGES_KEY)!)).toEqual([PAGE]);
   });
 
   it("gives the band the parent of a step subpage (the run belongs to the recording page)", async () => {

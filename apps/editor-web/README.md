@@ -240,11 +240,14 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **API**（本人の・ゴミ箱でないページだけ。未認証 401、DB が無い 503、更新系は同じ origin でなければ 403、別の人・存在しない・不正な id・削除済み・画像でない資産・まだ済んでいない画像は同じ 404）:
   `POST /api/pages/{id}/images/start`（本文 `{ contentType, sizeBytes, sha256 }`、任意の `Idempotency-Key`（UUID）。201 `{ assetId, upload: { url, method: "PUT", headers, expiresAt, maxBytes } }`）・
   `POST /api/pages/{id}/images/{assetId}/complete`（200 `{ image }`）・
-  `DELETE /api/pages/{id}/images/{assetId}`（アップロード中の予約を取り消す。204）・
+  `GET /api/pages/{id}/images`（「このページの写真」。済んだ画像を新しい順に最大 100 枚。200 `{ images: [{ assetId, bytes, contentType, alt, credit, consent, createdAt }] }`）・
+  `DELETE /api/pages/{id}/images/{assetId}`（このページの写真から外す。アップロード中の予約の取消も同じ。カバーがその写真なら本人のどのページでもカバーを外す。本文の中の画像はエディタが消して保存する。object は消さない。204）・
   `PATCH /api/assets/{assetId}`（`{ alt?, credit?, consent? }` のうち 1 つ以上。200 `{ image }`）・
   `GET /api/assets/{assetId}`（中身の中継。`Content-Type` は行の値、`Content-Disposition: inline`、`X-Content-Type-Options: nosniff`、`Cache-Control: private, max-age=86400, immutable`）・
   `GET /s/{token}/a/{assetId}`（共有リンクの中継。ログイン不要。`Cache-Control: private, no-store`）。`image` は `{ assetId, pageId, status, bytes, contentType, alt, credit, consent }`（object の場所・sha256 は出さない）。
 - **流れ**: start → ブラウザが `upload.url` へ直接 PUT（credentials なし）→ complete（保存先の object の実寸を確認して ready）。画面から呼ぶ関数とエディタに渡す口は `src/lib/image-upload-client.ts`。中止・失敗時は取消 API で予約を解放する。
+- **このページの写真**（設計 §4・§5.1）: 左サイドバーの下のパネル（`niho-docs-ui/page/PagePhotos`）。パネルの ＋・ドロップは本文に入れずに上げ、タイルを本文へドラッグ（独自の MIME `application/x-niho-page-image`）・押して「本文に入れる」で入れる。パネルから外すと、先に `DELETE` が成功してから本文の全ての出現とカバーを消して自動保存に載せる。
+- **何も足していない新しいページ**: `POST /api/pages/{id}/discard`（本文なし。同じ origin。200 `{ discarded }`、別の人・無いページは 404）。そのタブで「新しいページ」から作ったページ（sessionStorage の印。再読み込みでも残る）を、題名・本文・リード・カバー・画像が空のまま画面の中で離れたら、すぐ呼ぶ。タブを閉じる・再読み込み（`pagehide`）ではその場で捨てず、localStorage の候補に足すだけにし、次にアプリを開いたとき今開いているページ以外を捨てる（再読み込みの `GET` と捨てる要求がすれ違って、開いているページがサーバーで消えているのを防ぐ。`src/lib/left-empty-pages.ts`）。サーバーがページの行を押さえて空か（pages を参照する全ての表に行が無いか）を確かめ、空ならゴミ箱に入れずに完全に消す。
 - **エラー**: 400 `{"error":"bad_request","reason":…}`（`body`・`idempotency_key`・`content_type`・`size`・`too_large`・`too_many`・`sha256`・`alt`・`credit`・`consent`）、413（開始の本文が 4 KiB 超・欄の本文が 16 KiB 超）、503 `storage_unavailable`、502 `storage_failed`、409 `idempotency_conflict`、409 `{"error":"incomplete","reason":"missing"|"size_mismatch"}`。
 - **上限**: 受け付ける種類は `image/jpeg`・`image/png`・`image/webp`・`image/avif`・`image/gif`（**SVG は script を持てるので受け付けない**）、1 枚 **20 MiB**、1 ページ **100 枚**、alt 1000 文字・クレジット 500 文字。ページの題名・正規化後の本文 JSON・本文が参照する ready 画像・uploading 予約の合計は **30 MiB**。録音音声は別枠。ページロック内で開始・完了・本文保存を判定する。
 - **申告値**: `sha256`・`contentType`・`sizeBytes` はクライアントの申告（ブラウザで sha256 を計算して送る）。サーバーは中身を読まず、sha256 を検証しない。大きさは complete で保存先の実寸に確定する。中継のときだけ中身を通す。

@@ -29,6 +29,11 @@ export type ShellSidebarProps = {
    * 渡さなければ出さない（検索しているあいだ・まだ何も開いていない人には出さない）。
    */
   recent?: { items: ShellListItem[]; open: boolean; onToggle: () => void };
+  /**
+   * 一覧（nav）と左下の「設定」のあいだに置くもの（開いているページの「このページの写真」。page/PagePhotos.tsx）。
+   * 渡さなければ出さない（ページを開いていない画面・設定）。
+   */
+  photos?: ReactNode;
   me: {
     /** 本人の名前。左下には出さず、メニューの中に出す（`shellAccountItems(…, …, name)`）。 */
     name: string;
@@ -215,7 +220,7 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag }: 
  * 1行は題名と時刻。2行目は公開先・録音・作成中のときだけ。下は本人の行ひとつ。
  * 一覧は 1 本の木（フォルダ＝子を持てるページ）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
  */
-export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, onDrop, canDrop, listEnd, recent, me }: ShellSidebarProps) {
+export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, onDrop, canDrop, listEnd, recent, photos, me }: ShellSidebarProps) {
   const newButton = useRef<HTMLButtonElement | null>(null);
   const meButton = useRef<HTMLButtonElement | null>(null);
   const [dragState, setDragState] = useState<DragState>({ dragId: null, over: null });
@@ -302,6 +307,7 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
         <ShellSidebarRows nodes={nestListItems(items)} currentId={currentId} onSelect={onSelect} onToggleFolder={onToggleFolder} drag={drag} />
         {listEnd}
       </nav>
+      {photos}
       <div className="es-sb-foot">
         {/* 左下は「設定」。1 人しか使わないアプリで一番良い場所を名前が占める理由がないので、名前はメニューの中に出す（#37 T9） */}
         <button

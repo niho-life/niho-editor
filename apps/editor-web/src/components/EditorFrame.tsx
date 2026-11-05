@@ -21,7 +21,12 @@ import {
   type ShellToolAction,
 } from "niho-docs-ui/shell";
 import type { PageChromeTools } from "niho-docs-ui/page/PageChrome";
+import { PAGE_PHOTOS_MIN_HEIGHT, PagePhotos } from "niho-docs-ui/page/PagePhotos";
+import { pagePhotosBody } from "niho-docs-ui/page/page-photos";
+import { imageAssetPath } from "@/image/image-paths";
+import { pageImages } from "@/lib/image-upload-client";
 import { movePageOrderRequest, recordPageOpenRequest } from "@/lib/folder-client";
+import { discardLeftEmptyCandidates, dropLeftEmptyCandidate } from "@/lib/left-empty-pages";
 import { listPagesRequest, movePageRequest } from "@/lib/pages-client";
 import { PAGE_MAX_BYTES } from "@/image/image-limits";
 import { SAVE_STATUS_TEXT, headerStatus, type SaveStatus } from "@/lib/save-status";
@@ -113,6 +118,8 @@ export type EditorFrameApi = {
   registerAiSteps: (steps: AttachedAiSteps) => () => void;
   /** 公開のシートを開く（ページを開いている画面だけで出る）。 */
   openPublish: () => void;
+  /** 左下の「このページの写真」で写真を上げている途中か（何も足していないページを捨てる判定に使う）。 */
+  photosUploading?: () => boolean;
 };
 
 const noop = () => undefined;
@@ -131,6 +138,7 @@ const FrameContext = createContext<EditorFrameApi>({
   stepPagesChanged: noop,
   attachPage: () => noop,
   openPublish: noop,
+  photosUploading: () => false,
 });
 
 export function useEditorFrame(): EditorFrameApi {
@@ -483,6 +491,13 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const aiStepsRef = useRef<AttachedAiSteps | null>(null);
   // 版に戻して開き直したページ。そのページが登録し直したとき、フォーカスが外れていたら「…」へ戻す
   const refocusRef = useRef<string | null>(null);
+  // 左下の「このページの写真」: 開いているか・高さ（このタブのメモリだけ。保存しない。既定は閉じる）と、上げている途中か
+  const [photosOpen, setPhotosOpen] = useState(false);
+  const [photosHeight, setPhotosHeight] = useState(320);
+  const photosUploadingRef = useRef(false);
+  const setPhotosUploading = useCallback((uploading: boolean) => {
+    photosUploadingRef.current = uploading;
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000);
@@ -641,10 +656,26 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         };
       },
       openPublish: () => publishOpen.current(),
+      photosUploading: () => photosUploadingRef.current,
     }),
     [],
   );
   const frame = useMemo<EditorFrameApi>(() => ({ narrow, ...api }), [narrow, api]);
+
+  // 前に `pagehide`（タブを閉じる・再読み込み）で離れた、何も足していないページを捨てる（src/lib/left-empty-pages.ts）。
+  // 開いたときに 1 回だけ。今開いているページ（再読み込み・最後に開いたページへ戻った）は候補から外すだけで捨てない
+  const openedPath = useRef(pathname);
+  useEffect(() => {
+    const opened = PAGE_PATH.exec(openedPath.current)?.[1] ?? null;
+    void discardLeftEmptyCandidates(opened, api.pageRemoved);
+    // 戻る（bfcache）でこの画面がそのまま戻ってきたら、開いているページを候補から外す（別のタブが捨てないように）
+    const onShow = (event: PageTransitionEvent) => {
+      const current = PAGE_PATH.exec(window.location.pathname)?.[1];
+      if (event.persisted && current) dropLeftEmptyCandidate(current);
+    };
+    window.addEventListener("pageshow", onShow);
+    return () => window.removeEventListener("pageshow", onShow);
+  }, [api]);
 
   // 常設の書式の帯にも aria-haspopup="menu" のボタンがあるので、「その他」は名前で選ぶ
   const focusMore = useCallback(() => frameRoot.current?.querySelector<HTMLButtonElement>('.es-dt button[aria-label="その他"]')?.focus(), []);
@@ -976,6 +1007,30 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     else setRailOpenWide(!railShown);
   };
 
+  // 左下の「このページの写真」: ページを開いていて（作ってあり、エディタが下書きを読み終えた）、設定などの画面でないときだけ出す。
+  // 本文との橋渡し（✓・本文に入れる・外したら本文とカバーから消す）は、開いているページのエディタで行う
+  const photoEditor = attached?.ai?.editor ?? null;
+  const photoClearCover = attached?.clearCover;
+  const photosBody = useMemo(() => (photoEditor ? pagePhotosBody(photoEditor, { clearCover: photoClearCover }) : null), [photoEditor, photoClearCover]);
+  const photoPageId = attached?.id ?? null;
+  const photos =
+    photoPageId && photosBody && !settings ? (
+      <PagePhotos
+        pageId={photoPageId}
+        images={pageImages}
+        srcOf={imageAssetPath}
+        body={photosBody}
+        open={photosOpen}
+        onOpenChange={setPhotosOpen}
+        height={Math.max(PAGE_PHOTOS_MIN_HEIGHT, photosHeight)}
+        onHeightChange={setPhotosHeight}
+        narrow={narrow}
+        // 狭い画面では一覧（このパネル）からページへ戻って、入れた写真を見せる
+        onInserted={narrow ? () => setListFor(null) : undefined}
+        onUploadingChange={setPhotosUploading}
+      />
+    ) : undefined;
+
   return (
     <FrameContext.Provider value={frame}>
       <div ref={frameRoot} data-docs-app-root="" data-docs-shared-ui="" style={{ position: "fixed", inset: 0 }}>
@@ -1024,6 +1079,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                   <div ref={setSentinel} aria-hidden="true" style={{ height: 1 }} />
                 ) : null
               }
+              photos={photos}
               me={{
                 ...initial.me,
                 open: meOpen,

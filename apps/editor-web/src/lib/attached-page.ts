@@ -72,6 +72,8 @@ export type AttachedPage = {
   /** 任意のリード・カバー。本文には置かず、右のページ設定で編集する。 */
   publicationFields?: ReactNode;
   text: PageText;
+  /** パネルから外した写真がカバーなら、カバーも外す（サーバーは外し済み。同じ自動保存に載せる）。 */
+  clearCover?: (assetId: string) => void;
   /** 下書き復元前は id が null なので、AI は描画だけして操作を受け付けない。 */
   ai?: AttachedAi;
 };

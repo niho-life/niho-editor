@@ -12,6 +12,7 @@ import { EditorFrame, useEditorFrame, type AttachedPage, type FrameInitial } fro
 import { COUNT_DELAY_MS } from "./PageInfo";
 import { LANG_NOT_SAVED, PageEditor } from "./PageEditor";
 import { NewPage } from "./FramePages";
+import { LEFT_EMPTY_PAGES_KEY, TAB_CREATED_PAGES_KEY } from "@/lib/left-empty-pages";
 
 // 公開のシートの読み込み（#39）は PagePublish.test.tsx で本物の fetch の形で確かめる。ここでは、ページを開くたびに出る読み込みが
 // fetch の呼び出しの順や回数（複製・削除・書き出しの検査）を乱さないよう、読めなかったことにする
@@ -2499,5 +2500,221 @@ describe("EditorFrame: 左の一覧のドラッグで入れ子・並べ替え", 
     expect(calls.filter((call) => call.url.includes("/order"))).toHaveLength(1);
     expect(tree().map(([title]) => title)).toEqual(["一", "二", "三"]);
     expect(container!.querySelector('.es-dt [role="alert"]')?.textContent).toBe("並びを変えられませんでした");
+  });
+});
+
+describe("EditorFrame: このページの写真（サイドバーの下）と、何も足していない新しいページ", () => {
+  const A = "00000000-0000-4000-8000-0000000000a1";
+  const NEW = "00000000-0000-4000-8000-0000000000b2";
+  const PHOTO = "00000000-0000-4000-8000-0000000000c3";
+  const OTHER_PHOTO = "00000000-0000-4000-8000-0000000000c4";
+  const UPDATED = "2026-10-31T02:00:00.000Z";
+  type Call = { url: string; method: string; body: Record<string, unknown> | null; keepalive: boolean };
+  const calls: Call[] = [];
+  const photoRow = () => container!.querySelector<HTMLButtonElement>('aside .es-ph-fold[aria-label="このページの写真"]');
+  const tick = () => act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+  const sends = () => calls.filter((call) => call.method !== "GET");
+
+  /** 合成のサーバー（ページの作成・保存・写真の一覧・外す・捨てる）。 */
+  function server(options: { photos?: string[]; discarded?: boolean; discard?: (id: string) => Response | undefined } = {}) {
+    let revision = 1;
+    const photos = [...(options.photos ?? [PHOTO])];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit = {}) => {
+        const method = init.method ?? "GET";
+        calls.push({ url, method, body: init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null, keepalive: init.keepalive === true });
+        const ok = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+        if (url === "/api/pages" && method === "POST") return ok(201, { page: { id: NEW, revision: 1 } });
+        if (/\/api\/pages\/[^/]+$/.test(url) && method === "PATCH") return ok(200, { page: { id: url.split("/").at(-1), revision: ++revision } });
+        if (url.endsWith("/images") && method === "GET") {
+          return ok(200, { images: photos.map((assetId) => ({ assetId, bytes: 2048, contentType: "image/png", alt: null, credit: null, consent: false, createdAt: UPDATED })) });
+        }
+        if (/\/images\/[^/]+$/.test(url) && method === "DELETE") {
+          photos.splice(photos.indexOf(url.split("/").at(-1)!), 1);
+          return new Response(null, { status: 204 });
+        }
+        if (url.endsWith("/discard") && method === "POST") return options.discard?.(url.split("/").at(-2)!) ?? ok(200, { discarded: options.discarded ?? true });
+        return ok(404, { error: "not_found" });
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    calls.length = 0;
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+  });
+  const candidates = () => JSON.parse(window.localStorage.getItem(LEFT_EMPTY_PAGES_KEY) ?? "[]") as string[];
+
+  it("is a closed photo icon row on an open page, reads nothing until opened, and is absent elsewhere", async () => {
+    server();
+    nav.pathname = "/settings";
+    await mount({ pages: [page(A, "合成の題名")] });
+    expect(photoRow()).toBeNull();
+    nav.pathname = `/p/${A}`;
+    await rerender(<PageEditor page={{ id: A, title: "合成の題名", blocks: [], revision: 1, updatedAt: UPDATED }} drafts={null} />);
+    expect(photoRow()?.getAttribute("aria-expanded")).toBe("false");
+    // 一覧（nav）と左下の「設定」のあいだ
+    const sidebar = container!.querySelector('aside[aria-label="ページ"]')!;
+    const order = [...sidebar.children].map((child) => child.className);
+    expect(order.indexOf("es-sb-list")).toBeLessThan(order.findIndex((name) => name.startsWith("es-ph")));
+    expect(order.findIndex((name) => name.startsWith("es-ph"))).toBeLessThan(order.indexOf("es-sb-foot"));
+    expect(calls.filter((call) => call.url.endsWith("/images"))).toEqual([]);
+    await act(async () => photoRow()!.click());
+    await tick();
+    expect(calls.filter((call) => call.url.endsWith("/images")).map((call) => call.url)).toEqual([`/api/pages/${A}/images`]);
+    expect(container!.querySelector(`.es-ph-tile[data-asset-id="${PHOTO}"]`)).not.toBeNull();
+  });
+
+  it("removes a photo on the server first, then from every place in the body and from the cover, through the autosave", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    server({ photos: [PHOTO, OTHER_PHOTO] });
+    nav.pathname = `/p/${A}`;
+    const image = (assetId: string) => ({ type: "image", attrs: { assetId, alt: null, caption: null, credit: null, consent: false } });
+    const blocks = [image(PHOTO), { type: "paragraph", content: [{ type: "text", text: "本文" }] }, image(PHOTO), image(OTHER_PHOTO), { type: "paragraph" }];
+    await mount({ pages: [page(A, "合成の題名")] }, <PageEditor page={{ id: A, title: "合成の題名", blocks, cover: PHOTO, revision: 1, updatedAt: UPDATED }} drafts={null} />);
+    await act(async () => photoRow()!.click());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const tile = container!.querySelector<HTMLButtonElement>(`.es-ph-tile[data-asset-id="${PHOTO}"]`)!;
+    expect(tile.getAttribute("aria-label")).toContain("本文で使っています");
+    await act(async () => tile.click());
+    await act(async () => buttonByText("パネルから外す", dialog()!)!.click());
+    expect(dialog()!.textContent).toContain("本文の 2 か所からも消えます。元に戻せません。");
+    await act(async () => buttonByText("外す", dialog()!)!.click());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    const remove = sends().findIndex((call) => call.method === "DELETE");
+    const save = sends().findIndex((call) => call.method === "PATCH");
+    expect(sends()[remove]?.url).toBe(`/api/pages/${A}/images/${PHOTO}`);
+    expect(save).toBeGreaterThan(remove);
+    const saved = sends()[save]!.body!;
+    expect(saved.cover).toBeNull();
+    expect(JSON.stringify(saved.blocks)).not.toContain(PHOTO);
+    expect(JSON.stringify(saved.blocks)).toContain(OTHER_PHOTO);
+    expect(container!.querySelector(`.es-ph-tile[data-asset-id="${PHOTO}"]`)).toBeNull();
+  });
+
+  it("narrow: the list screen shows the panel without dragging; tapping 本文に入れる goes back to the page with the photo in it", async () => {
+    narrow = true;
+    server();
+    nav.pathname = `/p/${A}`;
+    await mount({ pages: [page(A, "合成の題名")], initialNarrow: true }, <PageEditor page={{ id: A, title: "合成の題名", blocks: [{ type: "paragraph", content: [{ type: "text", text: "本文" }] }], revision: 1, updatedAt: UPDATED }} drafts={null} />);
+    expect(shell().view).toBe("page");
+    await click('button[aria-label="一覧を出す"]');
+    expect(shell().view).toBe("list");
+    await act(async () => photoRow()!.click());
+    await tick();
+    const tile = container!.querySelector<HTMLButtonElement>(`.es-ph-tile[data-asset-id="${PHOTO}"]`)!;
+    expect(tile.getAttribute("draggable")).toBe("false");
+    await act(async () => tile.click());
+    await act(async () => buttonByText("本文に入れる", dialog()!)!.click());
+    expect(shell().view).toBe("page");
+    expect(container!.querySelector(`.ProseMirror img[src="/api/assets/${PHOTO}"]`)).not.toBeNull();
+  });
+
+  it("works on a page made the moment it opens, and discards it when left without anything added", async () => {
+    server();
+    nav.pathname = "/p/new";
+    window.history.replaceState(null, "", "/p/new");
+    await mount({}, <NewPage />);
+    nav.pathname = window.location.pathname;
+    await rerender(<NewPage />);
+    expect(window.location.pathname).toBe(`/p/${NEW}`);
+    expect(sends().filter((call) => call.url === "/api/pages")).toHaveLength(1);
+    // このタブで作ったページの印（再読み込みのあとも分かる）
+    expect(JSON.parse(window.sessionStorage.getItem(TAB_CREATED_PAGES_KEY)!)).toEqual([NEW]);
+    // 作ったばかりのページでも、写真をすぐ上げられる（パネルはそのページの id で読む）
+    await act(async () => photoRow()!.click());
+    await tick();
+    expect(calls.some((call) => call.url === `/api/pages/${NEW}/images`)).toBe(true);
+    expect(rows()).toEqual(["無題"]);
+    // 別の画面へ移る（この下書きのエディタが外れる）
+    nav.pathname = "/settings";
+    await rerender(<p>設定</p>);
+    await tick();
+    expect(sends().filter((call) => call.url.endsWith("/discard"))).toEqual([{ url: `/api/pages/${NEW}/discard`, method: "POST", body: null, keepalive: false }]);
+    expect(rows()).toEqual([]);
+  });
+
+  it("on pagehide (close, reload) does not discard: it only leaves the page as a candidate, and the row stays", async () => {
+    server();
+    nav.pathname = "/p/new";
+    window.history.replaceState(null, "", "/p/new");
+    await mount({}, <NewPage />);
+    nav.pathname = window.location.pathname;
+    await rerender(<NewPage />);
+    await act(async () => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    await tick();
+    expect(sends().filter((call) => call.url.endsWith("/discard"))).toEqual([]);
+    expect(candidates()).toEqual([NEW]);
+    expect(rows()).toEqual(["無題"]);
+  });
+
+  it("on start, discards the candidates except the page being opened, and keeps those that did not get through", async () => {
+    const X = "00000000-0000-4000-8000-0000000000d5";
+    const Y = "00000000-0000-4000-8000-0000000000d6";
+    const Z = "00000000-0000-4000-8000-0000000000d7";
+    window.localStorage.setItem(LEFT_EMPTY_PAGES_KEY, JSON.stringify([NEW, X, Y, Z]));
+    server({
+      discard: (id) =>
+        id === Y
+          ? new Response(JSON.stringify({ error: "internal" }), { status: 500, headers: { "content-type": "application/json" } })
+          : id === Z
+            ? new Response(JSON.stringify({ discarded: false }), { status: 200, headers: { "content-type": "application/json" } })
+            : undefined,
+    });
+    // 再読み込みで、捨てる候補の NEW を開き直した
+    nav.pathname = `/p/${NEW}`;
+    await mount({ pages: [page(NEW, ""), page(X, ""), page(Y, ""), page(Z, "")] }, <p>合成の中身</p>);
+    await tick();
+    await tick();
+    expect(sends().filter((call) => call.url.endsWith("/discard")).map((call) => call.url).sort()).toEqual([X, Y, Z].map((id) => `/api/pages/${id}/discard`).sort());
+    // 消えた X だけ一覧から外れる。今開いている NEW は捨てない（候補からも外す）。届かなかった Y は候補に戻す
+    expect(rows()).toEqual(["無題", "無題", "無題"]);
+    expect(candidates()).toEqual([Y]);
+  });
+
+  it("does not ask when the new page got a title, nor for a page this tab did not create", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    server();
+    nav.pathname = "/p/new";
+    window.history.replaceState(null, "", "/p/new");
+    await mount({}, <NewPage />);
+    nav.pathname = window.location.pathname;
+    await rerender(<NewPage />);
+    const title = container!.querySelector<HTMLTextAreaElement>("textarea.page-title")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(title, "合成の題名");
+      title.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    nav.pathname = "/settings";
+    await rerender(<p>設定</p>);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+    });
+    expect(sends().filter((call) => call.url.endsWith("/discard"))).toEqual([]);
+
+    // このタブで作っていない既存のページは、空でも頼まない
+    nav.pathname = `/p/${A}`;
+    await rerender(<PageEditor page={{ id: A, title: "", blocks: [], revision: 1, updatedAt: UPDATED }} drafts={null} />);
+    nav.pathname = "/settings";
+    await rerender(<p>設定</p>);
+    await act(async () => {
+      window.dispatchEvent(new Event("pagehide"));
+      await vi.advanceTimersByTimeAsync(6000);
+    });
+    expect(sends().filter((call) => call.url.endsWith("/discard"))).toEqual([]);
   });
 });

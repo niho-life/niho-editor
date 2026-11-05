@@ -9,9 +9,10 @@ import {
   IMAGE_CACHE_CONTROL,
   IMAGE_START_BODY_MAX_BYTES,
   SHARED_IMAGE_CACHE_CONTROL,
-  cancelImageRoute,
   completeImageRoute,
+  deleteImageRoute,
   imageMetadataRoute,
+  listImagesRoute,
   readImageRoute,
   sharedImageRoute,
   startImageRoute,
@@ -83,11 +84,18 @@ function memoryStore(options: { pages?: Record<string, string>; trashed?: readon
       row.asset = { ...row.asset, status: "ready" };
       return { status: "ok", asset: row.asset };
     },
-    cancelImageUpload: async (owner, pageId, assetId) => {
-      const index = rows.findIndex((row) => row.owner === owner && row.asset.pageId === pageId && row.asset.assetId === assetId && row.asset.status === "uploading" && own(owner, pageId));
-      if (index < 0) return false;
+    deletePageImage: async (owner, pageId, assetId) => {
+      const index = rows.findIndex((row) => row.owner === owner && row.asset.pageId === pageId && row.asset.assetId === assetId && own(owner, pageId));
+      if (index < 0) return null;
       rows.splice(index, 1);
-      return true;
+      return { coverCleared: false };
+    },
+    listPageImages: async (owner, pageId) => {
+      if (!own(owner, pageId)) return null;
+      return rows
+        .filter((row) => row.owner === owner && row.asset.pageId === pageId && row.asset.status === "ready")
+        .reverse()
+        .map(({ asset }) => ({ assetId: asset.assetId, bytes: asset.bytes, contentType: asset.contentType, alt: asset.alt, credit: asset.credit, consent: asset.consent, createdAt: asset.createdAt }));
     },
     imageAsset: async (owner, assetId) => find(owner, assetId)?.asset ?? null,
     updateImageMeta: async (owner, assetId, patch) => {
@@ -144,8 +152,9 @@ const start = (body: unknown, d: ImageApiDeps, headers: Record<string, string> =
   startImageRoute(request("POST", `/api/pages/${pageId}/images/start`, body, headers), pageId, d);
 const complete = (assetId: string, d: ImageApiDeps, headers: Record<string, string> = {}, pageId = PAGE) =>
   completeImageRoute(request("POST", `/api/pages/${pageId}/images/${assetId}/complete`, undefined, headers), pageId, assetId, d);
-const cancel = (assetId: string, d: ImageApiDeps, headers: Record<string, string> = {}, pageId = PAGE) =>
-  cancelImageRoute(request("DELETE", `/api/pages/${pageId}/images/${assetId}`, undefined, headers), pageId, assetId, d);
+const remove = (assetId: string, d: ImageApiDeps, headers: Record<string, string> = {}, pageId = PAGE) =>
+  deleteImageRoute(request("DELETE", `/api/pages/${pageId}/images/${assetId}`, undefined, headers), pageId, assetId, d);
+const list = (d: ImageApiDeps, pageId = PAGE) => listImagesRoute(request("GET", `/api/pages/${pageId}/images`), pageId, d);
 const patch = (assetId: string, body: unknown, d: ImageApiDeps, headers: Record<string, string> = {}) =>
   updateImageRoute(request("PATCH", `/api/assets/${assetId}`, body, headers), assetId, d);
 const read = (assetId: string, d: ImageApiDeps) => readImageRoute(request("GET", `/api/assets/${assetId}`), assetId, d);
@@ -467,12 +476,63 @@ describe("DELETE /api/pages/{id}/images/{assetId}", () => {
     const owner = deps("user-a", memory.store, storage);
     const created = await (await start(START, owner)).json();
     const assetId = created.assetId as string;
-    expect((await cancel(assetId, deps(null, memory.store, storage))).status).toBe(401);
-    expect((await cancel(assetId, deps("user-b", memory.store, storage))).status).toBe(404);
-    expect((await cancel(assetId, owner, { origin: "https://elsewhere.example" })).status).toBe(403);
-    expect((await cancel(assetId, owner)).status).toBe(204);
-    expect((await cancel(assetId, owner)).status).toBe(404);
+    expect((await remove(assetId, deps(null, memory.store, storage))).status).toBe(401);
+    expect((await remove(assetId, deps("user-b", memory.store, storage))).status).toBe(404);
+    expect((await remove(assetId, owner, { origin: "https://elsewhere.example" })).status).toBe(403);
+    expect((await remove(assetId, owner)).status).toBe(204);
+    expect((await remove(assetId, owner)).status).toBe(404);
     expect((await complete(assetId, owner)).status).toBe(404);
+  });
+
+  it("removes a finished photo from the page's panel, only through its own page, and answers the same 404 otherwise", async () => {
+    const storage = createFakeStorage();
+    const memory = memoryStore();
+    const owner = deps("user-a", memory.store, storage);
+    const assetId = await upload(storage, owner);
+    const removal = vi.spyOn(memory.store, "deletePageImage");
+    expect((await remove(assetId, deps(null, memory.store, storage))).status).toBe(401);
+    expect((await remove(assetId, owner, { origin: "https://elsewhere.example" })).status).toBe(403);
+    expect(removal).not.toHaveBeenCalled();
+    const notFound = await snapshot(await remove(assetId, owner, {}, OTHER_PAGE));
+    expect(notFound.status).toBe(404);
+    expect(await snapshot(await remove(randomUUID(), owner))).toEqual(notFound);
+    expect(await snapshot(await remove("not-a-uuid", owner))).toEqual(notFound);
+    const removed = await remove(assetId, owner);
+    expect(removed.status).toBe(204);
+    expect(removed.headers.get("cache-control")).toBe("private, no-store");
+    expect(await (await list(owner)).json()).toEqual({ images: [] });
+    expect((await read(assetId, owner)).status).toBe(404);
+  });
+});
+
+describe("GET /api/pages/{id}/images", () => {
+  it("lists the page's finished photos newest first with only the public fields", async () => {
+    const storage = createFakeStorage();
+    const memory = memoryStore();
+    const owner = deps("user-a", memory.store, storage);
+    const first = await upload(storage, owner);
+    const second = await upload(storage, owner);
+    // アップロード中のものは出さない
+    await start(START, owner);
+    const response = await list(owner);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const body = await response.json();
+    expect(body.images.map((image: { assetId: string }) => image.assetId)).toEqual([second, first]);
+    expect(Object.keys(body.images[0]).sort()).toEqual(["alt", "assetId", "bytes", "consent", "contentType", "createdAt", "credit"]);
+  });
+
+  it("answers 401 without looking, and the same 404 for someone else's, a missing and a malformed page", async () => {
+    const storage = createFakeStorage();
+    const memory = memoryStore();
+    const lookup = vi.spyOn(memory.store, "listPageImages");
+    expect((await list(deps(null, memory.store, storage))).status).toBe(401);
+    expect(lookup).not.toHaveBeenCalled();
+    const notFound = await snapshot(await list(deps("user-b", memory.store, storage)));
+    expect(notFound.status).toBe(404);
+    expect(await snapshot(await list(deps("user-a", memory.store, storage), randomUUID()))).toEqual(notFound);
+    expect(await snapshot(await list(deps("user-a", memory.store, storage), "not-a-uuid"))).toEqual(notFound);
+    expect((await list(deps("user-a", null, storage))).status).toBe(503);
   });
 });
 

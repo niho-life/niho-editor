@@ -22,6 +22,7 @@ export type PagesStore = Pick<
   | "savePage"
   | "movePage"
   | "deletePage"
+  | "discardEmptyPage"
   | "listVersions"
   | "getVersion"
   | "restoreVersion"
@@ -142,6 +143,24 @@ export function movePage(request: Request, id: string, deps: PagesApiDeps): Prom
     if (!result) return notFoundResponse();
     if (result === "moved") return jsonResponse(200, { parent: parent.value });
     return errorResponse(result === "too_deep" ? "too_deep" : "cycle");
+  });
+}
+
+/**
+ * POST /api/pages/{id}/discard — 何も足していないページを捨てる（「新しいページ」で作って、そのまま離れたとき）。
+ * 空かどうかはサーバーが行を押さえて確かめ、空ならゴミ箱に入れずに完全に消す。空でなければ何もしない。どちらも 200
+ * `{ discarded }`。本文は読まない（`pagehide` の `fetch(..., { keepalive: true })` から本文なしで呼べる）。
+ * 自分のページでなければ同じ 404。
+ */
+export function discardPage(request: Request, id: string, deps: PagesApiDeps): Promise<Response> {
+  return guarded("POST /api/pages/[id]/discard", async () => {
+    const session = await sessionOf(request, deps);
+    if (!session) return errorResponse("unauthorized");
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    const result = await store.discardEmptyPage(session.userId, id);
+    return result ? jsonResponse(200, { discarded: result.discarded }) : notFoundResponse();
   });
 }
 
