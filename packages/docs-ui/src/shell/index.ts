@@ -42,7 +42,7 @@ export { ShellSteps, ShellStepsStart, shellStepSay, type ShellStep, type ShellSt
 export { ShellChat, type ShellChatAction, type ShellChatMessage, type ShellChatProps } from "./chat";
 export { ShellPageSettings, type ShellPageSettingsProps } from "./page-settings";
 export { ShellPageInfo, type ShellPageInfoProps } from "./page-info";
-export { ShellEntitiesEditor, ShellTermsEditor, type EditorSettingsEntityDraft } from "./editor-settings";
+export { SHELL_TERMS_TEXT, ShellEntitiesEditor, ShellTermsEditor, type EditorSettingsEntityDraft, type EditorSettingsTermDraft } from "./terms-editor";
 export { ShellBubbleMenu, ShellSelectionBar, type ShellBubbleMenuProps, type ShellSelectionActions } from "./bubble";
 export {
   ShellAddRow,
@@ -114,23 +114,36 @@ export {
 } from "./editor-destinations";
 export { AccountPage, type AccountLink, type AccountPageProps, type AccountRole } from "./account";
 export {
-  EDITOR_SETTINGS_NAV,
+  EDITOR_SETTINGS_HREF,
   EDITOR_SETTINGS_TEXT,
-  EditorSettingsPage,
+  EditorSettingsAboutPage,
+  EditorSettingsHub,
+  EditorSettingsRecipePage,
+  EditorSettingsTermsPage,
+  EditorTermRows,
+  blankStep,
+  duplicateStep,
+  moveStep,
+  recipeMenuItems,
+  stepMenuItems,
+  type EditorRecipeSheet,
+  type EditorSettingsAboutPageProps,
   type EditorSettingsAiLang,
   type EditorSettingsAbout,
-  type EditorSettingsEngine,
+  type EditorSettingsAudioFacts,
   type EditorSettingsGuideExtraction,
-  type EditorSettingsPageProps,
+  type EditorSettingsHubProps,
   type EditorSettingsRecipe,
+  type EditorSettingsRecipePageProps,
   type EditorSettingsRecipeValidation,
   type EditorSettingsSample,
   type EditorSettingsStep,
   type EditorSettingsStorageUsage,
   type EditorSettingsTerm,
-  type EditorSettingsTermDraft,
-  type EditorSettingsTranscription,
+  type EditorSettingsTermsPageProps,
   type EditorSettingsUsage,
+  type EditorTermEditing,
+  type EditorTermRowsProps,
 } from "./editor-settings";
 export {
   SettingsPage,

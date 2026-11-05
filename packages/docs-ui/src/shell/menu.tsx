@@ -69,7 +69,8 @@ export function ShellMenu({ label, items, onSelect, onClose, trigger, className,
           className={`es-mi${item.danger ? " es-mi--danger" : ""}${item.current ? " es-mi--on" : ""}`}
           aria-current={item.current ? "page" : undefined}
           aria-checked={item.checked === undefined ? undefined : item.checked}
-          onClick={() => onSelect(item.id)}
+          aria-disabled={item.disabled || undefined}
+          onClick={() => !item.disabled && onSelect(item.id)}
         >
           {item.icon && <Icon name={item.icon} />}
           {item.label}

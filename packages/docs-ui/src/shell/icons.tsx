@@ -4,6 +4,16 @@ import type { ShellIconName } from "./types";
 /** モック v6 の SVG symbol をそのまま写した線画（24 の viewBox）。lucide-react は使わない。 */
 const PATHS: Record<ShellIconName, ReactNode> = {
   plus: <path d="M12 5v14M5 12h14" />,
+  /** 右向きの山（行を押すと詳細へ進む）。 */
+  chev: <path d="m9.5 6 6 6-6 6" />,
+  down: <path d="M12 5v13M6 12l6 6 6-6" />,
+  copy: (
+    <>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+    </>
+  ),
+  reset: <path d="M4 12a8 8 0 1 0 2.5-5.8M4 4v5h5" />,
   search: (
     <>
       <circle cx="10.5" cy="10.5" r="6" />

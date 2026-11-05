@@ -293,8 +293,14 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 
 ## 設定（#108）
 
-`/settings`。画面は共有の docs-ui（`packages/docs-ui/src/shell/editor-settings.tsx` の `EditorSettingsPage`。モック v6 の V.settings）で、
-`src/components/SettingsView.tsx` が状態と通信だけを持つ。節は AI・手順・文字起こし・保存の 4 つ（モックのプロフィールは NIHO アカウントの値なので持たない）。
+設定は 3 層（オーナー決定 2026-11-05。モック `docs/mockups/editor-settings-refine-v1.html`）。画面は共有の docs-ui
+（`packages/docs-ui/src/shell/editor-settings.tsx`）で、`src/components/settings/` が状態と通信だけを持つ（共有の `settings-state.ts`）。
+
+- `/settings`（`SettingsHubView`）: 一覧。AI（提案の言語・あなたについて・固有名詞）／手順（1 行 1 手順）／データ（AI の使用量・メディア容量）。
+  変えられる物だけを行にし、行が詳細へのリンク。提案の言語だけはその場で保存する。音声の上限と保持日数は「データ」の ⓘ の中。
+- `/settings/about`・`/settings/terms`（`SettingsAboutView`・`SettingsTermsView`）: あなたについて（2 つの欄）と、固有名詞の表（1 行ずつその場で直す）。
+- `/settings/recipes/{id}`（`SettingsRecipeView`）: 手順の詳細。段階・文書ガイド・お手本の文書・この手順だけの固有名詞。
+  押した操作ごとにすぐ保存し、段階の指示と文書ガイドは右の全高のシート（スマホは全画面）で書く。本人の手順に無い id は 404。
 
 - **変えられるもの**（`editor_settings`。migration `0013_editor_settings.sql`、コードは `packages/editor-store/src/settings.ts`）:
   - **AI の提案の言語**（書いた言語のまま／日本語／English）。`buildRequest` の `lang` になる（`src/ai/engine.ts`）。
@@ -303,11 +309,11 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
     読むときに既定へかぶせる（`src/steps/recipes.ts` の `recipesOf`）。既定の値を送り返すと写しが消えて既定に戻る。
     既定の手順は**段階の数を変えられない**（できあがったサブページがその段階の id に結んでいる）。
     手順は次に始めた run から効く（受付は `src/server/steps-api.ts`、worker は `claim.owner` で読む。`src/steps/runner.ts`）。
-- **読むだけのもの**（サーバー側が決める。`src/settings/facts.ts`）:
-  - **文字起こしのエンジン**（`EDITOR_TRANSCRIBE_ENGINE`）と 1 回の時間切れ。Web からは選べない。Gemini は長い音声の区切りがサーバー側に無いのでまだ出さない。
-  - **音声の上限**（1 ファイルの容量と長さ・受け付ける形式）と、**クラウドの音声が消えるまでの日数**（`src/recording/audio-limits.ts`。設計 §12 の「設定に明記」）。
-  - **保存先**（公開と同じ読み手で NIHO から毎回読み、editor に保存しない。設計 §2.1）。Web では選べない。
-- **AI の使用量**: 画面が `GET /api/ai/usage` を開いたときに 1 回読み、上限の 80% を超えていたら一言出す。
+- **読むだけのもの**（サーバー側が決める。`src/settings/facts.ts`）: 一覧には出さず、使う場所へ移した（2026-11-05）。
+  - **音声の上限**（1 ファイルの容量と長さ）と、**クラウドの音声が消えるまでの日数**（`src/recording/audio-limits.ts`）は、一覧の「データ」の ⓘ と録音の断りに出す。
+    受け付ける形式はファイル選択の accept と断るときの文に出す。
+  - **文字起こしのエンジン**（`EDITOR_TRANSCRIBE_ENGINE`）と 1 回の時間切れは設定に出さない（使う人が決めるものではない）。
+- **AI の使用量**: 一覧が `GET /api/ai/usage` を開いたときに 1 回読み、上限の 80% を超えていたら行の中に一言出す。
 - **API**: `GET /api/settings`・`PATCH /api/settings`（`src/server/settings-api.ts`）。未認証 401、別の origin からの更新 403、DB なし 503、
   通らない値は 400（何も書かない）。渡した項目だけを入れ替え、入れ替えた後の設定を返す。owner は認証の層の本人だけで、要求の値からは決めない。
 

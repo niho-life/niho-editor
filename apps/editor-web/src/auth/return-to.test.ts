@@ -6,7 +6,7 @@ const ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
 
 describe("safeReturnTo", () => {
   it("keeps the editor's own screens", () => {
-    for (const path of ["/", "/p/new", `/p/${ID}`, `/p/${ID.toUpperCase()}`, "/destinations", "/destinations/my-site-1", "/account", "/settings", "/photo", "/photo/trash", `/photo/${ID}`]) {
+    for (const path of ["/", "/p/new", `/p/${ID}`, `/p/${ID.toUpperCase()}`, "/destinations", "/destinations/my-site-1", "/account", "/settings", "/settings/about", "/settings/terms", "/settings/recipes/tpl-1", "/photo", "/photo/trash", `/photo/${ID}`]) {
       expect(safeReturnTo(path), path).toBe(path);
     }
     expect(safeReturnTo("/p/new?from=recording")).toBe("/p/new?from=recording");

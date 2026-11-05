@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ShellEntitiesEditor, ShellTermsEditor, type EditorSettingsEntityDraft, type EditorSettingsTermDraft } from "./editor-settings";
+import { ShellEntitiesEditor, ShellTermsEditor, type EditorSettingsEntityDraft, type EditorSettingsTermDraft } from "./terms-editor";
 import { Icon } from "./icons";
 import type { ShellDest, ShellLang } from "./types";
 

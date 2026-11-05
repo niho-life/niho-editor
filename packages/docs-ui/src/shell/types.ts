@@ -24,6 +24,8 @@ export type ShellMenuItem = {
   /** 右の数のバッジ（例: 未処理の招待）。 */
   badge?: string;
   danger?: boolean;
+  /** 押せない項目（aria-disabled。消さずに出して、押せない理由を hint に書く）。 */
+  disabled?: boolean;
   /** いま開いているページ（設定系のページでメニューに現在地を示す）。 */
   current?: boolean;
   /** 切り替えの項目の今の値（あれば `menuitemcheckbox` で、ON のとき右に ✓）。 */
@@ -62,6 +64,10 @@ export type ShellPublication = {
 
 export type ShellIconName =
   | "plus"
+  | "chev"
+  | "down"
+  | "copy"
+  | "reset"
   | "search"
   | "panel"
   | "side"
