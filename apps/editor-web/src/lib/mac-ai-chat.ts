@@ -1,5 +1,6 @@
 import { MODEL_OPTIONS } from "@niho/docs-core";
 import type { ShellBridge } from "niho-desktop-bridge/shell-bridge";
+import type { AiChatEvent } from "./ai-client";
 import { isShellError, type ShellAiEngine, type ShellAiEngineName, type ShellAiEvent, type ShellAiTurn } from "niho-desktop-bridge/shell-contract";
 
 export const MAC_ENGINE_LABELS: Readonly<Record<ShellAiEngineName, string>> = {
@@ -77,6 +78,17 @@ function progressText(event: ShellAiEvent): string | null {
   }
 }
 
+/** CLI の出来事を、サーバー経路の SSE と同じ形にする（画面の書きかけの発言に流す）。 */
+export function macChatEvent(event: ShellAiEvent): AiChatEvent | null {
+  switch (event.type) {
+    case "TextDelta": return typeof event.text === "string" && event.text ? { type: "text", text: event.text, kind: "text" } : null;
+    case "ThinkingDelta": return typeof event.text === "string" && event.text ? { type: "text", text: event.text, kind: "thinking" } : null;
+    case "ToolUse": return { type: "tool", tool: event.name, page: null, ok: null, phase: "start" };
+    case "ToolResult": return { type: "tool", tool: event.name, page: null, ok: event.ok === true, phase: "end" };
+    default: return null;
+  }
+}
+
 export type MacAiTurnOutput = {
   reply: string;
   sessionId: string | null;
@@ -94,7 +106,9 @@ export async function runMacAiTurn(input: {
   conversationId: string | null;
   resumeSession: string | null;
   signal: AbortSignal;
-  onProgress: (text: string) => void;
+  onProgress?: (text: string) => void;
+  /** 途中の文・道具（サーバー経路の `streamAiChat` と同じ形）。 */
+  onEvent?: (event: AiChatEvent) => void;
 }): Promise<MacAiTurnOutput> {
   if (input.signal.aborted) throw new MacAiError("aborted");
   if (new TextEncoder().encode(input.page.markdown).byteLength > 8 * 1024 * 1024 ||
@@ -126,7 +140,9 @@ export async function runMacAiTurn(input: {
         return;
       }
       const message = progressText(envelope.event);
-      if (message) input.onProgress(message);
+      if (message) input.onProgress?.(message);
+      const event = macChatEvent(envelope.event);
+      if (event) input.onEvent?.(event);
     });
   } catch (error) {
     throw input.signal.aborted ? new MacAiError("aborted") : errorFromShell(error);

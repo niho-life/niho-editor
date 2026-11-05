@@ -67,6 +67,10 @@ export type AiChatChange = {
   pageId: string;
   title: string;
   change: "edited" | "created";
+  /** 直す前の本文が残った版の番号（作ったページ・古い記録は null）。「変更を見る」の前の本文。 */
+  version: number | null;
+  /** 依頼が書き終えたときの revision（あとで人が直したかを見る。古い記録は null）。 */
+  revision: number | null;
   chars: number;
   delta: number;
   undoneAt: string | null;
@@ -121,6 +125,11 @@ async function post(path: string, body: unknown, signal?: AbortSignal): Promise<
   } catch (error) {
     throw new AiRequestError(aborted(error, signal) ? "aborted" : "network");
   }
+  return readResponse(response, signal);
+}
+
+/** POST の応答を読む（409 は競合、それ以外の失敗はステータスから code。本文は JSON）。 */
+async function readResponse(response: Response, signal: AbortSignal | undefined): Promise<unknown> {
   try {
     if (response.status === 409) {
       const page = conflictPageOf(await response.json().catch(() => null));
@@ -205,6 +214,8 @@ function chatChangeOf(value: unknown): AiChatChange | null {
     pageId: value.pageId,
     title: typeof value.title === "string" ? value.title : "",
     change: value.change,
+    version: isIndex(value.version, 1) ? value.version : null,
+    revision: isIndex(value.revision, 0) ? value.revision : null,
     chars: isIndex(value.chars, 0) ? value.chars : 0,
     delta: typeof value.delta === "number" && Number.isSafeInteger(value.delta) ? value.delta : 0,
     undoneAt: typeof value.undoneAt === "string" ? value.undoneAt : null,
@@ -331,6 +342,112 @@ function chatResultFrom(data: unknown): AiChatResult {
 
 export async function sendAiChat(pageId: string, body: { text: string; conversationId?: string }, options: { signal?: AbortSignal } = {}): Promise<AiChatResult> {
   return chatResultFrom(await post(pagePath(pageId, "/ai/chat"), body, options.signal));
+}
+
+/**
+ * 依頼の途中の出来事（画面の書きかけの発言）。`text` は文の差分（`kind` は CLI 経路の思考なら `thinking`）、
+ * `tool` は道具の前（`start`。ok・page は null）と後（`end`）。
+ */
+export type AiChatEvent =
+  | { type: "text"; text: string; kind?: "text" | "thinking" }
+  | { type: "tool"; tool: string; page: string | null; ok: boolean | null; phase: "start" | "end" };
+
+/** SSE の 1 つの出来事（`event:` と `data:`）。コメント行（`:`）は無視する。 */
+function parseSseBlock(block: string): { event: string; data: string } | null {
+  let event = "message";
+  const data: string[] = [];
+  for (const line of block.split("\n")) {
+    if (line.length === 0 || line.startsWith(":")) continue;
+    const colon = line.indexOf(":");
+    const field = colon < 0 ? line : line.slice(0, colon);
+    const value = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "");
+    if (field === "event") event = value;
+    else if (field === "data") data.push(value);
+  }
+  return data.length > 0 ? { event, data: data.join("\n") } : null;
+}
+
+function toolEventOf(value: unknown): AiChatEvent | null {
+  if (!isRecord(value) || typeof value.tool !== "string") return null;
+  if (value.phase !== "start" && value.phase !== "end") return null;
+  return {
+    type: "tool",
+    tool: value.tool,
+    page: typeof value.page === "string" ? value.page : null,
+    ok: typeof value.ok === "boolean" ? value.ok : null,
+    phase: value.phase,
+  };
+}
+
+/**
+ * AI チャットの 1 回の依頼を SSE で受ける（`Accept: text/event-stream`）。途中の文・道具は `onEvent` へ、終わりの `done` を結果として返す。
+ * サーバーが JSON で返したとき（SSE に対応しない経路）は `sendAiChat` と同じに読む。失敗のステータスの扱いも `sendAiChat` と同じ。
+ * `done` が来ずに終わったら、中断なら `aborted`、それ以外は `failed`。
+ */
+export async function streamAiChat(
+  pageId: string,
+  body: { text: string; conversationId?: string },
+  options: { signal?: AbortSignal; onEvent: (event: AiChatEvent) => void },
+): Promise<AiChatResult> {
+  const { signal } = options;
+  let response: Response;
+  try {
+    response = await fetch(pagePath(pageId, "/ai/chat"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", accept: "text/event-stream" },
+      body: JSON.stringify(body),
+      credentials: "same-origin",
+      cache: "no-store",
+      ...(signal ? { signal } : {}),
+    });
+  } catch (error) {
+    throw new AiRequestError(aborted(error, signal) ? "aborted" : "network");
+  }
+  const type = (response.headers.get("content-type") ?? "").toLowerCase();
+  if (!response.ok || !type.includes("text/event-stream") || !response.body) {
+    return chatResultFrom(await readResponse(response, signal));
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+      buffer = buffer.replace(/\r\n?/g, "\n");
+      let cut = buffer.indexOf("\n\n");
+      while (cut >= 0) {
+        const block = buffer.slice(0, cut);
+        buffer = buffer.slice(cut + 2);
+        cut = buffer.indexOf("\n\n");
+        const parsed = parseSseBlock(block);
+        if (!parsed) continue;
+        let data: unknown;
+        try {
+          data = JSON.parse(parsed.data);
+        } catch {
+          continue;
+        }
+        if (parsed.event === "text") {
+          if (isRecord(data) && typeof data.text === "string" && data.text.length > 0) options.onEvent({ type: "text", text: data.text });
+        } else if (parsed.event === "tool") {
+          const event = toolEventOf(data);
+          if (event) options.onEvent(event);
+        } else if (parsed.event === "done") {
+          void reader.cancel().catch(() => undefined);
+          return chatResultFrom(data);
+        } else if (parsed.event === "error") {
+          void reader.cancel().catch(() => undefined);
+          throw new AiRequestError("failed");
+        }
+      }
+      if (done) break;
+    }
+  } catch (error) {
+    if (error instanceof AiRequestError) throw error;
+    throw new AiRequestError(aborted(error, signal) ? "aborted" : "failed");
+  }
+  throw new AiRequestError(signal?.aborted ? "aborted" : "failed");
 }
 
 /** Mac CLI の完了結果を保存する。通信が途切れたら保存済みか不明なので、この関数は自動再送しない。 */

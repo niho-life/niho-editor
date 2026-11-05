@@ -13,6 +13,22 @@ export type PageText = {
   subscribe: (onChange: () => void) => () => void;
 };
 
+/**
+ * 「変更を見る」の表示中の状態。`hunks` は今の差分の数、`reverted` は開いてから戻した数、
+ * `edited` は開いたときに、依頼の後に人の編集が入っていた（今の revision が依頼の後の revision と違った）。
+ */
+export type AiDiffState = { version: number; hunks: number; reverted: number; edited: boolean };
+
+/** 本文の上に AI の変更を描く口（PageEditor が持つ。src/editor/ai-diff-view.ts）。 */
+export type AttachedAiDiff = {
+  /** 版 `version`（直す前の本文）を読み、今の本文との差分を描く。読めなければ reject（状態は変えない）。 */
+  open: (input: { version: number; revision: number }) => Promise<void>;
+  close: () => void;
+  /** 開いた・閉じた・戻したら知らせる（閉じたら null）。返す関数で外す。 */
+  subscribe: (listener: (state: AiDiffState | null) => void) => () => void;
+  current: () => AiDiffState | null;
+};
+
 /** 右レールの AI が使う、開いている PageEditor の安定した境界。 */
 export type AttachedAi = {
   editor: Editor | null;
@@ -20,6 +36,7 @@ export type AttachedAi = {
   title: string;
   kind: "note" | "rec" | "step" | "article";
   lang: PageLang;
+  diff: AttachedAiDiff;
 };
 
 /** PageSteps が持つ既存の工程状態を、AI の工程選択へ読み取り専用で共有する。 */

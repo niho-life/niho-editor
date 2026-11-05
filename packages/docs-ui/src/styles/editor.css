@@ -296,6 +296,27 @@
   color: inherit;
 }
 
+/* ── AI の変更を見る（editor-web の ai-diff-view.ts。decoration だけ。色は --ed-* だけ） ── */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be-diffbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin: 0 0 14px; padding: 8px 12px;
+  border-radius: 10px; background: var(--ed-accent-soft); color: var(--ed-ink); font-size: 13px; line-height: 1.5;
+}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be-diffbar > span { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be-diffbar small { display: block; color: var(--ed-ink-sub); font-size: 12px; }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be-diffbar button { border: 0; background: none; padding: 2px 0; color: var(--ed-accent-ink); font-size: 13px; font-weight: 600; cursor: pointer; }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be-diffbar button:disabled { color: var(--ed-ink-mute); cursor: default; }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-ins { background: var(--ed-accent-soft); text-decoration: underline; text-decoration-color: var(--ed-leaf); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-del { color: var(--ed-ink-mute); text-decoration: line-through; }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-deleted { display: block; margin: 0 0 .6em; }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-del-block { display: block; margin: 0 0 .4em; color: var(--ed-ink-mute); text-decoration: line-through; white-space: pre-wrap; }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-added,
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-changed { box-shadow: inset 3px 0 0 var(--ed-leaf); background: var(--ed-accent-soft); padding-left: 10px; border-radius: 2px; }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-ctl { display: inline-flex; gap: 10px; margin-left: 8px; vertical-align: baseline; user-select: none; }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-deleted > .es-diff-ctl { margin-left: 0; }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-ctl button { border: 0; background: none; padding: 0; color: var(--ed-accent-ink); font-family: var(--ed-font-sans); font-size: 12px; font-weight: 600; cursor: pointer; text-decoration: none; }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-ctl button:hover,
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-ctl button:focus-visible { text-decoration: underline; }
+
 /* ── 「/」のメニュー ── */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be-slash {
   position: fixed;

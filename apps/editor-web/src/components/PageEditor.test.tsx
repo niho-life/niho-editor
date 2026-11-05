@@ -1091,3 +1091,24 @@ describe("a new page (id null)", () => {
     });
   });
 });
+
+describe("PageEditor 変更を見る（AI の差分）", () => {
+  it("差分の表示中に再描画されても、閉じれば本文へ書ける（@tiptap/react が options.editable に読み取り専用を写し戻す問題）", async () => {
+    acceptingFetch();
+    await renderEditor({ blocks: paragraph("直したあとの文"), revision: 3 });
+    const editor = bodyEditor();
+    await act(async () => {
+      editor.commands.showAiDiff({ before: paragraph("直す前の文") });
+    });
+    expect(container!.querySelector(".ProseMirror")?.getAttribute("contenteditable")).toBe("false");
+    expect(container!.querySelectorAll(".es-diff-ctl").length).toBe(1);
+    // 表示中の再描画（題名を打つ）。useEditor が options を写し戻し、options.editable が false になる
+    await act(async () => typeTitle("再描画"));
+    await act(async () => {
+      editor.commands.hideAiDiff();
+    });
+    expect(container!.querySelector(".ProseMirror")?.getAttribute("contenteditable")).toBe("true");
+    expect(editor.isEditable).toBe(true);
+    expect(container!.querySelectorAll(".es-diff-ctl").length).toBe(0);
+  });
+});

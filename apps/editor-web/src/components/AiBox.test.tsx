@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import axe from "axe-core";
-import type { AttachedAi, AttachedAiSteps } from "@/lib/attached-page";
+import type { AiDiffState, AttachedAi, AttachedAiDiff, AttachedAiSteps } from "@/lib/attached-page";
 import { AiPanel } from "./AiBox";
 
 const nativeMock = vi.hoisted(() => ({ shell: null as unknown }));
@@ -73,9 +73,32 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function context(id = PAGE_1, overrides: Partial<AttachedAi["bridge"]> = {}): AttachedAi {
+/** 本文の「変更を見る」の代わり（開くと差分 2 か所を描いたことにする）。 */
+function fakeDiff() {
+  const listeners = new Set<(state: AiDiffState | null) => void>();
+  let state: AiDiffState | null = null;
+  const emit = (next: AiDiffState | null) => {
+    state = next;
+    listeners.forEach((listener) => listener(next));
+  };
+  const diff = {
+    open: vi.fn(async ({ version }: { version: number; revision: number }) => emit({ version, hunks: 2, reverted: 0, edited: false })),
+    close: vi.fn(() => emit(null)),
+    subscribe: (listener: (next: AiDiffState | null) => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    current: () => state,
+  } satisfies AttachedAiDiff;
+  return { ...diff, emit };
+}
+
+function context(id = PAGE_1, overrides: Partial<AttachedAi["bridge"]> = {}, diff: AttachedAiDiff = fakeDiff()): AttachedAi {
   return {
     editor: null,
+    diff,
     title: "合成ページ",
     kind: "note",
     lang: "ja",
@@ -135,6 +158,23 @@ async function until(check: () => boolean, rounds = 30) {
   }
   throw new Error("condition was not met");
 }
+
+/** SSE の応答（chunk を順に流す。`hold` を渡すと、それが解けるまで残りを流さない）。 */
+function sseResponse(chunks: string[], hold?: Promise<void>): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const [first, ...rest] = chunks;
+      if (first) controller.enqueue(encoder.encode(first));
+      if (hold) await hold;
+      for (const chunk of rest) controller.enqueue(encoder.encode(chunk));
+      controller.close();
+    },
+  });
+  return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 
 const field = () => container!.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')!;
 const button = (label: string) => container!.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
@@ -522,5 +562,127 @@ describe("AiPanel", () => {
     await render(PAGE_1, context());
     expect(container!.querySelector(".es-ai-empty")).toBeNull();
     expect(container!.textContent).not.toContain("何をつくりますか");
+  });
+
+  it("shows narration as paragraphs before the reply and hides the tool lines", async () => {
+    const answered = {
+      ...messages(CHAT_1)[1],
+      id: MESSAGE,
+      text: "二段落目を短くしました。",
+      items: [{ kind: "narration", text: "本文を読んで、二段落目を短くします。" }, { kind: "tool", tool: "read_page", page: "合成ページ", ok: true }],
+    };
+    defaultServer({ list: json(200, { conversations: [summary(CHAT_1)] }), get: () => json(200, { conversation: summary(CHAT_1), messages: [messages(CHAT_1)[0], answered] }) });
+    await render();
+    await until(() => logText().includes("二段落目を短くしました"));
+    const paragraphs = [...container!.querySelectorAll(".es-ai-message--assistant p")].map((node) => node.textContent);
+    expect(paragraphs).toEqual(["本文を読んで、二段落目を短くします。", "二段落目を短くしました。"]);
+    expect(container!.querySelector(".es-ai-message ul")).toBeNull();
+    expect(logText()).not.toContain("読みました");
+  });
+
+  it("streams a live reply with a work line, then replaces it with the saved reply", async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((done) => { release = done; });
+    const done = await chatResponse("一段落目を直しました。").json();
+    const server = defaultServer({
+      chat: () => sseResponse([
+        sse("text", { text: "本文を読みます。" }) + sse("tool", { tool: "read_page", page: null, ok: null, phase: "start" }),
+        sse("tool", { tool: "read_page", page: "合成ページ", ok: true, phase: "end" }) + sse("text", { text: "一段落目を直しました。" }) + sse("done", done),
+      ], hold),
+    });
+    await render();
+    setValue("一段落目を直して");
+    await until(() => !button("メッセージを送る").disabled);
+    expect(container!.querySelector(".es-ai-work")).toBeNull();
+    await press("Enter");
+    await until(() => container!.querySelector(".es-ai-work") !== null);
+    expect(container!.querySelector(".es-ai-message--live")?.textContent).toContain("本文を読みます。");
+    expect(container!.querySelector(".es-ai-work")?.textContent).toBe("本文を読んでいます…");
+    expect([...container!.querySelectorAll(".es-ai-message--user")].map((node) => node.textContent)).toContain("一段落目を直して");
+    expect(button("止める")).toBeTruthy();
+    expect(server.calls.find((call) => call.url.endsWith("/ai/chat"))).toBeTruthy();
+    release();
+    await until(() => container!.querySelector(".es-ai-message--live") === null);
+    expect(container!.querySelector(".es-ai-work")).toBeNull();
+    expect(logText()).toContain("一段落目を直しました。");
+    expect([...container!.querySelectorAll(".es-ai-message--user")].map((node) => node.textContent)).toEqual(["一段落目を直して"]);
+    expect(button("メッセージを送る")).toBeTruthy();
+  });
+
+  it("stops a running turn with the square stop button", async () => {
+    defaultServer({
+      chat: (_body, signal) => new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      }),
+    });
+    await render();
+    setValue("長い依頼");
+    await until(() => !button("メッセージを送る").disabled);
+    await press("Enter");
+    await until(() => container!.querySelector('button[aria-label="止める"]') !== null);
+    expect(button("止める").classList.contains("es-ai-send--stop")).toBe(true);
+    expect([...container!.querySelectorAll("button")].some((item) => item.textContent === "中止")).toBe(false);
+    await click(button("止める"));
+    await until(() => container!.textContent!.includes("中止しました"));
+    expect(container!.querySelector('button[aria-label="止める"]')).toBeNull();
+    expect(field().value).toBe("長い依頼");
+  });
+
+  it("shows one version line per change and offers 変更を見る only for an edit of the open page with a version", async () => {
+    const diff = fakeDiff();
+    const ai = context(PAGE_1, {}, diff);
+    const change = (pageId: string, extra: Record<string, unknown>) => ({ pageId, title: `題名${pageId.slice(-1)}`, change: "edited", version: 4, revision: 7, chars: 10, delta: -18, undoneAt: null, ...extra });
+    const answered = {
+      ...messages(CHAT_1)[1],
+      id: MESSAGE,
+      changes: [change(PAGE_1, {}), change(PAGE_2, {}), change("00000000-0000-4000-8000-000000000003", { change: "created", version: null, delta: 30 })],
+    };
+    const old = { ...messages(CHAT_1)[1], id: "old-message", seq: 1, changes: [change(PAGE_1, { version: null }), change(PAGE_1, { undoneAt: AT })] };
+    defaultServer({ list: json(200, { conversations: [summary(CHAT_1)] }), get: () => json(200, { conversation: summary(CHAT_1), messages: [old, messages(CHAT_1)[0], answered] }) });
+    await render(PAGE_1, ai);
+    await until(() => container!.querySelectorAll(".es-ai-verline").length === 5);
+    expect(container!.querySelector(".es-ai-change")).toBeNull();
+    const lines = [...container!.querySelectorAll(".es-ai-verline")];
+    expect(lines.map((line) => line.querySelector("span")?.textContent)).toEqual([
+      "題名1 を直しました（-18 字）",
+      "題名1 を直しました（-18 字）（元に戻しました）",
+      "題名1 を直しました（-18 字）",
+      "題名2 を直しました（-18 字）",
+      "題名3 を作りました（30 字）",
+    ]);
+    const views = lines.map((line) => [...line.querySelectorAll("button")].find((item) => item.textContent === "変更を見る") ?? null);
+    expect(views.map(Boolean)).toEqual([false, false, true, false, false]);
+    await click(views[2]!);
+    expect(diff.open).toHaveBeenCalledWith({ version: 4, revision: 7 });
+    await until(() => lines[2]!.textContent!.includes("変更を閉じる"));
+    act(() => diff.emit({ version: 4, hunks: 1, reverted: 2, edited: false }));
+    await click([...lines[2]!.querySelectorAll("button")].find((item) => item.textContent === "変更を閉じる")!);
+    expect(diff.close).toHaveBeenCalled();
+    await until(() => lines[2]!.textContent!.includes("（2 か所を戻しました）"));
+    expect(lines[2]!.textContent).toContain("変更を見る");
+  });
+
+  it("says the change could not be read when the version fails to load", async () => {
+    const diff = fakeDiff();
+    diff.open.mockRejectedValueOnce(new Error("not found"));
+    const answered = { ...messages(CHAT_1)[1], id: MESSAGE, changes: [{ pageId: PAGE_1, title: "題名", change: "edited", version: 4, revision: 7, chars: 1, delta: 1, undoneAt: null }] };
+    defaultServer({ list: json(200, { conversations: [summary(CHAT_1)] }), get: () => json(200, { conversation: summary(CHAT_1), messages: [messages(CHAT_1)[0], answered] }) });
+    await render(PAGE_1, context(PAGE_1, {}, diff));
+    await until(() => container!.textContent!.includes("変更を見る"));
+    await click([...container!.querySelectorAll<HTMLButtonElement>(".es-ai-verline button")].find((item) => item.textContent === "変更を見る")!);
+    await until(() => container!.textContent!.includes("変更を読めませんでした"));
+    expect(container!.textContent).not.toContain("変更を閉じる");
+  });
+
+  it.each([
+    ["推敲", "文体をそろえ、繰り返しと冗長な言い回しを削って読みやすくしてください。意味・固有名詞・数字・引用は変えないでください。"],
+    ["肉付け", "本文の各段落を章の書き出しとして一字も変えずに残し"],
+  ])("inserts the %s skill text into the composer", async (label, text) => {
+    defaultServer();
+    await render();
+    await until(() => !button("工程とスキルを開く").disabled);
+    await click(button("工程とスキルを開く"));
+    await click([...container!.querySelectorAll<HTMLButtonElement>(".es-ai-menu-row")].find((item) => item.textContent?.startsWith(label))!);
+    expect(field().value).toContain(text);
   });
 });
