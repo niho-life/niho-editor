@@ -830,6 +830,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--term>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--th{min-height:34px;font-size:12px;font-weight:600;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tm-t{font-weight:600}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-vh{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;clip-path:inset(50%);white-space:nowrap;pointer-events:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tm-r,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tm-v{font-size:13px;color:var(--ed-ink-sub)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tm--none{color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tm-ic{display:grid;color:var(--ed-ink-mute)}

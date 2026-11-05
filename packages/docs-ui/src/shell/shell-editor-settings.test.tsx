@@ -274,7 +274,9 @@ describe("EditorSettingsTermsPage（/settings/terms）", () => {
     const shown = textOf(markup);
     expect(markup).toContain(">固有名詞</h1>");
     expect(shown).toContain(`${EDITOR_SETTINGS_TEXT.termsSub} · 2 語 / 200 語`);
-    expect(markup).toContain('aria-label="北鎌倉 を編集"');
+    // 行の名前は見える文字＋見えない「を編集」（aria-label で短くしない。WCAG 2.5.3）
+    expect(markup).toMatch(/<button type="button" class="es-row es-row--term"><span class="es-tm-t">北鎌倉<\/span>/);
+    expect(markup).toContain('<span class="es-vh">を編集</span>');
     expect(shown).toContain("北鎌 · きた鎌倉");
     expect(markup).toContain('aria-label="固有名詞を追加"');
     expect(unlabeledButtons(markup)).toEqual([]);
@@ -287,7 +289,7 @@ describe("EditorSettingsTermsPage（/settings/terms）", () => {
     expect(markup).toContain('value="北鎌・"');
     expect(markup).toContain('aria-label="固有名詞の編集をやめる"');
     expect(markup).toContain('aria-label="北鎌倉を削除"');
-    expect(markup).not.toContain('aria-label="北鎌倉 を編集"');
+    expect(markup).not.toContain('<span class="es-tm-t">北鎌倉</span>');
     expect(unlabeledInputs(markup)).toEqual([]);
     expect(unlabeledButtons(markup)).toEqual([]);
     const empty = termsPage({ editing: { index: null, draft: { term: "", reading: "", variants: "", note: "" } } });
@@ -326,7 +328,7 @@ describe("EditorSettingsRecipePage（/settings/recipes/{id}）", () => {
   it("lists the stages with their first line and weight, and a ⋯ per stage that only reorders a default", () => {
     const markup = recipePage(article);
     const shown = textOf(markup);
-    expect(markup).toContain('aria-label="段階 1 文字起こし修正 を開く"');
+    expect(markup).toMatch(/<button type="button" class="es-row-main">.*?<span class="es-vh">段階 1<\/span><b>文字起こし修正<\/b>.*?<span class="es-vh">を開く<\/span><\/button>/);
     expect(markup).toContain('aria-label="段階 2 のメニュー"');
     expect(shown).toContain("読みやすく整える。");
     expect(shown).not.toContain("次の行");
@@ -353,7 +355,7 @@ describe("EditorSettingsRecipePage（/settings/recipes/{id}）", () => {
 
   it("shows the 文書ガイド as a card with its length, with an ⓘ disclosure", () => {
     const markup = recipePage(article);
-    expect(markup).toContain('aria-label="文書ガイドを開く"');
+    expect(markup).toContain('<button type="button" class="es-gcard"><span class="es-vh">文書ガイド</span>');
     expect(markup).toContain("es-gcard-t");
     expect(textOf(markup)).toContain(`${Array.from(article.guide).length} 字`);
     expect(buttonAttrs(markup, "文書ガイドとは")).toContain('aria-expanded="false"');
@@ -379,7 +381,7 @@ describe("EditorSettingsRecipePage（/settings/recipes/{id}）", () => {
   it("uses the same term rows for この手順だけの固有名詞, with 追加 at the end", () => {
     const markup = recipePage(talk);
     expect(markup).toContain('aria-label="この手順だけの固有名詞"');
-    expect(markup).toContain('aria-label="鎌倉ひとはこ を編集"');
+    expect(markup).toContain('<span class="es-tm-t">鎌倉ひとはこ</span>');
     expect(markup).toContain('aria-label="この手順だけの固有名詞とは"');
     expect(textOf(markup)).toContain("追加");
   });

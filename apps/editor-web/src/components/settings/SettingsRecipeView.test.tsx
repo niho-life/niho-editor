@@ -4,7 +4,7 @@ import { EDITOR_SETTINGS_TEXT } from "niho-docs-ui/shell";
 import type { GuideExtractionPreview, SettingsDto, SettingsFailure, SettingsPatchInput } from "@/lib/settings-client";
 import type { RecipeSample } from "@niho/editor-store";
 import { SETTINGS_MESSAGES } from "@/settings/messages";
-import { blur, button, click, customRecipe, DEFAULT_RECIPE_IDS, DEFAULTS, dto, echoRecipes, field, mount, shown, status, type, unmount, unnamed } from "./settings-test-kit";
+import { blur, button, click, clickRow, customRecipe, DEFAULT_RECIPE_IDS, DEFAULTS, dto, echoRecipes, field, mount, shown, status, type, unmount, unnamed } from "./settings-test-kit";
 
 const push = vi.fn();
 const save = vi.fn<(patch: SettingsPatchInput) => Promise<{ ok: true; settings: SettingsDto } | SettingsFailure>>();
@@ -45,7 +45,7 @@ describe("SettingsRecipeView（/settings/recipes/{id}）", () => {
   it("edits a stage in the sheet and sends the whole effective list, with the edited one in its place", async () => {
     await open("tpl-1");
     const first = DEFAULTS["tpl-1"]!.steps[0]!;
-    await click(`段階 1 ${first.name} を開く`);
+    await clickRow(`段階 1 ${first.name}`, "を開く");
     expect(document.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe("段階 1 の編集");
     await type("指示", "短く整える。");
     expect(shown()).toContain("6 字");
@@ -60,7 +60,7 @@ describe("SettingsRecipeView（/settings/recipes/{id}）", () => {
 
   it("does not send a stage whose instruction is empty", async () => {
     await open("tpl-1");
-    await click(`段階 1 ${DEFAULTS["tpl-1"]!.steps[0]!.name} を開く`);
+    await clickRow(`段階 1 ${DEFAULTS["tpl-1"]!.steps[0]!.name}`, "を開く");
     await type("指示", "  ");
     expect(shown()).toContain("指示を書いてください。");
     expect(button("段階を保存")?.getAttribute("aria-disabled")).toBe("true");
@@ -168,7 +168,7 @@ describe("SettingsRecipeView（/settings/recipes/{id}）", () => {
   it("keeps the recipe and says so when the save fails", async () => {
     await open("tpl-1");
     save.mockResolvedValue({ ok: false, status: 503, error: "unavailable", message: SETTINGS_MESSAGES.unavailable });
-    await click("文書ガイドを開く");
+    await clickRow("文書ガイド", "開く");
     await type("文書ガイド", "新しいガイド");
     await click("文書ガイドを保存");
     expect(status()).toBe(SETTINGS_MESSAGES.unavailable);
@@ -182,7 +182,7 @@ describe("SettingsRecipeView（/settings/recipes/{id}）", () => {
     const sample: RecipeSample = { id: "sample-1", name: "朝市レポート.md", chars: 8200 };
     importSample.mockResolvedValue({ ok: true, sample });
     load.mockResolvedValue({ ok: true, settings: withCustom({ samples: [sample] }) });
-    await click("お手本の文書を取り込む");
+    await clickRow("お手本の文書を 取り込む", "ファイル・URL");
     expect(button("取り込む")?.getAttribute("aria-disabled")).toBe("true");
     await type("公開 Web ページの URL", "https://example.invalid/a");
     await click("取り込む");
@@ -229,8 +229,13 @@ describe("SettingsRecipeView（/settings/recipes/{id}）", () => {
     const sample: RecipeSample = { id: "sample-1", name: "朝市レポート.md", chars: 8200 };
     await open("r-talk", withCustom({ samples: [sample] }));
     expect(unnamed()).toEqual([]);
-    for (const opener of ["段階 1 まとめ を開く", "文書ガイドを開く", "お手本の文書を取り込む"]) {
-      await click(opener);
+    const openers: [string, () => Promise<void>][] = [
+      ["段階 1 まとめ", () => clickRow("段階 1 まとめ", "を開く")],
+      ["文書ガイド", () => clickRow("文書ガイド", "開く")],
+      ["お手本の文書を取り込む", () => clickRow("お手本の文書を 取り込む", "ファイル・URL")],
+    ];
+    for (const [opener, openIt] of openers) {
+      await openIt();
       expect(unnamed(), opener).toEqual([]);
       await click("閉じる");
     }

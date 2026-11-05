@@ -102,6 +102,33 @@ export async function click(label: string): Promise<void> {
   await act(async () => target.click());
 }
 
+/** aria-hidden を除いた中の文字を、要素の切れ目で空白を入れて繋いだもの（見える文字が名前のボタン。見えない es-vh の語も入る）。 */
+function contentName(item: Element): string {
+  const parts: string[] = [];
+  const walk = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) parts.push(node.textContent ?? "");
+    else if (node instanceof Element && node.getAttribute("aria-hidden") !== "true") node.childNodes.forEach(walk);
+  };
+  item.childNodes.forEach(walk);
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * 見える文字が名前の行のボタン（固有名詞の行・段階の行）を、名前の先頭と末尾の動詞で探す。
+ * 例: `row("北鎌倉", "を編集")`・`row("段階 1 まとめ", "を開く")`。
+ */
+export const row = (start: string, verb: string) =>
+  buttons().find((item) => {
+    const name = contentName(item);
+    return !item.hasAttribute("aria-label") && name.startsWith(`${start} `) && name.endsWith(` ${verb}`);
+  });
+
+export async function clickRow(start: string, verb: string): Promise<void> {
+  const target = row(start, verb);
+  if (!target) throw new Error(`no row named ${start} … ${verb}`);
+  await act(async () => target.click());
+}
+
 export async function flush(): Promise<void> {
   await act(async () => undefined);
 }

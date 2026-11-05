@@ -635,8 +635,9 @@ export function EditorTermRows(props: EditorTermRowsProps) {
         editing?.index === index ? (
           edit(editing)
         ) : (
-          <button key={`${index}:${entry.term}`} type="button" className="es-row es-row--term" aria-label={`${entry.term || "表記のない行"} を編集`} {...busyProps(busy)} onClick={() => !busy && props.onOpen(index)}>
-            <span className="es-tm-t">{entry.term}</span>
+          // 名前は見える文字（表記・よみ・誤りやすい表記）＋見えない「を編集」（WCAG 2.5.3。aria-label で短くすると見える文字と食い違う）
+          <button key={`${index}:${entry.term}`} type="button" className="es-row es-row--term" {...busyProps(busy)} onClick={() => !busy && props.onOpen(index)}>
+            <span className="es-tm-t">{entry.term || <span className="es-vh">表記のない行</span>}</span>
             <span className={entry.reading ? "es-tm-r" : "es-tm-r es-tm--none"} data-k="よみ">
               {entry.reading || "—"}
             </span>
@@ -645,6 +646,7 @@ export function EditorTermRows(props: EditorTermRowsProps) {
             </span>
             <span className="es-tm-ic">
               <Icon name="edit" />
+              <span className="es-vh">を編集</span>
             </span>
           </button>
         ),
@@ -1026,16 +1028,19 @@ export function EditorSettingsRecipePage(props: EditorSettingsRecipePageProps) {
         <div className="es-grp">
           {steps.map((step, index) => (
             <div key={step.id} className="es-row es-row--split">
-              <button type="button" className="es-row-main" aria-label={`段階 ${index + 1} ${step.name} を開く`} onClick={() => openStep(index)}>
+              {/* 名前は見える文字（段階の名前・指示の 1 行目・重さ）を見えない「段階 n」「を開く」で挟む（WCAG 2.5.3） */}
+              <button type="button" className="es-row-main" onClick={() => openStep(index)}>
                 <span className="es-num" aria-hidden="true">
                   {index + 1}
                 </span>
                 <span className="es-row-t">
+                  <span className="es-vh">{`段階 ${index + 1}`}</span>
                   <b>{step.name}</b>
                   <small>{firstLine(step.instruction) || "指示がありません"}</small>
                 </span>
                 <span className="es-tag">{EDITOR_SETTINGS_TEXT.profile[step.profile] ?? EDITOR_SETTINGS_TEXT.profile.standard}</span>
                 <Icon name="chev" className="es-chev" />
+                <span className="es-vh">を開く</span>
               </button>
               <MenuButton label={`段階 ${index + 1} のメニュー`} items={stepMenuItems(index, steps.length, fixed, maxSteps)} busy={busy} onSelect={(id) => onStepMenu(index, id)} />
             </div>
@@ -1059,7 +1064,9 @@ export function EditorSettingsRecipePage(props: EditorSettingsRecipePageProps) {
       </Group>
 
       <Group title="文書ガイド" aside={guideInfo.button} info={guideInfo.panel(<p>{EDITOR_SETTINGS_TEXT.guideInfo}</p>)}>
-        <button type="button" className="es-gcard" aria-label="文書ガイドを開く" onClick={() => props.onSheet({ kind: "guide", draft: recipe.guide })}>
+        {/* 名前は見えない「文書ガイド」＋見える文字（中身・字数・開く）。aria-label で短くしない（WCAG 2.5.3） */}
+        <button type="button" className="es-gcard" onClick={() => props.onSheet({ kind: "guide", draft: recipe.guide })}>
+          <span className="es-vh">文書ガイド</span>
           <span className={recipe.guide.trim() ? "es-gcard-t" : "es-gcard-t es-row-v--none"}>{recipe.guide.trim() ? recipe.guide : EDITOR_SETTINGS_TEXT.guideEmpty}</span>
           <span className="es-gcard-f">
             <span>{fmt(charCount(recipe.guide))} 字</span>
@@ -1108,9 +1115,10 @@ export function EditorSettingsRecipePage(props: EditorSettingsRecipePageProps) {
           )}
           {recipe.samples.length === 0 && <div className="es-row es-row--note">{EDITOR_SETTINGS_TEXT.empty}</div>}
           {recipe.samples.length < maxSamples && (
-            <button type="button" className="es-row es-row--add" aria-label="お手本の文書を取り込む" onClick={() => props.onSheet({ kind: "import", file: null, url: "" })}>
+            <button type="button" className="es-row es-row--add" onClick={() => props.onSheet({ kind: "import", file: null, url: "" })}>
               <Icon name="plus" />
               <span>
+                <span className="es-vh">お手本の文書を</span>
                 取り込む<small className="es-row-more">ファイル・URL</small>
               </span>
             </button>
