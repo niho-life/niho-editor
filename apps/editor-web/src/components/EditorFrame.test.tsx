@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useEffect, type ReactNode } from "react";
+import { act, useEffect, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PageSummary } from "@niho/editor-store";
@@ -8,7 +8,7 @@ import { createIndexedDbDraftStorage } from "@/lib/drafts";
 import { SAVE_STATUS_TEXT, type SaveStatus } from "@/lib/save-status";
 import { isMacPlatform } from "@/lib/use-search-shortcut";
 import { COPIED_NOTE_MS } from "./ShareSheet";
-import { EditorFrame, useEditorFrame, type AttachedPage, type FrameInitial } from "./EditorFrame";
+import { EditorFrame, SWAP_UNSAVED_TEXT, useEditorFrame, type AttachedPage, type FrameInitial } from "./EditorFrame";
 import { COUNT_DELAY_MS } from "./PageInfo";
 import { LANG_NOT_SAVED, PageEditor } from "./PageEditor";
 import { NewPage } from "./FramePages";
@@ -2903,6 +2903,58 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     await act(async () => void rowButton("右のページ").dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true })));
     expect(replaceState).toHaveBeenLastCalledWith(null, "", `/p/${A}?side=${B}`);
     expect(nav.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("入れ替える前に保存できなければ移らず、ヘッダーに一言出す（保存できたら入れ替える）", async () => {
+    nav.search = `side=${B}`;
+    window.history.replaceState(null, "", `/p/${A}?side=${B}`);
+    const save = vi.fn(async () => false);
+    /** 保存に失敗しているメイン（競合・通信の失敗）。「今すぐ保存」は false を返す。 */
+    function FailingPage() {
+      const { attachPage, registerPageSaver } = useEditorFrame();
+      const [status, setStatus] = useState<"error" | "saved">("error");
+      useEffect(() => registerPageSaver(async () => {
+        const ok = await save();
+        if (ok) setStatus("saved");
+        return ok;
+      }), [registerPageSaver]);
+      useEffect(
+        () =>
+          attachPage({
+            id: A,
+            status,
+            flush: vi.fn(async () => true),
+            revision: () => 1,
+            reopen: vi.fn(),
+            shared: null,
+            setShared: vi.fn(),
+            lang: "ja",
+            setLang: vi.fn(),
+            langNote: null,
+            text: { read: () => "", subscribe: () => () => undefined },
+          }),
+        [attachPage, status],
+      );
+      return <p>合成の本文</p>;
+    }
+    await mount({ pages: pages() }, <FailingPage />);
+    await tick();
+    const swap = () => container!.querySelector<HTMLButtonElement>('button[aria-label="メインと入れ替える"]')!;
+    await act(async () => swap().click());
+    await tick();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(nav.push).not.toHaveBeenCalled();
+    expect([...container!.querySelectorAll('[role="alert"]')].map((node) => node.textContent)).toContain(SWAP_UNSAVED_TEXT);
+    // 一覧で右のページを開く（入れ替え）も同じく止まる
+    await act(async () => rowButton("右のページ").click());
+    await tick();
+    expect(nav.push).not.toHaveBeenCalled();
+    // 保存できたら入れ替え、一言は消える
+    save.mockResolvedValue(true);
+    await act(async () => swap().click());
+    await tick();
+    expect(nav.push).toHaveBeenLastCalledWith(`/p/${B}?side=${A}`);
+    expect([...container!.querySelectorAll('[role="alert"]')].map((node) => node.textContent)).not.toContain(SWAP_UNSAVED_TEXT);
   });
 
   it("AI を左のドック・メインの下へ移しても、作り直さず書きかけが残る。置き場所は端末に覚える", async () => {

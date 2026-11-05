@@ -249,6 +249,9 @@ function DeleteConfirm(props: { busy: boolean; error: string | null; onConfirm: 
 /** 保存の失敗だけをヘッダーに文字で出す（保存済み・保存中は状態の丸だけ。読み上げは丸の live region が持つ）。 */
 const SAVE_FAILURES: ReadonlySet<SaveStatus> = new Set<SaveStatus>(["offline", "error", "conflict", "signedOut"]);
 
+/** 右のページと入れ替える前に、いまのメインの変更を保存できなかったときの一言（入れ替えはしない）。 */
+export const SWAP_UNSAVED_TEXT = "入れ替える前に変更を保存できませんでした";
+
 /** 並べ替えを 1 歩ずつ送る上限（左の一覧のドラッグ）。 */
 const MAX_ORDER_STEPS = 50;
 
@@ -759,12 +762,25 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   };
   const closeSide = () => setSideUrl(null);
   // メインと入れ替える（⇄・右のページの帯を真ん中へ・一覧で右のページを開く）。いまのメインの届いていない変更を保存してから移る
-  // （右に移ったページはサーバーから読むので）。メインが替わるのは画面の移動なので、履歴に積む
+  // （右に移ったページはサーバーから読むので）。メインが替わるのは画面の移動なので、履歴に積む。
+  // 保存できなかった（通信の失敗・競合など）ときは移らない: 移ると元のメインは右で読むだけになり、直前の変更ではなく古い本文が出て、
+  // 保存の失敗や競合を直す画面からも離れてしまう。ヘッダーに一言出し、保存できたら消す（どのページの一言かも持つ）
+  const [swapNote, setSwapNote] = useState<string | null>(null);
+  const swapping = useRef(false);
   const swapSide = async () => {
-    if (!sideId || !currentId) return;
+    if (!sideId || !currentId || swapping.current) return;
     const [main, side] = [currentId, sideId];
-    await saveFirst();
-    router.push(`/p/${side}?side=${main}`);
+    swapping.current = true;
+    try {
+      if (!(await saveFirst())) {
+        setSwapNote(main);
+        return;
+      }
+      setSwapNote(null);
+      router.push(`/p/${side}?side=${main}`);
+    } finally {
+      swapping.current = false;
+    }
   };
 
   const select = (id: string) => {
@@ -1203,6 +1219,11 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                   {menu.note && (
                     <span role="alert" style={MENU_NOTE_STYLE}>
                       {menu.note}
+                    </span>
+                  )}
+                  {swapNote !== null && swapNote === currentId && attached?.status !== "saved" && (
+                    <span role="alert" style={MENU_NOTE_STYLE}>
+                      {SWAP_UNSAVED_TEXT}
                     </span>
                   )}
                   {restoredNote && (
