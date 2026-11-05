@@ -2,7 +2,8 @@
 
 import "niho-ui/styles/editor-tokens.css";
 import "niho-docs-ui/styles/shell.css";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { EFFORTS, effortLabel, type Effort } from "@niho/docs-core";
 import { isShellWindow, type ShellBridge } from "niho-desktop-bridge/shell-bridge";
 import type { ShellAiEngine, ShellAiEngineName } from "niho-desktop-bridge/shell-contract";
 import { validateBlocks } from "niho-docs-ui/page/blocks";
@@ -25,7 +26,8 @@ import {
   type AiChatSummary,
   type AiErrorCode,
 } from "@/lib/ai-client";
-import { MAC_AI_ERROR_TEXT, MAC_ENGINE_LABELS, MacAiError, macEngineModels, macEngineReady, macEngineStatus, runMacAiTurn } from "@/lib/mac-ai-chat";
+import { MAC_AI_ERROR_TEXT, MAC_ENGINE_LABELS, MacAiError, macEffortFor, macEffortRule, macEngineModels, macEngineReady, macEngineStatus, runMacAiTurn } from "@/lib/mac-ai-chat";
+import { readMacAiChoice, writeMacAiChoice, type MacAiChoice, type MacAiRoute } from "@/lib/mac-ai-choice";
 
 export const AI_TEXT = {
   working: "直しています…",
@@ -124,7 +126,8 @@ export function aiItemText(item: { kind: "narration"; text: string } | { kind: "
 
 type Busy = "working" | "saving" | "undoing" | "compact" | "step" | null;
 type MacState = { mode: "loading" | "error" } | { mode: "ready"; shell: ShellBridge; engines: ShellAiEngine[] };
-type MacRoute = "" | "server" | ShellAiEngineName;
+type MacRoute = MacAiRoute;
+type MacPrefs = Pick<MacAiChoice, "models" | "efforts">;
 type SkillId = "factcheck" | "polish" | "expand" | "compact";
 type MenuItem =
   | { id: SkillId; kind: "skill"; label: string; hint: string; search: string; disabledReason: string | null }
@@ -238,7 +241,14 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
   const [retry, setRetry] = useState(0);
   const [macState, setMacState] = useState<MacState>({ mode: "loading" });
   const [macRoute, setMacRoute] = useState<MacRoute>("");
-  const [macModel, setMacModel] = useState("");
+  // CLI ごとのモデルと思考量（この Mac に覚える。mac-ai-choice.ts）
+  const [macPrefs, setMacPrefs] = useState<MacPrefs>({ models: {}, efforts: {} });
+  const macPrefsLoadedRef = useRef(false);
+  // 入力欄の下端の「実行先・モデル・思考量」の窓
+  const [engineOpen, setEngineOpen] = useState(false);
+  const enginePillRef = useRef<HTMLButtonElement | null>(null);
+  const enginePopoverRef = useRef<HTMLDivElement | null>(null);
+  const engineFormId = useId();
   const [resumeSession, setResumeSession] = useState<{ engine: ShellAiEngineName; conversationId: string; id: string } | null>(null);
   const [live, setLive] = useState<AiLiveTurn | null>(null);
   // 「変更を見る」で開いている行（発言とページ）と、閉じたときに戻した数（画面だけ。保存しない）
@@ -266,8 +276,18 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
     setMacState({ mode: "loading" });
     try {
       const { shell, engines } = await readMacEngines();
+      // 前に選んだ実行先・モデル・思考量（初めて読むときだけ。そのあとは画面の選択が正）
+      const stored = readMacAiChoice();
+      if (!macPrefsLoadedRef.current) {
+        macPrefsLoadedRef.current = true;
+        setMacPrefs({ models: stored.models, efforts: stored.efforts });
+      }
       setMacState({ mode: "ready", shell, engines });
-      setMacRoute((current) => current === "server" ? current : (engines.find((engine) => engine.engine === current && macEngineReady(engine)) ?? engines.find(macEngineReady))?.engine ?? "");
+      setMacRoute((current) => {
+        const wanted = current || stored.route;
+        if (wanted === "server") return "server";
+        return (engines.find((engine) => engine.engine === wanted && macEngineReady(engine)) ?? engines.find(macEngineReady))?.engine ?? "";
+      });
     } catch {
       setMacState({ mode: "error" });
     }
@@ -388,7 +408,31 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
   const native = typeof window !== "undefined" && isShellWindow(window);
   const selectedMacEngine = macState.mode === "ready" ? macState.engines.find((engine) => engine.engine === macRoute) : undefined;
   const selectedMacModels = selectedMacEngine ? macEngineModels(selectedMacEngine) : [];
-  const activeMacModel = selectedMacModels.includes(macModel) ? macModel : selectedMacModels[0] ?? "";
+  const storedMacModel = selectedMacEngine ? macPrefs.models[selectedMacEngine.engine] ?? "" : "";
+  const activeMacModel = selectedMacModels.includes(storedMacModel) ? storedMacModel : selectedMacModels[0] ?? "";
+  // 思考量（null は既定＝CLI の設定のまま）。モデルに無い段階は低い段階に寄せた値を出す・送る
+  const macEffortChoices = selectedMacEngine ? macEffortRule(selectedMacEngine, activeMacModel) : { efforts: [], fixed: null };
+  const activeMacEffort = selectedMacEngine ? macEffortFor(selectedMacEngine, activeMacModel, macPrefs.efforts[selectedMacEngine.engine] ?? null) : null;
+
+  // 選んだものはこの Mac に覚える（次に開いたときも同じ実行先・モデル・思考量）
+  const chooseMacRoute = (route: MacRoute) => {
+    setMacRoute(route);
+    setResumeSession(null);
+    writeMacAiChoice({ route, ...macPrefs });
+  };
+  const chooseMacModel = (engine: ShellAiEngineName, model: string) => {
+    const next: MacPrefs = { ...macPrefs, models: { ...macPrefs.models, [engine]: model } };
+    setMacPrefs(next);
+    writeMacAiChoice({ route: macRoute, ...next });
+  };
+  const chooseMacEffort = (engine: ShellAiEngineName, effort: Effort | null) => {
+    const efforts = { ...macPrefs.efforts };
+    if (effort) efforts[engine] = effort;
+    else delete efforts[engine];
+    const next: MacPrefs = { ...macPrefs, efforts };
+    setMacPrefs(next);
+    writeMacAiChoice({ route: macRoute, ...next });
+  };
 
   const allMenuItems = useMemo<MenuItem[]>(() => [
     ...(steps?.options.map((step): MenuItem => ({ ...step, kind: "step", search: `${step.label} ${step.hint} 工程 手順` })) ?? []),
@@ -415,7 +459,20 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
   const closeMenus = () => {
     setMenuOpen(false);
     setHistoryOpen(false);
+    setEngineOpen(false);
   };
+
+  // 実行先の窓は、窓と下端のボタンの外を押したら閉じる
+  useEffect(() => {
+    if (!engineOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && (enginePopoverRef.current?.contains(target) || enginePillRef.current?.contains(target))) return;
+      setEngineOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [engineOpen]);
 
   const newConversation = () => {
     if (busy || sessionLoading || flightRef.current) return;
@@ -503,6 +560,7 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
       shell: macState.shell,
       engine: macRoute,
       model: activeMacModel,
+      effort: activeMacEffort,
       page: { pageId: target.pageId, title: saved.title, markdown: markdown.markdown },
       selection: null,
       instruction: macInstruction,
@@ -839,12 +897,21 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
   };
 
   const unavailable = !pageId || !context;
+  // 入力欄の下端に出す、今の実行先・モデル・思考量
+  const macPillText = macState.mode === "loading" ? "CLI を確認中…"
+    : macState.mode === "error" ? "CLI を確認できません"
+      : macRoute === "server" ? "サーバー AI"
+        : selectedMacEngine ? [MAC_ENGINE_LABELS[selectedMacEngine.engine], activeMacModel, activeMacEffort ? effortLabel(activeMacEffort) : null].filter(Boolean).join(" · ")
+          : "実行先を選ぶ";
   const routeDisabled = native && macRoute !== "server" && (!selectedMacEngine || !macEngineReady(selectedMacEngine) || !selectedMacModels.includes(activeMacModel));
   const sendDisabled = unavailable || sessionLoading || busy !== null || (!selectedStep && routeDisabled) || (!selectedStep && text.trim().length === 0);
 
   return (
     <section className="es-cd es-cd--open es-cd--fill es-ai-panel" aria-label="AIと作る" onKeyDown={(event) => {
-      if (event.key === "Escape" && !composing(event)) closeMenus();
+      if (event.key !== "Escape" || composing(event)) return;
+      // 実行先の窓を閉じたら、開いたボタンへ戻る
+      if (engineOpen) enginePillRef.current?.focus();
+      closeMenus();
     }}>
       <h2 className="es-ai-head">
         <span>AIと作る</span>
@@ -855,6 +922,7 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
         <button type="button" className="es-ib es-ib--sm" aria-label="会話履歴と切り替え" aria-expanded={historyOpen} disabled={busy !== null} onClick={() => {
           setHistoryOpen((open) => !open);
           setMenuOpen(false);
+          setEngineOpen(false);
         }}>
           <Icon name="more" />
         </button>
@@ -921,17 +989,6 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
         </div>
         <div className="es-ai-composer">
           {selectedStep && <div className="es-ai-chip"><Icon name="play" /><span>{selectedStep.label}</span><button type="button" aria-label={`${selectedStep.label}を外す`} disabled={busy !== null} onClick={() => setSelectedStep(null)}>×</button></div>}
-          {native && (
-            <div className="es-ai-route">
-              <label>実行先<select aria-label="自由入力チャットの実行先" value={macRoute} disabled={busy !== null} onChange={(event) => { setMacRoute(event.target.value as MacRoute); setResumeSession(null); }}>
-                <option value="">CLI を選択</option>
-                {macState.mode === "ready" && macState.engines.map((engine) => <option key={engine.engine} value={engine.engine} disabled={!macEngineReady(engine)}>{MAC_ENGINE_LABELS[engine.engine]}（{macEngineStatus(engine)}）</option>)}
-                <option value="server">サーバー AI（API 課金）</option>
-              </select></label>
-              {macRoute !== "server" && selectedMacEngine && <label>モデル<select aria-label="CLI のモデル" value={activeMacModel} disabled={busy !== null} onChange={(event) => setMacModel(event.target.value)}>{selectedMacModels.map((model) => <option key={model}>{model}</option>)}</select></label>}
-              {macState.mode === "error" && <button type="button" onClick={() => void refreshMacEngines()}>CLI 状態を再確認</button>}
-            </div>
-          )}
           <textarea
             ref={textareaRef}
             rows={2}
@@ -950,8 +1007,84 @@ export function AiPanel({ pageId, context, steps }: AiPanelProps) {
               setMenuQuery("");
               setMenuIndex(0);
               setHistoryOpen(false);
+              setEngineOpen(false);
               textareaRef.current?.focus();
             }}><Icon name="plus" /></button>
+            {native && (
+              <button
+                ref={enginePillRef}
+                type="button"
+                className="es-ai-engine-pill"
+                aria-haspopup="dialog"
+                aria-expanded={engineOpen}
+                aria-label={`AI の実行先・モデル・思考量（今は ${macPillText}）`}
+                disabled={busy !== null}
+                onClick={() => {
+                  setEngineOpen((open) => !open);
+                  setMenuOpen(false);
+                  setHistoryOpen(false);
+                }}
+              >
+                <span>{macPillText}</span>
+                <span className="es-ai-engine-caret" aria-hidden="true">▾</span>
+              </button>
+            )}
+            {native && engineOpen && (
+              <div ref={enginePopoverRef} className="es-ai-popover es-ai-engine" role="dialog" aria-label="AI の実行先・モデル・思考量">
+                <fieldset className="es-ai-engine-group" disabled={busy !== null}>
+                  <legend>実行先</legend>
+                  {macState.mode === "loading" && <p className="es-ai-engine-note">この Mac の CLI を確認しています…</p>}
+                  {macState.mode === "error" && <p className="es-ai-engine-note">この Mac の CLI を確認できませんでした。</p>}
+                  {macState.mode === "ready" && macState.engines.map((engine) => (
+                    <label key={engine.engine} className="es-ai-engine-option">
+                      <input type="radio" name={`${engineFormId}-route`} value={engine.engine} checked={macRoute === engine.engine} disabled={!macEngineReady(engine)} onChange={() => chooseMacRoute(engine.engine)} />
+                      <span>{MAC_ENGINE_LABELS[engine.engine]}<small>{macEngineStatus(engine)}</small></span>
+                    </label>
+                  ))}
+                  <label className="es-ai-engine-option">
+                    <input type="radio" name={`${engineFormId}-route`} value="server" checked={macRoute === "server"} onChange={() => chooseMacRoute("server")} />
+                    <span>サーバー AI<small>API 課金。月の上限に数えます</small></span>
+                  </label>
+                </fieldset>
+                {macRoute !== "server" && selectedMacEngine && (
+                  <>
+                    <label className="es-ai-engine-field">
+                      <span>モデル</span>
+                      <select aria-label="CLI のモデル" value={activeMacModel} disabled={busy !== null} onChange={(event) => chooseMacModel(selectedMacEngine.engine, event.target.value)}>
+                        {selectedMacModels.map((model) => <option key={model}>{model}</option>)}
+                      </select>
+                    </label>
+                    <fieldset className="es-ai-engine-group" disabled={busy !== null}>
+                      <legend>思考量</legend>
+                      {macEffortChoices.fixed !== null ? (
+                        <p className="es-ai-engine-note">このモデルは、思考量が名前で決まっています（{effortLabel(macEffortChoices.fixed)}）。</p>
+                      ) : macEffortChoices.efforts.length === 0 ? (
+                        <p className="es-ai-engine-note">この CLI では思考量を選べません。</p>
+                      ) : (
+                        <>
+                          <div className="es-ai-effort">
+                            {([null, ...EFFORTS] as const).map((effort) => (
+                              <label key={effort ?? "default"}>
+                                <input
+                                  type="radio"
+                                  name={`${engineFormId}-effort`}
+                                  checked={activeMacEffort === effort}
+                                  disabled={effort !== null && !macEffortChoices.efforts.includes(effort)}
+                                  onChange={() => chooseMacEffort(selectedMacEngine.engine, effort)}
+                                />
+                                <span>{effort ? effortLabel(effort) : "既定"}</span>
+                              </label>
+                            ))}
+                          </div>
+                          <p className="es-ai-engine-note">既定は CLI の設定のままです。高いほど、考える時間が長くなります。</p>
+                        </>
+                      )}
+                    </fieldset>
+                  </>
+                )}
+                <button type="button" className="es-ai-link" onClick={() => void refreshMacEngines()}>CLI の状態を読み直す</button>
+              </div>
+            )}
             {busy === "working" || busy === "compact"
               ? <button type="button" className="es-ai-send es-ai-send--stop" aria-label="止める" onClick={() => controllerRef.current?.abort()}><span className="es-ai-stop-mark" aria-hidden="true" /></button>
               : <button type="button" className="es-ai-send" aria-label="メッセージを送る" disabled={sendDisabled} onClick={send}><Icon name="up" /></button>}
