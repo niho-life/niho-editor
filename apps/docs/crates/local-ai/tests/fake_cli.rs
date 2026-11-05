@@ -451,6 +451,12 @@ HELP
   debug)
     if [ "$2" = models ]; then
       printf '%s' "${{CODEX_HOME:-}}" > "$OUT/codex-models-home.txt"
+      if [ -f "$OUT/codex-models-large" ]; then
+        # 実機（0.163.0）のカタログはモデルごとの長い指示を含み、256 KiB を超える
+        pad=$(head -c 400000 /dev/zero | tr '\0' x)
+        printf '{{"models":[{{"slug":"gpt-6.1-sol","visibility":"list","base_instructions":"%s"}},{{"slug":"gpt-6-astra","visibility":"list"}}]}}\n' "$pad"
+        exit 0
+      fi
       echo '{{"models":[{{"slug":"gpt-6-astra","visibility":"list"}},{{"slug":"gpt-reserve","visibility":"hide"}},{{"slug":"gpt-5.6-sol","visibility":"list"}}]}}'
       exit 0
     fi
@@ -2661,6 +2667,11 @@ fn status_reads_codex_login_status() {
   // ログイン後は `codex debug models` の一覧（visibility が list のもの）を返す。アプリの CODEX_HOME で見る
   assert_eq!(status.models, ["gpt-6-astra", "gpt-5.6-sol"].map(String::from));
   assert_eq!(h.read_out("codex-models-home.txt"), h.codex_home().to_string_lossy());
+  // カタログが状態の確認の出力の上限（256 KiB）を超えても、一覧を頭から読める（末尾だけ残ると JSON が読めず空になっていた）
+  h.touch_out("codex-models-large");
+  let large = provider_status_with(&h.runtime(), Provider::CodexCli);
+  assert_eq!(large.models, ["gpt-6.1-sol", "gpt-6-astra"].map(String::from));
+  fs::remove_file(h.out("codex-models-large")).unwrap();
   assert!(status.missing_cli_flags.is_empty(), "{:?}", status.missing_cli_flags);
   assert_eq!(status.reason, None);
   assert_eq!(

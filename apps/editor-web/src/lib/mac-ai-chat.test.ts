@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ShellBridge } from "niho-desktop-bridge/shell-bridge";
 import type { ShellAiTurn } from "niho-desktop-bridge/shell-contract";
-import { MacAiError, macChatEvent, macEngineModels, macEngineReady, runMacAiTurn } from "./mac-ai-chat";
+import type { ShellAiEngine } from "niho-desktop-bridge/shell-contract";
+import { MAC_AI_ERROR_TEXT, MacAiError, macChatEvent, macEffortFor, macEffortRule, macEngineModels, macEngineReady, runMacAiTurn } from "./mac-ai-chat";
 
 const PAGE = { pageId: "page-1", title: "合成ページ", markdown: "元の本文" };
 const DONE: ShellAiTurn = {
@@ -43,6 +44,25 @@ describe("Mac CLI chat turn", () => {
     await expect(run(result as ShellAiTurn).promise).rejects.toMatchObject({ code });
   });
 
+  it.each([
+    // 許可していない道具（MCP のリソースなど）で止めた・安全に動かせなかった
+    ["NotConfigured", "blocked"],
+    ["CliLoginRequired", "auth"],
+    ["UsageLimitReached", "usage_limit"],
+    ["ModelNotFound", "model"],
+    ["TimedOut", "timed_out"],
+    ["SessionNotFound", "session"],
+    ["TransientFailure", "failed"],
+    ["toString", "failed"],
+    ["未知", "failed"],
+  ] as const)("shows a fixed reason for a CLI Error (%s) instead of the CLI message", async (reason, code) => {
+    const error: ShellAiTurn = { ...DONE, page: null, finalEvent: { type: "Error", reason_code: reason, message: "CLI の出力の断片 /Users/x" } };
+    const rejected = await run(error).promise.catch((cause: unknown) => cause);
+    expect(rejected).toBeInstanceOf(MacAiError);
+    expect(rejected).toMatchObject({ code });
+    expect(MAC_AI_ERROR_TEXT[(rejected as MacAiError).code]).not.toContain("/Users/x");
+  });
+
   it("calls aiStop and never accepts a late Done after cancellation", async () => {
     const controller = new AbortController();
     let finish!: (value: ShellAiTurn) => void;
@@ -54,9 +74,19 @@ describe("Mac CLI chat turn", () => {
     expect(call.aiStop).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the CLI's own model list in its order (newest first)", () => {
+    const codex = { engine: "cli:codex" as const, installed: true, authenticated: true, reason: null, models: ["gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-terra"], effort: true, resume: true };
+    expect(macEngineModels(codex)).toEqual(["gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-terra"]);
+  });
+
   it("requires an authenticated CLI and gives Claude a local fallback model list", () => {
     const claude = { engine: "cli:claude-code" as const, installed: true, authenticated: true, reason: null, models: [], effort: true, resume: true };
     expect(macEngineModels(claude).length).toBeGreaterThan(0);
+    // 既定（先頭）は最新に解決する別名。版つきの古い ID はそのあと、重ねない
+    const models = macEngineModels(claude);
+    expect(models.slice(0, 4)).toEqual(["sonnet", "opus", "fable", "haiku"]);
+    expect(models).toContain("claude-sonnet-4-6");
+    expect(new Set(models).size).toBe(models.length);
     expect(macEngineReady({ ...claude, authenticated: false })).toBe(false);
     expect(new MacAiError("auth").message).not.toContain(PAGE.markdown);
   });
@@ -85,5 +115,33 @@ describe("Mac CLI chat turn", () => {
       { type: "text", text: "本文を読みます", kind: "text" },
       { type: "tool", tool: "Read", page: null, ok: null, phase: "start" },
     ]);
+  });
+});
+
+describe("Mac CLI の思考量", () => {
+  const engine = (name: ShellAiEngine["engine"], effort = true): ShellAiEngine => ({ engine: name, installed: true, authenticated: true, reason: null, models: [], effort, resume: true });
+
+  it("既定（null）は送らず、CLI が思考量を受けないときも送らない", () => {
+    expect(macEffortFor(engine("cli:claude-code"), "sonnet", null)).toBeNull();
+    expect(macEffortFor(engine("cli:claude-code", false), "sonnet", "high")).toBeNull();
+    expect(macEffortRule(engine("cli:claude-code", false), "sonnet").efforts).toEqual([]);
+    expect(macEffortFor(engine("cli:codex"), "gpt-5.6-terra", "max")).toBe("max");
+  });
+
+  it("モデルに無い段階は低い段階に寄せ、思考量入りの名前のモデルには送らない", () => {
+    expect(macEffortFor(engine("cli:antigravity"), "gemini-3.8-flash", "max")).toBe("high");
+    expect(macEffortRule(engine("cli:antigravity"), "gemini-3.8-flash-high")).toEqual({ efforts: ["high"], fixed: "high" });
+    expect(macEffortFor(engine("cli:antigravity"), "gemini-3.8-flash-high", "low")).toBeNull();
+  });
+
+  it("選んだ思考量を CLI の依頼に載せる（既定なら項目ごと送らない）", async () => {
+    for (const effort of ["high", null] as const) {
+      const aiTurn = vi.fn().mockImplementation(async () => DONE);
+      const shell = { aiTurn, aiStop: vi.fn() } as unknown as ShellBridge;
+      await runMacAiTurn({ shell, engine: "cli:claude-code", model: "sonnet", effort, page: PAGE, selection: null, instruction: "直して", conversationId: null, resumeSession: null, signal: new AbortController().signal });
+      const request = aiTurn.mock.calls[0]?.[1] as Record<string, unknown>;
+      if (effort) expect(request.effort).toBe("high");
+      else expect(request).not.toHaveProperty("effort");
+    }
   });
 });

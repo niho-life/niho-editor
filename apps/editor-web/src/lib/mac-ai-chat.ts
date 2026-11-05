@@ -1,7 +1,7 @@
-import { MODEL_OPTIONS } from "@niho/docs-core";
+import { MODEL_OPTIONS, effortRule, fitEffort, type Effort, type EffortRule } from "@niho/docs-core";
 import type { ShellBridge } from "niho-desktop-bridge/shell-bridge";
 import type { AiChatEvent } from "./ai-client";
-import { isShellError, type ShellAiEngine, type ShellAiEngineName, type ShellAiEvent, type ShellAiTurn } from "niho-desktop-bridge/shell-contract";
+import { isShellError, type ShellAiEffort, type ShellAiEngine, type ShellAiEngineName, type ShellAiEvent, type ShellAiTurn } from "niho-desktop-bridge/shell-contract";
 
 export const MAC_ENGINE_LABELS: Readonly<Record<ShellAiEngineName, string>> = {
   "cli:claude-code": "Claude Code",
@@ -21,6 +21,11 @@ export const MAC_AI_ERROR_TEXT = {
   extra_files: "CLI が別のファイルを作ったため、ページには反映していません。",
   invalid_result: "CLI の結果を確認できませんでした。ページには反映していません。",
   edited: "CLI の作業中にページが編集されました。結果は保存せず、もう一度頼んでください。",
+  blocked: "CLI を許可した範囲（文書の書き換えだけ）で動かせなかったため止めました。ページには反映していません。もう一度試すか、CLI を更新するか、別の AI を選んでください。",
+  usage_limit: "CLI の利用上限に達しました。ページには反映していません。時間をおいてから、もう一度お試しください。",
+  model: "選んだモデルをこの CLI で使えませんでした。ページには反映していません。別のモデルを選んでください。",
+  timed_out: "CLI が時間内に終わりませんでした。ページには反映していません。",
+  session: "CLI で前の会話の続きを見つけられませんでした。ページには反映していません。新しい会話で頼んでください。",
   failed: "CLI の依頼を終えられませんでした。ページには反映していません。",
 } as const;
 
@@ -41,11 +46,20 @@ const PROVIDER_OF: Readonly<Record<ShellAiEngineName, keyof typeof MODEL_OPTIONS
 
 const SAFE_MODEL = /^(?!-)[a-zA-Z0-9][a-zA-Z0-9._:-]{0,99}$/;
 
-/** CLI が一覧を返せないときだけ、docs-core にある同じ CLI の控えを使う。 */
+/**
+ * Claude Code が最新のモデルに解決する別名。Claude Code は一覧を返さないので控えを使うが、控えの先頭は版つきの古い ID
+ * （claude-sonnet-4-6）なので、別名を先に並べて既定（一覧の先頭）を最新の Sonnet にする。2026-11-05 の Claude Code 2.1.292 で
+ * sonnet → claude-sonnet-5-5・opus → claude-opus-5-5・fable → claude-fable-5-1 に解決した。控えに無い別名は出さない。
+ */
+const CLAUDE_LATEST_ALIASES: readonly string[] = ["sonnet", "opus", "fable", "haiku"];
+
+/** CLI が一覧を返せないときだけ、docs-core にある同じ CLI の控えを使う（CLI の一覧は新しい順のまま）。 */
 export function macEngineModels(engine: ShellAiEngine): string[] {
   const provider = PROVIDER_OF[engine.engine];
   if (!provider || !Array.isArray(engine.models)) return [];
-  const source = engine.models.length > 0 ? engine.models : MODEL_OPTIONS[provider].map((option) => option.id);
+  const fallback = MODEL_OPTIONS[provider].map((option) => option.id);
+  const latestFirst = provider === "claude" ? [...CLAUDE_LATEST_ALIASES.filter((alias) => fallback.includes(alias)), ...fallback] : fallback;
+  const source = engine.models.length > 0 ? engine.models : latestFirst;
   return [...new Set(source.filter((model) => SAFE_MODEL.test(model)))];
 }
 
@@ -57,6 +71,40 @@ export function macEngineStatus(engine: ShellAiEngine): string {
 
 export function macEngineReady(engine: ShellAiEngine): boolean {
   return engine.installed && engine.authenticated && macEngineModels(engine).length > 0;
+}
+
+/**
+ * CLI の Error の理由（native の `ReasonCode`）から、画面の決まった文を選ぶ。CLI の message はそのまま出さない
+ * （CLI の出力の断片を含みうるので）。知らない理由は「終えられませんでした」。
+ */
+const ERROR_OF_REASON: Readonly<Record<string, MacAiErrorCode>> = {
+  CliLoginRequired: "auth",
+  NotConfigured: "blocked",
+  UsageLimitReached: "usage_limit",
+  ModelNotFound: "model",
+  TimedOut: "timed_out",
+  SessionNotFound: "session",
+};
+
+export function macErrorOfReason(reason: unknown): MacAiErrorCode {
+  return typeof reason === "string" && Object.hasOwn(ERROR_OF_REASON, reason) ? ERROR_OF_REASON[reason]! : "failed";
+}
+
+/** この CLI・モデルで選べる思考量（docs-core の決まり。CLI が思考量を受けないときは選べるものが無い）。 */
+export function macEffortRule(engine: ShellAiEngine, model: string): EffortRule {
+  if (!engine.effort) return { efforts: [], fixed: null };
+  return effortRule(PROVIDER_OF[engine.engine], model);
+}
+
+/**
+ * 実際に CLI へ渡す思考量。null は「既定」（`effort` を送らず、CLI の設定のまま）。
+ * 思考量がモデル名で決まる（`gemini-3.8-flash-high` など）ときも送らない。モデルに無い段階は、それより低い段階に寄せる。
+ */
+export function macEffortFor(engine: ShellAiEngine, model: string, wanted: Effort | null): Effort | null {
+  if (wanted === null) return null;
+  const rule = macEffortRule(engine, model);
+  if (rule.fixed !== null || rule.efforts.length === 0) return null;
+  return rule.efforts.includes(wanted) ? wanted : fitEffort(PROVIDER_OF[engine.engine], model, wanted);
 }
 
 function errorFromShell(error: unknown): MacAiError {
@@ -105,6 +153,8 @@ export async function runMacAiTurn(input: {
   instruction: string;
   conversationId: string | null;
   resumeSession: string | null;
+  /** 思考量。null は既定（送らない）。 */
+  effort?: ShellAiEffort | null;
   signal: AbortSignal;
   onProgress?: (text: string) => void;
   /** 途中の文・道具（サーバー経路の `streamAiChat` と同じ形）。 */
@@ -127,6 +177,7 @@ export async function runMacAiTurn(input: {
     turn = await input.shell.aiTurn(turnId, {
       engine: input.engine,
       model: input.model,
+      ...(input.effort ? { effort: input.effort } : {}),
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       ...(input.resumeSession ? { resumeSession: input.resumeSession } : {}),
       instruction: input.selection === null ? input.instruction : `${input.instruction}\n\n選択範囲を主な対象にしてください。選択範囲は context/selection.md にあります。`,
@@ -151,7 +202,7 @@ export async function runMacAiTurn(input: {
   }
   if (input.signal.aborted) throw new MacAiError("aborted");
   if (!turn || typeof turn !== "object" || !turn.finalEvent || typeof turn.finalEvent !== "object") throw new MacAiError("invalid_result");
-  if (turn.finalEvent.type === "Error") throw new MacAiError("failed");
+  if (turn.finalEvent.type === "Error") throw new MacAiError(macErrorOfReason(turn.finalEvent.reason_code));
   if (turn.finalEvent.type !== "Done" || typeof turn.finalEvent.text !== "string" ||
       (turn.finalEvent.session_id !== null && typeof turn.finalEvent.session_id !== "string")) throw new MacAiError("invalid_result");
   if (turn.finalEvent.stop_reason !== "EndTurn") throw new MacAiError(turn.finalEvent.stop_reason === "Stopped" ? "aborted" : turn.finalEvent.stop_reason === "MaxTokens" ? "incomplete" : "invalid_result");
