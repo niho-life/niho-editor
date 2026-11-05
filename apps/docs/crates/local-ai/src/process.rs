@@ -435,10 +435,24 @@ fn read_tail(pipe: Option<impl Read>, max_bytes: usize) -> Vec<u8> {
 #[cfg(unix)]
 pub(crate) fn run_child(
   ctx: &TurnCtx,
+  command: Command,
+  stdin_bytes: Vec<u8>,
+  handler: &mut dyn StreamHandler,
+  emit: &mut dyn FnMut(TurnEvent),
+) -> ChildExit {
+  run_child_within(ctx, command, stdin_bytes, handler, emit, None)
+}
+
+/// [`run_child`] に、この子だけの上限 `cap` を足したもの（ターンの前の短い問い合わせ。過ぎたら子を止めるが、ターンの時間切れには
+/// しない＝`ChildExit::Exited` の `exit_code` が None になる）。ターンの子として動くので、停止・ターンの時間切れ・アプリの終了でも止まる。
+#[cfg(unix)]
+pub(crate) fn run_child_within(
+  ctx: &TurnCtx,
   mut command: Command,
   stdin_bytes: Vec<u8>,
   handler: &mut dyn StreamHandler,
   emit: &mut dyn FnMut(TurnEvent),
+  cap: Option<Instant>,
 ) -> ChildExit {
   use std::os::unix::io::AsRawFd;
 
@@ -488,10 +502,14 @@ pub(crate) fn run_child(
   let mut child_reaped = false;
   let mut exit_code = None;
   let mut drain_deadline = None;
+  let mut capped = false;
 
   loop {
     if !running.is_timed_out() && Instant::now() >= ctx.deadline {
       running.mark_timed_out();
+      running.terminate(grace);
+    } else if !capped && !child_reaped && cap.is_some_and(|cap| Instant::now() >= cap) {
+      capped = true;
       running.terminate(grace);
     }
 
@@ -661,10 +679,22 @@ pub(crate) fn run_child(
 #[cfg(not(unix))]
 pub(crate) fn run_child(
   ctx: &TurnCtx,
+  command: Command,
+  stdin_bytes: Vec<u8>,
+  handler: &mut dyn StreamHandler,
+  emit: &mut dyn FnMut(TurnEvent),
+) -> ChildExit {
+  run_child_within(ctx, command, stdin_bytes, handler, emit, None)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn run_child_within(
+  ctx: &TurnCtx,
   mut command: Command,
   stdin_bytes: Vec<u8>,
   handler: &mut dyn StreamHandler,
   emit: &mut dyn FnMut(TurnEvent),
+  cap: Option<Instant>,
 ) -> ChildExit {
   let running = ctx.running;
   let grace = ctx.runtime.kill_grace;
@@ -700,6 +730,10 @@ pub(crate) fn run_child(
       while !done.load(Ordering::SeqCst) {
         if Instant::now() >= deadline {
           running.mark_timed_out();
+          running.terminate(grace);
+          return;
+        }
+        if cap.is_some_and(|cap| Instant::now() >= cap) {
           running.terminate(grace);
           return;
         }

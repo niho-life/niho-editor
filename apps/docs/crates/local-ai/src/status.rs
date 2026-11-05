@@ -2,7 +2,6 @@
 //! Desktop の build_claude_setup_status と get_article_agent_capabilities の写しを 3 つの CLI に広げたもの。
 
 use crate::classify::is_agy_login_required;
-use crate::codex::DISABLED_FEATURES;
 use crate::process::{run_capture, CaptureError, Captured};
 use crate::runtime::{provider_command, resolve_cli, Runtime};
 use crate::turn::is_valid_model;
@@ -85,24 +84,6 @@ pub(crate) fn missing_cli_flags(help_text: &str, required: &[&str]) -> Vec<Strin
     .copied()
     .filter(|flag| !words.contains(flag))
     .map(str::to_string)
-    .collect()
-}
-
-/// `codex features list` に無い、crate が `--disable=` で切る機能（`--disable=<名前>` の形）。古い codex は知らない機能名を
-/// 「Unknown feature flag」で断って起動しないが、`exec --help` にはフラグがそろって見えるので、ここで古い版と分かるようにする。
-/// 一覧の行は「名前 段階 有効」で、先頭の語だけを見る。一覧を取れなければ空（ほかの確かめに任せる）。
-pub(crate) fn unknown_codex_features(features_list: &str) -> Vec<String> {
-  let known: HashSet<&str> = features_list
-    .lines()
-    .filter_map(|line| line.split_whitespace().next())
-    .collect();
-  if known.is_empty() {
-    return Vec::new();
-  }
-  DISABLED_FEATURES
-    .iter()
-    .filter(|feature| !known.contains(*feature))
-    .map(|feature| format!("--disable={feature}"))
     .collect()
 }
 
@@ -252,15 +233,8 @@ pub fn provider_status_with(runtime: &Runtime, provider: Provider) -> ProviderSt
     Ok(output) => missing_cli_flags(&combined_output(&output), required_flags(provider)),
     Err(_) => required_flags(provider).iter().map(|flag| flag.to_string()).collect(),
   };
-  if provider == Provider::CodexCli {
-    if let Ok(output) = run_cli(runtime, provider, &cli, &["features", "list"]) {
-      if output.status.success() {
-        status
-          .missing_cli_flags
-          .extend(unknown_codex_features(&String::from_utf8_lossy(&output.stdout)));
-      }
-    }
-  }
+  // Codex の機能は `-c features.<名前>=false` で切るので、知らない名前で起動できなくなることは無い（古い版の確かめは要らない）。
+  // 切る機能は依頼のたびに `codex features list` から決める（codex.rs の features_off）
   let auth_reason = match provider {
     Provider::ClaudeCode | Provider::CodexCli => {
       let args: &[&str] = if provider == Provider::ClaudeCode {
@@ -318,26 +292,6 @@ pub fn provider_status_with(runtime: &Runtime, provider: Provider) -> ProviderSt
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn codex_features_unknown_to_an_old_cli_are_reported_as_missing_flags() {
-    // 0.151.0 の `codex features list` には sleep_tool などが無い（`--disable=sleep_tool` で起動しない）
-    let all: String = DISABLED_FEATURES
-      .iter()
-      .map(|feature| format!("{feature:<40} stable             true\n"))
-      .collect();
-    assert!(unknown_codex_features(&all).is_empty());
-    let old: String = DISABLED_FEATURES
-      .iter()
-      .filter(|feature| **feature != "sleep_tool" && **feature != "goals")
-      .map(|feature| format!("{feature:<40} under development  false\n"))
-      .collect();
-    let mut missing = unknown_codex_features(&old);
-    missing.sort();
-    assert_eq!(missing, vec!["--disable=goals", "--disable=sleep_tool"]);
-    // 一覧が取れない（空）ときは決めつけない
-    assert!(unknown_codex_features("").is_empty());
-  }
 
   #[test]
   fn missing_flags_are_read_from_help_text() {
