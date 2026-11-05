@@ -151,7 +151,7 @@ Block は段落、見出し（2・3）、箇条書き・チェックリスト（
 **CLI の往復（「文書ファイルは直接編集する」の形）。** 旧アプリでは CLI が手元の Markdown を直接書き換えていた。正本がサーバーになるので、**CLI が手元の作業コピーを直し、結果を同じ API でサーバーのページに書き戻す**：
 
 1. 開始：Mac の bridge がサーバーから本文を読み、Markdown にして一時置き場（§13）の `page/body.md` に置く（限定 AST ⇄ Markdown は `niho-docs-ui/page/markdown.ts`）。参照（親ページの本文＝背景情報、固有名詞、選んだ範囲）は `context/*.md` に置く。そのときの `revision` を控える。
-2. 実行：CLI を既存の `niho-local-ai` の `ToolPolicy::ProjectFolder { dir: 一時置き場, writable: ["page"] }` で起動する（cwd＝一時置き場。claude は Read・Edit・Write・Glob・Grep だけ、codex は `--sandbox workspace-write` の apply_patch だけ、agy はファイルの道具だけのエージェント。ほかの道具が見えたら fail closed）。CLI は `page/body.md` を**直接編集する**（旧アプリと同じ体験）。指示は標準入力で渡す。
+2. 実行：CLI を既存の `niho-local-ai` の `ToolPolicy::ProjectFolder { dir: 一時置き場, writable: ["page"] }` で起動する（cwd＝一時置き場。claude は Read・Edit・Write・Glob・Grep だけ、codex は `--sandbox workspace-write` の apply_patch だけ（起動の直前に `codex features list` を読み、今の版で有効な機能を `code_mode_host` 以外すべて切る。版に依らず新しい機能も切れ、一覧を読めなければ起動しない）、agy はファイルの道具だけのエージェント。ほかの道具が見えたら fail closed）。CLI は `page/body.md` を**直接編集する**（旧アプリと同じ体験）。指示は標準入力で渡す。
 3. 書き戻し：終わったら `page/body.md` を読み、限定 AST に変換し、会話のターンと変更を既存の保存 API へ送る（`baseRevision` 付き）。変換できない要素（結合セルなど Markdown に表現できない構造）は黙って欠けさせず、保存を止めて理由を知らせる。
 4. 画面：Web と同じ常設チャットに返答と変更結果を出す。**CLI が直接書き換えるのは一時置き場の中だけ**。完了を確認してから既存の保存 API で本文・版・会話を保存する。変更結果から「元に戻す」を使える。保存結果が不明なときは再送せず、再読み込みで確かめる。
 5. 競合：保存時に `baseRevision` が今の revision と違えば、既存の競合処理で止め、最新の本文を読み直して再実行を案内する。黙って上書きしない。

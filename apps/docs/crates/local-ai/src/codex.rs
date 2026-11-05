@@ -1,7 +1,12 @@
 //! Codex CLI（`codex exec --json`）の起動引数と出力（JSONL）の読み取り。
 //!
 //! - 本人の設定・ルール・AGENTS.md を読ませず（`--ignore-user-config`・`--ignore-rules`・`project_doc_max_bytes=0`）、
-//!   読み取り専用の sandbox で、シェル・MCP・Web 検索などの機能を `--disable` で全部切る。
+//!   読み取り専用の sandbox で、シェル・MCP・Web 検索などの機能を全部切る。切る機能は**版に依らず**決める: 起動の直前に
+//!   `codex features list` を読み、今の版で有効な機能を全部（修正の会話の `code_mode_host` だけ残して）、crate が知っている
+//!   一覧（`DISABLED_FEATURES`）と合わせて `-c features.<名前>=false` で切る。新しい版の機能（0.163.0 の `remote_plugin`
+//!   ＝アカウントの remote plugin の同期など）も、名前を知らなくても切れる。`--disable=<名前>` は知らない名前で CLI が
+//!   起動しない（Unknown feature flag）が、`-c features.<名前>=false` は知らない名前でも起動するので、古い版でも同じ形で渡せる。
+//!   一覧を読めなければ起動しない（fail closed）。
 //! - システムプロンプトは 0600 のファイルに書き、`-c model_instructions_file="<path>"` で Codex の既定の指示ごと置き換える
 //!   （0.154.0 は `-c base_instructions` を無視して既定の指示のままだった。#18383）。指示は標準入力。
 //! - codex が既定で足す指示も切る: スキルの一覧（`~/.agents/skills` と同梱のスキル。`skills.include_instructions=false`）、
@@ -17,7 +22,7 @@
 
 use crate::classify::{classify_codex_failure, error_event};
 use crate::claude::file_name_only;
-use crate::process::{is_uuid, run_child, PrivateDir, TURN_DIR_PREFIX};
+use crate::process::{is_uuid, run_capture, run_child, PrivateDir, TURN_DIR_PREFIX};
 use crate::turn::{Breach, FolderAccess, StreamHandler, TurnCtx};
 use crate::types::{Effort, Provider, ReasonCode, StopReason, TurnEvent, Usage};
 use serde_json::Value;
@@ -25,7 +30,8 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::Path;
 
-/// `--disable` で切る機能（0.154.0 の features の一覧から、文を書くのに要らないものを全部）。
+/// crate が知っている、いつも切る機能（0.154.0 の features の一覧から、文を書くのに要らないものを全部）。実際に切るのは、
+/// これに `codex features list` で今の版に有効な機能を全部足したもの（[`features_off`]）。
 pub(crate) const DISABLED_FEATURES: [&str; 18] = [
   "shell_tool",
   "unified_exec",
@@ -46,6 +52,55 @@ pub(crate) const DISABLED_FEATURES: [&str; 18] = [
   "workspace_dependencies",
   "skill_mcp_dependency_install",
 ];
+
+/// `codex features list` を待つ時間・残す出力の大きさ・読む機能の数の上限。
+const FEATURES_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+const FEATURES_OUTPUT_MAX_BYTES: usize = 256 * 1024;
+const MAX_FEATURES: usize = 512;
+const FEATURES_UNREADABLE_MESSAGE: &str =
+  "Codex CLI の機能の一覧を読めなかったため、止めました。Codex CLI を更新してから、もう一度試してください。";
+
+/// 機能の名前の形（設定のキー `features.<名前>` に使うので、英小文字で始まる英小文字・数字・`_` の 64 文字までだけ）。
+fn is_feature_name(name: &str) -> bool {
+  name.len() <= 64
+    && name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+    && name
+      .bytes()
+      .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+/// `codex features list` の出力から、今の版で有効な機能の名前を取る（行は「名前 段階 有効」。段階は 2 語のこともある）。
+/// 形の合う行が 1 つも無い・多すぎるときは None（一覧を読めなかったとして起動しない）。
+pub(crate) fn enabled_features(list: &str) -> Option<Vec<String>> {
+  let mut rows = 0usize;
+  let mut enabled = Vec::new();
+  for line in list.lines() {
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let (Some(name), Some(state)) = (words.first(), words.last()) else {
+      continue;
+    };
+    if words.len() < 2 || !is_feature_name(name) || !matches!(*state, "true" | "false") {
+      continue;
+    }
+    rows += 1;
+    if *state == "true" {
+      enabled.push((*name).to_string());
+    }
+  }
+  (rows > 0 && rows <= MAX_FEATURES).then_some(enabled)
+}
+
+/// 切る機能（名前の順）: crate が知っている一覧と、今の版で有効な機能の全部。修正の会話（`folder`）だけ、apply_patch の
+/// ある `code_mode_host` を残す。
+pub(crate) fn features_off(enabled: &[String], folder: bool) -> Vec<String> {
+  let mut off: std::collections::BTreeSet<String> =
+    DISABLED_FEATURES.iter().map(|feature| feature.to_string()).collect();
+  off.extend(enabled.iter().filter(|feature| is_feature_name(feature)).cloned());
+  if folder {
+    off.remove(PROJECT_FOLDER_KEPT_FEATURE);
+  }
+  off.into_iter().collect()
+}
 
 /// 引数の合計の上限。macOS の ARG_MAX（1MiB。環境変数も含む）を超えると起動できないので、その手前で断る。
 const MAX_ARGV_BYTES: usize = 768 * 1024;
@@ -101,12 +156,14 @@ pub(crate) fn toml_basic_string(value: &str) -> String {
 /// cwd で作業の root を決める）。プロンプトは標準入力だけで渡す（位置引数も `-` も付けない）。
 /// `folder` があれば（修正の会話）workspace-write の sandbox で許可した書き込みフォルダだけを root にし、無ければ read-only。
 /// `instructions` はシステムプロンプトのファイル（無ければ Codex の既定の指示のまま。空のシステムプロンプト）。
+/// `off` は切る機能（[`features_off`]）。`-c features.<名前>=false` で渡す（知らない名前でも CLI は起動する）。
 pub(crate) fn build_args(
   model: &str,
   effort: Option<Effort>,
   instructions: Option<&Path>,
   resume: Option<&str>,
   folder: Option<&FolderAccess>,
+  off: &[String],
 ) -> Vec<String> {
   let sandbox = if folder.is_some() {
     "workspace-write"
@@ -138,12 +195,10 @@ pub(crate) fn build_args(
       .iter()
       .map(|v| v.to_string()),
   );
-  args.extend(
-    DISABLED_FEATURES
-      .iter()
-      .filter(|feature| folder.is_none() || **feature != PROJECT_FOLDER_KEPT_FEATURE)
-      .map(|feature| format!("--disable={feature}")),
-  );
+  for feature in off {
+    args.push("-c".to_string());
+    args.push(format!("features.{feature}=false"));
+  }
   args.extend(
     ["-c", "web_search=\"disabled\"", "-c", "project_doc_max_bytes=0"]
       .iter()
@@ -473,12 +528,29 @@ pub(crate) fn run(ctx: &TurnCtx, emit: &mut dyn FnMut(TurnEvent)) -> TurnEvent {
       Err(err) => return ctx.setup_failed(format!("instructions file: {err}")),
     }
   };
+  // 今の版で有効な機能を読む（読めなければ起動しない）。切る機能は版に依らずここで決める
+  let listed = run_capture(
+    ctx.command(&["features".to_string(), "list".to_string()], &[]),
+    FEATURES_TIME_LIMIT,
+    ctx.runtime.kill_grace,
+    FEATURES_OUTPUT_MAX_BYTES,
+  );
+  let enabled = match listed {
+    Ok(output) if output.status.success() => enabled_features(&String::from_utf8_lossy(&output.stdout)),
+    _ => None,
+  };
+  let Some(enabled) = enabled else {
+    ctx.log("features_unreadable", serde_json::json!({}));
+    return ctx.error(ReasonCode::NotConfigured, Some(FEATURES_UNREADABLE_MESSAGE));
+  };
+  let off = features_off(&enabled, ctx.folder.is_some());
   let args = build_args(
     &ctx.req.model,
     ctx.req.effort,
     instructions.as_deref(),
     ctx.req.resume_session.as_deref(),
     ctx.folder.as_ref(),
+    &off,
   );
   if args.iter().map(String::len).sum::<usize>() > MAX_ARGV_BYTES {
     return ctx.error(ReasonCode::TransientFailure, Some("依頼の引数が長すぎます。"));
@@ -724,19 +796,22 @@ mod tests {
   #[test]
   fn args_for_new_and_resume_differ_only_in_the_head_and_sandbox() {
     let instructions = Path::new(INSTRUCTIONS);
-    let new = build_args("gpt-5.5", None, Some(instructions), None, None);
+    let off = features_off(&[], false);
+    let new = build_args("gpt-5.5", None, Some(instructions), None, None, &off);
     assert_eq!(
       &new[..4],
       ["exec", "--json", "--sandbox", "read-only"].map(String::from)
     );
     assert!(!new.iter().any(|arg| arg == "resume"));
     assert!(!new.iter().any(|arg| arg.starts_with("sandbox_mode=")));
-    assert_eq!(new.iter().filter(|arg| arg.starts_with("--disable=")).count(), 18);
-    for feature in DISABLED_FEATURES {
-      assert!(new.contains(&format!("--disable={feature}")));
-    }
     let after =
       |args: &[String], flag: &str, value: &str| args.windows(2).any(|pair| pair[0] == flag && pair[1] == value);
+    // 機能は `-c features.<名前>=false` で切る（`--disable=` は知らない名前で CLI が起動しない）
+    assert!(!new.iter().any(|arg| arg.starts_with("--disable")));
+    assert_eq!(new.iter().filter(|arg| arg.starts_with("features.")).count(), 18);
+    for feature in DISABLED_FEATURES {
+      assert!(after(&new, "-c", &format!("features.{feature}=false")), "{feature}");
+    }
     assert!(after(&new, "-c", "web_search=\"disabled\""));
     assert!(after(&new, "-c", "project_doc_max_bytes=0"));
     // システムプロンプトはファイルで渡し（-c base_instructions は 0.154.0 で無視される）、既定で足される指示を切る
@@ -754,7 +829,14 @@ mod tests {
     assert!(!new.iter().any(|arg| arg == "-" || arg == "-o"));
     assert_eq!(new.last().map(String::as_str), Some("gpt-5.5"));
 
-    let resume = build_args("gpt-5.5", Some(Effort::High), Some(instructions), Some(THREAD), None);
+    let resume = build_args(
+      "gpt-5.5",
+      Some(Effort::High),
+      Some(instructions),
+      Some(THREAD),
+      None,
+      &off,
+    );
     assert_eq!(
       &resume[..6],
       ["exec", "resume", THREAD, "--json", "-c", "sandbox_mode=\"read-only\""].map(String::from)
@@ -765,7 +847,7 @@ mod tests {
     assert_eq!(&new[4..], &resume[6..resume.len() - 2]);
 
     // 空のシステムプロンプト（ファイル無し）は Codex の既定の指示のまま
-    let bare = build_args("gpt-5.5", None, None, None, None);
+    let bare = build_args("gpt-5.5", None, None, None, None, &off);
     assert!(!bare.iter().any(|arg| arg.starts_with("model_instructions_file")));
   }
 
@@ -782,7 +864,15 @@ mod tests {
     let folder = folder();
     let after =
       |args: &[String], flag: &str, value: &str| args.windows(2).any(|pair| pair[0] == flag && pair[1] == value);
-    let new = build_args("gpt-5.6-luna", None, Some(Path::new(INSTRUCTIONS)), None, Some(&folder));
+    let off = features_off(&[], true);
+    let new = build_args(
+      "gpt-5.6-luna",
+      None,
+      Some(Path::new(INSTRUCTIONS)),
+      None,
+      Some(&folder),
+      &off,
+    );
     assert_eq!(
       &new[..6],
       [
@@ -796,7 +886,7 @@ mod tests {
       .map(String::from)
     );
     // apply_patch は code mode の中にあるので code_mode_host だけを残し、シェルは切ったまま
-    assert!(!new.iter().any(|arg| arg == "--disable=code_mode_host"));
+    assert!(!new.iter().any(|arg| arg == "features.code_mode_host=false"));
     for feature in [
       "shell_tool",
       "unified_exec",
@@ -805,9 +895,9 @@ mod tests {
       "computer_use",
       "hooks",
     ] {
-      assert!(new.contains(&format!("--disable={feature}")), "{feature}");
+      assert!(after(&new, "-c", &format!("features.{feature}=false")), "{feature}");
     }
-    assert_eq!(new.iter().filter(|arg| arg.starts_with("--disable=")).count(), 17);
+    assert_eq!(new.iter().filter(|arg| arg.starts_with("features.")).count(), 17);
     assert!(after(&new, "-c", "sandbox_workspace_write.exclude_slash_tmp=true"));
     assert!(after(&new, "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true"));
     assert!(after(&new, "-c", "web_search=\"disabled\""));
@@ -830,6 +920,7 @@ mod tests {
       Some(Path::new(INSTRUCTIONS)),
       Some(THREAD),
       Some(&folder),
+      &off,
     );
     assert_eq!(
       &resume[..6],
@@ -845,6 +936,82 @@ mod tests {
     );
     assert!(!resume.iter().any(|arg| arg == "-C" || arg == "--sandbox"));
     assert!(after(&resume, "-c", "sandbox_workspace_write.exclude_slash_tmp=true"));
+  }
+
+  /// 0.163.0 の `codex features list` の一部（段階は 2 語のこともある）。
+  const FEATURES_0_163: &str = "agent_message_board                      under development  false
+apps                                     stable             true
+code_mode_host                           stable             true
+collaboration_modes                      removed            true
+plugins                                  stable             true
+remote_plugin                            stable             true
+realtime_conversation                    stable             true
+shell_tool                               stable             true
+worktrees                                stable             true
+web_search_cached                        deprecated         false
+";
+
+  #[test]
+  fn enabled_features_reads_only_well_formed_rows() {
+    let enabled = enabled_features(FEATURES_0_163).unwrap();
+    assert_eq!(
+      enabled,
+      [
+        "apps",
+        "code_mode_host",
+        "collaboration_modes",
+        "plugins",
+        "remote_plugin",
+        "realtime_conversation",
+        "shell_tool",
+        "worktrees"
+      ]
+      .map(String::from)
+    );
+    // 設定のキーにならない名前・形の違う行は読まない
+    let odd =
+      "Bad-Name stable true\nx.y stable true\n\"q\" stable true\nok_one stable maybe\nshort\nfine_one stable true\n";
+    assert_eq!(enabled_features(odd).unwrap(), vec!["fine_one".to_string()]);
+    // 1 行も読めない（別の出力・空）なら None（起動しない）
+    assert_eq!(enabled_features(""), None);
+    assert_eq!(enabled_features("Usage: codex [OPTIONS]\nerror: unknown command"), None);
+    // 多すぎる一覧も読めなかったとする
+    let many: String = (0..=MAX_FEATURES)
+      .map(|index| format!("f{index} stable true\n"))
+      .collect();
+    assert_eq!(enabled_features(&many), None);
+  }
+
+  #[test]
+  fn features_off_adds_every_enabled_feature_of_this_version() {
+    let enabled = enabled_features(FEATURES_0_163).unwrap();
+    // 知らない新しい機能（remote_plugin・realtime_conversation・worktrees など）も切る
+    let off = features_off(&enabled, false);
+    for feature in [
+      "remote_plugin",
+      "realtime_conversation",
+      "worktrees",
+      "collaboration_modes",
+      "code_mode_host",
+    ] {
+      assert!(off.contains(&feature.to_string()), "{feature}");
+    }
+    for feature in DISABLED_FEATURES {
+      assert!(off.contains(&feature.to_string()), "{feature}");
+    }
+    // 名前の順で、重ならない
+    let mut sorted = off.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(off, sorted);
+    // 修正の会話だけ code_mode_host を残す（apply_patch がある）
+    let folder_off = features_off(&enabled, true);
+    assert!(!folder_off.contains(&"code_mode_host".to_string()));
+    assert!(folder_off.contains(&"remote_plugin".to_string()));
+    // 設定のキーにならない名前は渡さない
+    let odd = features_off(&["ok".to_string(), "a=b".to_string(), "x.y".to_string()], false);
+    assert!(odd.contains(&"ok".to_string()));
+    assert!(!odd.iter().any(|feature| feature.contains('=') || feature.contains('.')));
   }
 
   #[test]

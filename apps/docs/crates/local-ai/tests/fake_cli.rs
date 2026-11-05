@@ -113,6 +113,12 @@ impl Harness {
   /// 偽の CLI を bin/<name> に書く。`$OUT` は記録用のフォルダ。
   fn fake(&self, name: &str, body: &str) -> PathBuf {
     let path = self.bin(name);
+    // codex は起動の前に `codex features list` を読む（切る機能を版に依らず決める）。どの偽物も同じ一覧を返す
+    let body = if name == "codex" {
+      format!("{CODEX_FEATURES}\n{body}")
+    } else {
+      body.to_string()
+    };
     let script = format!(
       "#!/bin/sh\nOUT={}\n{body}\n",
       sh_quote(&self.dir.join("out").to_string_lossy())
@@ -1172,6 +1178,54 @@ fn shutdown_stops_running_turns() {
 // ---------------------------------------------------------------------------
 // codex
 
+/// `codex features list` の偽物（0.163.0 の形。段階は 2 語のこともある）。`$OUT/codex-features-broken` があれば読めない一覧
+/// （別の出力と exit 2）を返す。どの `CODEX_HOME` で読んだかを写す。
+const CODEX_FEATURES: &str = r#"if [ "$1" = features ] && [ "$2" = list ]; then
+  printf '%s' "${CODEX_HOME:-}" > "$OUT/codex-features-home.txt"
+  if [ -f "$OUT/codex-features-broken" ]; then echo "error: unrecognized subcommand 'features'" >&2; exit 2; fi
+  cat <<'FEATURES'
+agent_message_board                      under development  false
+apps                                     stable             true
+code_mode_host                           stable             true
+realtime_conversation                    stable             true
+remote_plugin                            stable             true
+shell_tool                               stable             true
+FEATURES
+  exit 0
+fi"#;
+
+/// 今の版で有効な機能（偽物の一覧の true）と crate の一覧を合わせ、名前の順に `-c features.<名前>=false` にしたもの。
+fn features_off_args(keep: &[&str]) -> Vec<String> {
+  let mut off: std::collections::BTreeSet<&str> = [
+    "shell_tool",
+    "unified_exec",
+    "code_mode_host",
+    "apps",
+    "plugins",
+    "image_generation",
+    "goals",
+    "multi_agent",
+    "view_image",
+    "tool_suggest",
+    "browser_use",
+    "computer_use",
+    "in_app_browser",
+    "skill_search",
+    "sleep_tool",
+    "hooks",
+    "workspace_dependencies",
+    "skill_mcp_dependency_install",
+  ]
+  .into_iter()
+  .collect();
+  off.extend(["realtime_conversation", "remote_plugin"]);
+  off
+    .into_iter()
+    .filter(|feature| !keep.contains(feature))
+    .flat_map(|feature| ["-c".to_string(), format!("features.{feature}=false")])
+    .collect()
+}
+
 /// 標準入力・引数・cwd・`CODEX_HOME` と、`model_instructions_file` に渡されたファイル（中身・権限・パス）を写す codex の偽物の頭。
 const CODEX_RECORD: &str = r#"cat > "$OUT/stdin.txt"
 printf '%s\n' "$@" > "$OUT/args.txt"
@@ -1242,28 +1296,8 @@ fn codex_success_passes_args_and_stdin() {
   .iter()
   .map(|value| value.to_string())
   .collect();
-  for feature in [
-    "shell_tool",
-    "unified_exec",
-    "code_mode_host",
-    "apps",
-    "plugins",
-    "image_generation",
-    "goals",
-    "multi_agent",
-    "view_image",
-    "tool_suggest",
-    "browser_use",
-    "computer_use",
-    "in_app_browser",
-    "skill_search",
-    "sleep_tool",
-    "hooks",
-    "workspace_dependencies",
-    "skill_mcp_dependency_install",
-  ] {
-    expected.push(format!("--disable={feature}"));
-  }
+  // 機能は、今の版で有効な機能（偽物の一覧の remote_plugin・realtime_conversation など）も合わせて -c で切る
+  expected.extend(features_off_args(&[]));
   // システムプロンプトは 0600 のファイルで渡す（-c base_instructions は codex 0.154.0 が無視する）
   let instructions = h.read_out("instructions-path.txt");
   expected.extend(
@@ -1364,6 +1398,23 @@ fn codex_command_execution_is_stopped() {
     .logs()
     .iter()
     .any(|line| line.starts_with("tool_breach") && line.contains("command_execution")));
+}
+
+#[test]
+fn codex_does_not_start_when_the_features_list_cannot_be_read() {
+  // 切る機能を決められないときは起動しない（fail closed）。exec は 1 回も動かない
+  let _guard = global_lock();
+  let h = Harness::new("codex-features-broken");
+  fs::write(h.dir.join("out").join("codex-features-broken"), "").unwrap();
+  h.fake("codex", "touch \"$OUT/codex-exec-ran\"\nexit 0");
+  let events = h.run(h.request(Provider::CodexCli, "gpt-5.5"));
+  let (code, message) = error_of(&events);
+  assert_eq!(code, ReasonCode::NotConfigured);
+  assert!(message.contains("Codex CLI の機能の一覧を読めなかった"), "{message}");
+  assert!(!h.dir.join("out").join("codex-exec-ran").exists());
+  assert!(h.logs().iter().any(|line| line.starts_with("features_unreadable")));
+  // 一覧はアプリの置き場（CODEX_HOME）で読む
+  assert_eq!(h.read_out("codex-features-home.txt"), h.codex_home().to_string_lossy());
 }
 
 #[test]
@@ -1986,8 +2037,23 @@ fn codex_project_folder_uses_workspace_write_in_the_folder() {
   let writable_root = dir.join("artifacts");
   assert!(same_dir(Path::new(&arg_after(&args, "-C").unwrap()), &writable_root));
   assert!(same_dir(Path::new(h.read_out("pwd.txt").trim()), &writable_root));
-  assert!(!args.iter().any(|arg| arg == "--disable=code_mode_host"));
-  assert!(args.iter().any(|arg| arg == "--disable=shell_tool"));
+  // apply_patch のある code_mode_host だけ残し、ほかは今の版で有効な機能（remote_plugin など）も切る
+  assert!(!args.iter().any(|arg| arg == "features.code_mode_host=false"));
+  for feature in [
+    "shell_tool",
+    "remote_plugin",
+    "realtime_conversation",
+    "apps",
+    "plugins",
+  ] {
+    assert!(
+      args
+        .windows(2)
+        .any(|pair| pair[0] == "-c" && pair[1] == format!("features.{feature}=false")),
+      "{feature}"
+    );
+  }
+  assert!(!args.iter().any(|arg| arg.starts_with("--disable")));
   assert!(args
     .windows(2)
     .any(|pair| pair[0] == "-c" && pair[1] == "sandbox_workspace_write.exclude_slash_tmp=true"));
