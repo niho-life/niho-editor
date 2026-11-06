@@ -127,6 +127,7 @@ export function PageSteps({
   parentId,
   media,
   onBodyReplaced,
+  quiet = false,
   children,
 }: {
   pageId: string;
@@ -139,13 +140,19 @@ export function PageSteps({
    * 呼ぶ側はページを読み直してエディタを開き直す（#37。帯だけ「済み」になってエディタが古いままにならないように）。
    */
   onBodyReplaced?: () => void;
+  /**
+   * 帯・入口・一言を本文に描かない（#308。オーナー決定 2026-11-06: 本文に帯もボタンも置かない。手順の操作は「ページ」パネルへ。#309）。
+   * 状態の読み込み（AI パネルの選択肢・一覧の印・本文の入れ替え）はそのまま。
+   */
+  quiet?: boolean;
   /** 本文（PageEditor）。 */
   children: ReactNode;
 }) {
   const router = useRouter();
   const { stepPagesChanged, registerAiSteps } = useEditorFrame();
-  // 手順は録音ページを根に持つ。サブページを開いているときは親で読む
-  const rootId = kind === "rec" ? pageId : parentId;
+  // 手順は録音ページを根に持つ。サブページを開いているときは親（録音）で読む。ほかの種類のページには手順が無い
+  // （フォルダの中のふつうのページで、親＝フォルダの id を根にして読まない）
+  const rootId = kind === "rec" ? pageId : kind === "step" ? parentId : null;
   const [run, setRun] = useState<StepRun | null>(null);
   // その人の手順（設定で変えた名前・足したものを含む。サーバーが状態と一緒に答える）
   const [recipes, setRecipes] = useState<readonly StepRecipeChoice[]>([]);
@@ -290,7 +297,7 @@ export function PageSteps({
 
   useEffect(() => (aiSteps ? registerAiSteps(aiSteps) : undefined), [aiSteps, registerAiSteps]);
 
-  if (!rootId) {
+  if (!rootId || quiet) {
     return (
       <>
         {media}

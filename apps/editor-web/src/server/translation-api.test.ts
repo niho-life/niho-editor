@@ -29,6 +29,7 @@ const page: Page = {
   role: null,
   madeFrom: null,
   lastTab: null,
+  tabName: null,
   createdAt: "2029-12-01T00:00:00.000Z",
   updatedAt: "2030-01-01T00:00:00.000Z",
 };

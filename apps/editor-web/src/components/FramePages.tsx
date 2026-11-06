@@ -12,10 +12,12 @@ import { isNarrowNow, useEditorFrame } from "./EditorFrame";
 import { FolderPage } from "./FolderPage";
 import { PageEditor } from "./PageEditor";
 import { PageSteps } from "./PageSteps";
+import { PageTabs, type OpenPageTab } from "./PageTabs";
 import { RecordingInfo } from "./RecordingInfo";
 import { RecordingTranscript } from "./RecordingTranscript";
 
 export { RecordingStartScreen } from "./RecordingStartScreen";
+export type { OpenPageTab };
 
 /** `/`。デスクトップでは最後に開いたページ（無ければ新しいページ）へ移る。狭い画面では一覧がこの画面なので何もしない。 */
 export function HomeRedirect({ lastPageId }: { lastPageId: string | null }) {
@@ -65,9 +67,12 @@ function useLeftEmpty(): (id: string, options: { keepalive: boolean }) => void {
  * 手順（#37）の段階のページを開いている間にその段階が終わると、worker が本文を入れ替えて revision を進める。
  * そのときはページを読み直し、エディタを**開き直す**（key を替えて作り直す。保存・下書き・Undo の部品も新しくなるので、
  * 入れ替わった本文が Undo に混ざらず、自動保存も起きない。端末の下書きがあれば、開いたときと同じく比べて帯を出す）。
+ *
+ * tabs は同じ入れ物のタブ（本文なし。#308）。本文の上にタブの帯（./PageTabs.tsx）を出す（フォルダには出さない）。
  */
 export function OpenPage({
   summary,
+  tabs = [],
   blocks,
   revision,
   cover = null,
@@ -76,6 +81,7 @@ export function OpenPage({
   recordingSec = null,
 }: {
   summary: PageSummary;
+  tabs?: readonly OpenPageTab[];
   blocks: unknown[];
   revision: number;
   cover?: string | null;
@@ -86,6 +92,20 @@ export function OpenPage({
   const frame = useEditorFrame();
   const { pageOpened, pageSaved } = frame;
   const { id } = summary;
+  // エディタの「今すぐ保存して待つ」（タブの複製・削除の前に使う。枠にも同じものを渡す）
+  const saverRef = useRef<(() => Promise<boolean>) | null>(null);
+  const saveNow = useCallback(() => saverRef.current?.() ?? Promise.resolve(true), []);
+  const registerSaveNow = useCallback(
+    (saveNow: () => Promise<boolean>) => {
+      saverRef.current = saveNow;
+      const off = frame.registerPageSaver(saveNow);
+      return () => {
+        if (saverRef.current === saveNow) saverRef.current = null;
+        off();
+      };
+    },
+    [frame],
+  );
   // このタブの「新しいページ」で作ったページ（再読み込みで開き直したとき）は、何も足さずに離れたら捨てる。既存のページは対象にしない
   const tabCreated = useMemo(() => isTabCreatedPage(id), [id]);
   const leftEmpty = useLeftEmpty();
@@ -138,7 +158,7 @@ export function OpenPage({
       shared={shared}
       onTitleChange={(value) => frame.pageTitleChanged(id, value)}
       onSaved={() => frame.pageSaved(id)}
-      registerSaveNow={frame.registerPageSaver}
+      registerSaveNow={registerSaveNow}
       onLangChange={(lang) => frame.pageLangChanged(id, lang)}
       onLeftEmpty={
         tabCreated
@@ -149,26 +169,30 @@ export function OpenPage({
       }
     />
   );
-  // 手順の帯（#37）はページのいちばん上、録音ページの文字起こし（設計 §7.1。本文の上）はその下。
-  // 手順に関わらないページでは、PageSteps は帯も入口も描かず本文だけを並べる
+  // タブの帯（#308）はページのいちばん上。手順（#37）の状態は PageSteps が読み続けるが、帯・入口は本文に描かない（quiet。#309 でパネルへ）。
+  // 録音ページの文字起こし（設計 §7.1。本文の上）はその下
   return (
-    <PageSteps
-      pageId={id}
-      kind={summary.kind}
-      parentId={summary.parent}
-      // 録音ページ: 「この録音について」（§3.3）と、録音ブロック・見出し「文字起こし」の下の文字起こし
-      media={
-        summary.kind === "rec" ? (
-          <>
-            <RecordingInfo key={`info-${id}`} pageId={id} />
-            <RecordingTranscript key={id} pageId={id} />
-          </>
-        ) : null
-      }
-      onBodyReplaced={onBodyReplaced}
-    >
-      {editor}
-    </PageSteps>
+    <>
+      <PageTabs key={`tabs-${id}`} page={summary} tabs={tabs} saveNow={saveNow} />
+      <PageSteps
+        pageId={id}
+        kind={summary.kind}
+        parentId={summary.parent}
+        quiet
+        // 録音ページ: 「この録音について」（§3.3）と、録音ブロック・見出し「文字起こし」の下の文字起こし
+        media={
+          summary.kind === "rec" ? (
+            <>
+              <RecordingInfo key={`info-${id}`} pageId={id} />
+              <RecordingTranscript key={id} pageId={id} />
+            </>
+          ) : null
+        }
+        onBodyReplaced={onBodyReplaced}
+      >
+        {editor}
+      </PageSteps>
+    </>
   );
 }
 

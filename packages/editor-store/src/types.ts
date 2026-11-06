@@ -63,9 +63,17 @@ export type Page = {
   madeFrom: MadeFrom | null;
   /** 入れ物で最後に開いたタブ（入れ物以外は null）。 */
   lastTab: string | null;
+  /**
+   * タブの名前（帯に出す短い札。#308）。名前を付けていなければ null（画面は入れ物の中の位置の番号を出す。`tabLabel`）。
+   * 題名（`title`）はページの名前で、入れ物と全てのタブで同じ（タブの保存が写す）。
+   */
+  tabName: string | null;
   createdAt: string;
   updatedAt: string;
 };
+
+/** タブの名前の長さの上限（文字。migration 20261107003531 の CHECK と同じ）。 */
+export const TAB_NAME_MAX_CHARS = 100;
 
 /** 公開の発信先（#39）。exp は NIHO Experience、niho は NIHO、site は本人のサイト。 */
 export const PUBLISH_DESTS = ["exp", "niho", "site"] as const;
@@ -96,7 +104,20 @@ export type PageSummary = Pick<Page, "id" | "kind" | "title" | "lang" | "parent"
   role?: PageRole | null;
   /** 入れ物のタブの数（入れ物の行だけ。`view: 'pages'` の一覧で添える）。 */
   tabsCount?: number;
+  /** タブの名前（タブの行だけ。付けていなければ null。#308）。 */
+  tabName?: string | null;
+  /** 入れ物の中の位置（1 から。タブの行だけ。名前の無いタブの札に使う）。 */
+  tabPos?: number;
 };
+
+/**
+ * タブの帯・一覧の 2 行目・検索の結果に出すタブの札: 付けた名前か、入れ物の中の位置の番号（モック editor-folder-pages-v1 の `tl`）。
+ * タブでない行（入れ物・フォルダ・入れ物の無いページ）は空。
+ */
+export function tabLabel(tab: Pick<PageSummary, "tabName" | "tabPos">): string {
+  if (tab.tabName) return tab.tabName;
+  return tab.tabPos === undefined ? "" : String(tab.tabPos);
+}
 
 /** 一覧のひと区切り。next は続きを読むときに cursor に渡す値（続きが無ければ null）。 */
 export type PageChunk = { pages: PageSummary[]; next: string | null };
@@ -107,9 +128,10 @@ export type PageChunkOptions = {
   cursor?: string | null;
   /**
    * 何を 1 行にするか。`tabs`（既定。今までの一覧）: 本文を持つ行（タブと入れ物の無いページ）。入れ物は出さない。
-   * `pages`: 入れ物・フォルダ・入れ物の無いページ（タブは出さず、入れ物に `tabsCount`）。一覧の画面が #308 で使う。
+   * `pages`: 入れ物・フォルダ・入れ物の無いページ（タブは出さず、入れ物に `tabsCount`）。
+   * `all`: 入れ物もタブも全部（画面の一覧が使う。入れ物の行にして、タブは `page` で入れ物に集める。#308）。
    */
-  view?: "tabs" | "pages";
+  view?: "tabs" | "pages" | "all";
 };
 
 /**
@@ -130,9 +152,12 @@ export type CreatePageInput = {
   role?: PageRole | null;
 };
 
-/** タブを足す入力（#307）。`title` が無ければ空。本文は持たない（まっさら。複製は duplicatePage）。 */
+/**
+ * タブを足す入力（#307）。本文は持たない（まっさら。複製は duplicatePage）。題名はページの名前（入れ物の題名）を写す。
+ * `name` はタブの名前（無ければ付けない＝位置の番号で呼ぶ）。
+ */
 export type CreateTabInput = {
-  title?: string;
+  name?: string;
   lang?: PageLang;
 };
 

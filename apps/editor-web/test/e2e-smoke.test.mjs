@@ -518,7 +518,9 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow");
     const { results } = await response.json();
     assert.deepEqual(results.map((hit) => hit.id), [page.id]);
-    assert.deepEqual(Object.keys(results[0]).sort(), ["id", "kind", "snippet", "title", "updatedAt"]);
+    // `tab` はタブの札（入れ物にタブが 2 つ以上あるときだけ。1 枚だけのページは null。#308）
+    assert.deepEqual(Object.keys(results[0]).sort(), ["id", "kind", "snippet", "tab", "title", "updatedAt"]);
+    assert.equal(results[0].tab, null);
     assert.match(results[0].snippet, new RegExp(token));
     assert.doesNotMatch(JSON.stringify(results), /他人/);
 
@@ -674,7 +676,9 @@ describe("editor-web e2e (stub, next dev)", () => {
     const copy = (await duplicated.json()).page;
     createdIds.push(copy.id);
     assert.notEqual(copy.id, page.id);
-    assert.equal(copy.title, "合成の書き出し e2eのコピー");
+    // タブの複製（#308）: 題名はページの名前のまま（入れ物と同じ）で、タブの名前（位置の番号）に「のコピー」を足す
+    assert.equal(copy.title, "合成の書き出し e2e");
+    assert.equal(copy.tabName, "1のコピー");
     assert.deepEqual(copy.blocks, blocks);
     assert.deepEqual((await (await fetch(`${base}/api/pages/${copy.id}/share`)).json()).share, PRIVATE_SHARE, "the share is not copied");
     assert.equal((await (await fetch(`${base}/api/pages/${page.id}`)).json()).page.title, "合成の書き出し e2e", "the original is unchanged");

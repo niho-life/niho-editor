@@ -170,9 +170,9 @@ export async function readPageRequest(id: string): Promise<ConflictPage> {
   return page;
 }
 
-/** 一覧の続き（cursor は前の応答の next）。 */
+/** 一覧の続き（cursor は前の応答の next）。行は入れ物もタブも（`view=all`。一覧は入れ物の行にして、タブを `page` で集める。#308）。 */
 export async function listPagesRequest(cursor: string): Promise<PageChunk> {
-  const response = await fetch(`/api/pages?limit=${PAGE_CHUNK}&cursor=${encodeURIComponent(cursor)}`, { credentials: "same-origin", cache: "no-store" });
+  const response = await fetch(`/api/pages?limit=${PAGE_CHUNK}&view=all&cursor=${encodeURIComponent(cursor)}`, { credentials: "same-origin", cache: "no-store" });
   if (!response.ok) throw new PageRequestError(response.status);
   const data = (await response.json()) as { pages?: unknown; next?: unknown };
   if (!Array.isArray(data.pages) || (data.next !== null && typeof data.next !== "string")) throw new PageRequestError(500);

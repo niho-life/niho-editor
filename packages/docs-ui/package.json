@@ -9,6 +9,7 @@
     "./page/ImageNodeView": "./src/page/ImageNodeView.tsx",
     "./page/PageChrome": "./src/page/PageChrome.tsx",
     "./page/PagePhotos": "./src/page/PagePhotos.tsx",
+    "./page/TabBar": "./src/page/TabBar.tsx",
     "./page/*": "./src/page/*.ts",
     "./recording/*": "./src/recording/*.ts",
     "./sharing": "./src/sharing/page-sharing-panel.tsx",

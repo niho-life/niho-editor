@@ -75,9 +75,25 @@ describe("FolderPage", () => {
     act(() => root.render(<FolderPage summary={folder} revision={1} />));
     const rows = [...host.querySelectorAll("li")];
     expect(rows.map((row) => row.querySelector("b")?.textContent)).toEqual(["座談会", "記事本文", "メモ"]);
-    expect(rows.map((row) => row.querySelector("small")?.textContent ?? null)).toEqual(["録音", "作成中…", null]);
+    // 録音の 2 行目「録音」は出さない（マイクの印で足りる。#308）
+    expect(rows.map((row) => row.querySelector("small")?.textContent ?? null)).toEqual([null, "作成中…", null]);
     act(() => rows[1]!.querySelector("button")!.click());
     expect(push).toHaveBeenCalledWith("/p/step");
+  });
+
+  it("入れ物（kind='page'）は 1 行。タブが 2 つ以上なら 2 行目にタブの名前。押すと入れ物（最後に開いたタブへ）", () => {
+    frame.pages = [
+      folder,
+      page("p1", { kind: "page", parent: FOLDER, title: "冬の鎌倉" }),
+      page("t1", { parent: FOLDER, title: "冬の鎌倉", page: "p1", tabPos: 1, tabName: "下書き" }),
+      page("t2", { parent: FOLDER, title: "冬の鎌倉", page: "p1", tabPos: 2, tabName: null, createdAt: "2026-11-02T00:00:00.000Z" }),
+    ];
+    act(() => root.render(<FolderPage summary={folder} revision={1} />));
+    const rows = [...host.querySelectorAll("li")];
+    expect(rows.map((row) => row.querySelector("b")?.textContent)).toEqual(["冬の鎌倉"]);
+    expect(rows[0]!.querySelector("small")?.textContent).toBe("下書き · 2");
+    act(() => rows[0]!.querySelector("button")!.click());
+    expect(push).toHaveBeenCalledWith("/p/p1");
   });
 
   it("題名は欄を離れたときに題名だけを保存する（変えていなければ送らない）", async () => {

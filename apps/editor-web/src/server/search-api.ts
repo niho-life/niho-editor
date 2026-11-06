@@ -30,9 +30,9 @@ function parseParams(url: URL): ParsedParams {
   return { ok: true, query: queries[0] ?? "", limit };
 }
 
-/** 応答に載せるのは決まった 5 つだけ（store が何を足しても、他の列・他人の情報を出さない）。 */
+/** 応答に載せるのは決まった 6 つだけ（store が何を足しても、他の列・他人の情報を出さない）。`tab` はタブの札（無ければ null。#308）。 */
 function toResult(hit: SearchHit): SearchHit {
-  return { id: hit.id, kind: hit.kind, title: hit.title, snippet: hit.snippet, updatedAt: hit.updatedAt };
+  return { id: hit.id, kind: hit.kind, title: hit.title, snippet: hit.snippet, updatedAt: hit.updatedAt, tab: typeof hit.tab === "string" ? hit.tab : null };
 }
 
 /**

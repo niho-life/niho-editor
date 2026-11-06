@@ -3,6 +3,7 @@ import {
   PAGE_KINDS,
   PAGE_LIST_LIMIT,
   PAGE_MAX_BYTES,
+  TAB_NAME_MAX_CHARS,
   isPageId,
   isPositiveInteger,
   type Block,
@@ -135,14 +136,25 @@ export function parseCreatePage(body: unknown): InputResult<CreatePageInput> {
   return { ok: true, value: result };
 }
 
-/** タブを足す（#307）。`{ title?, lang? }` だけ（本文は持たない。まっさら）。ほかの鍵は 400。 */
+/** タブの名前（#308）。文字列で、前後の空白を除いて 1〜100 字。NUL は不可。null・空白だけは「名前なし」（null）。 */
+function parseTabName(value: unknown): InputResult<string | null> {
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== "string" || value.includes("\u0000")) return { ok: false };
+  const name = value.trim();
+  if (name === "") return { ok: true, value: null };
+  if (Array.from(name).length > TAB_NAME_MAX_CHARS) return { ok: false };
+  return { ok: true, value: name };
+}
+
+/** タブを足す（#307 #308）。`{ name?, lang? }` だけ（本文は持たない。まっさら。題名はページの名前を写す）。ほかの鍵は 400。 */
 export function parseCreateTab(body: unknown): InputResult<CreateTabInput> {
   if (!isPlainObject(body)) return { ok: false };
   const result: CreateTabInput = {};
-  for (const key of Object.keys(body)) if (key !== "title" && key !== "lang") return { ok: false };
-  if (body.title !== undefined) {
-    if (typeof body.title !== "string" || Array.from(body.title).length > 500 || body.title.includes("\u0000")) return { ok: false };
-    result.title = body.title;
+  for (const key of Object.keys(body)) if (key !== "name" && key !== "lang") return { ok: false };
+  if (body.name !== undefined) {
+    const name = parseTabName(body.name);
+    if (!name.ok) return { ok: false };
+    if (name.value !== null) result.name = name.value;
   }
   if (body.lang !== undefined) {
     if (body.lang !== "ja" && body.lang !== "en") return { ok: false };
@@ -163,10 +175,24 @@ export function parseTabOrder(body: unknown): InputResult<string[]> {
   return { ok: true, value: ids };
 }
 
-/** タブを別の入れ物へ移す（#307）。`{ page: uuid }`（入れ先。タブの id でもよい）。 */
-export function parseMoveTab(body: unknown): InputResult<string> {
-  if (!isPlainObject(body) || typeof body.page !== "string" || !isPageId(body.page)) return { ok: false };
-  return { ok: true, value: body.page.toLowerCase() };
+/** PATCH /api/pages/{id}/tab の本文（#307 #308）: `page`（別の入れ物へ移す。タブの id でもよい）と `name`（タブの名前。null で外す）。少なくとも 1 つ。 */
+export type TabPatch = { page?: string; name?: string | null };
+
+export function parseTabPatch(body: unknown): InputResult<TabPatch> {
+  if (!isPlainObject(body)) return { ok: false };
+  const result: TabPatch = {};
+  for (const key of Object.keys(body)) if (key !== "page" && key !== "name") return { ok: false };
+  if (body.page !== undefined) {
+    if (typeof body.page !== "string" || !isPageId(body.page)) return { ok: false };
+    result.page = body.page.toLowerCase();
+  }
+  if (body.name !== undefined) {
+    const name = parseTabName(body.name);
+    if (!name.ok) return { ok: false };
+    result.name = name.value;
+  }
+  if (result.page === undefined && result.name === undefined) return { ok: false };
+  return { ok: true, value: result };
 }
 
 /** 部分更新。少なくとも 1 つは指定する。 */
@@ -201,6 +227,12 @@ export function parseListQuery(params: URLSearchParams): InputResult<PageChunkOp
   if (cursor !== null) {
     if (cursor.length === 0 || cursor.length > 128) return { ok: false };
     result.cursor = cursor;
+  }
+  // 何を 1 行にするか（#307 #308）。無ければ今までどおりタブ（本文を持つ行）
+  const view = params.get("view");
+  if (view !== null) {
+    if (view !== "tabs" && view !== "pages" && view !== "all") return { ok: false };
+    result.view = view;
   }
   return { ok: true, value: result };
 }

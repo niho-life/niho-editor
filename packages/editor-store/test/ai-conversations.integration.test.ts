@@ -378,7 +378,7 @@ describe("AI conversations", { skip: databaseUrl ? false : "TEST_DATABASE_URL is
       const owner = alone();
       const folder = await store.createPage(owner, { title: "合成のフォルダ", kind: "folder" });
       const note = (await store.createPage(owner, { title: "記事本文", parent: folder.id }))!;
-      const second = (await store.createTab(owner, note.id, { title: "英語版" }))!;
+      const second = (await store.createTab(owner, note.id, { name: "英語版" }))!;
       const rec = (await store.createPage(owner, { title: "合成の録音", kind: "rec", parent: folder.id }))!;
       const step = await store.createPage(owner, { title: "文字起こし修正", kind: "step" });
       await pool.query("UPDATE pages SET parent = $2 WHERE id = $1", [step.id, rec.id]);
@@ -390,7 +390,8 @@ describe("AI conversations", { skip: databaseUrl ? false : "TEST_DATABASE_URL is
       assert.deepEqual(workspace?.[0], { id: note.id, title: "記事本文", kind: "note", parent: folder.id, open: true });
       assert.deepEqual(
         workspace?.map((item) => item.title).sort(),
-        ["文字起こし修正", "英語版", "記事本文", "合成の録音"].sort(),
+        // 題名はページの名前で、入れ物と全てのタブで同じ（#308）。2 つ目のタブも「記事本文」（タブの名前「英語版」は tab_name）
+        ["文字起こし修正", "記事本文", "記事本文", "合成の録音"].sort(),
       );
       assert.ok(!workspace?.some((item) => item.id === far.id || item.id === farInFolder.id || item.id === folder.id || item.id === note.page));
       // 録音の下の段階から開いても同じフォルダ（開いているのは段階）

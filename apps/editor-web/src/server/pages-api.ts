@@ -12,7 +12,7 @@ import {
   PAGE_BODY_MAX_BYTES,
   readJsonBody,
 } from "./http";
-import { parseCreatePage, parseCreateTab, parseListQuery, parseMoveParent, parseMoveTab, parsePageSave, parseTabOrder } from "./page-input";
+import { parseCreatePage, parseCreateTab, parseListQuery, parseMoveParent, parsePageSave, parseTabOrder, parseTabPatch } from "./page-input";
 
 /** API の route が使う store の操作。 */
 export type PagesStore = Pick<
@@ -33,6 +33,7 @@ export type PagesStore = Pick<
   | "resolvePage"
   | "reorderTabs"
   | "moveTab"
+  | "renameTab"
   | "touchLastTab"
 >;
 
@@ -241,10 +242,10 @@ export function reorderTabs(request: Request, id: string, deps: PagesApiDeps): P
 }
 
 /**
- * PATCH /api/pages/{id}/tab — タブを別の入れ物へ移す（`{ page: id }`。入れ先はタブの id でもよい）。
- * 動かすものがタブでない・入れ先が入れ物でないときは 409 `not_page`。200 `{ page }`。どちらかが自分のページでなければ同じ 404。
+ * PATCH /api/pages/{id}/tab — タブの名前を変える（`{ name }`。null で外す。#308）・別の入れ物へ移す（`{ page: id }`。入れ先はタブの id でもよい）。
+ * 対象がタブでない・入れ先が入れ物でないときは 409 `not_page`。200 `{ page, name }`。どちらかが自分のページでなければ同じ 404。
  */
-export function moveTab(request: Request, id: string, deps: PagesApiDeps): Promise<Response> {
+export function patchTab(request: Request, id: string, deps: PagesApiDeps): Promise<Response> {
   return guarded("PATCH /api/pages/[id]/tab", async () => {
     const session = await sessionOf(request, deps);
     if (!session) return errorResponse("unauthorized");
@@ -253,12 +254,21 @@ export function moveTab(request: Request, id: string, deps: PagesApiDeps): Promi
     if (!store) return errorResponse("unavailable");
     const body = await readJsonBody(request);
     if (!body.ok) return body.response;
-    const target = parseMoveTab(body.value);
-    if (!target.ok) return errorResponse("bad_request");
+    const patch = parseTabPatch(body.value);
+    if (!patch.ok) return errorResponse("bad_request");
     try {
-      const result = await store.moveTab(session.userId, id, target.value);
-      if (result === null) return notFoundResponse();
-      return result === "moved" ? jsonResponse(200, { page: target.value }) : errorResponse(result);
+      // 名前（#308）。タブでない行には付かない（409 not_page）
+      if (patch.value.name !== undefined) {
+        const renamed = await store.renameTab(session.userId, id, patch.value.name);
+        if (renamed === null) return notFoundResponse();
+        if (!renamed) return errorResponse("not_page");
+      }
+      if (patch.value.page !== undefined) {
+        const result = await store.moveTab(session.userId, id, patch.value.page);
+        if (result === null) return notFoundResponse();
+        if (result !== "moved") return errorResponse(result);
+      }
+      return jsonResponse(200, { page: patch.value.page ?? null, name: patch.value.name ?? null });
     } catch (error) {
       if (error instanceof TypeError && FOLDER_RULES.test(error.message)) return errorResponse("bad_request");
       throw error;

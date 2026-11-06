@@ -108,16 +108,20 @@ recipes (owner, id)   -- 主キー。人ごとに 1 行ずつ
 
 ### 3.4 ページ › タブ（`kind = 'page'` の入れ物。#307。オーナー決定 2026-11-06、#288）
 
-状態: **データ（migration `20261106234701_pages_tabs`）**。画面（帯・一覧の行・ルート）は #308、手順の出力先は #309、文字起こしのタブは #310。モックは [docs/mockups/editor-folder-pages-v1.html](../mockups/editor-folder-pages-v1.html)。
+状態: **データ（migration `20261106234701_pages_tabs`）と画面（#308。migration `20261107003531_pages_tab_name`）**。手順の出力先は #309、文字起こしのタブは #310。モックは [docs/mockups/editor-folder-pages-v1.html](../mockups/editor-folder-pages-v1.html)。
 
 - 本文を持つ行（`note`・`rec`・`article`）はそのまま**タブ**。その上に**入れ物**（`kind = 'page'`。題名・役割 `role`・並び・最後に開いたタブ `last_tab`。本文は持たない）が 1 行。タブは `page` で入れ物を指し、入れ物と**同じフォルダ**（`parent`）に並ぶ（親子にしない: 段の規則と `parent` の使い方は変えない）。
 - `createPage` は入れ物と 1 つ目のタブを一緒に作り、**タブの行**を返す。`/p/<id>`・公開・共有・資産・録音・欄・会話はすべてタブの id（既存の id は migration で変わらない）。`kind: 'page'` を直に作ることはできない。
-- 一覧（`listPages`／`listPageChunk`／`listPageChildren`）は既定でタブの行（入れ物は出さない。今までと同じ）。`view: 'pages'` で入れ物の行（`tabsCount` つき）。タブの行の `sortOrder` は入れ物の並び（並べ替えは入れ物に書く）。`listPageTree`（書き出し）は入れ物を出さない。
-- タブの操作: `createTab`（まっさら。本文なし）、複製（`duplicatePage`。同じ入れ物の末尾に `made_from: { kind: 'dup', from }`）、`listTabs`、`reorderTabs`、`moveTab`（別の入れ物へ。空になった入れ物は消す）、`resolvePage`（タブ → 入れ物と自分、入れ物 → 最後に開いたタブ）、`touchLastTab`。
+- **題名はページの名前**で、入れ物と全てのタブで同じ（#308。モックの h1）。タブの保存で題名を変えると、`savePage` が入れ物と兄弟のタブへ写す（兄弟の `revision` は進めない）。公開・共有・検索・書き出しが読む `title` はこれまでどおりタブの行にある。まっさらなタブ（`createTab`）の題名は入れ物の題名。
+- **タブの名前** `tab_name`（タブだけ。帯の短い札: 下書き・英語版・Gemini など。1〜100 字、無ければ null）。札は `tabLabel`: 付けた名前か、入れ物の中の位置の番号（`tabPos`。`#tabsOf` の並び）。`renameTab` で付ける・外す。複製は「札のコピー」（題名はページの名前のまま）。検索の結果は、入れ物にタブが 2 つ以上あるときだけ札 `tab` を添える（画面は「ページ名 › 札」）。
+- 一覧（`listPages`／`listPageChunk`／`listPageChildren`）は既定でタブの行（入れ物は出さない。API の既定も同じ）。`view: 'pages'` で入れ物の行（`tabsCount` つき）、`view: 'all'` で入れ物もタブも（**画面の一覧**はこれを読み、`lib/sidebar-items.ts` が入れ物の行にタブを集める: 行の id は入れ物、`tabs`・`count`。開いているタブを持つ行が今の行）。タブの行の `sortOrder` は入れ物の並び（並べ替えは入れ物に書く。`pageSiblingOrders` は入れ物とそのタブの両方を返す）。`listPageTree`（書き出し）は入れ物を出さない。
+- タブの操作: `createTab`（まっさら。本文なし）、複製（`duplicatePage`。同じ入れ物の末尾に `made_from: { kind: 'dup', from }`）、`listTabs`、`reorderTabs`、`moveTab`（別の入れ物へ。空になった入れ物は消す）、`renameTab`、`resolvePage`（タブ → 入れ物と自分、入れ物 → 最後に開いたタブ）、`touchLastTab`。
 - 役割 `role`（入れ物だけ）: `{ kind: 'transcript' }`／`{ kind: 'step', recipe, stepId }`。系譜 `made_from`（タブだけ）: 文字起こし・段階・複製の出どころ。手順がこれを使う（#309）。
 - ゴミ箱: 入れ物を消すとタブも、最後のタブを消すと入れ物も（同じ `deleted_at`）。戻すと一緒に戻る。`discardEmptyPage` は空のタブを捨て、最後なら入れ物も。完全に消すときは `page` を先に外し（複合キーの `SET NULL` は使わない）、タブを持たない入れ物はついでに消す。
 - 入れ物の無い 1 枚だけのページ（移行前の行・入れ物が完全に消えた行・手順のサブページ）はそのまま 1 枚として扱い、タブを足すときに入れ物を作って結ぶ。
-- API: `GET /api/pages/{id}/tabs`（`{ page, tab, tabs }`）、`POST …/tabs`（足す）、`PATCH …/tabs`（並び）、`PATCH …/tab`（移す）。`/p/<入れ物の id>` は最後に開いたタブへ redirect。
+- API: `GET /api/pages/{id}/tabs`（`{ page, tab, tabs }`）、`POST …/tabs`（足す。`{ name? }`）、`PATCH …/tabs`（並び）、`PATCH …/tab`（`{ name }` で名前、`{ page }` で移す）、`GET /api/pages?view=all`。`/p/<入れ物の id>` は最後に開いたタブへ redirect（`?side=` は保つ）。
+- 画面（#308）: 本文の上にタブの帯（docs-ui `page/TabBar.tsx`、`components/PageTabs.tsx`）。ページ名の上、本文のコンテンツ幅の薄い罫線と右端の ＋（まっさらなタブをすぐ足す）。タブが 2 つ以上なら左に札、開いているタブに ▾（名前を変える・複製・並べて開く・別のページへ移す・削除）。
+  本文に手順の帯・ボタンは置かない（`PageSteps` は `quiet`。手順の操作は「ページ」パネルへ。#309）。一覧は入れ物 1 行（タブの数の印。今の行は網掛けせず太字。録音の 2 行目「録音」は出さない）。フォルダの画面は入れ物 1 行で、タブが 2 つ以上なら 2 行目に札。
 
 ```
 フォルダ（0 の段。kind = 'folder'）

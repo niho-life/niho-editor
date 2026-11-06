@@ -124,10 +124,17 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
     const marks = [dragId === id ? " es-di--dragging" : "", over?.id === id ? ` es-di--drop-${over.where}` : ""].join("");
     return `es-dirow${marks}`;
   };
+  /** 行が「その id」か（入れ物の行は、そのタブのどれでも）。 */
+  const holds = (item: ShellListItem, id: string | undefined) => id !== undefined && (item.id === id || item.tabs?.includes(id) === true);
+  /** 右に並べる・本文へ落とすときに開く id（入れ物の行は 1 つ目のタブ。入れ物の id では本文が無い）。 */
+  const sideIdOf = (item: ShellListItem) => item.tabs?.[0] ?? item.id;
   return (
     <ul>
       {nodes.map(({ item, children }) => {
-        const onSide = rowActions?.sideId === item.id;
+        const onSide = holds(item, rowActions?.sideId);
+        const on = holds(item, currentId);
+        // 押したときに開く id: 今のページの行はそのタブ（一覧をしまうだけ）、ほかは行の id（入れ物なら最後に開いたタブへ）
+        const openId = on && currentId !== undefined && item.tabs?.includes(currentId) ? currentId : item.id;
         return (
         <li key={item.id}>
           <div
@@ -138,7 +145,7 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
                 ? (event) => {
                     if (drag) event.dataTransfer?.setData("text/plain", item.id);
                     // 本文へ落とす（右に並べる・ここで開く）ためのページ用の型。並べ替え（move）と両方を許す
-                    if (sideOpen) event.dataTransfer?.setData(SHELL_DND.page, item.id);
+                    if (sideOpen) event.dataTransfer?.setData(SHELL_DND.page, sideIdOf(item));
                     if (event.dataTransfer) event.dataTransfer.effectAllowed = sideOpen ? "copyMove" : "move";
                     drag?.onStart(item.id);
                   }
@@ -208,15 +215,15 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
             )}
             <button
               type="button"
-              className={`es-di${item.id === currentId ? " es-di--on" : ""}${item.sub || item.busy || onSide ? "" : " es-di--one"}`}
-              aria-current={item.id === currentId ? "page" : undefined}
-              onClick={(event) => (event.altKey && sideOpen ? sideOpen(item.id) : onSelect?.(item.id))}
+              className={`es-di${on ? " es-di--on" : ""}${item.sub || item.busy || onSide ? "" : " es-di--one"}`}
+              aria-current={on ? "page" : undefined}
+              onClick={(event) => (event.altKey && sideOpen ? sideOpen(sideIdOf(item)) : onSelect?.(openId))}
               onKeyDown={
                 rowActions
                   ? (event) => {
                       if (event.key === "Enter" && event.altKey && sideOpen) {
                         event.preventDefault();
-                        sideOpen(item.id);
+                        sideOpen(sideIdOf(item));
                       } else if (rowActions.menu && (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))) {
                         event.preventDefault();
                         const box = event.currentTarget.getBoundingClientRect();
@@ -229,6 +236,13 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
               <span className={`es-di-t${item.title ? "" : " es-di-t--untitled"}${item.icon ? ` es-di-t--${item.icon}` : ""}`}>
                 {item.icon && <Icon name={item.icon} className="es-di-ki" />}
                 {item.title || "無題"}
+                {/* タブの数（2 つ以上のときだけ。#308）。読み上げは「タブ 2」 */}
+                {item.count !== undefined && item.count > 1 && (
+                  <em className="es-di-n">
+                    <span className="es-vh">タブ </span>
+                    {item.count}
+                  </em>
+                )}
               </span>
               <span className="es-when">{item.when}</span>
               {(item.sub || item.busy || onSide) && (

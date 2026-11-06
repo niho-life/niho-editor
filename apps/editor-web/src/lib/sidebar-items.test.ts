@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PageSummary } from "@niho/editor-store";
 import type { SearchHit } from "./search-client";
-import { arrangeSidebarItems, folderContents, folderOfPage, folderOptions, formatWhen, locationOf, searchRows, siblingOrder, withoutPageTree } from "./sidebar-items";
+import { arrangeSidebarItems, folderContents, folderOfPage, folderOptions, formatWhen, locationOf, orderNeighbours, reorderedPages, searchRows, siblingOrder, withoutPageTree } from "./sidebar-items";
 
 /** 2026-10-31 12:00（東京）＝ 03:00 UTC。 */
 const NOW = Date.parse("2026-10-31T03:00:00.000Z");
@@ -109,12 +109,13 @@ describe("arrangeSidebarItems", () => {
     expect(items.find((item) => item.id === "sub")?.folder).toBeUndefined();
   });
 
-  it("shows the second line only for recordings and steps that are not done", () => {
+  it("shows the second line only for steps that are not done (a recording has the mic icon, no second line. #308)", () => {
     const items = arrangeSidebarItems(
       [page("rec", { kind: "rec" }), page("run", { stepStatus: "run" }), page("done", { stepStatus: "done" }), page("plain", { title: "" })],
       { now: NOW },
     );
-    expect(items.map((item) => item.sub)).toEqual([{ text: "録音" }, { text: "作成中…" }, undefined, undefined]);
+    expect(items.map((item) => item.sub)).toEqual([undefined, { text: "作成中…" }, undefined, undefined]);
+    expect(items[0]).toEqual({ id: "rec", title: "rec", when: "1時間前", icon: "mic" });
     expect(items[3]).toEqual({ id: "plain", title: "", when: "1時間前" });
   });
 
@@ -155,14 +156,108 @@ describe("arrangeSidebarItems", () => {
     ]);
   });
 
-  it("shows search hits flat, in the server's order, with the matched sentence as the second line", () => {
+  it("shows search hits flat, in the server's order, with the matched sentence as the second line; a tab as ページ名 › タブ名", () => {
     const hits: SearchHit[] = [
-      { id: "b", kind: "note", title: "鎌倉の朝", snippet: "…江ノ電の音で目が覚めた…", updatedAt: "2026-10-31T02:30:00.000Z" },
-      { id: "a", kind: "rec", title: "", snippet: "  ", updatedAt: "2026-10-30T02:00:00.000Z" },
+      { id: "b", kind: "note", title: "鎌倉の朝", snippet: "…江ノ電の音で目が覚めた…", updatedAt: "2026-10-31T02:30:00.000Z", tab: null },
+      { id: "a", kind: "rec", title: "", snippet: "  ", updatedAt: "2026-10-30T02:00:00.000Z", tab: null },
+      { id: "c", kind: "note", title: "冬の鎌倉", snippet: "海辺", updatedAt: "2026-10-30T02:00:00.000Z", tab: "英語版" },
+      { id: "d", kind: "note", title: "", snippet: "", updatedAt: "2026-10-30T02:00:00.000Z", tab: "2" },
     ];
     expect(searchRows(hits, NOW)).toEqual([
       { id: "b", title: "鎌倉の朝", when: "30分前", sub: { text: "…江ノ電の音で目が覚めた…" } },
       { id: "a", title: "", when: "昨日" },
+      { id: "c", title: "冬の鎌倉 › 英語版", when: "昨日", sub: { text: "海辺" } },
+      { id: "d", title: "無題 › 2", when: "昨日" },
+    ]);
+  });
+});
+
+/** ページ（入れ物 `kind='page'`）とタブ（`page` で入れ物を指す）は 1 行（#308）。 */
+describe("arrangeSidebarItems: 入れ物とタブ（#308）", () => {
+  const holder = (id: string, over: Partial<PageSummary> = {}) => page(id, { kind: "page", ...over });
+  const tab = (id: string, of: string, pos: number, over: Partial<PageSummary> = {}) => page(id, { page: of, tabPos: pos, tabName: null, ...over });
+
+  it("入れ物の行にタブを集める（タブは行にしない）。タブの id と数、いちばん新しい時刻、タブの録音のマイク", () => {
+    const items = arrangeSidebarItems(
+      [
+        tab("t2", "p1", 2, { title: "鎌倉の朝", kind: "rec", updatedAt: "2026-10-31T02:50:00.000Z" }),
+        holder("p1", { title: "鎌倉の朝", updatedAt: "2026-10-31T02:40:00.000Z" }),
+        tab("t1", "p1", 1, { title: "鎌倉の朝", createdAt: "2026-09-01T00:00:00.000Z" }),
+        holder("p2", { title: "円覚寺" }),
+        tab("t3", "p2", 1, { title: "円覚寺" }),
+        page("lone"),
+      ],
+      { now: NOW },
+    );
+    expect(items).toEqual([
+      { id: "p1", title: "鎌倉の朝", when: "10分前", icon: "mic", tabs: ["t1", "t2"], count: 2 },
+      { id: "p2", title: "円覚寺", when: "1時間前", tabs: ["t3"], count: 1 },
+      { id: "lone", title: "lone", when: "1時間前" },
+    ]);
+  });
+
+  it("入れ物をまだ読み込んでいないタブは、それ自身の行で出す（消えない）", () => {
+    const items = arrangeSidebarItems([tab("t9", "not-loaded", 1, { title: "途中" })], { now: NOW });
+    expect(items.map((item) => [item.id, item.tabs ?? null])).toEqual([["t9", null]]);
+  });
+
+  it("フォルダの中の入れ物と、録音のタブの下の工程のサブページ（入れ物の行の下に 1 段）", () => {
+    const items = arrangeSidebarItems(
+      [
+        page("f", { kind: "folder" }),
+        holder("p1", { parent: "f", title: "取材" }),
+        tab("r1", "p1", 1, { parent: "f", kind: "rec", title: "取材" }),
+        page("s1", { kind: "step", parent: "r1", stepStatus: "run" }),
+      ],
+      { now: NOW },
+    );
+    // 入れ物の行の印はそのタブまで（下の段階の状態は段階の行が持つ）
+    expect(items.map((item) => [item.id, item.depth ?? 0, item.busy ?? false, item.sub?.text ?? null, item.icon ?? null])).toEqual([
+      ["f", 0, false, null, "folder"],
+      ["p1", 1, false, null, "mic"],
+      ["s1", 2, true, "作成中…", "spark"],
+    ]);
+  });
+
+  it("公開はタブのどれかの公開を入れ物の行に出す（公開中が先）", () => {
+    const live = { dest: "exp", handle: "exp", range: "live", stopped: false } as const;
+    const items = arrangeSidebarItems(
+      [holder("p1"), tab("t1", "p1", 1, { publication: { ...live, stopped: true } }), tab("t2", "p1", 2, { publication: live })],
+      { now: NOW },
+    );
+    expect(items[0]!.sub).toEqual({ text: "NIHO Experience", dest: "exp" });
+  });
+
+  it("並びは入れ物（と入れ物の無い行）の間で決まる。タブの id で聞いても入れ物の兄弟", () => {
+    const pages = [holder("p1", { sortOrder: 2 }), tab("t1", "p1", 1, { sortOrder: 2 }), holder("p2", { sortOrder: 1 }), tab("t2", "p2", 1, { sortOrder: 1 }), page("lone", { sortOrder: 3 })];
+    expect(siblingOrder(pages, "t1")).toEqual(["p2", "p1", "lone"]);
+    expect(siblingOrder(pages, "p1")).toEqual(["p2", "p1", "lone"]);
+    expect(orderNeighbours(pages, "t2")).toEqual({ canUp: false, canDown: true });
+    expect(orderNeighbours(pages, "lone")).toEqual({ canUp: true, canDown: false });
+    // 1 つ動かすと、入れ物とそのタブに同じ並びを書く
+    const moved = reorderedPages(pages, "t1", "up");
+    expect(moved.map((row) => [row.id, row.sortOrder])).toEqual([["p1", 1], ["t1", 1], ["p2", 2], ["t2", 2], ["lone", 3]]);
+    expect(reorderedPages(pages, "p2", "up")).toEqual(pages);
+  });
+
+  it("移動…の入れ先はタブの id で聞いても同じ。入れ物の録音のタブの下に段階があっても 1 段なら入れられる", () => {
+    const pages = [page("f", { kind: "folder" }), holder("p1"), tab("r1", "p1", 1, { kind: "rec" }), page("s1", { kind: "step", parent: "r1" })];
+    expect(folderOptions(pages, "r1").map((option) => option.id)).toEqual(["f"]);
+    expect(folderOptions(pages, "p1").map((option) => option.id)).toEqual(["f"]);
+  });
+
+  it("削除: 入れ物を外すとタブも、最後のタブを外すと入れ物も。1 つのタブだけなら入れ物は残る", () => {
+    const pages = [holder("p1"), tab("t1", "p1", 1), tab("t2", "p1", 2), page("s1", { kind: "step", parent: "t1" }), page("lone")];
+    expect(withoutPageTree(pages, "p1").map((row) => row.id)).toEqual(["lone"]);
+    expect(withoutPageTree(pages, "t1").map((row) => row.id)).toEqual(["p1", "t2", "lone"]);
+    expect(withoutPageTree([holder("p1"), tab("t1", "p1", 1), page("lone")], "t1").map((row) => row.id)).toEqual(["lone"]);
+  });
+
+  it("フォルダの画面: 入れ物は 1 行で、タブが 2 つ以上なら 2 行目にタブの名前（付けた名前か位置の番号）", () => {
+    const pages = [page("f", { kind: "folder" }), holder("p1", { parent: "f", title: "冬の鎌倉" }), tab("t1", "p1", 1, { parent: "f", tabName: "下書き" }), tab("t2", "p1", 2, { parent: "f" }), holder("p2", { parent: "f" }), tab("t3", "p2", 1, { parent: "f" })];
+    expect(folderContents(pages, "f", NOW).map((row) => [row.id, row.sub?.text ?? null, row.count])).toEqual([
+      ["p1", "下書き · 2", 2],
+      ["p2", null, 1],
     ]);
   });
 });
@@ -191,7 +286,7 @@ describe("arrangeSidebarItems: 2 行目の公開先（#39）", () => {
       [{ ...page("a"), publication: { ...live, stopped: true } }, { ...page("b", { kind: "rec" }), publication: null }, page("c")],
       { now: NOW },
     );
-    expect(rows.map((row) => row.sub)).toEqual([{ text: "公開をやめた" }, { text: "録音" }, undefined]);
+    expect(rows.map((row) => row.sub)).toEqual([{ text: "公開をやめた" }, undefined, undefined]);
   });
 
   it("公開中は録音・作成中より先に出す（モック v6 の順）", () => {
@@ -246,10 +341,10 @@ describe("folderContents / folderOfPage / locationOf", () => {
   ];
 
   it("lists the folder's pages with each recording's step pages one 段 down, in the sidebar's words", () => {
-    expect(folderContents(pages, "f", NOW).map((row) => [row.id, row.depth ?? 0, row.sub?.text ?? null])).toEqual([
-      ["rec", 0, "録音"],
-      ["step", 1, "作成中…"],
-      ["memo", 0, null],
+    expect(folderContents(pages, "f", NOW).map((row) => [row.id, row.depth ?? 0, row.sub?.text ?? null, row.icon ?? null])).toEqual([
+      ["rec", 0, null, "mic"],
+      ["step", 1, "作成中…", "spark"],
+      ["memo", 0, null, null],
     ]);
     expect(folderContents(pages, "top", NOW)).toEqual([]);
   });
