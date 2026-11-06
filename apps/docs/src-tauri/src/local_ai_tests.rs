@@ -217,6 +217,34 @@ fn dev_fake_claude_runs_through_the_crate() {
 }
 
 #[test]
+fn web_search_off_reaches_the_crate_and_its_notice_reaches_the_app() {
+  // 修正の会話の `web_search: false`（設定の「Web を検索する」を切った）は crate まで届き、crate の知らせ
+  // （検索は切っています）が `TurnEvent::Notice` として最初に流れる。検索なしで文書は直る（#283）
+  let _lock = global_lock();
+  let harness = Harness::new("fake-chat");
+  let project = harness.dir.join("project");
+  fs::create_dir_all(project.join("artifacts")).unwrap();
+  fs::write(project.join("artifacts").join("k7m2q9xa.md"), "# 見出し\n").unwrap();
+  let mut request = harness.request("見出しを短くして");
+  request.workdir = project.clone();
+  request.tool_policy = ToolPolicy::ProjectFolder {
+    dir: project.clone(),
+    writable: vec!["artifacts".into()],
+    web_search: false,
+  };
+  let events = run(&harness.runner(&fake_claude()), request);
+  assert_eq!(
+    events.first(),
+    Some(&TurnEvent::Notice {
+      code: "webSearchOff".into(),
+      message: "検索は切っています。".into()
+    }),
+    "{events:?}"
+  );
+  assert!(matches!(last(&events), TurnEvent::Done { .. }), "{events:?}");
+}
+
+#[test]
 fn dev_fake_claude_edits_a_document_in_the_project_folder() {
   let _lock = global_lock();
   let harness = Harness::new("fake-chat");
@@ -228,6 +256,7 @@ fn dev_fake_claude_edits_a_document_in_the_project_folder() {
   request.tool_policy = ToolPolicy::ProjectFolder {
     dir: project.clone(),
     writable: vec!["artifacts".into()],
+    web_search: true,
   };
   let events = run(&harness.runner(&fake_claude()), request);
   let tools: Vec<(String, String)> = events
@@ -280,6 +309,7 @@ fn dev_fake_agy_edits_a_document_in_the_project_folder() {
     request.tool_policy = ToolPolicy::ProjectFolder {
       dir: project.clone(),
       writable: vec!["artifacts".into()],
+      web_search: true,
     };
     request
   };
@@ -846,6 +876,7 @@ fn shared_turn_event_fixtures() {
       request.tool_policy = ToolPolicy::ProjectFolder {
         dir,
         writable: vec!["artifacts".into()],
+        web_search: true,
       };
     }
     let control = &fixture["control"];
@@ -860,8 +891,11 @@ fn shared_turn_event_fixtures() {
       .iter()
       .map(|key| key.as_str().unwrap().to_string())
       .collect();
+    // 共有の期待は `Notice`（#283）を持たない。この疑似 CLI は Web の道具を持たないので、`webSearchUnsupported` が先に流れる。
+    // それだけを取り除いて比べる（ほかの知らせが混ざれば、そのまま差になって落ちる）
     let actual: Vec<Value> = events
       .iter()
+      .filter(|event| !matches!(event, TurnEvent::Notice { code, .. } if code == "webSearchUnsupported"))
       .map(|event| without_ignored(event.to_wire(), &ignore))
       .collect();
     let expected: Vec<Value> = fixture["events"]

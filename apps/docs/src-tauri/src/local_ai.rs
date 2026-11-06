@@ -212,8 +212,16 @@ pub(crate) fn app_reason(code: local::ReasonCode) -> ReasonCode {
 pub(crate) fn local_tool_policy(policy: ToolPolicy) -> local::ToolPolicy {
   match policy {
     ToolPolicy::None => local::ToolPolicy::None,
-    ToolPolicy::ProjectFolder { dir, writable } => local::ToolPolicy::ProjectFolder { dir, writable },
+    ToolPolicy::ProjectFolder { dir, writable, .. } => local::ToolPolicy::ProjectFolder { dir, writable },
     ToolPolicy::ReadFile { file } => local::ToolPolicy::ReadFile { file },
+  }
+}
+
+/// 知らせの種類の名前（crate の JSON と同じ。画面の契約 `ShellAiEvent` の `Notice.code`）。
+fn notice_code(code: local::NoticeCode) -> &'static str {
+  match code {
+    local::NoticeCode::WebSearchOff => "webSearchOff",
+    local::NoticeCode::WebSearchUnsupported => "webSearchUnsupported",
   }
 }
 
@@ -240,8 +248,8 @@ fn app_usage(provider: local::Provider, usage: local::Usage, model: &str) -> Usa
   }
 }
 
-/// 画面に流す形。crate の知らせ（`Notice`。Web の検索を切った・この版では検索できない）は、画面の表示を足すまで流さない
-/// （None。#283 の画面側で契約に足す）。
+/// 画面に流す形。crate の知らせ（`Notice`。Web の検索を切った・この版では検索できない）は `TurnEvent::Notice` として流す
+/// （#283。画面が作業の行に出す）。流さない出来事は None。
 pub(crate) fn app_event(provider: local::Provider, model: &str, event: local::TurnEvent) -> Option<TurnEvent> {
   Some(match event {
     local::TurnEvent::ThinkingDelta(text) => TurnEvent::ThinkingDelta(text),
@@ -272,7 +280,10 @@ pub(crate) fn app_event(provider: local::Provider, model: &str, event: local::Tu
       };
       TurnEvent::Error { reason_code, message }
     }
-    local::TurnEvent::Notice { .. } => return None,
+    local::TurnEvent::Notice { code } => TurnEvent::Notice {
+      code: notice_code(code).to_string(),
+      message: code.message().to_string(),
+    },
   })
 }
 
@@ -369,6 +380,8 @@ impl LlmRunner for LocalAiRunner {
     let model = request.model.clone();
     // 修正の会話の返答は文書ではないので、前後の空白を差分から戻さない
     let restore_edges = request.tool_policy == ToolPolicy::None;
+    // Web の検索は、修正の会話（ProjectFolder）が許したときだけ（#283）。ほかの方針は crate が見ない
+    let web_search = matches!(request.tool_policy, ToolPolicy::ProjectFolder { web_search: true, .. });
     let turn = local::TurnRequest {
       provider,
       model: request.model,
@@ -380,8 +393,7 @@ impl LlmRunner for LocalAiRunner {
       timeout: request.timeout,
       max_budget_usd: request.max_budget_usd,
       tool_policy: local_tool_policy(request.tool_policy),
-      // Web の検索は既定で許す（#283）。設定の「Web を検索する」は別の変更でここへつなぐ
-      web_search: true,
+      web_search,
     };
     let mut edges = StreamEdges::default();
     let handle = local::run_turn_with(&self.runtime, turn, move |event| {

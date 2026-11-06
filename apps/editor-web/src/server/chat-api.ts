@@ -801,7 +801,11 @@ export function getAiChatContext(request: Request, id: string, deps: ChatApiDeps
       about: { name: settings.aboutName, text: settings.about },
       ...(await loadChatContext(chats, owner, open)),
     });
-    return jsonResponse(200, { context: sections.map((section: ChatContextSection) => ({ name: section.name, title: section.title, markdown: section.section })) });
+    // `webSearch`: 設定の「Web を検索する」。Mac の CLI の経路では、画面がこれを CLI の依頼に載せる（#283）
+    return jsonResponse(200, {
+      context: sections.map((section: ChatContextSection) => ({ name: section.name, title: section.title, markdown: section.section })),
+      webSearch: settings.webSearch,
+    });
   });
 }
 

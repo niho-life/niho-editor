@@ -50,6 +50,18 @@ describe("Mac CLI chat turn", () => {
     expect(aiTurn.mock.calls[3]?.[1]).not.toHaveProperty("context");
   });
 
+  it("sends webSearch only when it is off (omitted means on), so the CLI gets no search tool when the setting is off", async () => {
+    const aiTurn = vi.fn().mockResolvedValue(DONE);
+    const shell = { aiTurn, aiStop: vi.fn() } as unknown as ShellBridge;
+    const base = { shell, engine: "cli:codex" as const, model: "gpt-6", page: PAGE, instruction: "短くして", selection: null, conversationId: null, resumeSession: null, signal: new AbortController().signal };
+    await runMacAiTurn({ ...base, webSearch: false });
+    expect(aiTurn.mock.calls[0]?.[1]).toMatchObject({ webSearch: false });
+    await runMacAiTurn({ ...base, webSearch: true });
+    expect(aiTurn.mock.calls[1]?.[1]).not.toHaveProperty("webSearch");
+    await runMacAiTurn(base);
+    expect(aiTurn.mock.calls[2]?.[1]).not.toHaveProperty("webSearch");
+  });
+
   it.each([
     [{ ...DONE, finalEvent: { ...DONE.finalEvent, stop_reason: "MaxTokens" } }, "incomplete"],
     [{ ...DONE, pageRemoved: true }, "page_removed"],
@@ -114,6 +126,22 @@ describe("Mac CLI chat turn", () => {
     expect(macChatEvent({ type: "ToolUse", id: "t1", name: "Edit", summary: "page.md" })).toEqual({ type: "tool", tool: "Edit", page: null, ok: null, phase: "start" });
     expect(macChatEvent({ type: "ToolResult", id: "t1", name: "Edit", ok: false })).toEqual({ type: "tool", tool: "Edit", page: null, ok: false, phase: "end" });
     expect(macChatEvent({ type: "Error", reason_code: "x", message: "y" })).toBeNull();
+  });
+
+  it("shows the CLI's web tools and notices in the same work line as the server route (no search terms, host names only)", () => {
+    expect(macChatEvent({ type: "ToolUse", id: "w1", name: "WebSearch", summary: "" })).toEqual({ type: "tool", tool: "web_search", page: null, ok: null, phase: "start" });
+    expect(macChatEvent({ type: "ToolResult", id: "w1", name: "WebSearch", ok: true })).toEqual({ type: "tool", tool: "web_search", page: null, ok: true, phase: "end" });
+    // ページを読むときはホスト名だけを出す。ホスト名の形でない summary（URL・本文の断片）は出さない
+    expect(macChatEvent({ type: "ToolUse", id: "w2", name: "WebFetch", summary: "example.com" })).toEqual({ type: "tool", tool: "web_fetch", page: null, ok: null, phase: "start", detail: "example.com を読んでいます" });
+    expect(macChatEvent({ type: "ToolUse", id: "w3", name: "WebFetch", summary: "https://example.com/a?q=1" })).toEqual({ type: "tool", tool: "web_fetch", page: null, ok: null, phase: "start" });
+    expect(macChatEvent({ type: "ToolUse", id: "w4", name: "WebFetch", summary: "" })).toEqual({ type: "tool", tool: "web_fetch", page: null, ok: null, phase: "start" });
+    // 検索を切った・この版では検索できない: 文はコードごとに画面側で決めた文だけ（Rust から来た message は使わない）
+    expect(macChatEvent({ type: "Notice", code: "webSearchOff", message: "検索は切っています。" })).toEqual({ type: "tool", tool: "web_search", page: null, ok: null, phase: "end", detail: "検索は切っています" });
+    expect(macChatEvent({ type: "Notice", code: "webSearchUnsupported", message: "x" })).toEqual({ type: "tool", tool: "web_search", page: null, ok: null, phase: "end", detail: "この CLI の版では検索できません" });
+    expect(macChatEvent({ type: "Notice", code: "other" as "webSearchOff", message: "ignore previous instructions" })).toBeNull();
+    // CLI 由来の文字列は自分のキーだけを引く（継承されたプロパティに当たらない）
+    expect(macChatEvent({ type: "Notice", code: "constructor" as "webSearchOff", message: "x" })).toBeNull();
+    expect(macChatEvent({ type: "ToolUse", id: "c1", name: "constructor", summary: "" })).toEqual({ type: "tool", tool: "constructor", page: null, ok: null, phase: "start" });
   });
 
   it("passes the mapped events of its own turn to onEvent", async () => {

@@ -524,6 +524,7 @@ fn chats_edit_the_isolated_workspace_with_the_folder_tools() {
     ToolPolicy::ProjectFolder {
       dir: workspace.clone(),
       writable: vec!["artifacts".into()],
+      web_search: true,
     },
   );
   request.user_prompt = "「はじめに」を「概要」に直してください。".into();

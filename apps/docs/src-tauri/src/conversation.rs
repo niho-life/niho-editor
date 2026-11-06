@@ -654,6 +654,8 @@ pub async fn run_chat_turn(
       // 両 provider adapter とも writable は実在するフォルダ prefix を要求する。
       // 正本へ反映する対象は read_workspace_changes で選択成果物だけに限定する。
       writable: vec![CHAT_WRITABLE_DIR.to_string()],
+      // 文書の会話は今までどおり Web の検索を許す（設定の「Web を検索する」は修正の会話＝Mac の CLI の経路で見る。#283）
+      web_search: true,
     },
   };
   let (done_sender, done_receiver) = std::sync::mpsc::channel::<(u64, TurnEvent)>();

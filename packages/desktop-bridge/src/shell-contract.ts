@@ -218,6 +218,8 @@ export type ShellAiTurnRequest = {
   instruction: string;
   page: ShellAiDocument;
   context?: ShellAiContext[];
+  /** Web の検索を許すか（設定の「Web を検索する」。省くと許す）。false なら検索の道具を渡さず、`Notice` で知らせて続ける。 */
+  webSearch?: boolean;
 };
 
 export type ShellAiStopReason = "EndTurn" | "MaxTokens" | "Stopped";
@@ -237,6 +239,8 @@ export type ShellAiEvent =
   /** `summary` は対象のファイル名だけ（パス・本文は来ない）。 */
   | { type: "ToolUse"; id: string; name: string; summary: string }
   | { type: "ToolResult"; id: string; name: string; ok: boolean }
+  /** 知らせ（検索を切った・この CLI の版では検索できない）。検索なしで続ける。`message` は画面に出す文。 */
+  | { type: "Notice"; code: "webSearchOff" | "webSearchUnsupported"; message: string }
   | {
       type: "Done";
       /** 返答（会話 API の `reply` に送る）。 */

@@ -250,8 +250,11 @@ export type AiContextFile = { name: string; title: string; markdown: string };
 
 const CONTEXT_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-/** Mac の CLI に渡す文脈（あなたについて・この録音について・文書ガイド・固有名詞。無いものは含まれない）。 */
-export async function fetchAiChatContext(pageId: string, options: { signal?: AbortSignal } = {}): Promise<AiContextFile[]> {
+/** Mac の CLI に渡すもの: 文脈のファイルと、設定の「Web を検索する」（古いサーバーが返さないときは ON）。 */
+export type AiChatContext = { files: AiContextFile[]; webSearch: boolean };
+
+/** Mac の CLI に渡す文脈（あなたについて・この録音について・文書ガイド・固有名詞。無いものは含まれない）と、Web の検索の設定。 */
+export async function fetchAiChatContext(pageId: string, options: { signal?: AbortSignal } = {}): Promise<AiChatContext> {
   const data = await get(pagePath(pageId, "/ai/context"), options.signal);
   if (!isRecord(data) || !Array.isArray(data.context)) throw new AiRequestError("failed");
   const files: AiContextFile[] = [];
@@ -261,7 +264,7 @@ export async function fetchAiChatContext(pageId: string, options: { signal?: Abo
     }
     files.push({ name: item.name, title: item.title, markdown: item.markdown });
   }
-  return files;
+  return { files, webSearch: typeof data.webSearch === "boolean" ? data.webSearch : true };
 }
 
 /** 1 つの会話とその発言（古い順）。 */
