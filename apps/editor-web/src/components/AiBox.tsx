@@ -685,7 +685,9 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     if (!macEngineReady(engine) || !macEngineModels(engine).includes(activeMacModel)) throw new MacAiError("unavailable");
     // サーバー経路が指示に入れる資料（あなたについて・この録音について・文書ガイド・固有名詞）を、CLI にも context/*.md で渡す。
     // 読めないまま黙って渡さずに止める（「札に出ているのに守られない」を作らない）。
-    // **本文のスナップショットを取る前に**読む: 待っているあいだの編集を `editedRef`（下で初期化する）で見逃さないため
+    // 編集の印は**読む前に**下ろす。読んでいるあいだの編集も印に残し、スナップショットのあとに確かめる
+    // （スナップショットは保存済みの本文なので、待っているあいだの未保存の編集は入らない。古い本文で CLI を走らせない）
+    editedRef.current = false;
     let contextFiles: Awaited<ReturnType<typeof fetchAiChatContext>>;
     try {
       contextFiles = await fetchAiChatContext(target.pageId, { signal: controller.signal });
@@ -697,7 +699,8 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     if (!saved || !checked || !checked.ok) throw new MacAiError("unreadable");
     const markdown = blocksToMarkdown(checked.blocks);
     if (!markdown.ok) throw new MacAiError("unreadable");
-    editedRef.current = false;
+    // 資料を読んでいるあいだに本文が編集されていたら、このスナップショットは古い。CLI を走らせずに止める
+    if (editedRef.current) throw new MacAiError("edited");
     const resumable = resumeSession;
     const output = await runMacAiTurn({
       shell: macState.shell,

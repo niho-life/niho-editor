@@ -365,6 +365,33 @@ describe("AiPanel", () => {
     expect(contextFetch).toBeLessThan(snapshot);
   });
 
+  it("does not run the Mac CLI when the page was edited while the context was being read", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const aiTurn = vi.fn();
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-5"], effort: true, resume: true }]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    const gate = deferred<Response>();
+    const server = defaultServer({ context: () => gate.promise });
+    // 本文の update を起こせる最小のエディタ（AiBox が見るのは on / off だけ）
+    const updates = new Set<() => void>();
+    const editor = { on: (_name: string, listener: () => void) => updates.add(listener), off: (_name: string, listener: () => void) => updates.delete(listener) };
+    const ai = { ...context(PAGE_1), editor: editor as unknown as AttachedAi["editor"] };
+    await render(PAGE_1, ai);
+    await until(() => enginePill()?.textContent?.includes("Codex CLI") ?? false);
+    setValue("端末で直す");
+    await press("Enter");
+    await until(() => server.calls.some((call) => call.url.endsWith("/ai/context")));
+    // 資料を待っているあいだに、人が本文を編集した
+    act(() => updates.forEach((listener) => listener()));
+    gate.resolve(json(200, { context: CONTEXT_FILES }));
+    await until(() => container!.textContent!.includes("CLI の作業中にページが編集されました"));
+    expect(aiTurn).not.toHaveBeenCalled();
+    expect(server.calls.some((call) => call.url.endsWith("/ai/chat/turns"))).toBe(false);
+  });
+
   it("does not run the Mac CLI when the context (document guide etc.) cannot be read", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     const aiTurn = vi.fn();
