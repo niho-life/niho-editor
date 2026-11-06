@@ -32,7 +32,7 @@ Experienceの初期面は英語guidesのまま。日本語URLを捏造してhref
 
 オーナーはNIHO日本語記事面と「鎌倉の人」の役割を撤廃した。今回の日本語原文はEditorの個人ページ、英語版の公開先はExperience。日本語版の公開先/hreflang URLを追加せず、実在しない日本語ページをSEOへ出さない。既存本人サイト接続は壊さないが、このfeatureで新しい日本語の公開面は作らない。
 
-1. 生成は既存 `resolveAiCompose` のAnthropicClient/設定・JST月次usage/予算を使い、実行前に送信先と従量対象を示して本人が「APIで英語案を作る」を選ぶ。Macの既定CLI設定から、無説明に有料APIへfallbackしない。既存clientの構造化応答・usageエラー処理は再利用するが、`buildComposePrompt` の24,000文字clampを翻訳に使わない（省略は不可）。初期上限は翻訳対象20,000 codepoints/256 fields。超過はproviderを呼ぶ前に説明して拒否し、分割を案内する。
+1. 生成は既存 `resolveAiCompose` のAnthropicClient/設定・JST月次usage/予算を使い、実行前に送信先と従量対象を示して本人が「APIで英語案を作る」を選ぶ。Macの既定CLI設定から、無説明に有料APIへfallbackしない。既存clientの構造化応答・usageエラー処理は再利用するが、`buildComposePrompt` の100,000文字clampを翻訳に使わない（省略は不可）。初期上限は翻訳対象20,000 codepoints/256 fields。超過はproviderを呼ぶ前に説明して拒否し、分割を案内する。
 2. 新しいCloud Tasks基盤を翻訳専用に作ることは必須にしない。固定入力を持つproposal/operation/generation/leaseで1回の生成を占有し、同時・応答消失の再送は同じproposalを返す。request停止/provider失敗は候補を採用せず固定codeで失敗する。新しい明示再実行だけが別generationを開始する。モデルが返した値だけを英語ページへ自動保存しない。
 3. field pathはtitle、lead、本文のtext、写真alt/captionなど人間の文だけ。リンクURL/asset ID/構造/mark/credit/ライセンスを維持し、code等の非対象は勝手に変換/削除しない。録音参照を含む原文は下記の境界で受付前に拒否する。対象外を事前に説明し、未知構造・上限・未知/missing/duplicate pathsを拒否する。CONFIRMの未確認印をモデルが消すことも許可しない。
 4. relationは現在の同ownerのsource ja→target en。初回採用は非公開の英語ページを作り、再翻訳はproposalとして比較してからtargetのexpectedRevisionとsourceRevisionを照合して採用する。sourceの保存後に並行変更があれば候補を保持して409。既存英語の公開snapshot/手編集を自動上書きしない。source更新・target手編集でreviewed revisionを古くし、次の公開/更新まで人が固有名詞/価格/時刻/個人情報/写真altを確認する。元から独立した英語ページには翻訳条件を足さない。

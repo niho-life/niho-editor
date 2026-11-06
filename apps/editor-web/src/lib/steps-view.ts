@@ -55,11 +55,22 @@ export function stepStateOf(step: StepRunStep): ShellStepState {
   return "wait";
 }
 
+/**
+ * 資料を上限で切って作った段階の一言（#277。黙って欠けさせない）。N は実際に使った字数（code point）。
+ * 切っていない段階・古い run（字数を持たない）では null。
+ */
+export function stepInputCutNotice(step: StepRunStep): string | null {
+  if (step.inputUsedChars === undefined) return null;
+  return `入力が長いので先頭 ${step.inputUsedChars.toLocaleString("en-US")} 字だけ使いました`;
+}
+
 /** 帯の段階（id はサブページの id。押すとそのページへ行く）。 */
 export function stepBandSteps(run: StepRun): ShellStep[] {
   return run.steps.map((step) => {
     const state = stepStateOf(step);
-    const notice = state === "stale" ? staleNoticeText(step.staleReasons ?? []) : null;
+    const cut = state === "done" ? stepInputCutNotice(step) : null;
+    // 済みの言葉は残し、切ったことを続けて出す（状態を文字でも出す決まりを崩さない）
+    const notice = state === "stale" ? staleNoticeText(step.staleReasons ?? []) : cut ? `済み · ${cut}` : null;
     return { id: step.pageId, label: step.name, state, ...(notice ? { notice } : {}) };
   });
 }

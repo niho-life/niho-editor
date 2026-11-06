@@ -70,6 +70,8 @@ export type StepRunStepView = {
   errorCode: string | null;
   /** 本文を含めず、本人が明示取得できる途中出力があるかだけを返す。 */
   hasPartialOutput?: boolean;
+  /** 済みの段階で、資料を上限で切ったときだけ、実際に使った字数（code point。#277）。 */
+  inputUsedChars?: number;
 };
 
 export type StepRunView = {
@@ -250,6 +252,7 @@ type ViewRow = {
   error_code: string | null;
   step_status: StepStatus | null;
   has_partial_output: boolean;
+  input_used_chars: number | null;
 };
 
 async function loadRunView(db: Queryable, owner: OwnerId, runId: string): Promise<StepRunView | null> {
@@ -259,7 +262,8 @@ async function loadRunView(db: Queryable, owner: OwnerId, runId: string): Promis
             p.step_status,
             CASE WHEN r.state = 'failed' AND a.state = 'failed' AND p.id IS NOT NULL
                    AND jsonb_typeof(a.partial_blocks) = 'array'
-                 THEN jsonb_array_length(a.partial_blocks) > 0 ELSE false END AS has_partial_output
+                 THEN jsonb_array_length(a.partial_blocks) > 0 ELSE false END AS has_partial_output,
+            CASE WHEN a.state = 'succeeded' THEN a.input_used_chars END AS input_used_chars
        FROM step_runs r
        JOIN step_attempts a ON a.run_id = r.id
        LEFT JOIN pages p ON p.id = a.page_id AND p.owner = r.owner AND p.deleted_at IS NULL
@@ -289,6 +293,7 @@ async function loadRunView(db: Queryable, owner: OwnerId, runId: string): Promis
       tries: row.tries,
       errorCode: row.error_code,
       ...(row.has_partial_output ? { hasPartialOutput: true } : {}),
+      ...(row.input_used_chars !== null && row.input_used_chars !== undefined ? { inputUsedChars: row.input_used_chars } : {}),
     })),
   };
 }
@@ -606,7 +611,8 @@ export async function claimAttempt(
               started_at = clock_timestamp(),
               finished_at = NULL,
               error_code = NULL,
-              partial_blocks = NULL
+              partial_blocks = NULL,
+              input_used_chars = NULL
         WHERE a.run_id = $1 AND a.step_index = $2 AND a.state = 'queued'
           AND (a.step_index = 0 OR EXISTS (
                 SELECT 1 FROM step_attempts prev
@@ -717,7 +723,12 @@ export async function readStepInput(
   };
 }
 
-export type CommitInput = AttemptRef & { blocks: readonly Block[]; inputBasis: StepBasis | string };
+export type CommitInput = AttemptRef & {
+  blocks: readonly Block[];
+  inputBasis: StepBasis | string;
+  /** 資料を上限で切ったときだけ、実際に使った字数（code point）。切っていなければ渡さない（#277）。 */
+  inputUsedChars?: number;
+};
 
 export type CommitResult =
   /** `next`: 次に実行する段階（最後の段階なら null。run は succeeded）。 */
@@ -733,6 +744,9 @@ export async function commitAttempt(db: StepRunsDb, input: CommitInput): Promise
   const structuredBasis = parseStepBasis(input.inputBasis);
   if (!structuredBasis && !(typeof input.inputBasis === "string" && /^[0-9a-f]{64}$/.test(input.inputBasis))) throw new TypeError("editor-store: inputBasis must be a complete basis or legacy digest");
   const legacyBasis = structuredBasis ? null : input.inputBasis as string;
+  if (input.inputUsedChars !== undefined && !(Number.isInteger(input.inputUsedChars) && input.inputUsedChars >= 0 && input.inputUsedChars <= 2_147_483_647)) {
+    throw new TypeError("editor-store: inputUsedChars must be a non-negative integer");
+  }
   if (!isPageId(input.runId)) return { ok: false, reason: "stale_generation" };
   return inTransaction<CommitResult>(db, async (client) => {
     const run = await client.query<{ owner: string; state: RunState }>("SELECT owner, state FROM step_runs WHERE id = $1 FOR UPDATE", [input.runId]);
@@ -741,10 +755,10 @@ export async function commitAttempt(db: StepRunsDb, input: CommitInput): Promise
     const done = await client.query<{ page_id: string }>(
       `UPDATE step_attempts
           SET state = 'succeeded', input_basis = $4, input_basis_v2 = $5::jsonb, finished_at = clock_timestamp(), lease_until = NULL, error_code = NULL,
-              partial_blocks = NULL
+              partial_blocks = NULL, input_used_chars = $6
         WHERE run_id = $1 AND step_index = $2 AND generation = $3 AND state = 'running'
         RETURNING page_id`,
-      [input.runId, input.stepIndex, input.generation, legacyBasis, structuredBasis ? JSON.stringify(structuredBasis) : null],
+      [input.runId, input.stepIndex, input.generation, legacyBasis, structuredBasis ? JSON.stringify(structuredBasis) : null, input.inputUsedChars ?? null],
     );
     const pageId = done.rows[0]?.page_id;
     if (!pageId) return { ok: false, reason: "stale_generation" } satisfies CommitResult;

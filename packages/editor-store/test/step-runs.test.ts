@@ -424,6 +424,33 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.deepEqual(await claimAttempt(pool, run.id, 9), { ok: false, reason: "not_queued" });
   });
 
+  it("keeps the used input chars of a cut source on the committed step only, and clears them on the next claim (#277)", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    const first = await claimed(run.id, 0);
+    const input = await readStepInput(pool, first);
+    assert.ok(input);
+    await assert.rejects(
+      commitAttempt(pool, { ...refOf(first), blocks: paragraph("x"), inputBasis: computeStepBasis(RECIPE, 0, input), inputUsedChars: -1 }),
+      TypeError,
+    );
+    assert.deepEqual(
+      await commitAttempt(pool, { ...refOf(first), blocks: paragraph("切った結果"), inputBasis: computeStepBasis(RECIPE, 0, input), inputUsedChars: 100_000 }),
+      { ok: true, next: 1 },
+    );
+    const view = (await listRun(pool, OWNER, parent))?.run;
+    assert.equal(view?.steps[0]?.inputUsedChars, 100_000);
+    assert.equal("inputUsedChars" in (view?.steps[1] ?? {}), false, "a step that was not cut (or not run) carries nothing");
+    await complete(run.id, 1);
+    await complete(run.id, 2);
+    assert.equal("inputUsedChars" in ((await listRun(pool, OWNER, parent))?.run?.steps[1] ?? {}), false);
+
+    const again = await created(parent);
+    await claimed(again.id, 0);
+    assert.equal((await pool.query<{ input_used_chars: number | null }>("SELECT input_used_chars FROM step_attempts WHERE run_id = $1 AND step_index = 0", [again.id])).rows[0]?.input_used_chars, null);
+    assert.equal("inputUsedChars" in ((await listRun(pool, OWNER, parent))?.run?.steps[0] ?? {}), false, "a running step shows nothing");
+  });
+
   it("commits only with the current generation, then queues the next step and finishes the run on the last step", async () => {
     const parent = await recording();
     const run = await created(parent);
