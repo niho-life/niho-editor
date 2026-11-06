@@ -265,6 +265,14 @@ function isInside(pages: readonly PageSummary[], id: string, ancestor: string): 
   return false;
 }
 
+/** `id` のページが `root` のページ自身か、その子孫か（サーバーの削除は子孫ごとゴミ箱へ入れる。大文字小文字は区別しない）。 */
+function inPageTree(pages: readonly PageSummary[], id: string, root: string): boolean {
+  const [at, top] = [id.toLowerCase(), root.toLowerCase()];
+  if (at === top) return true;
+  const lowered = pages.map((page) => ({ ...page, id: page.id.toLowerCase(), parent: page.parent?.toLowerCase() ?? null }));
+  return isInside(lowered, at, top);
+}
+
 /** 並びを 1 つ動かした結果を行に入れる（サーバーが確定した値があればそれを、無ければ同じ規則で作り直す）。 */
 function applyOrder(pages: PageSummary[], id: string, move: "up" | "down", orders: ReadonlyMap<string, number>): PageSummary[] {
   return orders.size > 0 ? pages.map((page) => (orders.has(page.id) ? { ...page, sortOrder: orders.get(page.id)! } : page)) : reorderedPages(pages, id, move);
@@ -795,14 +803,18 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     router.push(kind === "recording" ? "/p/new?from=recording" : "/p/new");
   };
 
-  // 一覧の行の「…」→「削除」（確認のシートはヘッダーの「…」の削除と同じ）。消したページを開いていればホームへ、右に並べていれば閉じる
+  // 一覧の行の「…」→「削除」（確認のシートはヘッダーの「…」の削除と同じ）。消したページ（フォルダなら中のページも）を開いていればホームへ、右に並べていれば閉じる
+  const treePages = list.opened && !list.pages.some((page) => page.id === list.opened!.id) ? [...list.pages, list.opened] : list.pages;
   const rowDelete = useRowDelete({
     current: () => attachedRef.current,
+    inTree: (id, root) => inPageTree(treePages, id, root),
     onDeleted: (id) => {
+      // 一覧から外す前に、開いているページが消す木の中か見る（外した後は親が分からない）
+      const mainGone = !!currentId && inPageTree(treePages, currentId, id);
+      const sideGone = !!sideId && inPageTree(treePages, sideId, id);
       api.pageRemoved(id);
-      const gone = id.toLowerCase();
-      if (currentId && gone === currentId.toLowerCase()) router.push("/");
-      else if (sideId && gone === sideId) closeSide();
+      if (mainGone) router.push("/");
+      else if (sideGone) closeSide();
     },
   });
   const rowTitle = (id: string) =>

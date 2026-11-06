@@ -12,15 +12,25 @@ export type RowDeleteConfirm = { title: string; busy: boolean; error: string | n
 
 /**
  * 左の一覧の行の「…」→「削除」（オーナー決定 2026-11-06）。確認はヘッダーの「…」の削除と同じシート（ゴミ箱に 30 日）。
- * 開いているページの行なら、先にまだ届いていない変更を送る（`flush`。届かなければ止めて理由を出す）。
+ * 開いているページがその行のページ、またはその子孫（フォルダを消すと中のページごとゴミ箱に入る）なら、
+ * 先にまだ届いていない変更を送る（`flush`。届かなければ止めて理由を出す）。
  * 失敗はシートの中に出して閉じない。送っている間は閉じず、2 回目を送らない。消せたら閉じて `onDeleted(id)`。
  */
-export function useRowDelete({ current, onDeleted }: { current: () => AttachedPage | null; onDeleted: (id: string) => void }) {
+export function useRowDelete({
+  current,
+  inTree,
+  onDeleted,
+}: {
+  current: () => AttachedPage | null;
+  /** `id` のページが、`root` のページ自身か、その子孫か。 */
+  inTree: (id: string, root: string) => boolean;
+  onDeleted: (id: string) => void;
+}) {
   const [state, setState] = useState<RowDeleteState | null>(null);
   const running = useRef(false);
-  const latest = useRef(onDeleted);
+  const latest = useRef({ inTree, onDeleted });
   useEffect(() => {
-    latest.current = onDeleted;
+    latest.current = { inTree, onDeleted };
   });
 
   const open = (id: string, title: string) => {
@@ -36,7 +46,7 @@ export function useRowDelete({ current, onDeleted }: { current: () => AttachedPa
     try {
       setState((now) => (now && now.id === id ? { ...now, busy: true, error: null } : now));
       const page = current();
-      if (page && page.id !== null && page.id.toLowerCase() === id.toLowerCase()) {
+      if (page && page.id !== null && latest.current.inTree(page.id, id)) {
         if (!(await page.flush())) {
           fail(id, PAGE_MENU_TEXT.unsaved("削除"));
           return;
@@ -50,7 +60,7 @@ export function useRowDelete({ current, onDeleted }: { current: () => AttachedPa
         return;
       }
       setState((now) => (now && now.id === id ? null : now));
-      latest.current(id);
+      latest.current.onDeleted(id);
     } finally {
       running.current = false;
     }

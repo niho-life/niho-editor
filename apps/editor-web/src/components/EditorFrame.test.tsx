@@ -898,6 +898,60 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     expect(nav.push).toHaveBeenCalledWith("/");
   });
 
+  it("row delete: a folder's row while one of its subpages is open saves that subpage first (and stops if it cannot), then goes to /", async () => {
+    const calls: string[] = [];
+    let saved = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push(`${init.method} ${url}`);
+        return new Response(null, { status: 204 });
+      }),
+    );
+    nav.pathname = `/p/${C}`;
+    const pages = [{ ...page(C, "手順の結果"), parent: A }, page(A, "フォルダ"), page(D, "別のページ")];
+    await mount({ pages }, <FakePage page={fakePage(C, { flush: vi.fn(async () => (calls.push("flush"), saved)) })} />);
+    calls.length = 0;
+    await deleteRow("フォルダ");
+    await act(async () => dialogButton("削除する").click());
+    await tick();
+    // 開いているのは中のページ。保存できないまま消すと、その変更を失うので、削除は送らない
+    expect(calls).toEqual(["flush"]);
+    expect(dialogAlert()).toBe("削除の前に変更を保存できませんでした");
+    expect(rows()).toEqual(["フォルダ", "手順の結果", "別のページ"]);
+    expect(nav.push).not.toHaveBeenCalled();
+
+    saved = true;
+    await act(async () => dialogButton("削除する").click());
+    await tick();
+    expect(calls).toEqual(["flush", "flush", `DELETE /api/pages/${A}`]);
+    expect(dialog()).toBeNull();
+    // 中のページも一覧から外れ、開いていた画面は閉じる
+    expect(rows()).toEqual(["別のページ"]);
+    expect(nav.push).toHaveBeenCalledWith("/");
+  });
+
+  it("row delete: a row of an unrelated page does not save or close the open page, even when the open page is inside another folder", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push(`${init.method} ${url}`);
+        return new Response(null, { status: 204 });
+      }),
+    );
+    nav.pathname = `/p/${C}`;
+    const pages = [{ ...page(C, "手順の結果"), parent: A }, page(A, "フォルダ"), page(D, "別のページ")];
+    await mount({ pages }, <FakePage page={fakePage(C, { flush: vi.fn(async () => (calls.push("flush"), true)) })} />);
+    calls.length = 0;
+    await deleteRow("別のページ");
+    await act(async () => dialogButton("削除する").click());
+    await tick();
+    expect(calls).toEqual([`DELETE /api/pages/${D}`]);
+    expect(rows()).toEqual(["フォルダ", "手順の結果"]);
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
   it("delete: sends once while waiting (Esc and やめる do not close it then), and a refusal stays in the dialog with the list unchanged", async () => {
     const answers = [deferred<Response>(), deferred<Response>(), deferred<Response>(), deferred<Response>()];
     let call = 0;
@@ -2953,6 +3007,31 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     await act(async () => rowButton("右のページ").click());
     await tick();
     expect(nav.push).toHaveBeenLastCalledWith(`/p/${B}?side=${A}`);
+  });
+
+  it("行の「…」の削除で、右に並べたページがその中のページなら右を閉じる（メインは動かさない）", async () => {
+    nav.search = `side=${B}`;
+    window.history.replaceState(null, "", `/p/${A}?side=${B}`);
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "DELETE") return new Response(null, { status: 204 });
+        return url === `/api/pages/${B}` ? sideJson("右のページ", "取材メモの本文") : new Response("{}", { status: 404 });
+      }),
+    );
+    // 「三つ目」(C) の中に、右のページ (B) がある
+    await mount({ pages: [page(A, "メインのページ"), page(C, "三つ目"), { ...page(B, "右のページ"), parent: C }] }, <FakePage id={A} />);
+    await tick();
+    expect(container!.querySelector(".es-side")).not.toBeNull();
+    const row = rowButton("三つ目").closest<HTMLElement>(".es-dirow")!;
+    await act(async () => row.querySelector<HTMLButtonElement>(".es-di-more")!.click());
+    await act(async () => container!.querySelector<HTMLButtonElement>('[role="menu"][aria-label="ページのメニュー"] [role="menuitem"]')!.click());
+    const confirm = [...container!.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === "削除する")!;
+    await act(async () => confirm.click());
+    await tick();
+    expect(replaceState).toHaveBeenLastCalledWith(null, "", `/p/${A}`);
+    expect(nav.push).not.toHaveBeenCalled();
   });
 
   it("⇄ は入れ替え（画面の移動）、× と ⌥クリックは履歴に積まずに ?side= を付け外す", async () => {
