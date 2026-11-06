@@ -56,7 +56,8 @@ export type ChatPagesStore = {
   getPage: (owner: OwnerId, id: string) => Promise<Page | null>;
   savePage: (owner: OwnerId, id: string, patch: { blocks: Block[] }, options: { baseRevision: number }) => Promise<SaveResult | null>;
   createVersion: (owner: OwnerId, id: string, reason: "ai") => Promise<PageVersionSummary | null>;
-  createPage: (owner: OwnerId, input: CreatePageInput) => Promise<Page>;
+  /** 上の段に作る（チャットからはフォルダの中に作らない）。 */
+  createPage: (owner: OwnerId, input: Omit<CreatePageInput, "parent">) => Promise<Page>;
   restoreVersion: (
     owner: OwnerId,
     id: string,

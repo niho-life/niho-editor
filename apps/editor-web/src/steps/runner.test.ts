@@ -34,19 +34,18 @@ async function setup(executor: StepExecutor = fakeExecutor, extra: Partial<Runne
 }
 
 describe("runAttempt", () => {
-  it("keeps the folder background separate and marks completed steps info-stale when it changes", async () => {
+  it("keeps the recording's own background separate and marks completed steps info-stale when it changes", async () => {
     const seen: { source: unknown; background: unknown }[] = [];
     const executor: StepExecutor = { run: async (input) => {
-      seen.push({ source: input.parentBlocks, background: input.backgroundBlocks });
+      seen.push({ source: input.parentBlocks, background: input.background });
       return fakeExecutor.run(input);
     } };
     const { store, parent, start, drainAll } = await setup(executor);
-    const folder = store.addPage(OWNER, { blocks: [{ type: "paragraph", content: [{ type: "text", text: "合成の背景" }] }] });
-    store.pages.get(parent)!.parent = folder;
+    store.fields.set(parent, { entities: [], terms: [], background: "合成の背景" });
     await start();
     await drainAll();
-    expect(seen[0]).toEqual({ source: transcript, background: store.pages.get(folder)?.blocks });
-    store.pages.get(folder)!.blocks = [{ type: "paragraph", content: [{ type: "text", text: "変更した背景" }] }];
+    expect(seen[0]).toEqual({ source: transcript, background: "合成の背景" });
+    store.fields.set(parent, { entities: [], terms: [], background: "変更した背景" });
     expect(await store.refreshStale(OWNER, parent, tpl1)).toBe(tpl1.steps.length);
     expect((await store.readStaleReasons(OWNER, parent, tpl1))[2]).toEqual(["info"]);
   });

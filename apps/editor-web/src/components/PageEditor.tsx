@@ -4,7 +4,7 @@ import "niho-ui/styles/tokens.css";
 import "niho-docs-ui/styles/tokens.css";
 import "niho-docs-ui/styles/editor.css";
 import "niho-ui/styles/editor-tokens.css";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import type { PageKind, PageLang } from "@niho/editor-store";
 import { PageTitle } from "niho-docs-ui/components/BlockEditor";
@@ -35,7 +35,7 @@ import type { AiDiffState, AttachedAiDiff, PageText } from "@/lib/attached-page"
 import { MAX_LEAD_CHARS, MAX_TITLE_CHARS } from "@/lib/page-limits";
 import { UNCREATED_REVISION, classifySaveFailure, createPageSaver, type PageSaver } from "@/lib/page-save";
 import type { RestoredPage } from "@/lib/page-actions-client";
-import { PageConflictError, PageRequestError, type ConflictPage, type PageBody } from "@/lib/pages-client";
+import { PageConflictError, PageRequestError, createPageRequest, type ConflictPage, type PageBody } from "@/lib/pages-client";
 import type { SaveStatus } from "@/lib/save-status";
 import { isSaveShortcut } from "@/lib/shortcuts";
 import { imageAssetPath } from "@/image/image-paths";
@@ -106,6 +106,10 @@ export type PageEditorProps = {
   createOnOpen?: boolean;
   /** リンクで共有しているか（開いたときにサーバーが読んだ値。分からなければ null・省略）。「…」の「共有中」の印に使う。 */
   shared?: boolean | null;
+  /** 新しいページ（`id: null`）を作るフォルダ（`/p/new?in=`）。最初の保存の `POST /api/pages { parent }` に付ける。 */
+  createIn?: string | null;
+  /** 題名の上の 1 行（狭い画面の場所。docs-ui の ShellLocation）。 */
+  aboveTitle?: ReactNode;
 } & PageEditorEvents;
 
 /** 何も足していないか（onLeftEmpty の判定）。空ならページの id と、まだ届いていない保存があるか。空でなければ null。 */
@@ -301,6 +305,8 @@ function EditorScreen(props: ScreenProps) {
   const hasStorage = useSyncExternalStore(noSubscription, () => storage !== null, () => false);
 
   const initialRef = useRef(page);
+  // 作るフォルダ（開いたときの値。作る前に変わっても、最初の保存は開いたときのフォルダに作る）
+  const createInRef = useRef(props.createIn ?? null);
   const titleRef = useRef(page.title);
   const langRef = useRef(initialLang);
   const coverRef = useRef<string | null>(page.cover ?? null);
@@ -402,6 +408,7 @@ function EditorScreen(props: ScreenProps) {
         cover: initial.cover ?? null,
         lead: initial.lead ?? null,
       },
+      ...(initial.id === null && createInRef.current ? { create: (patch: PageBody = {}, options?: { keepalive?: boolean }) => createPageRequest({ ...patch, parent: createInRef.current! }, options) } : {}),
       onCreated: (created) => {
         setPageId(created.id);
         eventsRef.current.onCreated?.(created.id);
@@ -919,7 +926,7 @@ function EditorScreen(props: ScreenProps) {
       text,
       publicationFields,
       clearCover,
-      ai: { editor, bridge: aiBridge, title, kind: page.kind ?? "note", lang, diff: aiDiffBridge },
+      ai: { editor, bridge: aiBridge, title, kind: page.kind === undefined || page.kind === "folder" ? "note" : page.kind, lang, diff: aiDiffBridge },
     }),
     [attachPage, ready, pageId, status, flush, revision, reopenHere, shared, setShared, lang, changeLang, langNote, text, publicationFields, clearCover, editor, aiBridge, aiDiffBridge, title, page.kind],
   );
@@ -964,6 +971,7 @@ function EditorScreen(props: ScreenProps) {
       onCompositionEnd={compositionEnded}
     >
       {conflict && <ConflictBand page={conflict} overwriting={state === "saving"} container={root} onCopy={copyBody} onOverwrite={overwrite} />}
+      {props.aboveTitle}
       <PageTitle
         value={title}
         editor={editor}

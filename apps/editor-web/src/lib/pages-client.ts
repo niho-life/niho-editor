@@ -12,6 +12,10 @@ export type PageBody = {
   cover?: string | null;
   /** 公開用リード。null で外す。 */
   lead?: string | null;
+  /** 作るときだけ: 入れるフォルダ（本人の生きているフォルダ。違えば 404）。 */
+  parent?: string;
+  /** 作るときだけ: 種類（フォルダを作るときは `folder`）。 */
+  kind?: "note" | "rec" | "folder";
 };
 
 /** サーバーが受ける言語か。 */

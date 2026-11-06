@@ -4,9 +4,41 @@ import { ShellMenu } from "./menu";
 import { StatusDot } from "./status-dot";
 import type { ShellButtonTone, ShellMenuItem, ShellStatusState } from "./types";
 
+/** 場所の 1 段（親のフォルダ・親の録音）。押すとそのページへ。 */
+export type ShellLocationItem = { id: string; title: string; icon: "folder" | "mic" };
+
+/**
+ * 場所（パンくず）。親のフォルダ › 親の録音 だけで、**ページの題名は出さない**（題名は本文の題名にだけ。オーナー決定 2026-11-06）。
+ * 上の段のページでは何も描かない。ヘッダー（`es-loc--head`。720px 以下では隠す）と、本文の題名の上（`es-loc--body`。
+ * 720px 以下でだけ出す）で同じものを使う。
+ */
+export function ShellLocation({ items, onOpen, place }: { items: readonly ShellLocationItem[]; onOpen?: (id: string) => void; place: "head" | "body" }) {
+  if (items.length === 0) return null;
+  return (
+    <nav className={`es-loc es-loc--${place}`} aria-label="場所">
+      {items.map((item, index) => (
+        <span key={item.id} className="es-loc-part">
+          {index > 0 && (
+            <i className="es-loc-sep" aria-hidden="true">
+              ›
+            </i>
+          )}
+          <button type="button" className="es-loc-btn" onClick={() => onOpen?.(item.id)}>
+            <Icon name={item.icon} />
+            <span>{item.title || "無題"}</span>
+          </button>
+        </span>
+      ))}
+    </nav>
+  );
+}
+
 export type ShellHeaderProps = {
-  /** 狭い幅でヘッダーに出る題名。 */
-  title: string;
+  /** 狭い幅でヘッダーに出る題名（省くと出さない。Web はページ名をヘッダーに出さず、場所だけを出す）。 */
+  title?: string;
+  /** 場所（親のフォルダ › 親の録音）。720px より広いときにヘッダーの左に出す。 */
+  location?: readonly ShellLocationItem[];
+  onOpenLocation?: (id: string) => void;
   /** 一覧がしまわれているときの「一覧を出す」ボタン。 */
   showListButton?: boolean;
   onToggleList?: () => void;
@@ -49,7 +81,13 @@ export function ShellHeader(props: ShellHeaderProps) {
           <Icon name="side" />
         </button>
       )}
-      <span className="es-ttl">{props.title || "無題"}</span>
+      {props.location && props.location.length > 0 && <ShellLocation items={props.location} onOpen={props.onOpenLocation} place="head" />}
+      {props.title === undefined ? (
+        // 題名を出さないときも、狭い幅で右の操作を右へ寄せる場所は取る（es-ttl は 900px 未満で伸びる）
+        <span className="es-ttl" aria-hidden="true" />
+      ) : (
+        <span className="es-ttl">{props.title || "無題"}</span>
+      )}
       {props.tools}
       <span className="es-sp" />
       {props.status && <StatusDot state={props.status.state} tip={props.status.tip} />}

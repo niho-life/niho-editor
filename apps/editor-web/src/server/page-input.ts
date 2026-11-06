@@ -109,13 +109,21 @@ function parseFields(body: unknown): InputResult<PagePatch> {
   return { ok: true, value: result };
 }
 
-/** 新しいページ。全て任意（`{}` で空のページ）。 */
+/**
+ * 新しいページ。全て任意（`{}` で空のページ）。`parent` はフォルダの id（その中に作る。本人の生きているフォルダかは
+ * store が見て、違えば同じ 404）。フォルダ（`kind: 'folder'`）は本文と `parent` を持てない（400）。
+ */
 export function parseCreatePage(body: unknown): InputResult<CreatePageInput> {
   if (!isPlainObject(body)) return { ok: false };
-  const { lead, ...fields } = body;
+  const { lead, parent, ...fields } = body;
   const parsed = parseFields(fields);
   if (!parsed.ok) return { ok: false };
   const result: CreatePageInput = { ...parsed.value };
+  if (Object.prototype.hasOwnProperty.call(body, "parent") && parent !== null) {
+    if (typeof parent !== "string" || !isPageId(parent)) return { ok: false };
+    result.parent = parent.toLowerCase();
+  }
+  if (result.kind === "folder" && (result.parent !== undefined || (result.blocks !== undefined && result.blocks.length > 0))) return { ok: false };
   if (Object.prototype.hasOwnProperty.call(body, "lead")) {
     const checked = parseLead(lead);
     if (!checked.ok) return { ok: false };

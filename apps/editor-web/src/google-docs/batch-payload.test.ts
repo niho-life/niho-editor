@@ -6,7 +6,7 @@ function page(extra: Partial<GoogleDocsBatchTreePage> = {}): GoogleDocsBatchTree
   return {
     id: "00000000-0000-4000-8000-000000000001", title: " 合成の題名 ", revision: 3, parent: null, depth: 0,
     blocks: [{ type: "paragraph", content: [{ type: "text", text: "本文" }] }],
-    entities: [], terms: [], transcriptSegments: [], speakerNames: {}, hasRecording: false, hasBackground: false, hasTranscript: false,
+    entities: [], terms: [], background: "", transcriptSegments: [], speakerNames: {}, hasRecording: false, hasBackground: false, hasTranscript: false,
     backgroundCount: 0, transcriptCount: 0, ...extra,
   };
 }

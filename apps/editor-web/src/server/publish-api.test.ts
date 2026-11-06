@@ -213,6 +213,19 @@ describe("公開する・更新を公開・保存・発信先を変える・公�
     expect(sheet.canStop).toBe(true);
   });
 
+  it("フォルダ（kind=folder）は公開しない: 400 bad_request（理由 folder）で何も書かない", async () => {
+    const { deps, store } = world();
+    store.putPage({ ...page(PAGE, ME), kind: "folder" } as DraftPage);
+    const before = store.dump();
+    const response = await post(deps, to("exp"));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "bad_request", reason: "folder" });
+    expect(store.dump()).toBe(before);
+    // 別の人のフォルダは同じ 404
+    store.putPage({ ...page(THEIRS, OTHER), kind: "folder" } as DraftPage);
+    expect((await post(deps, to("exp"), THEIRS)).status).toBe(404);
+  });
+
   it("not_ready: 409 と problems・一言。何も書かない", async () => {
     const { deps, store } = world();
     store.putPage(page(PAGE, ME, { content: [{ type: "paragraph", content: [{ type: "text", text: "No headings." }] }] }));

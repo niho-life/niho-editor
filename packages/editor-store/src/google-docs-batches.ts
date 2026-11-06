@@ -28,6 +28,8 @@ export type GoogleDocsBatchTreePage = GoogleDocsBatchTreePageMetadata & {
   blocks: Block[];
   entities: unknown;
   terms: unknown;
+  /** 録音の背景（`page_fields.background`。文字。2026-11-06）。 */
+  background: unknown;
   transcriptSegments: unknown;
   speakerNames: unknown;
   backgroundCount: number;
@@ -99,7 +101,7 @@ type TreeRow = {
 };
 type SourceRow = {
   id: string; title: string; blocks: Block[] | null; revision: number; parent: string | null;
-  entities: unknown | null; terms: unknown | null; segments: unknown | null; speaker_names: unknown | null;
+  entities: unknown | null; terms: unknown | null; background: unknown | null; segments: unknown | null; speaker_names: unknown | null;
   has_recording: boolean; background_count: number; transcript_count: number; raw_bytes: string | number;
 };
 
@@ -257,18 +259,20 @@ async function sourceRow(
   options: GoogleDocsBatchOptions,
 ): Promise<SourceRow | null> {
   const backgroundBytes = options.includeBackground
-    ? " + octet_length(COALESCE(f.entities, '[]'::jsonb)::text)::bigint + octet_length(COALESCE(f.terms, '[]'::jsonb)::text)::bigint"
+    ? " + octet_length(COALESCE(f.entities, '[]'::jsonb)::text)::bigint + octet_length(COALESCE(f.terms, '[]'::jsonb)::text)::bigint + octet_length(COALESCE(f.background, ''))::bigint"
     : "";
   const transcriptBytes = options.includeTranscript
     ? " + octet_length(COALESCE(r.segments, '[]'::jsonb)::text)::bigint + octet_length(COALESCE(r.speaker_names, '{}'::jsonb)::text)::bigint"
     : "";
   const result = await db.query<SourceRow>(
     `SELECT p.id, p.title, p.revision, p.parent, (r.page_id IS NOT NULL) AS has_recording, sized.raw_bytes,
-            (jsonb_array_length(COALESCE(f.entities, '[]'::jsonb)) + jsonb_array_length(COALESCE(f.terms, '[]'::jsonb))) AS background_count,
+            (jsonb_array_length(COALESCE(f.entities, '[]'::jsonb)) + jsonb_array_length(COALESCE(f.terms, '[]'::jsonb))
+              + CASE WHEN btrim(COALESCE(f.background, '')) <> '' THEN 1 ELSE 0 END) AS background_count,
             jsonb_array_length(COALESCE(r.segments, '[]'::jsonb)) AS transcript_count,
             CASE WHEN sized.raw_bytes <= $3 THEN p.blocks ELSE NULL END AS blocks,
             CASE WHEN sized.raw_bytes <= $3 AND $4::boolean THEN COALESCE(f.entities, '[]'::jsonb) ELSE NULL END AS entities,
             CASE WHEN sized.raw_bytes <= $3 AND $4::boolean THEN COALESCE(f.terms, '[]'::jsonb) ELSE NULL END AS terms,
+            CASE WHEN sized.raw_bytes <= $3 AND $4::boolean THEN COALESCE(f.background, '') ELSE NULL END AS background,
             CASE WHEN sized.raw_bytes <= $3 AND $5::boolean THEN COALESCE(r.segments, '[]'::jsonb) ELSE NULL END AS segments,
             CASE WHEN sized.raw_bytes <= $3 AND $5::boolean THEN COALESCE(r.speaker_names, '{}'::jsonb) ELSE NULL END AS speaker_names
        FROM pages p
@@ -298,7 +302,7 @@ async function readSource(
     ok: true,
     page: {
       ...metadata, title: row.title, revision: row.revision, parent: row.parent, blocks: row.blocks,
-      entities: row.entities ?? [], terms: row.terms ?? [], transcriptSegments: row.segments ?? [], speakerNames: row.speaker_names ?? {},
+      entities: row.entities ?? [], terms: row.terms ?? [], background: row.background ?? "", transcriptSegments: row.segments ?? [], speakerNames: row.speaker_names ?? {},
       hasRecording: row.has_recording, backgroundCount: row.background_count, transcriptCount: row.transcript_count,
     },
   };

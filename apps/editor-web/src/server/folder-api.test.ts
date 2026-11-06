@@ -162,21 +162,33 @@ describe("GET・PATCH /api/pages/{id}/fields", () => {
     const { deps, fields } = memoryDeps();
     const read = await getPageFields(request("GET", "/x"), FOLDER, deps);
     expect(read.status).toBe(200);
-    expect(await read.json()).toEqual({ fields: { entities: [], terms: [] } });
+    expect(await read.json()).toEqual({ fields: { entities: [], terms: [], background: "" } });
 
     const saved = await patchPageFields(request("PATCH", "/x", { entities: [{ name: "田中", reading: "たなか", role: "店主", note: "" }] }), FOLDER, deps);
     expect(saved.status).toBe(200);
     expect(((await saved.json()) as { fields: PageFields }).fields.entities).toHaveLength(1);
     expect(fields.value.entities).toHaveLength(1);
+
+    const background = await patchPageFields(request("PATCH", "/x", { background: "取材の目的" }), FOLDER, deps);
+    expect(background.status).toBe(200);
+    expect(fields.value.background).toBe("取材の目的");
+  });
+
+  it("refuses to give a folder 欄 with 400 (reason folder)", async () => {
+    const { deps, fields } = memoryDeps({ rows: [{ ...pageOf(FOLDER, "フォルダ", []), kind: "folder" }] });
+    const response = await patchPageFields(request("PATCH", "/x", { background: "背景" }), FOLDER, deps);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "bad_request", reason: "folder" });
+    expect(fields.value.background).toBe("");
   });
 
   it("refuses a body the screen could not send with 400, writing nothing", async () => {
     const { deps, fields } = memoryDeps();
-    for (const body of [{ background: "" }, { entities: [{ name: "" }] }, { terms: [{ term: "", reading: "", variants: [], note: "" }] }, { entities: "no" }]) {
+    for (const body of [{ notes: "" }, { background: "あ".repeat(4001) }, { background: 1 }, { entities: [{ name: "" }] }, { terms: [{ term: "", reading: "", variants: [], note: "" }] }, { entities: "no" }]) {
       const response = await patchPageFields(request("PATCH", "/x", body), FOLDER, deps);
       expect(response.status, JSON.stringify(body)).toBe(400);
     }
-    expect(fields.value).toEqual({ entities: [], terms: [] });
+    expect(fields.value).toEqual({ entities: [], terms: [], background: "" });
   });
 
   it("answers 401・403・503 and the same 404 for another person's page", async () => {
@@ -224,6 +236,16 @@ describe("GET /api/pages/{id}/export.zip", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it("reads この録音について from each recording page's own fields (never the folder's)", async () => {
+    const REC = "33333333-3333-4333-8333-333333333333";
+    const rows = [{ ...pageOf(FOLDER, "フォルダ", []), kind: "folder" as const }, { ...pageOf(REC, "録音"), kind: "rec" as const, parent: FOLDER }, { ...pageOf(INSIDE, "メモ"), parent: FOLDER }];
+    const { deps } = memoryDeps({ rows });
+    const get = vi.fn(async () => ({ entities: [], terms: [], background: "合成の背景" }));
+    const response = await exportFolder(request("GET", "/x"), FOLDER, { ...deps, fields: () => ({ get, save: async () => EMPTY_PAGE_FIELDS }) });
+    expect(response.status).toBe(200);
+    expect(get.mock.calls.map((call) => (call as unknown[])[1])).toEqual([REC]);
+  });
+
   it("answers 401 without a session, 503 without a database and the same 404 for another person's page", async () => {
     expect((await exportFolder(request("GET", "/x"), FOLDER, memoryDeps({ userId: null }).deps)).status).toBe(401);
     expect((await exportFolder(request("GET", "/x"), FOLDER, memoryDeps({ db: false }).deps)).status).toBe(503);
@@ -236,7 +258,7 @@ describe("GET /api/pages/{id}/export.zip", () => {
     const over = memoryDeps({ rows: [pageOf(FOLDER, "フォルダ", []), ...many] });
     expect((await exportFolder(request("GET", "/x"), FOLDER, over.deps)).status).toBe(413);
 
-    const nothing = memoryDeps({ rows: [pageOf(FOLDER, "フォルダ", [])] });
+    const nothing = memoryDeps({ rows: [{ ...pageOf(FOLDER, "フォルダ", [paragraph("旧の本文")]), kind: "folder" }] });
     expect((await exportFolder(request("GET", "/x"), FOLDER, nothing.deps)).status).toBe(400);
   });
 });

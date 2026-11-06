@@ -70,6 +70,8 @@
 
 旧版の `ProjectInfo`（背景情報・登場人物・話者人数・言語）のうち、editor は独立した録音情報欄を追加しない。背景本文は親フォルダ、登場人物・用語は `page_fields`、言語やAI向け説明は `editor_settings` から段階へ渡す。話者人数欄は設けない（§2.2 G）。
 
+**2026-11-06 に置き場を変えた**（[editor-recipes-and-folders.md](editor-recipes-and-folders.md) §3.3）: 背景・登場人物・固有名詞は**録音ページ自身**の `page_fields`（`entities`・`terms`・`background`）に持ち、`readStepInput` は親フォルダではなく録音ページの行を読む。フォルダ（`kind = 'folder'`）は本文も欄も持たない。以下の §2.2 G・§2.3・§2.4 の「親フォルダ」は、この置き場に読み替える。
+
 ### 1.4 T1 へのお願い（表を作る側に渡すこと）
 
 1. `recipes` は **owner ごと**（`owner text` + `id text` の複合主キー）。既定の 3 つは行を作らず、**手を入れたものと足したものだけ**が行になる（いまの jsonb と同じ考え。`recipesOf()` が既定にかぶせる）。
@@ -684,7 +686,7 @@ docs-core の `guide-extraction.ts` をサーバーで呼ぶだけ。中身は�
 
 | 件 | 中身 |
 | --- | --- |
-| **A** 背景情報・登場人物・案件の固有名詞 | 旧アプリの案件＝**フォルダ**に持つ。話者人数は要らない（`page_recordings` が `language` と `speaker_names` を持っている） |
+| **A** 背景情報・登場人物・案件の固有名詞 | 2026-11-06: **録音ページ**の `page_fields` に持つ（フォルダには持たない。[editor-recipes-and-folders.md](editor-recipes-and-folders.md) §3.3）。話者人数は要らない（`page_recordings` が `language` と `speaker_names` を持っている） |
 | **B** 手順ごとの固有名詞 | `recipes` の表に `terms`。混ぜる順はフォルダ → 手順 → アカウント共通 |
 | **C** 参考ページ | 「同じフォルダの独立文書を実行時に自動で固定」 |
 

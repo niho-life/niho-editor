@@ -115,10 +115,11 @@ export class MemoryStepRunStore implements StepRunStore {
     const upstream = upstreamPageIds ?? recipe.steps.slice(0, index).map((step, prior) => ({ id: step.id, pageId: pageIds[prior]! }));
     return {
       parentBlocks: parent.blocks,
-      backgroundBlocks: this.#page(owner, parent.parent)?.blocks ?? [],
+      // 背景・登場人物・固有名詞は録音ページ自身の欄（editor-store の readStepInput と同じ）
+      background: this.fields.get(parentId)?.background ?? "",
       upstream: upstream.map((item) => ({ id: item.id, blocks: this.#page(owner, item.pageId)?.blocks ?? [] })),
       refs: [...this.pages.values()].filter((page) => page.owner === owner && !page.deleted && parent.parent !== null && page.parent === parent.parent && page.id !== parentId).map((page) => ({ id: page.id, blocks: page.blocks })),
-      fields: this.fields.get(parent.parent ?? "") ?? { entities: [], terms: [] },
+      fields: { entities: this.fields.get(parentId)?.entities ?? [], terms: this.fields.get(parentId)?.terms ?? [] },
       settings: this.settings.get(owner) ?? DEFAULT_EDITOR_SETTINGS,
     };
   }

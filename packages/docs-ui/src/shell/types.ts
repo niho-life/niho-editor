@@ -6,8 +6,8 @@
 /** 公開先。exp＝NIHO Experience、niho＝NIHO、site＝本人のサイト。 */
 export type ShellDest = "exp" | "niho" | "site";
 export type ShellLang = "ja" | "en";
-/** ページの種類。step は録音から作った手順のサブページ。 */
-export type ShellPageKind = "note" | "rec" | "step" | "article";
+/** ページの種類。step は録音から作った手順のサブページ、folder は本文を持たない入れ物。 */
+export type ShellPageKind = "note" | "rec" | "step" | "article" | "folder";
 /** 状態の丸。private＝自分だけ、published＝公開中、updated＝更新あり、limited＝限定公開、stopped＝公開をやめた。 */
 export type ShellStatusState = "private" | "published" | "updated" | "limited" | "stopped";
 /** 段階の状態。done＝済み、run＝作成中、wait＝待機、failed＝失敗、stale＝前提変更（上流が変わった）。設計 §7.2。 */
@@ -30,6 +30,8 @@ export type ShellMenuItem = {
   current?: boolean;
   /** 切り替えの項目の今の値（あれば `menuitemcheckbox` で、ON のとき右に ✓）。 */
   checked?: boolean;
+  /** この項目の前に区切りの線を引く。 */
+  separated?: boolean;
 };
 
 /**
@@ -44,8 +46,12 @@ export type ShellListItem = {
   when: string;
   /** 木の段。省けば 0（上の段）。 */
   depth?: 0 | 1 | 2;
-  /** 子を持つ行（フォルダ）。開閉のボタンを出す。 */
+  /** フォルダの行（`kind = 'folder'`。子が無くても）。開閉のボタンを出す（子が無ければ幅だけ取って押せない）。 */
   folder?: boolean;
+  /** 中身の無いフォルダ（`folder` のときだけ見る）。開閉は押せず、幅だけ取る。 */
+  empty?: boolean;
+  /** 題名の前の小さなアイコン（フォルダ・録音・工程のサブページ）。 */
+  icon?: "folder" | "mic" | "spark";
   /** フォルダを開いているか（`folder` のときだけ見る。閉じているあいだ、呼ぶ側は中の行を渡さない）。 */
   open?: boolean;
   /** 手順が動いている行の回るマーク（設計 §7.2）。印だけでは状態を表さないので、sub の文字（「作成中…」）と一緒に渡す。 */
@@ -77,6 +83,7 @@ export type ShellIconName =
   | "mic"
   | "spark"
   | "img"
+  | "folder"
   | "list"
   | "link"
   | "eye"

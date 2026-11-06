@@ -1,0 +1,105 @@
+/* フォルダを開いた画面（モック docs/mockups/editor-folders-v1.html の folderHtml）。色は token だけ。 */
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.head > :last-child {
+  flex: 1;
+  min-width: 0;
+}
+.icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  margin-top: 6px;
+  color: var(--ed-ink-sub);
+  stroke-width: 1.5;
+}
+.acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+.rows {
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--ed-line-2);
+  border-radius: 14px;
+  background: var(--ed-white);
+}
+.row + .row {
+  border-top: 1px solid var(--ed-line);
+}
+.rowButton {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 46px;
+  padding: 8px 14px;
+  border-radius: 13px;
+  text-align: left;
+  color: var(--ed-ink);
+}
+.rowButton:hover {
+  background: var(--ed-sand);
+}
+.step .rowButton {
+  padding-left: 36px;
+}
+.ki {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  color: var(--ed-ink-sub);
+}
+.step .ki {
+  width: 13px;
+  height: 13px;
+  color: var(--ed-ink-mute);
+}
+.text {
+  flex: 1;
+  min-width: 0;
+}
+.text b {
+  display: block;
+  font-weight: 500;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.text small {
+  display: block;
+  font-size: 12px;
+  color: var(--ed-ink-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.untitled {
+  color: var(--ed-ink-mute);
+}
+.when {
+  flex: none;
+  font-size: 12px;
+  color: var(--ed-ink-mute);
+  white-space: nowrap;
+}
+.empty {
+  margin: 16px 0 0;
+  padding: 18px 14px;
+  border: 1px dashed var(--ed-line-3);
+  border-radius: 14px;
+  font-size: 13px;
+  color: var(--ed-ink-mute);
+}
+.note {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--ed-amber-ink);
+}

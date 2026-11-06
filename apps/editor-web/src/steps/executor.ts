@@ -13,8 +13,8 @@ export type StepExecutorInput = {
   parentPageId?: string;
   /** 録音ページの本文。 */
   parentBlocks: Block[];
-  /** 親フォルダの背景本文。録音の原文とは別の入力。 */
-  backgroundBlocks: Block[];
+  /** 録音ページ自身の背景（`page_fields.background`。文字）。録音の原文とは別の入力。 */
+  background: string;
   /** 前の段階のサブページの本文（段階 0 は null）。 */
   previousBlocks: Block[] | null;
   /** 実行と前提計算が同じ時点で読んだ素材。 */

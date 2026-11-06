@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { Fragment, useEffect, useRef, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
 import { Icon } from "./icons";
 import type { ShellMenuItem } from "./types";
 
@@ -41,10 +41,12 @@ export type ShellMenuProps = {
   trigger?: RefObject<HTMLElement | null>;
   className?: string;
   style?: CSSProperties;
+  /** 項目の上に置く見出し（押せない。例: 「『◯◯』の中に」）。 */
+  heading?: ReactNode;
 };
 
 /** 開いたら先頭にフォーカスし、↑↓・Home・End で動かし、Esc で閉じるメニュー。 */
-export function ShellMenu({ label, items, onSelect, onClose, trigger, className, style }: ShellMenuProps) {
+export function ShellMenu({ label, items, onSelect, onClose, trigger, className, style, heading }: ShellMenuProps) {
   const ref = useRef<HTMLDivElement | null>(null);
   useMenuDismiss(ref, onClose, trigger);
   useEffect(() => {
@@ -61,9 +63,15 @@ export function ShellMenu({ label, items, onSelect, onClose, trigger, className,
   };
   return (
     <div ref={ref} className={className ? `es-menu ${className}` : "es-menu"} style={style} role="menu" aria-label={label} onKeyDown={move}>
+      {heading && (
+        <div className="es-menu-hd" role="presentation">
+          {heading}
+        </div>
+      )}
       {items.map((item) => (
+        <Fragment key={item.id}>
+        {item.separated && <div className="es-menu-sep" role="separator" />}
         <button
-          key={item.id}
           type="button"
           role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"}
           className={`es-mi${item.danger ? " es-mi--danger" : ""}${item.current ? " es-mi--on" : ""}`}
@@ -77,6 +85,7 @@ export function ShellMenu({ label, items, onSelect, onClose, trigger, className,
           {item.badge ? <small className="es-mi-badge">{item.badge}</small> : item.hint ? <small>{item.hint}</small> : null}
           {item.checked && <span className="es-mi-check" aria-hidden="true"><Icon name="check" /></span>}
         </button>
+        </Fragment>
       ))}
     </div>
   );

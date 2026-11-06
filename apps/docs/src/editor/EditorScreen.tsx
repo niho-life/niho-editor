@@ -361,6 +361,8 @@ export function EditorScreen({ bridge, me }: { bridge: DocsHost; me: { name: str
               onToggle: () => setNewMenuOpen((open) => !open),
               onClose: () => setNewMenuOpen(false),
               onPick: (kind) => void pickNew(kind),
+              // Mac の画面は今の 2 つのまま（フォルダは Web の画面で作る。Mac 用の画面は作らない）
+              kinds: ["blank", "recording"],
             }}
             search={{
               open: search.open,

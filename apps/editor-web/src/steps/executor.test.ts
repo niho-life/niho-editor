@@ -8,7 +8,7 @@ const transcript = [{ type: "paragraph", content: [{ type: "text", text: "合成
 
 describe("fakeExecutor", () => {
   it("returns the same marked blocks for the same input, and they pass the blocks check", async () => {
-    const input = { recipe, stepIndex: 0, parentBlocks: transcript, backgroundBlocks: [], previousBlocks: null };
+    const input = { recipe, stepIndex: 0, parentBlocks: transcript, background: "", previousBlocks: null };
     const first = await fakeExecutor.run(input);
     const second = await fakeExecutor.run(input);
     expect(second).toEqual(first);
@@ -23,16 +23,16 @@ describe("fakeExecutor", () => {
 
   it("reads the previous step after the first one, and never emits an empty text node", async () => {
     const previous = [{ type: "paragraph", content: [{ type: "text", text: "前の段階の合成の結果" }] }];
-    const output = await fakeExecutor.run({ recipe, stepIndex: 1, parentBlocks: transcript, backgroundBlocks: [], previousBlocks: previous });
+    const output = await fakeExecutor.run({ recipe, stepIndex: 1, parentBlocks: transcript, background: "", previousBlocks: previous });
     expect(JSON.stringify(output.blocks)).toContain("前の段階の合成の結果");
     expect(JSON.stringify(output.blocks)).toContain("記事方針");
-    const empty = await fakeExecutor.run({ recipe, stepIndex: 2, parentBlocks: [], backgroundBlocks: [], previousBlocks: [] });
+    const empty = await fakeExecutor.run({ recipe, stepIndex: 2, parentBlocks: [], background: "", previousBlocks: [] });
     expect(JSON.stringify(empty.blocks)).not.toContain('"text":""');
     expect(parseBlocks(empty.blocks).ok).toBe(true);
   });
 
   it("can fail the first n calls, throw what it is told, and be slow until aborted", async () => {
-    const input = { recipe, stepIndex: 0, parentBlocks: transcript, backgroundBlocks: [], previousBlocks: null };
+    const input = { recipe, stepIndex: 0, parentBlocks: transcript, background: "", previousBlocks: null };
     const flaky = createFakeExecutor({ failures: 2 });
     await expect(flaky.run(input)).rejects.toMatchObject({ name: "StepError", code: "fake_failure", retryable: true });
     await expect(flaky.run(input)).rejects.toBeInstanceOf(StepError);

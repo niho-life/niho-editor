@@ -287,6 +287,7 @@ describe("PostgreSQL publications (0009)", { skip: databaseUrl === undefined }, 
         lead: "合成のリード",
         coverAssetId: assetId,
         content: [{ type: "paragraph", content: [{ type: "text", text: "合成" }] }],
+        kind: "note",
         revision: saved.rows[0]!.revision,
         savedAt: saved.rows[0]!.updated_at.toISOString(),
       });

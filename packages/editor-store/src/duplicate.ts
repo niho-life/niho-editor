@@ -9,6 +9,7 @@ import type { Block, OwnerId, Page, PageKind, PageLang, Queryable, StepStatus } 
  * 音声（#36 段 2a。資産は 1 つのページに属する）は写さない: コピーは文字起こしだけで、audio_* は既定の none。
  * 2 本目以降の音声（新しい migration の page_recording_audios）と文字起こしの案（page_recording_candidates）も、同じ理由で写さない。
  * 音声から作った録音（source = 'audio'）も録音の行を写す（音声のない音声由来の録音は 0008 が許す。文字起こしは残る）。
+ * フォルダ（kind = 'folder'）は複製しない（null。API は先に kind を見て bad_request を返す）。
  */
 
 /** 複製の題名に足す言葉。 */
@@ -59,7 +60,7 @@ WITH copied AS (
          CASE WHEN title = '' THEN '' ELSE left(title, $4::int - char_length($3::text)) || $3::text END,
          lang, blocks, lead
     FROM pages
-   WHERE owner = $1 AND id = $2 AND deleted_at IS NULL
+   WHERE owner = $1 AND id = $2 AND deleted_at IS NULL AND kind <> 'folder'
   RETURNING ${DUPLICATE_COLUMNS}
 ),
 recording AS (

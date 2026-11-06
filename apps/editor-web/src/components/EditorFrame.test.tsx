@@ -240,10 +240,69 @@ describe("EditorFrame", () => {
     }
   });
 
+  describe("フォルダ（kind = 'folder'）", () => {
+    const FOLDER = "00000000-0000-4000-8000-0000000000f1";
+    const INSIDE = "00000000-0000-4000-8000-0000000000f2";
+    const folderPages = () => [
+      { ...page(FOLDER, "鎌倉の取材"), kind: "folder" as const },
+      { ...page(INSIDE, "取材メモ"), parent: FOLDER },
+      page("00000000-0000-4000-8000-000000000001", "上の段"),
+    ];
+
+    it("フォルダの中のページでは、新しいページのメニューの上に「『◯◯』の中に」を出し、その中に作る（?in=）", async () => {
+      nav.pathname = `/p/${INSIDE}`;
+      await mount({ pages: folderPages() });
+      await clickSidebarAct("新しいページ");
+      const menu = container!.querySelector('[role="menu"]')!;
+      expect(menu.querySelector(".es-menu-hd")?.textContent).toBe("「鎌倉の取材」の中に");
+      await act(async () => [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent?.includes("空のページ"))!.click());
+      expect(nav.push).toHaveBeenLastCalledWith(`/p/new?in=${FOLDER}`);
+      await clickSidebarAct("新しいページ");
+      await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent?.includes("録音から"))!.click());
+      expect(nav.push).toHaveBeenLastCalledWith(`/p/new?from=recording&in=${FOLDER}`);
+      // 上の段のページでは見出しを出さない
+      await moveTo("/p/00000000-0000-4000-8000-000000000001");
+      await clickSidebarAct("新しいページ");
+      expect(container!.querySelector('[role="menu"] .es-menu-hd')).toBeNull();
+    });
+
+    it("「フォルダ」はいつも上の段に空のフォルダを作って開き、一覧にフォルダの行として出す", async () => {
+      const NEW = "00000000-0000-4000-8000-0000000000f9";
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/pages" && init?.method === "POST") return new Response(JSON.stringify({ page: { id: NEW, revision: 1 } }), { status: 201, headers: { "content-type": "application/json" } });
+        return new Response(null, { status: 204 });
+      });
+      const previous = globalThis.fetch;
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      nav.pathname = `/p/${INSIDE}`;
+      await mount({ pages: folderPages() });
+      await clickSidebarAct("新しいページ");
+      await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent === "フォルダ")!.click());
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+      const post = fetchMock.mock.calls.find(([url, init]) => url === "/api/pages" && init?.method === "POST")!;
+      expect(JSON.parse(String(post[1]!.body))).toEqual({ kind: "folder" });
+      expect(nav.push).toHaveBeenLastCalledWith(`/p/${NEW}`);
+      expect(container!.querySelector(".es-sb-list .es-di-t--folder")).not.toBeNull();
+      globalThis.fetch = previous;
+    });
+
+    it("ヘッダーの場所は親のフォルダだけ（ページ名は出さない）。押すとそのフォルダへ", async () => {
+      nav.pathname = `/p/${INSIDE}`;
+      await mount({ pages: folderPages() });
+      const nav2 = container!.querySelector('.es-dt nav[aria-label="場所"]')!;
+      expect(nav2.textContent).toBe("鎌倉の取材");
+      expect(container!.querySelector(".es-dt")?.textContent).not.toContain("取材メモ");
+      await act(async () => nav2.querySelector("button")!.click());
+      expect(nav.push).toHaveBeenLastCalledWith(`/p/${FOLDER}`);
+    });
+  });
+
   it("moves to a page, a new page, the recording start, and the settings from the sidebar", async () => {
     nav.pathname = "/p/00000000-0000-4000-8000-000000000001";
     await mount({ pages: [page("00000000-0000-4000-8000-000000000001", "合成の題名"), page("00000000-0000-4000-8000-000000000002")] });
-    expect(container!.querySelector(".es-ttl")?.textContent).toBe("合成の題名");
+    // ページ名はヘッダーに出さない（本文の題名にだけ）。上の段のページなので場所も出ない
+    expect(container!.querySelector(".es-dt .es-ttl")?.textContent ?? null).toBe("");
+    expect(container!.querySelector('.es-dt nav[aria-label="場所"]') === null).toBe(true);
     expect(container!.querySelector('[aria-current="page"]')?.textContent).toContain("合成の題名");
 
     await act(async () => container!.querySelectorAll<HTMLButtonElement>(".es-sb-list li button.es-di")[1]!.click());
@@ -2083,8 +2142,8 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
     });
   const twisty = (title: string) => container!.querySelector<HTMLButtonElement>(`.es-sb-list button[aria-label="${title} の中"]`);
 
-  it("出すのは 1 本の木（フォルダ › ページ › 録音のサブページ）。フォルダの行で開閉できる", async () => {
-    await mount({ pages: [page(PARENT, "鎌倉の記事"), inside(PARENT, CHILD, "取材メモ"), inside(CHILD, SUB, "文字起こし修正")] });
+  it("出すのは 1 本の木（フォルダ › ページ › 録音のサブページ）。フォルダ（kind）の行で開閉できる", async () => {
+    await mount({ pages: [{ ...page(PARENT, "鎌倉の記事"), kind: "folder" as const }, { ...inside(PARENT, CHILD, "取材メモ"), kind: "rec" as const }, { ...inside(CHILD, SUB, "文字起こし修正"), kind: "step" as const }] });
     expect(tree()).toEqual([
       ["鎌倉の記事", 0],
       ["取材メモ", 1],
@@ -2110,7 +2169,7 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
       }),
     );
     nav.pathname = `/p/${CHILD}`;
-    await mount({ pages: [page(PARENT, "鎌倉の記事"), page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
+    await mount({ pages: [{ ...page(PARENT, "鎌倉の記事"), kind: "folder" as const }, page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
     await chooseMore("移動…");
     expect(document.activeElement?.getAttribute("aria-label")).toBe("フォルダ");
     const select = sheetNamed("移動")!.querySelector<HTMLSelectElement>('select[aria-label="フォルダ"]')!;
@@ -2142,7 +2201,7 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
   it("入れられなかったときは行を戻して一言（ページは失われない）", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "too_deep" }), { status: 409, headers: { "content-type": "application/json" } })));
     nav.pathname = `/p/${CHILD}`;
-    await mount({ pages: [page(PARENT, "鎌倉の記事"), page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
+    await mount({ pages: [{ ...page(PARENT, "鎌倉の記事"), kind: "folder" as const }, page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
     await chooseMore("移動…");
     const select = () => sheetNamed("移動")!.querySelector<HTMLSelectElement>('select[aria-label="フォルダ"]')!;
     await act(async () => {
@@ -2165,7 +2224,7 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
 
   it("「移動…」は Esc で閉じて「⋯」へフォーカスを戻す", async () => {
     nav.pathname = `/p/${CHILD}`;
-    await mount({ pages: [page(PARENT, "鎌倉の記事"), page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
+    await mount({ pages: [{ ...page(PARENT, "鎌倉の記事"), kind: "folder" as const }, page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
     await chooseMore("移動…");
     expect(sheetNamed("移動")).not.toBeNull();
     await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
@@ -2306,41 +2365,26 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     expect(rows()).toEqual(["A の記事", "C の記事"]);
   });
 
-  it("「フォルダの背景…」はフォルダのページでだけ出し、開いているあいだだけ読み、登場人物と固有名詞を保存する", async () => {
-    const calls: { method: string; url: string; body: unknown }[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        calls.push({ method: init?.method ?? "GET", url, body: init?.body === undefined ? undefined : JSON.parse(String(init.body)) });
-        const fields = init?.method === "PATCH" ? JSON.parse(String(init.body)) : { entities: [], terms: [] };
-        return new Response(JSON.stringify({ fields }), { status: 200, headers: { "content-type": "application/json" } });
-      }),
-    );
+  it("フォルダの「⋯」は 書き出し（.zip）・削除 だけ。フォルダでないページに「フォルダの背景…」は無い", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })));
     nav.pathname = `/p/${FOLDER}`;
-    await mount({ pages: [page(FOLDER, "鎌倉の記事"), inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER)} />);
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
-    expect(calls.some((call) => call.url.includes("/fields"))).toBe(false);
-    await chooseMore("フォルダの背景…");
-    await until(() => calls.some((call) => call.url.includes("/fields")));
-    expect(sheetNamed("フォルダの背景")?.querySelector("h2")?.textContent).toBe("フォルダの背景");
-
-    await act(async () => railButton("編集")!.click());
-    await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === "行を追加")!.click());
-    await act(async () => {
-      const input = sheetNamed("フォルダの背景")!.querySelector<HTMLInputElement>("input")!;
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "田中");
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    await act(async () => railButton("登場人物を保存")!.click());
-    await until(() => calls.some((call) => call.method === "PATCH"));
-    expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({ entities: [{ name: "田中", reading: "", role: "", note: "" }], terms: [] });
-
-    // フォルダでないページには項目を出さない（開いていたシートも出さない）
+    await mount({ pages: [{ ...page(FOLDER, "鎌倉の記事"), kind: "folder" }, inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER)} />);
+    expect(await moreLabels()).toEqual(["書き出し.zip", "削除中のページも"]);
+    // AI・公開のボタンは出さない
+    expect(container!.querySelector('.es-dt button[aria-label="AIと作る"]')).toBeNull();
     nav.pathname = `/p/${INSIDE}`;
     await rerender(<FakePage page={fakePage(INSIDE)} />);
-    expect(sheetNamed("フォルダの背景")).toBeNull();
-    expect(await moreLabels()).not.toContain("フォルダの背景…");
-    expect(await moreLabels()).not.toContain("フォルダを書き出し.zip");
+    const labels = await moreLabels();
+    expect(labels).not.toContain("フォルダの背景…");
+    expect(labels).not.toContain("書き出し.zip");
+  });
+
+  it("フォルダを削除するときは中のページの数を言う", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })));
+    nav.pathname = `/p/${FOLDER}`;
+    await mount({ pages: [{ ...page(FOLDER, "鎌倉の記事"), kind: "folder" }, inside(FOLDER, INSIDE, "取材メモ"), inside(FOLDER, OTHER, "別のメモ")] }, <FakePage page={fakePage(FOLDER)} />);
+    await chooseMore("削除");
+    expect(sheetNamed("フォルダの削除")?.querySelector("h2")?.textContent).toBe("「鎌倉の記事」と中の 2 ページを削除しますか？");
   });
 
   it("フォルダの書き出しは、まだ届いていない本文の変更を保存してから始める（保存できなければ始めない）", async () => {
@@ -2354,9 +2398,9 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
       nav.pathname = `/p/${FOLDER}`;
       let finishSave: (saved: boolean) => void = () => undefined;
       const flush = vi.fn(() => new Promise<boolean>((resolve) => { finishSave = resolve; }));
-      await mount({ pages: [page(FOLDER, "鎌倉の記事"), inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER, { flush })} />);
+      await mount({ pages: [{ ...page(FOLDER, "鎌倉の記事"), kind: "folder" }, inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER, { flush })} />);
       // 保存を待っているあいだは、ダウンロードを始めない
-      await chooseMore("フォルダを書き出し");
+      await chooseMore("書き出し");
       expect(flush).toHaveBeenCalledTimes(1);
       expect(clicked).toEqual([]);
       // 保存できたら始める
@@ -2364,7 +2408,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
       expect(clicked).toEqual([`/api/pages/${FOLDER}/export.zip`]);
 
       // 保存できなければ始めず、理由を出す
-      await chooseMore("フォルダを書き出し");
+      await chooseMore("書き出し");
       await act(async () => finishSave(false));
       expect(clicked).toHaveLength(1);
       expect(container!.textContent).toContain("書き出しの前に変更を保存できませんでした");
@@ -2382,8 +2426,8 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     try {
       vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ fields: { entities: [], terms: [] } }), { status: 200, headers: { "content-type": "application/json" } })));
       nav.pathname = `/p/${FOLDER}`;
-      await mount({ pages: [page(FOLDER, "鎌倉の記事"), inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER)} />);
-      await chooseMore("フォルダを書き出し");
+      await mount({ pages: [{ ...page(FOLDER, "鎌倉の記事"), kind: "folder" }, inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER)} />);
+      await chooseMore("書き出し");
       expect(clicked).toEqual([`/api/pages/${FOLDER}/export.zip`]);
     } finally {
       HTMLAnchorElement.prototype.click = click_;
@@ -2452,7 +2496,7 @@ describe("EditorFrame: 左の一覧のドラッグで入れ子・並べ替え", 
   };
 
   it("真ん中に落とすとそのフォルダへ入れる（PATCH parent）。自分の中には落とせない", async () => {
-    await mount({ pages: [top(F, "鎌倉の記事", 1), top(X, "取材メモ", 2)] });
+    await mount({ pages: [{ ...top(F, "鎌倉の記事", 1), kind: "folder" as const }, top(X, "取材メモ", 2)] });
     expect(rowOf("取材メモ").getAttribute("draggable")).toBe("true");
     expect(await dragTo("取材メモ", "鎌倉の記事", 20)).toBe(true);
     expect(calls).toEqual([{ url: `/api/pages/${X}/parent`, method: "PATCH", body: { parent: F } }]);
@@ -2460,7 +2504,7 @@ describe("EditorFrame: 左の一覧のドラッグで入れ子・並べ替え", 
       ["鎌倉の記事", 0],
       ["取材メモ", 1],
     ]);
-    // フォルダを自分の子の中へは入れられない
+    // フォルダはどこへも入れられない（入れ子にしない）
     calls.length = 0;
     expect(await dragTo("鎌倉の記事", "取材メモ", 20)).toBe(false);
     expect(calls).toEqual([]);
@@ -2482,7 +2526,7 @@ describe("EditorFrame: 左の一覧のドラッグで入れ子・並べ替え", 
   });
 
   it("フォルダの中の行を上の段の行の後に落とすと、先にフォルダから出してから並べる", async () => {
-    await mount({ pages: [top(F, "鎌倉の記事", 1), { ...page(X, "取材メモ"), parent: F }, top(T1, "一", 2)] });
+    await mount({ pages: [{ ...top(F, "鎌倉の記事", 1), kind: "folder" as const }, { ...page(X, "取材メモ"), parent: F }, top(T1, "一", 2)] });
     expect(tree()).toEqual([
       ["鎌倉の記事", 0],
       ["取材メモ", 1],

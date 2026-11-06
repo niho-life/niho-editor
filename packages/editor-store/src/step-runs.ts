@@ -671,7 +671,7 @@ export async function heartbeatAttempt(db: Queryable, ref: AttemptRef, options: 
 
 export type StepInput = StepMaterials & { previousBlocks: Block[] | null };
 
-/** 段階の入力。録音本文と親フォルダの背景本文を分け、owner で絞った単一 SQL snapshot で読む。 */
+/** 段階の入力。録音本文と録音ページ自身の欄（背景・登場人物・固有名詞）を、owner で絞った単一 SQL snapshot で読む。 */
 export async function readStepInput(
   db: Queryable,
   claim: Pick<StepClaim, "owner" | "parentId" | "previousPageId"> & { recipe?: string; stepIndex?: number; recipeSnapshot?: Pick<RecipeSnapshot, "steps"> | null; stepIds?: readonly string[]; upstreamPageIds?: readonly { id: string; pageId: string }[] },
@@ -682,9 +682,9 @@ export async function readStepInput(
     id: claim.stepIds?.[index] ?? claim.recipeSnapshot?.steps[index]?.id ?? String(index),
     pageId: stepPageId(claim.parentId, claim.recipe ?? "", index),
   }));
-  const result = await db.query<{ parent_blocks: Block[] | null; background_blocks: Block[]; previous_blocks: Block[] | null; upstream: { id: string; blocks: Block[] }[]; refs: { id: string; blocks: Block[] }[]; entities: StepMaterials["fields"]["entities"]; terms: StepMaterials["fields"]["terms"]; ai_lang: string | null; glossary: StepMaterials["settings"]["glossary"] | null; about_name: string | null; about: string | null }>(
+  const result = await db.query<{ parent_blocks: Block[] | null; background: string | null; previous_blocks: Block[] | null; upstream: { id: string; blocks: Block[] }[]; refs: { id: string; blocks: Block[] }[]; entities: StepMaterials["fields"]["entities"]; terms: StepMaterials["fields"]["terms"]; ai_lang: string | null; glossary: StepMaterials["settings"]["glossary"] | null; about_name: string | null; about: string | null }>(
     `SELECT p.blocks AS parent_blocks,
-            COALESCE(folder.blocks, '[]'::jsonb) AS background_blocks,
+            COALESCE(f.background, '') AS background,
             (SELECT blocks FROM pages WHERE owner = $1 AND id = $3 AND deleted_at IS NULL) AS previous_blocks,
             COALESCE((SELECT jsonb_agg(jsonb_build_object('id', prior.step_id, 'blocks', COALESCE(s.blocks, '[]'::jsonb)) ORDER BY prior.ord)
               FROM unnest($4::text[], $5::uuid[]) WITH ORDINALITY prior(step_id, page_id, ord)
@@ -694,8 +694,7 @@ export async function readStepInput(
             COALESCE(f.entities, '[]'::jsonb) AS entities, COALESCE(f.terms, '[]'::jsonb) AS terms,
             e.ai_lang, e.glossary, e.about_name, e.about
        FROM pages p
-       LEFT JOIN pages folder ON folder.owner = p.owner AND folder.id = p.parent AND folder.deleted_at IS NULL
-       LEFT JOIN page_fields f ON f.owner = p.owner AND f.page_id = p.parent
+       LEFT JOIN page_fields f ON f.owner = p.owner AND f.page_id = p.id
        LEFT JOIN editor_settings e ON e.owner = p.owner
       WHERE p.owner = $1 AND p.id = $2 AND p.deleted_at IS NULL`,
     [claim.owner, claim.parentId, claim.previousPageId, upstream.map((item) => item.id), upstream.map((item) => item.pageId)],
@@ -703,7 +702,7 @@ export async function readStepInput(
   const row = result.rows[0];
   if (!row?.parent_blocks) return null;
   return {
-    parentBlocks: row.parent_blocks, backgroundBlocks: row.background_blocks ?? [],
+    parentBlocks: row.parent_blocks, background: typeof row.background === "string" ? row.background : "",
     previousBlocks: claim.previousPageId === null ? null : (row.previous_blocks ?? []),
     upstream: row.upstream ?? [], refs: row.refs ?? [], fields: {
       entities: Array.isArray(row.entities) ? row.entities.filter(isPageEntity) : [],

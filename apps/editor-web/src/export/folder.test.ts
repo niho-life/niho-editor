@@ -1,7 +1,7 @@
 import { FOLDER_EXPORT_MAX_CHARS, FOLDER_EXPORT_MAX_TABS } from "@niho/docs-core";
 import type { PageFields } from "@niho/editor-store";
 import { describe, expect, it } from "vitest";
-import { buildFolderExport, contextMarkdown, exportFileName, pageMarkdown, photoArchivePath, photoAssetIds, uniqueFileNames, type FolderExportPage, type FolderExportPhoto } from "./folder";
+import { buildFolderExport, exportFileName, recordingInfoMarkdown, pageMarkdown, photoArchivePath, photoAssetIds, uniqueFileNames, type FolderExportPage, type FolderExportPhoto } from "./folder";
 
 /**
  * フォルダ単位の書き出し（#37。旧 `folder-export-tree.ts` の木をページの木に作り替えたもの）。
@@ -11,11 +11,13 @@ import { buildFolderExport, contextMarkdown, exportFileName, pageMarkdown, photo
 const ASSET = "11111111-1111-4111-8111-111111111111";
 const OTHER_ASSET = "22222222-2222-4222-8222-222222222222";
 const noPhotos = new Map<string, FolderExportPhoto>();
-const empty: PageFields = { entities: [], terms: [] };
+const empty: PageFields = { entities: [], terms: [], background: "" };
+const noFields = new Map<string, PageFields>();
 
 const paragraph = (text: string) => ({ type: "paragraph", content: [{ type: "text", text }] });
 const image = (assetId: string, alt = "") => ({ type: "image", attrs: { assetId, alt, credit: null } });
-const page = (title: string, blocks: unknown[] = [paragraph("合成の本文")]): FolderExportPage => ({ id: `id-${title}`, title, blocks });
+const page = (title: string, blocks: unknown[] = [paragraph("合成の本文")], kind?: string): FolderExportPage => ({ id: `id-${title}`, title, blocks, ...(kind ? { kind } : {}) });
+const folder = (title: string, blocks: unknown[] = []): FolderExportPage => page(title, blocks, "folder");
 const photo = (sha: string, contentType = "image/jpeg"): FolderExportPhoto => ({ sha256: sha.repeat(64).slice(0, 64), contentType, bytes: new Uint8Array([1, 2, 3]) });
 
 describe("exportFileName / uniqueFileNames", () => {
@@ -57,19 +59,20 @@ describe("photoAssetIds", () => {
   });
 });
 
-describe("contextMarkdown（背景情報）", () => {
-  it("is the folder's own body, with 登場人物 and 固有名詞 under their own headings", () => {
+describe("recordingInfoMarkdown（この録音について）", () => {
+  it("puts 登場人物・固有名詞・背景 under their own headings", () => {
     const fields: PageFields = {
       entities: [{ name: "田中", reading: "たなか", role: "店主", note: "" }],
       terms: [{ term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌"], note: "駅名" }],
+      background: " 取材の背景 ",
     };
-    const markdown = contextMarkdown(page("鎌倉の記事", [paragraph("取材の背景")]), fields, () => null);
-    expect(markdown).toBe("# 背景情報\n\n取材の背景\n\n## 登場人物\n- 田中 · たなか · 店主\n\n## 固有名詞\n- 北鎌倉 · きたかまくら · 北鎌 · 駅名\n");
+    expect(recordingInfoMarkdown(fields)).toBe("## 登場人物\n- 田中 · たなか · 店主\n\n## 固有名詞\n- 北鎌倉 · きたかまくら · 北鎌 · 駅名\n\n## 背景\n取材の背景");
   });
 
-  it("is null when the folder has no body and no 欄 (the page is left out)", () => {
-    expect(contextMarkdown(page("フォルダ", []), empty, () => null)).toBeNull();
-    expect(contextMarkdown(page("フォルダ", [paragraph("  ")]), empty, () => null)).toBeNull();
+  it("leaves out an empty section, and is null when everything is empty", () => {
+    expect(recordingInfoMarkdown({ ...empty, background: "背景だけ" })).toBe("## 背景\n背景だけ");
+    expect(recordingInfoMarkdown(empty)).toBeNull();
+    expect(recordingInfoMarkdown({ ...empty, background: "  " })).toBeNull();
   });
 });
 
@@ -91,27 +94,45 @@ describe("pageMarkdown", () => {
 });
 
 describe("buildFolderExport", () => {
-  it("puts 背景情報 first, then one .md per page in tree order, and the photos once each", () => {
+  it("writes one .md per page in tree order (no 背景情報.md), and the photos once each", () => {
     const photos = new Map([
       [ASSET, photo("a")],
       [OTHER_ASSET, photo("b", "image/png")],
     ]);
     const result = buildFolderExport({
-      pages: [page("鎌倉の記事", [paragraph("背景")]), page("取材メモ", [image(ASSET, "店")]), page("録音", [image(ASSET), image(OTHER_ASSET)])],
-      fields: empty,
+      pages: [folder("鎌倉の記事", [paragraph("旧の背景")]), page("取材メモ", [image(ASSET, "店")]), page("録音", [image(ASSET), image(OTHER_ASSET)], "rec")],
+      fields: noFields,
       photos,
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.files).toEqual(["背景情報.md", "取材メモ.md", "録音.md", photoArchivePath(photo("a")), photoArchivePath(photo("b", "image/png"))]);
+    expect(result.files).toEqual(["取材メモ.md", "録音.md", photoArchivePath(photo("a")), photoArchivePath(photo("b", "image/png"))]);
     expect(result.photos).toBe(2);
     // バイトは zip（形は editor-publish の zip の test が持つ）
     expect([...result.bytes.slice(0, 4)]).toEqual([0x50, 0x4b, 0x03, 0x04]);
     expect(result.bytes.byteLength).toBeGreaterThan(100);
   });
 
-  it("leaves 背景情報 out when the folder is empty, and leaves a photo out when no body points at it", () => {
-    const result = buildFolderExport({ pages: [page("フォルダ", []), page("メモ")], fields: empty, photos: new Map([[ASSET, photo("a")]]) });
+  it("puts この録音について at the top of a recording page only, from that recording's own fields", () => {
+    const rec = page("録音", [paragraph("文字起こし")], "rec");
+    const fields: PageFields = { entities: [{ name: "田中", reading: "", role: "", note: "" }], terms: [], background: "取材の目的" };
+    const info = recordingInfoMarkdown(fields);
+    expect(pageMarkdown(rec, () => null, info)).toBe("# 録音\n\n## 登場人物\n- 田中\n\n## 背景\n取材の目的\n\n文字起こし\n");
+    const result = buildFolderExport({ pages: [folder("フォルダ"), rec, page("メモ")], fields: new Map([[rec.id, fields], ["id-メモ", fields]]), photos: noPhotos });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.files).toEqual(["録音.md", "メモ.md"]);
+  });
+
+  it("writes the root too when it is not a folder (a recording and its step pages)", () => {
+    const result = buildFolderExport({ pages: [page("録音", [paragraph("本文")], "rec"), page("記事本文", [paragraph("本文")], "step")], fields: noFields, photos: noPhotos });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.files).toEqual(["録音.md", "記事本文.md"]);
+  });
+
+  it("leaves a photo out when no body points at it", () => {
+    const result = buildFolderExport({ pages: [folder("フォルダ"), page("メモ")], fields: noFields, photos: new Map([[ASSET, photo("a")]]) });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.files).toEqual(["メモ.md"]);
@@ -119,21 +140,20 @@ describe("buildFolderExport", () => {
   });
 
   it("refuses an empty folder, too many pages and too many characters, without building anything", () => {
-    expect(buildFolderExport({ pages: [], fields: empty, photos: noPhotos })).toEqual({ ok: false, reason: "empty" });
-    expect(buildFolderExport({ pages: [page("フォルダ", [])], fields: empty, photos: noPhotos })).toEqual({ ok: false, reason: "empty" });
+    expect(buildFolderExport({ pages: [], fields: noFields, photos: noPhotos })).toEqual({ ok: false, reason: "empty" });
+    expect(buildFolderExport({ pages: [folder("フォルダ", [paragraph("旧の本文")])], fields: noFields, photos: noPhotos })).toEqual({ ok: false, reason: "empty" });
 
     const many = Array.from({ length: FOLDER_EXPORT_MAX_TABS + 1 }, (_, index) => page(`p${index}`));
-    expect(buildFolderExport({ pages: [page("フォルダ", []), ...many], fields: empty, photos: noPhotos })).toEqual({ ok: false, reason: "too_many" });
+    expect(buildFolderExport({ pages: [folder("フォルダ"), ...many], fields: noFields, photos: noPhotos })).toEqual({ ok: false, reason: "too_many" });
 
     const long = page("長い", [paragraph("あ".repeat(FOLDER_EXPORT_MAX_CHARS + 10))]);
-    expect(buildFolderExport({ pages: [page("フォルダ", []), long], fields: empty, photos: noPhotos })).toEqual({ ok: false, reason: "too_large" });
+    expect(buildFolderExport({ pages: [folder("フォルダ"), long], fields: noFields, photos: noPhotos })).toEqual({ ok: false, reason: "too_large" });
   });
 
-  it("counts the folder's own page as 背景情報 and never as a second file", () => {
-    const result = buildFolderExport({ pages: [page("背景情報", [paragraph("本文")]), page("背景情報")], fields: empty, photos: noPhotos });
+  it("never names a page 背景情報.md on its own account: a page titled 背景情報 is just one file", () => {
+    const result = buildFolderExport({ pages: [folder("背景情報", [paragraph("本文")]), page("背景情報")], fields: noFields, photos: noPhotos });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // フォルダの本文は「背景情報.md」になり、同じ題名の中のページは「背景情報-2.md」になる
-    expect(result.files).toEqual(["背景情報.md", "背景情報-2.md"]);
+    expect(result.files).toEqual(["背景情報.md"]);
   });
 });

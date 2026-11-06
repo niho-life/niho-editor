@@ -13,7 +13,7 @@ const recipe: StepRecipe = {
 };
 const materials: StepMaterials = {
   parentBlocks: block("原文"),
-  backgroundBlocks: block("親フォルダの背景"),
+  background: "録音の背景",
   upstream: [{ id: "one", blocks: block("一の本文") }, { id: "two", blocks: block("二の本文") }],
   refs: [{ id: "ref-1", blocks: block(" 参考本文 ") }],
   fields: { entities: [], terms: [] },
@@ -34,8 +34,8 @@ test("step basis records six SHA-256 sections and every upstream step id", () =>
 test("source, refs, info, guide and step change independently; reference title is excluded", () => {
   const basis = computeStepBasis(recipe, 2, materials);
   assert.deepEqual(stepStaleReasons(basis, computeStepBasis(recipe, 2, { ...materials, parentBlocks: block("変更") })), ["source"]);
-  assert.deepEqual(stepStaleReasons(basis, computeStepBasis(recipe, 2, { ...materials, backgroundBlocks: block("変更した背景") })), ["info"]);
-  assert.deepEqual(stepStaleReasons(basis, computeStepBasis(recipe, 2, { ...materials, backgroundBlocks: [...materials.backgroundBlocks, block("長い本文の末尾")[0]!] })), ["info"]);
+  assert.deepEqual(stepStaleReasons(basis, computeStepBasis(recipe, 2, { ...materials, background: "変更した背景" })), ["info"]);
+  assert.deepEqual(stepStaleReasons(basis, computeStepBasis(recipe, 2, { ...materials, background: `${materials.background}\n長い本文の末尾` })), ["info"]);
   assert.deepEqual(stepStaleReasons(basis, computeStepBasis(recipe, 2, { ...materials, refs: [{ id: "ref-1", blocks: block("別の本文") }] })), ["refs"]);
   assert.deepEqual(stepStaleReasons(basis, computeStepBasis(recipe, 2, { ...materials, refs: [{ ...materials.refs[0]!, title: "題名だけ変更" }] })), []);
   assert.deepEqual(stepStaleReasons(basis, computeStepBasis(recipe, 2, { ...materials, fields: { entities: [{ name: "合成", reading: "", role: "", note: "" }], terms: [] } })), ["info"]);
@@ -44,10 +44,10 @@ test("source, refs, info, guide and step change independently; reference title i
   assert.deepEqual(stepStaleReasons(basis, computeStepBasis({ ...recipe, steps: [...recipe.steps.slice(0, 2), { ...recipe.steps[2]!, instruction: "変更" }] }, 2, materials)), ["step"]);
 });
 
-test("the full normalized folder body is hashed even past the prompt's background limit", () => {
+test("the full recording background is hashed even past the prompt's background limit", () => {
   const longBody = "あ".repeat(9_000);
-  const recorded = computeStepBasis(recipe, 0, { ...materials, backgroundBlocks: block(longBody + "末尾A") });
-  const current = computeStepBasis(recipe, 0, { ...materials, backgroundBlocks: block(longBody + "末尾B") });
+  const recorded = computeStepBasis(recipe, 0, { ...materials, background: longBody + "末尾A" });
+  const current = computeStepBasis(recipe, 0, { ...materials, background: longBody + "末尾B" });
   assert.deepEqual(stepStaleReasons(recorded, current), ["info"]);
 });
 
@@ -60,8 +60,8 @@ test("code block text contributes to source, context, references, and upstream a
   const sourceChanged = computeStepBasis(recipe, 0, { ...materials, parentBlocks: code("const value = 2;") });
   assert.notEqual(source.source, sourceChanged.source);
 
-  const context = computeStepBasis(recipe, 0, { ...materials, backgroundBlocks: code("const value = 1;") });
-  const contextChanged = computeStepBasis(recipe, 0, { ...materials, backgroundBlocks: code("const value = 2;") });
+  const context = computeStepBasis(recipe, 0, { ...materials, background: "const value = 1;" });
+  const contextChanged = computeStepBasis(recipe, 0, { ...materials, background: "const value = 2;" });
   assert.notEqual(context.info, contextChanged.info);
 
   const reference = computeStepBasis(recipe, 0, { ...materials, refs: [{ id: "ref-1", blocks: code("const value = 1;") }] });

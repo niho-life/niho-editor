@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 type Context = { params: Promise<{ id: string }> };
 
-/** フォルダの登場人物・固有名詞（背景情報はページの本文そのもの）。 */
+/** 録音ページの「この録音について」（登場人物・固有名詞・背景）。 */
 export async function GET(request: Request, context: Context): Promise<Response> {
   const { id } = await context.params;
   return getPageFields(request, id, folderDeps);
