@@ -107,11 +107,18 @@ jobs:
           test -n "$TEST_DATABASE_URL"
           npm -C packages/editor-store test
 
-  editor-web:
+  # Web の検査は 3 つの並列 job（Issue #292。直列 1 本だと 5〜6 分で、長い所は e2e・unit test・build）。
+  # 必須チェックの名前 `editor-web` は、下の集約 job が 3 つの結果をまとめて報告する（名前は branch protection の contexts にあるので変えない）。
+  #   editor-web-check: typecheck・lint・unit test（PostgreSQL の *.pg.test を含む）・Photo SDK の staging
+  #   editor-web-build: 本番の build → 起動ガード → 公開 API v1 の e2e（standalone の build を使う部分）
+  #   editor-web-e2e:   `next dev` の e2e（build を使わない部分）
+  # e2e は test/e2e-smoke.test.mjs 1 本を `public API v1` の名前で 2 つに分けて走らせる（npm の test:e2e:api / test:e2e:dev。
+  # 手元の test:e2e は今までどおり全部）。2 つの件数の和が test:e2e の件数と同じであること。
+  editor-web-check:
     needs: changes
     if: needs.changes.outputs.editor == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16-alpine
@@ -150,12 +157,128 @@ jobs:
       - run: npm -C apps/editor-web test
       - name: Verify immutable Photo SDK runtime staging
         run: npm -C apps/editor-web run test:photo-runtime
+
+  editor-web-build:
+    needs: changes
+    if: needs.changes.outputs.editor == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: editor_ci
+          POSTGRES_PASSWORD: editor-ci-disposable
+          POSTGRES_DB: editor_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U editor_ci -d editor_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            apps/editor-web/package-lock.json
+            packages/editor-store/package-lock.json
+      - name: Point the app at the service database (the public API e2e applies the migrations to its own schema)
+        run: |
+          echo "DATABASE_URL=postgres://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}" >> "$GITHUB_ENV"
+          echo "TEST_DATABASE_URL=postgres://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}" >> "$GITHUB_ENV"
+      - run: npm -C apps/editor-web ci --no-audit --no-fund
+      - run: npm -C packages/editor-store ci --no-audit --no-fund
+      - name: Apply migrations to the empty database
+        run: npm -C packages/editor-store run migrate
+      # build の cache（webpack の filesystem cache）。packages/ は file: 依存で node_modules へ写されるが、webpack は node_modules を
+      # 不変と見て中身を見直さないので、packages/ のどこかが変わったら key ごと変える（restore-keys でも古い packages の cache へ落ちない）。
+      # apps/editor-web の変更は webpack が自分で見分けるので、restore-keys で前の cache から続きを使う。
+      - name: Restore the Next.js build cache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4
+        with:
+          path: apps/editor-web/.next/cache
+          key: next-build-${{ runner.os }}-${{ hashFiles('apps/editor-web/package-lock.json', 'packages/*/package.json', 'packages/*/src/**') }}-${{ hashFiles('apps/editor-web/src/**', 'apps/editor-web/next.config.ts') }}
+          restore-keys: |
+            next-build-${{ runner.os }}-${{ hashFiles('apps/editor-web/package-lock.json', 'packages/*/package.json', 'packages/*/src/**') }}-
       - name: Build (NODE_ENV=production, no EDITOR_AUTH_MODE)
         run: npm -C apps/editor-web run build
       - name: Production start guard (stub and unset refuse to start)
         run: npm -C apps/editor-web run test:startup
+      - name: Public API v1 e2e (the production build and PostgreSQL)
+        run: npm -C apps/editor-web run test:e2e:api
+
+  editor-web-e2e:
+    needs: changes
+    if: needs.changes.outputs.editor == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: editor_ci
+          POSTGRES_PASSWORD: editor-ci-disposable
+          POSTGRES_DB: editor_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U editor_ci -d editor_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            apps/editor-web/package-lock.json
+            packages/editor-store/package-lock.json
+      - name: Point the app at the service database
+        run: |
+          echo "DATABASE_URL=postgres://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}" >> "$GITHUB_ENV"
+          echo "TEST_DATABASE_URL=postgres://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}" >> "$GITHUB_ENV"
+      - run: npm -C apps/editor-web ci --no-audit --no-fund
+      - run: npm -C packages/editor-store ci --no-audit --no-fund
+      - name: Apply migrations to the empty database
+        run: npm -C packages/editor-store run migrate
+      # `next dev` の cache（.next/dev/cache）。key の決め方は build の cache と同じ（packages/ が変われば key ごと変える）。
+      - name: Restore the Next.js dev cache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4
+        with:
+          path: apps/editor-web/.next/dev/cache
+          key: next-dev-${{ runner.os }}-${{ hashFiles('apps/editor-web/package-lock.json', 'packages/*/package.json', 'packages/*/src/**') }}-${{ hashFiles('apps/editor-web/src/**', 'apps/editor-web/next.config.ts') }}
+          restore-keys: |
+            next-dev-${{ runner.os }}-${{ hashFiles('apps/editor-web/package-lock.json', 'packages/*/package.json', 'packages/*/src/**') }}-
       - name: Create, write, reload (EDITOR_AUTH_MODE=stub, next dev)
-        run: npm -C apps/editor-web run test:e2e
+        run: npm -C apps/editor-web run test:e2e:dev
+
+  # 必須チェック `editor-web`（branch protection の contexts。docs/architecture/editor-release-boundary.md §3）。
+  # 上の 3 つの job がすべて成功したときだけ成功する。`changes` が「走らせない」と言ったときは 3 つと一緒に skip（成功と数える）。
+  # どれかが失敗しても必ず走って赤にする（`!cancelled()`。run の取消のときだけ走らない）。
+  editor-web:
+    needs: [changes, editor-web-check, editor-web-build, editor-web-e2e]
+    if: ${{ !cancelled() && needs.changes.outputs.editor == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every editor-web job succeeded
+        env:
+          CHECK: ${{ needs.editor-web-check.result }}
+          BUILD: ${{ needs.editor-web-build.result }}
+          E2E: ${{ needs.editor-web-e2e.result }}
+        run: |
+          echo "check=$CHECK build=$BUILD e2e=$E2E"
+          test "$CHECK" = success && test "$BUILD" = success && test "$E2E" = success
 
   # 配備の道具（docs/ops/editor-deploy.md）。本番には触れない: 構文・Secret と env の組み立て・image の build だけを確かめる。
   editor-deploy:

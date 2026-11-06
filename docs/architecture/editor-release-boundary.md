@@ -38,6 +38,8 @@
 
 必須チェックにする job は、workflow の `paths` で止めない。workflow ごと走らないと check が pending のままになり、PR を queue に入れられない。`changes` job で変更を見分け、jobs の `if` で skip する（skip は成功と数える）。
 
+長い job は並列の job に分けてよいが、必須チェックの名前は増やさない。分けた job は、同じ名前の**集約 job**（`needs` で 3 つを待ち、全部 `success` のときだけ成功。`!cancelled()` で、どれかが赤でも必ず走って赤にする）が 1 つの check として報告する（`editor-web` ＝ `editor-web-check` / `editor-web-build` / `editor-web-e2e`。Issue #292）。
+
 ### 公開リポジトリの設定
 
 - fork からの PR の workflow は、外部の contributor 全員について承認が要る（`approval_policy: all_external_contributors`）。承認しなければ走らない。
