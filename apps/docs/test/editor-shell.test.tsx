@@ -52,9 +52,9 @@ function body(container: HTMLElement): Editor {
   return element.editor;
 }
 
-/** 左の一覧の上段の行（「検索」「新しいページ」）。名前は行の文字で、⌘ の表示は読み上げに出さない。 */
+/** 左の一覧の上の 1 行のアイコン（「検索」「新しいページ」）。名前は `aria-label`（「検索（⌘K）」のように ⌘ の案内が付く）。 */
 function sidebarAction(container: HTMLElement, label: string): HTMLButtonElement | null {
-  return [...container.querySelectorAll<HTMLButtonElement>(".es-sb-acts .es-sb-act")].find((candidate) => candidate.textContent?.includes(label)) ?? null;
+  return [...container.querySelectorAll<HTMLButtonElement>(".es-sb button.es-ib")].find((candidate) => candidate.getAttribute("aria-label")?.startsWith(label)) ?? null;
 }
 
 /** 「新しいページ」›「空のページ」。 */

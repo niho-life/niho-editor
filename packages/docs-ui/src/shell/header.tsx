@@ -1,4 +1,5 @@
 import { useRef, type ReactNode } from "react";
+import { ShellBrand } from "./brand";
 import { Icon } from "./icons";
 import { ShellMenu } from "./menu";
 import { StatusDot } from "./status-dot";
@@ -39,7 +40,7 @@ export type ShellHeaderProps = {
   /** 場所（親のフォルダ › 親の録音）。720px より広いときにヘッダーの左に出す。 */
   location?: readonly ShellLocationItem[];
   onOpenLocation?: (id: string) => void;
-  /** 一覧がしまわれているときの「一覧を出す」ボタン。 */
+  /** 一覧がしまわれているときの「一覧を出す」ボタン（右隣にアプリ名 ShellBrand も出す）。 */
   showListButton?: boolean;
   onToggleList?: () => void;
   /** 道具の帯（ShellTools）。 */
@@ -81,6 +82,8 @@ export function ShellHeader(props: ShellHeaderProps) {
           <Icon name="side" />
         </button>
       )}
+      {/* 一覧をしまったときも左上にアプリ名が残るように（900px 以下では題名の場所を空けるため CSS で隠す） */}
+      {props.showListButton && <ShellBrand />}
       {props.location && props.location.length > 0 && <ShellLocation items={props.location} onOpen={props.onOpenLocation} place="head" />}
       {props.title === undefined ? (
         // 題名を出さないときも、狭い幅で右の操作を右へ寄せる場所は取る（es-ttl は 900px 未満で伸びる）

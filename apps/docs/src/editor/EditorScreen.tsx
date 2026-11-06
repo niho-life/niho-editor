@@ -11,7 +11,6 @@ import {
   EditorShell,
   ShellHeader,
   ShellSidebar,
-  shellAccountItems,
   type NewPageKind,
   type ShellListItem,
 } from "niho-docs-ui/shell";
@@ -66,7 +65,7 @@ function listItems(pages: readonly VaultPage[], now: number): ShellListItem[] {
   }));
 }
 
-export function EditorScreen({ bridge, me }: { bridge: DocsHost; me: { name: string; caption: string; initial: string } }) {
+export function EditorScreen({ bridge }: { bridge: DocsHost; me: { name: string; caption: string; initial: string } }) {
   const pages = useMemo(() => vaultPages(bridge), [bridge]);
   const [rows, setRows] = useState<VaultPage[]>([]);
   const [opened, setOpened] = useState<Opened | null>(null);
@@ -75,7 +74,6 @@ export function EditorScreen({ bridge, me }: { bridge: DocsHost; me: { name: str
   const [problem, setProblem] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [newMenuOpen, setNewMenuOpen] = useState(false);
-  const [meOpen, setMeOpen] = useState(false);
   const [search, setSearch] = useState<{ open: boolean; value: string }>({ open: false, value: "" });
   const [now, setNow] = useState(() => Date.now());
 
@@ -371,14 +369,8 @@ export function EditorScreen({ bridge, me }: { bridge: DocsHost; me: { name: str
               onClose: () => setSearch({ open: false, value: "" }),
               onChange: (value) => setSearch({ open: true, value }),
             }}
-            me={{
-              ...me,
-              open: meOpen,
-              items: shellAccountItems(),
-              onToggle: () => setMeOpen((open) => !open),
-              onClose: () => setMeOpen(false),
-              onSelect: () => setMeOpen(false),
-            }}
+            // 左下は「設定」の直リンク（shell の決まり）。Mac の殻にはまだ設定の画面が無いので、今までのメニューと同じく何もしない
+            me={{ onOpen: () => undefined }}
           />
         }
         header={

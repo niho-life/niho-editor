@@ -93,20 +93,23 @@
 
 /* ===== 左の一覧 ===== */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb{display:flex;flex-direction:column;min-height:0;height:100%;background:var(--ed-canvas);border-right:1px solid var(--ed-line)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-top{display:flex;align-items:center;gap:6px;padding:14px 12px 10px;min-height:58px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-top{display:flex;align-items:center;gap:2px;padding:12px 8px 8px 12px;min-height:56px}
+/* 上の 1 行のアイコン（検索・＋・一覧をしまう）。言葉は aria-label と title（⌘K / ⌘N） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-top>.es-ib,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-top>.es-newwrap>.es-ib{color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-top>.es-ib:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-top>.es-newwrap>.es-ib:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-top .es-ib[aria-expanded="true"]{color:var(--ed-ink)}
+/* 左上のアプリ名とアイコン（ShellBrand）。地の色は svg の currentColor（rect）で受ける */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-brand{display:inline-flex;align-items:center;gap:7px;min-width:0;flex:none;font-size:14px;font-weight:600;line-height:1;color:var(--ed-ink);white-space:nowrap}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-brand svg{width:22px;height:22px;flex:none;border-radius:6px;color:var(--ed-sand-2);box-shadow:0 0 0 1px var(--ed-line-2)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-top>.es-brand{padding-left:2px}
+/* ＋のメニューは右端の小さなボタンから左へ開く（一覧の幅からはみ出さない） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-top .es-menu--narrow{left:auto;right:0;top:36px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt>.es-brand{margin-right:4px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-newwrap{position:relative;display:flex}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-newbtn{width:30px;height:30px;border-radius:50%;background:var(--ed-primary-bg);color:var(--ed-primary-ink);display:grid;place-items:center;flex:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-newbtn:hover{background:var(--ed-primary-bg-hover)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-newbtn .es-ico{width:17px;height:17px;stroke-width:2.2}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-find{display:flex;align-items:center;gap:8px;flex:1;min-width:0;height:32px;padding:0 4px 0 10px;border-radius:9px;background:var(--ed-white);border:1px solid var(--ed-line-2);color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-find input{flex:1;min-width:0;border:0;outline:none;font-size:13px;background:none;color:var(--ed-ink)}
-/* 上段の行ボタン（検索・新しいページ）。右端のショートカットは飾り（aria-hidden） */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-acts{display:grid;gap:2px;padding:0 10px 6px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-acts .es-newwrap{display:block}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-act{display:flex;align-items:center;gap:9px;width:100%;height:30px;padding:0 8px;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--ed-ink-sub);text-align:left}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-act:hover{background:var(--ed-sand-2);color:var(--ed-ink)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-act .es-ico{width:16px;height:16px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-act kbd{margin-left:auto;font-family:var(--ed-font-sans);font-size:12px;font-weight:500;color:var(--ed-ink-mute)}
 /* ドラッグ: 動かしている行は沈め、落とす位置に印（into は面と枠、before / after は線） */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di--dragging{background:var(--ed-sand);color:var(--ed-ink-mute);border-radius:10px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow.es-di--drop-into{background:var(--ed-accent-soft);box-shadow:inset 0 0 0 2px var(--ed-leaf);border-radius:10px}
@@ -150,14 +153,12 @@
 @media (hover:none){:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di-more{opacity:1}}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-psfolder select{width:100%;border:1px solid var(--ed-line-2);border-radius:10px;padding:6px 8px;background:var(--ed-white);font:inherit;font-size:13px;color:var(--ed-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-foot{position:relative;border-top:1px solid var(--ed-line);padding:8px 10px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:7px 8px;border-radius:10px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me--on{background:var(--ed-sand)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-who{min-width:0;display:block}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-who b{display:block;font-size:13px;line-height:1.25;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-who span{display:block;font-size:12px;color:var(--ed-ink-mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 左下の「設定」（直リンク。今いるときは aria-current で面を付ける） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:7px 8px;border-radius:10px;font-size:13.5px;color:var(--ed-ink-sub)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me b{font-weight:600}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me .es-ico{width:18px;height:18px;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me[aria-current="page"]{background:var(--ed-sand);color:var(--ed-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-badge{margin-left:auto;font-style:normal;font-size:12px;background:var(--ed-accent-soft);color:var(--ed-accent-ink);border-radius:999px;padding:0 7px;font-weight:600}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me .es-cv{margin-left:auto;color:var(--ed-ink-faint);font-size:12px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-badge+.es-cv{margin-left:6px}
 
 /* ===== このページの写真（サイドバーの下。page/PagePhotos.tsx。モック editor-photo-library-v1） ===== */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ph-split{flex:none;height:10px;margin:-5px 0;position:relative;z-index:2;cursor:row-resize;touch-action:none}
@@ -826,6 +827,15 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--add .es-ico{width:15px;height:15px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root button.es-row--add:hover{background:var(--ed-accent-soft)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--note{grid-template-columns:minmax(0,1fr) auto;min-height:40px;font-size:12.5px;color:var(--ed-ink-mute)}
+/* 「アカウント」の群の本人の行: [アバター] [名前／役割とつながり] [›] を 1 行に */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me{grid-template-columns:auto minmax(0,1fr) auto;gap:6px 12px;min-height:60px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me .es-row-k{display:block;color:var(--ed-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me .es-row-k b{display:block;font-size:14px;font-weight:600;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me .es-row-k small{display:block;font-size:12.5px;font-weight:500;color:var(--ed-ink-mute)}
+/* 設定の一覧のいちばん下の「ログアウト」（薄い 1 行） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-logout{display:inline-flex;align-items:center;gap:8px;margin-top:34px;padding:6px 10px 6px 6px;border-radius:8px;font-size:13px;font-weight:600;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-logout:hover{background:var(--ed-sand);color:var(--ed-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-logout .es-ico{width:16px;height:16px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row-info{padding:10px 16px 12px;border-top:1px solid var(--ed-line);background:var(--ed-sand);font-size:12.5px;line-height:1.7;color:var(--ed-ink-sub);overflow-wrap:anywhere}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-info-dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 12px;margin-top:6px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-info-dl dt{font-weight:600;color:var(--ed-ink-mute)}
@@ -998,6 +1008,7 @@
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ttl{display:block;flex:1;min-width:0;padding:0 4px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt .es-sp{display:none}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt .es-tools{display:none}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt .es-brand{display:none}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt .es-pubbtn{min-width:0;padding:0 12px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-mtb{flex:none;display:flex;height:50px;border-top:1px solid var(--ed-line);background:var(--ed-canvas);z-index:30}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-mtb .es-tools{margin:0;padding:0 10px;width:100%;height:100%}
@@ -1081,6 +1092,9 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--lang .es-choice button{flex:1;padding:0 6px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--add{grid-template-columns:auto minmax(0,1fr)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--note{grid-template-columns:minmax(0,1fr) auto}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me{grid-template-columns:auto minmax(0,1fr) auto}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me .es-row-k{grid-column:2}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me .es-row-e{grid-column:3;grid-row:1}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--split{grid-template-columns:minmax(0,1fr) auto;padding:0 8px 0 0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row-main{grid-template-columns:auto minmax(0,1fr) auto;padding-left:12px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row-main .es-chev{display:none}

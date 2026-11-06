@@ -13,7 +13,6 @@ import {
   ShellSheet,
   ShellSidebar,
   ShellTools,
-  shellAccountItems,
   type NewPageKind,
   type ShellDropTarget,
   type ShellToolAction,
@@ -49,6 +48,7 @@ import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
 import { usePageShare } from "@/lib/use-page-share";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
 import { useShellLayout } from "@/lib/use-shell-layout";
+import { useRowDelete } from "@/lib/use-row-delete";
 import { HistorySheet } from "./HistorySheet";
 import { InfoPanel } from "./InfoPanel";
 import { SidePage } from "./SidePage";
@@ -66,11 +66,11 @@ const PAGE_PATH = /^\/p\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 /** 右に並べたページ（`?side=`）の id の形。 */
 const SIDE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** 設定系のページ（本人の行のメニューの項目と、ヘッダーの題名）。 */
+/** 設定系のページ（ヘッダーの題名と、左下の「設定」の現在地）。 */
 const SETTINGS_ROUTES = [
-  { path: "/destinations", item: "dest", title: "発信先" },
-  { path: "/account", item: "account", title: "役割とつながり" },
-  { path: "/settings", item: "settings", title: "設定" },
+  { path: "/destinations", title: "発信先" },
+  { path: "/account", title: "役割とつながり" },
+  { path: "/settings", title: "設定" },
 ] as const;
 
 export type FrameMe = { name: string; caption: string; initial: string };
@@ -234,17 +234,20 @@ const VISUALLY_HIDDEN_STYLE = {
  * 削除の確認（docs-ui の ShellSheet。外は inert、Esc・外の押下・「やめる」で閉じ、閉じたら「…」へフォーカスが戻る）。
  * 送っている間は閉じず、2 回目を送らない。失敗の理由はダイアログの中に出し、閉じない。
  */
-function DeleteConfirm(props: { busy: boolean; error: string | null; onConfirm: () => void; onCancel: () => void; folder?: { title: string; count: number } | null }) {
+function DeleteConfirm(props: { title?: string; busy: boolean; error: string | null; onConfirm: () => void; onCancel: () => void; folder?: { title: string; count: number } | null }) {
   const { busy, folder } = props;
   return (
     <ShellSheet label={folder ? "フォルダの削除" : "ページの削除"} onClose={props.onCancel}>
       <div className="es-sh-hd">
+        {/* どのページかを見出しで言う（無題なら「このページ」）。フォルダは中のページの数も言う */}
         <h2>
           {folder
             ? folder.count > 0
               ? `「${folder.title || "無題"}」と中の ${folder.count} ページを削除しますか？`
               : `「${folder.title || "無題"}」を削除しますか？`
-            : "このページを削除しますか？"}
+            : props.title
+              ? `「${props.title}」を削除しますか？`
+              : "このページを削除しますか？"}
         </h2>
       </div>
       <div className="es-sh-body">
@@ -287,6 +290,14 @@ function isInside(pages: readonly PageSummary[], id: string, ancestor: string): 
     if (at === ancestor) return true;
   }
   return false;
+}
+
+/** `id` のページが `root` のページ自身か、その子孫か（サーバーの削除は子孫ごとゴミ箱へ入れる。大文字小文字は区別しない）。 */
+function inPageTree(pages: readonly PageSummary[], id: string, root: string): boolean {
+  const [at, top] = [id.toLowerCase(), root.toLowerCase()];
+  if (at === top) return true;
+  const lowered = pages.map((page) => ({ ...page, id: page.id.toLowerCase(), parent: page.parent?.toLowerCase() ?? null }));
+  return isInside(lowered, at, top);
 }
 
 /** 並びを 1 つ動かした結果を行に入れる（サーバーが確定した値があればそれを、無ければ同じ規則で作り直す）。 */
@@ -449,7 +460,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // 並べ替えを送っているあいだ（描画を待たずに読む。ドラッグの次のドロップを受けない）
   const orderingRef = useRef(false);
   const [newMenuOpen, setNewMenuOpen] = useState(false);
-  const [meOpen, setMeOpen] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
   const publishSaved = useRef<(id: string) => void>(() => undefined);
   const publishOpen = useRef<() => void>(() => undefined);
@@ -789,21 +799,22 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     router.push(kind === "recording" ? `/p/new?from=recording${inside ? `&${inside}` : ""}` : `/p/new${inside ? `?${inside}` : ""}`);
   };
 
-  const selectAccount = (item: string) => {
-    setMeOpen(false);
-    const route = SETTINGS_ROUTES.find((candidate) => candidate.item === item);
-    if (route) {
-      router.push(route.path);
-      return;
-    }
-    if (item === "logout") {
-      // 結果に関わらずログインの画面へ。この画面の状態（一覧など）を残さないよう、読み込み直す
-      void fetch("/auth/logout", { method: "POST", credentials: "same-origin" })
-        .catch(() => undefined)
-        // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- 読み込み直すため
-        .finally(() => window.location.assign("/auth/login"));
-    }
-  };
+  // 一覧の行の「…」→「削除」（確認のシートはヘッダーの「…」の削除と同じ）。消したページ（フォルダなら中のページも）を開いていればホームへ、右に並べていれば閉じる
+  const treePages = list.opened && !list.pages.some((page) => page.id === list.opened!.id) ? [...list.pages, list.opened] : list.pages;
+  const rowDelete = useRowDelete({
+    current: () => attachedRef.current,
+    inTree: (id, root) => inPageTree(treePages, id, root),
+    onDeleted: (id) => {
+      // 一覧から外す前に、開いているページが消す木の中か見る（外した後は親が分からない）
+      const mainGone = !!currentId && inPageTree(treePages, currentId, id);
+      const sideGone = !!sideId && inPageTree(treePages, sideId, id);
+      api.pageRemoved(id);
+      if (mainGone) router.push("/");
+      else if (sideGone) closeSide();
+    },
+  });
+  const rowTitle = (id: string) =>
+    items.find((item) => item.id === id)?.title ?? list.pages.find((page) => page.id === id)?.title ?? "";
 
   const recordingStart = pathname === "/p/new" && searchParams.get("from") === "recording";
   // ページの題名はヘッダーに出さない（本文の題名にだけ。オーナー決定 2026-11-06）。ページでない画面（録音から・設定）は出す
@@ -1048,9 +1059,13 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     const folder = parent?.kind === "folder" ? { title: parent.title, others: list.pages.filter((page) => page.parent === parent.id && page.id !== railSummary.id).length } : null;
     return { kind: railSummary.kind, folder };
   }, [railSummary, list.pages]);
-  // フォルダを削除するときの確認の言葉（中のページの数。読み込んである分）
-  const folderInside = railIsFolder && railSummary ? withoutPageTree(list.pages, railSummary.id).length : 0;
-  const deleteFolder = railIsFolder && railSummary ? { title: railSummary.title, count: list.pages.length - folderInside - (list.pages.some((page) => page.id === railSummary.id) ? 1 : 0) } : null;
+  // フォルダを削除するときの確認の言葉（中のページの数。読み込んである分）。ヘッダーの「…」と一覧の行の「…」の両方で使う
+  const folderDeleteInfo = (id: string): { title: string; count: number } | null => {
+    const page = list.pages.find((item) => item.id === id);
+    if (page?.kind !== "folder") return null;
+    return { title: page.title, count: list.pages.length - withoutPageTree(list.pages, id).length - 1 };
+  };
+  const deleteFolder = railIsFolder && railSummary ? folderDeleteInfo(railSummary.id) : null;
   // 右上の「…」（リンクで共有・書き出し・履歴・複製・移動・ページの情報・削除）。操作の前に、開いているページのまだ届いていない変更を保存する
   // 「…」の「AI の文を灰色で見せる」（この端末の表示だけ。PageEditor が本文に当てる）
   const aiGray = useAiGray();
@@ -1126,7 +1141,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 page={railPage}
                 aiSteps={aiSteps?.ownerId === railId ? aiSteps : null}
                 placement={
-                  narrow ? undefined : { at: layout.place.ai, onMove: (to) => layout.move("ai", to), open: layout.float.open, onOpenChange: layout.setFloatOpen }
+                  narrow ? undefined : { at: layout.place.ai, open: layout.float.open, onOpenChange: layout.setFloatOpen }
                 }
                 onPagesChanged={onAiPagesChanged}
                 reads={aiReads}
@@ -1194,17 +1209,10 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 ) : null
               }
               photos={photos}
-              side={!narrow && currentId ? { id: sideId ?? undefined, onOpen: openSide, onClose: closeSide } : undefined}
-              panel={narrow ? undefined : { at: layout.place.list, onMove: (to) => layout.move("list", to) }}
-              me={{
-                ...initial.me,
-                open: meOpen,
-                current: settings !== undefined,
-                items: shellAccountItems(0, settings?.item, initial.me.name),
-                onToggle: () => setMeOpen((open) => !open),
-                onClose: () => setMeOpen(false),
-                onSelect: selectAccount,
-              }}
+              side={!narrow && currentId ? { id: sideId ?? undefined, onOpen: openSide } : undefined}
+              onDeleteRow={(id) => rowDelete.open(id, rowTitle(id))}
+              panel={!narrow}
+              me={{ current: settings !== undefined, onOpen: () => router.push("/settings") }}
             />
           }
           header={
@@ -1266,6 +1274,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
             <>
               {menu.confirm ? (
                 <DeleteConfirm {...menu.confirm} folder={deleteFolder} />
+              ) : rowDelete.confirm ? (
+                <DeleteConfirm {...rowDelete.confirm} folder={folderDeleteInfo(rowDelete.confirm.id)} />
               ) : share.sheet ? (
                 <ShareSheet {...share.sheet} />
               ) : history.sheet ? (

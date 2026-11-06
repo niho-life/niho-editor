@@ -214,27 +214,21 @@ function nextEnabled(items: readonly MenuItem[], from: number, direction: 1 | -1
   return from;
 }
 
-/** 分割ビュー（設計 §5.5）での「AIと作る」の置き場所。 */
+/** 分割ビュー（設計 §5.5）での「AIと作る」の置き場所。移すのは見出し（掴む所）のドラッグだけ（メニューは無い。オーナー決定 2026-11-06）。 */
 export type AiPanelPlacement = {
   /** 今の置き場所（左右のドックか、メインの下に浮かせる）。 */
   at: ShellAiPlace;
-  /** 会話メニューの「〜へ移す」（今いない場所だけ出す）。 */
-  onMove: (to: ShellAiPlace) => void;
   /** 浮かせているとき、会話を出しているか（出していなければ入力欄 1 行）。 */
   open: boolean;
   onOpenChange: (open: boolean) => void;
 };
-
-/** 移す先の名前（会話メニューの項目）。 */
-const PLACE_TEXT: Record<ShellAiPlace, string> = { left: "左のドックへ移す", right: "右のドックへ移す", float: "メインの下に浮かせる" };
-const PLACE_ICON: Record<ShellAiPlace, "side" | "panel" | "float"> = { left: "side", right: "panel", float: "float" };
 
 export type AiPanelProps = {
   pageId: string | null;
   context: AttachedAi | null;
   steps: AttachedAiSteps | null;
   /**
-   * 分割ビューの置き場所（デスクトップだけ渡す）。渡すと、見出しを掴んで動かせ、会話メニューの下に「〜へ移す」を出す。
+   * 分割ビューの置き場所（デスクトップだけ渡す）。渡すと、見出しを掴んで動かせる（移すメニューは無い）。
    * 浮かせているときは、ふだんは入力欄 1 行（掴む所と ⌃）で、送るか ⌃ で会話を出し、Esc で 1 行に戻す。
    * 置き場所を変えてもこの部品は作り直されない（EditorShell が木の同じ位置に描く）ので、会話・書きかけ・実行中の依頼は残る。
    */
@@ -1034,20 +1028,6 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
                 <span>{sessionError}</span>
                 {failedSessionId && <button type="button" disabled={sessionLoading} onClick={() => void switchConversation(failedSessionId)}>再試行</button>}
               </div>
-            )}
-            {placement && (
-              <>
-                <hr className="es-ai-sep" />
-                {(["left", "right", "float"] as const).filter((to) => to !== placement.at).map((to) => (
-                  <button key={to} type="button" className="es-ai-menu-row" onClick={() => {
-                    setHistoryOpen(false);
-                    placement.onMove(to);
-                  }}>
-                    <Icon name={PLACE_ICON[to]} />
-                    <span>{PLACE_TEXT[to]}</span>
-                  </button>
-                ))}
-              </>
             )}
           </div>
         )}

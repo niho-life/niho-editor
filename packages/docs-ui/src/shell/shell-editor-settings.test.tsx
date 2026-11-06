@@ -49,6 +49,8 @@ function hubProps(patch: Partial<EditorSettingsHubProps> = {}): EditorSettingsHu
     storageUsage: { imageBytes: "1073741824", audioBytes: "4096", totalBytes: "1073745920" },
     storageUsageNote: null,
     audio: { maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30 },
+    account: { name: "合成の名前", initial: "合" },
+    onLogout: noop,
     onNavigate: noop,
     ...patch,
   };
@@ -142,15 +144,32 @@ function buttonAttrs(markup: string, name: string): string | undefined {
 }
 
 describe("EditorSettingsHub（/settings）", () => {
-  it("has the three groups AI / 手順 / データ, a status line, and no 「編集」 button anywhere", () => {
+  it("has the groups アカウント / AI / 手順 / データ, a status line, and no 「編集」 button anywhere", () => {
     const markup = hub();
-    for (const id of ["es-s-ai", "es-s-steps", "es-s-data"]) expect(markup).toContain(`id="${id}"`);
-    for (const title of ["AI", "手順", "データ"]) expect(markup).toContain(`>${title}</h2>`);
+    for (const id of ["es-s-account", "es-s-ai", "es-s-steps", "es-s-data"]) expect(markup).toContain(`id="${id}"`);
+    const titles = [...markup.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(([, title]) => title);
+    expect(titles).toEqual(["アカウント", "AI", "手順", "データ"]);
     expect(markup).toContain('role="status"');
     expect([...markup.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)].map(([, inner]) => (inner ?? "").replace(/<[^>]*>/g, "").trim())).not.toContain("編集");
     // 事実は一覧から外した（エンジン・時間切れ・受け付ける形式・保存の節）
     const shown = textOf(markup);
     for (const gone of ["Deepgram", "時間切れ", "受け付ける形式", "文字起こし</h2>"]) expect(markup.includes(gone) || shown.includes(gone)).toBe(false);
+  });
+
+  it("puts 本人（役割とつながり）and 発信先 in アカウント, and ログアウト last", () => {
+    const markup = hub();
+    const account = markup.slice(markup.indexOf('id="es-s-account"'), markup.indexOf('id="es-s-ai"'));
+    expect(account).toMatch(/<a class="es-row es-row--link es-row--me" href="\/account">/);
+    expect(account).toContain('<span class="es-av" aria-hidden="true">合</span>');
+    expect(account).toContain("<b>合成の名前</b><small>役割とつながり</small>");
+    expect(account).toMatch(/href="\/destinations"[^>]*>[\s\S]*?発信先/);
+    // 名前が空なら太字は「役割とつながり」だけ
+    const nameless = hub({ account: { name: " ", initial: "?" } });
+    expect(nameless).toContain("<b>役割とつながり</b></span>");
+    expect(nameless).not.toContain("<small>役割とつながり</small>");
+    // ログアウトはデータの群の後ろ（いちばん下）
+    expect(markup.indexOf('class="es-logout"')).toBeGreaterThan(markup.indexOf('id="es-s-data"'));
+    expect(textOf(markup.slice(markup.indexOf('class="es-logout"')))).toContain("ログアウト");
   });
 
   it("links the rows to the detail pages", () => {

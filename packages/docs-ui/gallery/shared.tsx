@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { ShellSidebar, shellAccountItems, type ShellListItem } from "../src/shell";
+import { ShellSidebar, type ShellListItem } from "../src/shell";
 import { DEST, ME, PAGES, byId, isPublished, type GalleryPage } from "./data";
 
 export const navigate = (route: string) => {
@@ -30,11 +30,10 @@ export function listItems(extraNew: boolean): ShellListItem[] {
   return extraNew ? [{ id: "new", title: "", when: "たった今" }, ...rows] : rows;
 }
 
-/** 発信先・役割とつながり・設定のページで使う左の一覧（ページは選ばれていない。本人の行に現在地を示す）。 */
-export function useSettingsSidebar(current: "dest" | "account" | "settings", forced: boolean | undefined, pendingInvites: number): { sidebar: ReactNode; sidebarOpen: boolean; setSidebarOpen: (open: boolean) => void } {
+/** 発信先・役割とつながり・設定のページで使う左の一覧（ページは選ばれていない。左下の「設定」に現在地を示す）。 */
+export function useSettingsSidebar(forced: boolean | undefined, pendingInvites: number): { sidebar: ReactNode; sidebarOpen: boolean; setSidebarOpen: (open: boolean) => void } {
   const [sidebarOpen, setSidebarOpen] = useState(forced ?? !isNarrow());
   const [newMenu, setNewMenu] = useState(false);
-  const [accountMenu, setAccountMenu] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
   const items = useMemo(() => listItems(false), []);
   const query = search.value.trim();
@@ -57,21 +56,7 @@ export function useSettingsSidebar(current: "dest" | "account" | "settings", for
         onClose: () => setSearch({ open: false, value: "" }),
         onChange: (value) => setSearch({ open: true, value }),
       }}
-      me={{
-        name: ME.name,
-        initial: ME.initial,
-        badge: pendingInvites || undefined,
-        open: accountMenu,
-        current: true,
-        items: shellAccountItems(pendingInvites, current),
-        onToggle: () => setAccountMenu((v) => !v),
-        onClose: () => setAccountMenu(false),
-        onSelect: (id) => {
-          setAccountMenu(false);
-          if (id === "logout") navigate("login");
-          else navigate(id);
-        },
-      }}
+      me={{ badge: pendingInvites || undefined, current: true, onOpen: () => navigate("settings") }}
     />
   );
   return { sidebar, sidebarOpen, setSidebarOpen };

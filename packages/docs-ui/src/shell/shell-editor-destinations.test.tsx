@@ -43,6 +43,7 @@ function destProps(patch: Partial<EditorDestinationsPageProps> = {}): EditorDest
     issuedKey: null,
     onCopyKey: noop,
     onCloseKey: noop,
+    onNavigate: noop,
     ...patch,
   };
 }
@@ -108,6 +109,11 @@ function unlabeledInputs(markup: string): string[] {
 }
 
 describe("EditorDestinationsPage", () => {
+  it("has 「← 設定」 above the heading (a link to /settings)", () => {
+    const markup = destHtml();
+    expect(markup).toMatch(/<a class="es-back" href="\/settings">[\s\S]*?設定<\/a><h1>発信先<\/h1>/);
+  });
+
   it("lists the faces with their reason, and every connected site", () => {
     const shown = plain(destHtml());
     expect(shown).toContain("NIHO Experience");

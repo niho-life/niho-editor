@@ -16,7 +16,6 @@ import {
   ShellSidebar,
   ShellSteps,
   ShellTools,
-  shellAccountItems,
   shellMoreItems,
   shellPublishButton,
   shellStatus,
@@ -124,7 +123,6 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
   const [sidebarOpen, setSidebarOpen] = useState(forced.sidebar ?? !isNarrow());
   const [railOpen, setRailOpen] = useState(forced.rail ?? def?.rail ?? false);
   const [newMenu, setNewMenu] = useState(false);
-  const [accountMenu, setAccountMenu] = useState(false);
   const [moreMenu, setMoreMenu] = useState(false);
   const [blockMenu, setBlockMenu] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
@@ -156,8 +154,9 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
       currentId={isStart ? undefined : page.id}
       onSelect={(itemId) => navigate(itemId === "new" ? "new" : `page:${itemId}`)}
       onCollapse={() => setSidebarOpen(false)}
-      // 右に並べる（設計 §5.5。editor-web と同じくデスクトップでページを開いているときだけ）。行の「…」を axe・はみ出しの確認に載せる
-      side={!isStart && !isNarrow() ? { onOpen: () => undefined, onClose: () => undefined } : undefined}
+      // 右に並べる（設計 §5.5。editor-web と同じくデスクトップでページを開いているときだけ）。行の「…」（削除）を axe・はみ出しの確認に載せる
+      side={!isStart && !isNarrow() ? { onOpen: () => undefined } : undefined}
+      onDeleteRow={() => undefined}
       newMenu={{
         open: newMenu,
         onToggle: () => setNewMenu((v) => !v),
@@ -171,19 +170,7 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
         onClose: () => setSearch({ open: false, value: "" }),
         onChange: (value) => setSearch({ open: true, value }),
       }}
-      me={{
-        name: ME.name,
-        initial: ME.initial,
-        badge: 1,
-        open: accountMenu,
-        items: shellAccountItems(1),
-        onToggle: () => setAccountMenu((v) => !v),
-        onClose: () => setAccountMenu(false),
-        onSelect: (itemId) => {
-          setAccountMenu(false);
-          navigate(itemId === "logout" ? "login" : itemId);
-        },
-      }}
+      me={{ badge: 1, onOpen: () => navigate("settings") }}
     />
   );
 

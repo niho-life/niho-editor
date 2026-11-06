@@ -1,0 +1,687 @@
+<!doctype html>
+<!--
+  mock: NIHO editor のシェル（左の一覧・行のメニュー・左下の設定）リファイン v1（PC と 320px）
+  色と文字: 単体で開けるよう、色は :root の仮値（hex）で持つ。実装（docs-ui / editor-web）では packages/ui/src/styles/tokens.css の
+  token を引き、生の hex は足さない。文字は 12px 以上。
+
+  オーナーの指示（2026-11-06）と、それをどう置いたか:
+    1. 「検索」「新しいページ」をアイコンだけにして、「一覧をしまう」と同じ 1 行に
+       → 一覧の上は 1 行: [アプリのアイコン Editor] ……… [検索][＋][一覧をしまう]。言葉は吹き出し（検索 ⌘K／新しいページ ⌘N）。
+         ＋ は今までどおり「空のページ／録音から／音声ファイルから」のメニュー。検索を押すとその行が検索欄に変わる（今と同じ）。
+       ※ 設計 §4 の「2 行にする（アイコンの列にしない。オーナー決定 2026-11-05）」を上書きする。実装のときに設計を直す。
+    2. 画面の左上にアプリ名「Editor」とアイコン
+       → 一覧の 1 行目の左。一覧をしまったときはヘッダーの左（「一覧を出す」の右隣）に同じものが出るので、どの状態でも左上にある。
+         アイコンは Mac アプリの icon.svg（apps/docs/src-tauri/icons）のグリフをそのまま小さく描く。
+    3. 行の「…」に「削除」
+       → 「…」の中身は「削除」だけ。「開く」は行を押せば開くので要らない。「右に並べて開く」は ⌥クリックとドラッグに任せてメニューから消す。
+         削除は今の「…」（右上）と同じ確認（ゴミ箱に 30 日）。触れる端末（hover が無い）では「…」を常に出す。
+    4. 「右に並べて開く」「左／右のドックへ移す」「メインの下に浮かせる」は全部やめる（ドラッグで足りる）
+       → 一覧の上の「一覧のメニュー（⋯）」そのものを消す。AI の「⋯」は会話の履歴だけにして、「〜へ移す」の行を消す。
+         右に並べるのは ⌥クリック・行のドラッグ。ドックを移すのは見出しのドラッグ。
+    5. 左下の「設定」を押すとメニュー、もう一度「設定」で設定ページ、の二度手間
+       → 左下は「設定」の直リンク（押すとすぐ /settings）。メニューは無い（▾ も無い）。
+         発信先・役割とつながり・ログアウトは設定ページの中に入れる。設定の一覧は 3 層設計（#271）のまま、先頭に「アカウント」の群を足す:
+           アカウント: [本人の名前 › 役割とつながり（未処理の招待はバッジ）] [発信先 ›]
+           AI / 手順 / データ: 今のまま
+           いちばん下: ログアウト（薄い 1 行）
+         未処理の招待のバッジは、左下の「設定」と「役割とつながり」の行の両方に出す（今までメニューの行に出ていたもの）。
+         発信先・役割とつながりのページは「← 設定」で戻る（URL は今のまま /destinations・/account）。
+
+  見かた:
+    - 上の黒い帯は mock 用。本物には無い。
+    - 行にカーソルを乗せると「…」。押すと「削除」。削除を押すと確認のシート。
+    - 左下の「設定」→ 設定の一覧 → 「発信先」「役割とつながり」の行で中へ。
+    - 右上の「一覧をしまう」で一覧をしまうと、ヘッダーの左に Editor が出る。
+    - 幅 720px 以下はスマホの並び（一覧がはじめの画面。ページ・設定は全画面で、左上のボタンで一覧へ）。
+    - URL の ?view=settings|dest|account / ?menu=row|new / ?sb=closed / ?screen=list|page で、その状態で開ける（確認用）。
+
+  作っていない:
+    - 本文の保存・公開・AI・検索の結果・新しいページの作成・削除の実行・ログアウトは見た目だけ（押すと右上に一言）。
+    - 行のドラッグ・右に並べる・ドックの移動は動かない（本物のまま）。
+    - 設定の AI／手順／データの中（あなたについて・固有名詞・手順の詳細）は docs/mockups/editor-settings-refine-v1.html のまま。ここでは行だけ。
+  参照: packages/docs-ui/src/shell/sidebar.tsx（es-sb-top / es-sb-acts / rowMenuItems / shellAccountItems）/ packages/docs-ui/src/shell/header.tsx /
+        apps/editor-web/src/components/AiBox.tsx（PLACE_TEXT）/ docs/mockups/editor-settings-refine-v1.html / docs/architecture/editor-niho-life-design.md §4
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>NIHO editor シェル リファイン v1</title>
+<style>
+:root{
+  --ink:#2a2a26;--ink2:#54544d;--mute:#6e6d66;--faint:#898880;
+  --white:#fff;--canvas:#fffdfa;--shell:#fcfaf5;--sand:#f7f7f4;--sand2:#f5f3ee;
+  --line:#f1f1ed;--line2:#e7e7e2;--line3:#dbdbd5;--track:#f2efe8;
+  --moss:#56751e;--pale:#EEF6E1;--leaf:#B2D67C;--deep:#63A109;
+  --grad:linear-gradient(140deg,#7DBA3A 0%,#63A109 100%);--grad-h:linear-gradient(140deg,#74B033 0%,#5C9508 100%);
+  --amber:#C8713A;--amber-ink:#a55827;--amber-pale:#FAF0E6;
+  --red:#B42318;--red-pale:#fdebec;
+  --sans:"Hiragino Maru Gothic ProN","Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;
+  --mono:ui-monospace,Menlo,monospace;
+  --sbw:244px;--aiw:320px;--bar:40px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{font:14px/1.6 var(--sans);color:var(--ink);background:var(--canvas);-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4,p,ul,ol,dl,dd{margin:0}
+ul,ol{padding:0;list-style:none}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0;padding:0;text-align:left}
+b,strong{font-weight:600}
+:focus-visible{outline:2px solid var(--moss);outline-offset:2px;border-radius:6px}
+[hidden]{display:none!important}
+.ico{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.sp{flex:1}
+kbd{font:12px var(--mono);color:var(--faint)}
+
+/* ===== 共通の部品 ===== */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:34px;padding:0 15px;border-radius:999px;background:var(--grad);color:#fff;font-weight:600;font-size:13.5px;white-space:nowrap}
+.btn:hover{background:var(--grad-h)}
+.btn.line{background:#fff;color:var(--ink);box-shadow:inset 0 0 0 1.5px var(--line3)}
+.btn.line:hover{background:var(--sand);box-shadow:inset 0 0 0 1.5px var(--line3)}
+.btn.quiet{background:none;color:var(--ink2)}
+.btn.quiet:hover{background:var(--sand)}
+.btn.danger{background:var(--red);color:#fff}
+.btn.sm{height:30px;padding:0 12px;font-size:13px}
+.btn .ico{width:15px;height:15px}
+.ib{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:var(--ink2);flex:none;position:relative}
+.ib:hover,.ib.on{background:var(--sand2);color:var(--ink)}
+.ib[data-tip]::after{content:attr(data-tip);position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);white-space:nowrap;background:var(--ink);color:#fff;font-size:12px;font-weight:600;padding:3px 8px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .12s;z-index:60}
+.ib[data-tip]:hover::after,.ib[data-tip]:focus-visible::after{opacity:1}
+.ib[data-tip].tip-l::after{left:0;transform:none}
+.ib[data-tip].tip-r::after{left:auto;right:0;transform:none}
+.menu{position:absolute;right:0;top:calc(100% + 4px);z-index:50;min-width:200px;background:#fff;border:1px solid var(--line2);border-radius:12px;box-shadow:0 12px 36px rgba(28,28,26,.12);padding:6px;display:none}
+.menu.open{display:block}
+.menu.left{right:auto;left:0}
+.menu button{display:flex;align-items:center;gap:10px;width:100%;padding:7px 10px;border-radius:8px;font-size:13.5px;color:var(--ink)}
+.menu button:hover{background:var(--sand)}
+.menu button .ico{width:16px;height:16px;color:var(--ink2)}
+.menu button small{margin-left:auto;font-size:12px;color:var(--faint);white-space:nowrap}
+.menu button.danger{color:var(--red)}
+.menu button.danger .ico{color:var(--red)}
+.menu hr{border:0;border-top:1px solid var(--line);margin:5px 4px}
+.menu .hd{font-size:12px;font-weight:600;color:var(--faint);padding:4px 10px 6px}
+.menu.at{position:fixed;top:0;left:0;right:auto}
+.tag{display:inline-flex;align-items:center;height:18px;padding:0 7px;border-radius:999px;font-size:11.5px;font-weight:600;color:var(--faint);background:var(--sand2);white-space:nowrap;flex:none}
+.tag.ok{color:var(--moss);background:var(--pale)}
+.tag.no{color:var(--amber-ink);background:var(--amber-pale)}
+.badge{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--amber);color:#fff;font-size:11.5px;font-weight:700;font-style:normal;line-height:1}
+.av{width:22px;height:22px;border-radius:50%;background:var(--pale);color:var(--moss);display:grid;place-items:center;font-size:12px;font-weight:700;flex:none}
+.av.lg{width:40px;height:40px;font-size:16px}
+.toast{position:fixed;top:52px;right:16px;z-index:120;background:var(--ink);color:#fff;font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;box-shadow:0 8px 24px rgba(28,28,26,.2);opacity:0;transition:opacity .15s;pointer-events:none;max-width:calc(100vw - 32px)}
+.toast.show{opacity:1}
+
+/* ===== mock bar（本物には無い） ===== */
+.mock{position:sticky;top:0;z-index:100;overflow:hidden;display:flex;align-items:center;gap:10px;height:var(--bar);padding:0 12px;background:#141413;color:#fff;font-size:12.5px}
+.mock .url{flex:1;min-width:0;background:rgba(255,255,255,.08);border-radius:8px;padding:4px 10px;font-family:var(--mono);font-size:12px;color:rgba(255,255,255,.55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mock .url b{color:#fff;font-weight:600}
+.mock .sw{display:flex;align-items:center;gap:6px;overflow:auto}
+.mock .sw button{height:24px;padding:0 10px;border-radius:999px;color:rgba(255,255,255,.75);font-weight:600;font-size:12px;border:1px solid rgba(255,255,255,.18);white-space:nowrap;flex:none}
+.mock .sw button.on{background:#fff;color:#141413;border-color:#fff}
+@media (max-width:820px){.mock .url{display:none}}
+
+/* ===== shell ===== */
+.ws{display:grid;grid-template-columns:var(--sbw) minmax(0,1fr);min-height:calc(100vh - var(--bar))}
+.ws.nosb{grid-template-columns:minmax(0,1fr)}
+.ws.nosb .sb{display:none}
+.sb{position:sticky;top:var(--bar);height:calc(100vh - var(--bar));display:flex;flex-direction:column;background:var(--shell);border-right:1px solid var(--line);min-width:0}
+
+/* 一覧の上の 1 行: ブランド ＋ アイコン 3 つ */
+.sb-top{display:flex;align-items:center;gap:2px;height:52px;padding:10px 8px 6px 12px;flex:none}
+.brand{display:flex;align-items:center;gap:7px;min-width:0;flex:1;font-weight:600;font-size:14px;letter-spacing:.01em;color:var(--ink);padding:3px 6px 3px 2px;border-radius:8px;white-space:nowrap}
+.brand .logo{width:22px;height:22px;flex:none;border-radius:6px;box-shadow:0 1px 2px rgba(28,28,26,.14)}
+.sb-top .ib{width:30px;height:30px;color:var(--mute)}
+.sb-top .ib:hover,.sb-top .ib.on{color:var(--ink)}
+.sb-top .ib .ico{width:17px;height:17px}
+.newwrap{position:relative;display:grid}
+.sb-find{display:flex;align-items:center;gap:8px;flex:1;min-width:0;height:32px;padding:0 4px 0 10px;border-radius:9px;background:#fff;border:1px solid var(--line2);color:var(--mute)}
+.sb-find input{flex:1;min-width:0;border:0;outline:none;font-size:13px;background:none;color:var(--ink)}
+.sb-find .ico{width:15px;height:15px}
+.sb-find .ib{width:26px;height:26px}
+
+.sb-list{flex:1;min-height:0;overflow:auto;padding:4px 8px 10px}
+.row{position:relative;display:flex;align-items:center;gap:6px;min-height:34px;padding:4px 4px 4px calc(10px + var(--d,0) * 18px);border-radius:8px;cursor:pointer;user-select:none;flex-wrap:wrap}
+.row:hover{background:var(--sand2)}
+.row.on{background:#fff;box-shadow:0 1px 2px rgba(28,28,26,.06),0 0 0 1px var(--line)}
+.row b{flex:1;min-width:0;font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row b.untitled{color:var(--mute)}
+.row .when{font-size:12px;color:var(--faint);white-space:nowrap;width:40px;text-align:right}
+.row .sub{flex-basis:100%;font-size:12px;color:var(--mute);margin-top:-2px;padding-bottom:2px}
+.row .more{width:24px;height:24px;border-radius:6px;display:none;place-items:center;color:var(--faint);flex:none}
+.row .more .ico{width:16px;height:16px}
+.row .more:hover,.row .more.on{background:var(--line2);color:var(--ink)}
+.row:hover .when,.row.menu-on .when{display:none}
+.row:hover .more,.row.menu-on .more{display:grid}
+.row:hover .more{margin-left:16px}
+.row.menu-on .more{margin-left:16px;background:var(--line2);color:var(--ink)}
+@media (hover:none){.row .when{display:none}.row .more{display:grid}.ib[data-tip]::after{display:none}}
+
+/* このページの写真（閉じた 1 行） */
+.sb-photos{display:flex;align-items:center;gap:6px;height:44px;padding:0 12px;border-top:1px solid var(--line);color:var(--faint);font-size:11px;flex:none}
+.sb-photos .ico{width:17px;height:17px;color:var(--mute)}
+
+/* 左下: 設定の直リンク（メニューは無い） */
+.sb-foot{border-top:1px solid var(--line);padding:8px 10px;flex:none}
+.sb-set{display:flex;align-items:center;gap:10px;width:100%;padding:7px 8px;border-radius:10px;font-size:13.5px;font-weight:600;color:var(--ink2);text-decoration:none}
+.sb-set:hover,.sb-set.on{background:var(--sand2);color:var(--ink)}
+.sb-set .ico{width:18px;height:18px;color:var(--mute)}
+.sb-set .badge{margin-left:auto}
+
+/* ===== ページ ===== */
+.doc{position:relative;display:flex;flex-direction:column;min-width:0;min-height:calc(100vh - var(--bar))}
+.dt{position:sticky;top:var(--bar);z-index:20;display:flex;align-items:center;gap:2px;height:52px;padding:0 10px 0 8px;background:var(--canvas)}
+.dt .brand{flex:none;margin-right:4px}
+.dt .crumb{font-size:13px;color:var(--mute);max-width:30vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0 6px}
+.dt .crumb.untitled{color:var(--faint)}
+.dt .ins{display:flex;align-items:center;gap:2px;margin-left:6px;padding-left:10px;border-left:1px solid var(--line2)}
+.dt .ins .ib{color:var(--faint)}
+.dt .ins .ib:hover{color:var(--ink)}
+.pubbtn{height:30px;padding:0 13px;border-radius:8px;font-weight:600;font-size:13.5px;color:var(--ink);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:none}
+.pubbtn:hover{background:var(--sand)}
+.dbody{display:grid;grid-template-columns:minmax(0,1fr) 0;flex:1;transition:grid-template-columns .2s}
+.dbody.open{grid-template-columns:minmax(0,1fr) var(--aiw)}
+.canvas{padding:52px 56px 140px;min-width:0}
+.canvas .in{max-width:680px;margin:auto}
+.tt{font-weight:600;font-size:34px;line-height:1.25;letter-spacing:-.01em;min-height:1.25em}
+.bd{font-size:16px;line-height:1.95;margin-top:14px;min-height:40vh}
+.ph:empty::before{content:attr(data-ph);color:var(--faint);pointer-events:none}
+.count{position:fixed;right:18px;bottom:14px;z-index:15;font-size:12px;color:var(--faint);padding:4px 9px;border-radius:999px;background:color-mix(in srgb,var(--canvas) 85%,transparent)}
+.dbody.open .count{right:calc(var(--aiw) + 18px)}
+
+/* AI（右） */
+.ai{position:sticky;top:calc(var(--bar) + 52px);align-self:start;height:calc(100vh - var(--bar) - 52px);border-left:1px solid var(--line);background:var(--canvas);display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.ai .hd{display:flex;align-items:center;gap:2px;height:40px;padding:0 8px 0 16px;font-size:13px;font-weight:600;flex:none}
+.ai .hd span{flex:1}
+.ai .hd .newwrap .menu{min-width:240px}
+.thread{flex:1;overflow:auto;padding:4px 16px}
+.composer{padding:10px 12px 12px;flex:none}
+.composer .box{border:1px solid var(--line2);border-radius:14px;background:#fff;padding:9px 10px 7px}
+.composer textarea{width:100%;border:0;outline:none;resize:none;font-size:13.5px;line-height:1.6;min-height:48px;background:none;padding:0 2px;display:block}
+.composer textarea::placeholder{color:var(--faint)}
+.composer .foot{display:flex;align-items:center;gap:4px;margin-top:4px}
+.composer .foot .ib{width:28px;height:28px;color:var(--faint)}
+.send{width:28px;height:28px;border-radius:50%;background:var(--grad);color:#fff;display:grid;place-items:center;margin-left:auto}
+.send .ico{width:15px;height:15px;stroke-width:2.2}
+
+/* ===== 設定（メインの列に出る） ===== */
+.page{padding:0 48px 120px;min-width:0}
+.page .in{max-width:640px;margin:auto;min-width:0;padding-top:28px}
+.page h1{font-size:22px;font-weight:600}
+.back{display:inline-flex;align-items:center;gap:2px;font-size:13px;font-weight:600;color:var(--mute);margin-bottom:10px;margin-left:-6px;padding:4px 8px 4px 4px;border-radius:8px}
+.back:hover{background:var(--sand);color:var(--ink)}
+.back .ico{width:16px;height:16px}
+.sect{margin-top:28px}
+.sect h2{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--mute);margin:0 0 8px 2px}
+.grp{border:1px solid var(--line2);border-radius:14px;background:#fff}
+.r{position:relative;display:grid;grid-template-columns:150px minmax(0,1fr) auto;align-items:center;gap:6px 14px;width:100%;min-height:48px;padding:8px 12px 8px 16px;border-top:1px solid var(--line);font-size:13.5px;color:var(--ink)}
+.grp>.r:first-child{border-top:0;border-radius:13px 13px 0 0}
+.grp>.r:last-child{border-radius:0 0 13px 13px}
+.grp>.r:only-child{border-radius:13px}
+.r .k{font-weight:600;font-size:13px;color:var(--ink2);display:flex;align-items:center;gap:8px;min-width:0}
+.r .k span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.r .v{min-width:0;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.r .v small{color:var(--faint);font-size:12.5px;margin-left:6px}
+.r .e{display:flex;align-items:center;gap:8px;justify-content:flex-end;min-width:0}
+.r.link{cursor:pointer}
+.r.link:hover{background:var(--sand)}
+.r.me{grid-template-columns:auto minmax(0,1fr) auto;min-height:60px;gap:6px 12px}
+.r.me .t b{display:block;font-size:14px}
+.r.me .t small{display:block;font-size:12.5px;color:var(--faint)}
+.r.add{min-height:44px;color:var(--moss);font-weight:600;font-size:13px;grid-template-columns:auto minmax(0,1fr);gap:8px}
+.r.add .ico{width:15px;height:15px}
+.r.add:hover{background:var(--pale)}
+.chev{width:16px;height:16px;color:var(--faint);flex:none}
+.seg{display:inline-flex;background:var(--sand2);border-radius:999px;padding:3px;flex:none;max-width:100%}
+.seg button{height:26px;padding:0 11px;border-radius:999px;font-size:12.5px;font-weight:600;color:var(--ink2);white-space:nowrap}
+.seg button.on{background:#fff;color:var(--moss);box-shadow:0 1px 2px rgba(28,28,26,.08)}
+.bar{width:120px;height:6px;border-radius:3px;background:var(--track);flex:none;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--grad);border-radius:3px}
+.logout{display:inline-flex;align-items:center;gap:8px;margin-top:34px;padding:6px 10px 6px 6px;border-radius:8px;font-size:13px;font-weight:600;color:var(--mute)}
+.logout:hover{background:var(--sand);color:var(--ink)}
+.logout .ico{width:16px;height:16px}
+/* 発信先のカード */
+.dcard{display:flex;align-items:center;gap:14px;padding:14px 16px;border-top:1px solid var(--line)}
+.grp>.dcard:first-child{border-top:0}
+.dcard i{width:36px;height:36px;border-radius:10px;flex:none;background:var(--pale)}
+.dcard i.kam{background:#E7EEF6}
+.dcard i.site{background:var(--sand2)}
+.dcard .t{flex:1;min-width:0}
+.dcard .t b{display:block;font-size:14px}
+.dcard .t code{display:block;font:12px var(--mono);color:var(--faint);margin-top:1px}
+.dcard .m{display:flex;align-items:center;gap:10px;margin-top:4px;font-size:12.5px;color:var(--mute);flex-wrap:wrap}
+/* 役割とつながり */
+.acct{display:flex;align-items:center;gap:12px;padding:14px 16px}
+.acct b{display:block;font-size:14px}
+.acct code{display:block;font:12px var(--mono);color:var(--faint)}
+.role{display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)}
+.grp>.role:first-child{border-top:0}
+.role .t{flex:1;min-width:0}
+.role .t b{display:block;font-size:13.5px}
+.role .t small{display:block;font-size:12.5px;color:var(--faint)}
+.role.off .t b{color:var(--mute)}
+.invite{display:flex;align-items:center;gap:12px;padding:12px 16px;border:1px solid var(--leaf);background:var(--pale);border-radius:14px;margin-bottom:10px;flex-wrap:wrap}
+.invite .t{flex:1;min-width:140px}
+.invite .t b{display:block;font-size:13.5px}
+.invite .t small{display:block;font-size:12.5px;color:var(--mute)}
+.invite .acts{display:flex;gap:6px}
+
+/* ===== 削除の確認（シート） ===== */
+.veil{position:fixed;inset:0;z-index:110;background:rgba(28,28,26,.28);display:none;align-items:center;justify-content:center;padding:16px}
+.veil.open{display:flex}
+.sheet{width:min(420px,100%);background:#fff;border-radius:16px;box-shadow:0 24px 60px rgba(28,28,26,.24);padding:22px 22px 18px}
+.sheet h2{font-size:17px;font-weight:600;margin-bottom:8px}
+.sheet p{font-size:13.5px;color:var(--ink2)}
+.sheet .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+
+/* ===== スマホ（720px 以下） ===== */
+.mb{display:none}
+@media (max-width:720px){
+  .ws,.ws.nosb{grid-template-columns:minmax(0,1fr)}
+  .sb{position:static;height:auto;min-height:calc(100vh - var(--bar));border-right:0}
+  .ws[data-screen="page"] .sb,.ws[data-screen="settings"] .sb{display:none}
+  .ws[data-screen="list"] .doc,.ws[data-screen="list"] .page,.ws[data-screen="settings"] .doc,.ws[data-screen="page"] .page{display:none}
+  .sb-top{padding-left:10px}
+  #btn-collapse{display:none}
+  .dt .brand{display:none}
+  .dt .ins{margin-left:0}
+  .dt .crumb{max-width:28vw}
+  .dbody,.dbody.open{grid-template-columns:minmax(0,1fr)}
+  .ai{display:none}
+  .canvas{padding:28px 16px 120px}
+  .tt{font-size:26px}
+  .count,.dbody.open .count{right:12px}
+  .page{padding:0 16px 80px}
+  .page .in{padding-top:8px}
+  .r{grid-template-columns:minmax(0,1fr) auto;padding-left:14px}
+  .r .k{grid-column:1}
+  .r .v{grid-column:1;font-size:12.5px;color:var(--mute)}
+  .r .e{grid-column:2;grid-row:1 / span 2}
+  .r.me{grid-template-columns:auto minmax(0,1fr) auto}
+  .r.me .e{grid-column:3;grid-row:1}
+  .r.add{grid-template-columns:auto minmax(0,1fr)}
+  .r.lang{grid-template-columns:minmax(0,1fr)}
+  .r.lang .v{display:none}
+  .r.lang .e{grid-column:1;grid-row:auto;justify-content:flex-start}
+  .seg{max-width:100%;overflow:auto}
+  .seg button{padding:0 8px}
+  #aitoggle{display:none}
+  .dcard{flex-wrap:wrap}
+  .dcard .ext{flex-basis:100%;margin-left:50px}
+  .mb{display:flex;align-items:center;gap:4px;height:48px;padding:0 8px}
+  .mb .ttl{font-size:14px;font-weight:600;margin-left:4px}
+}
+</style>
+</head>
+<body>
+
+<div class="mock">
+  <div class="url"><b>editor.niho.life</b><span id="url">/p/b3db6a17</span></div>
+  <div class="sw" id="sw">
+    <button data-go="page" class="on">ページ</button>
+    <button data-go="settings">設定</button>
+    <button data-go="dest">発信先</button>
+    <button data-go="account">役割とつながり</button>
+  </div>
+</div>
+
+<div class="ws" id="ws" data-screen="page">
+  <!-- 左: 一覧 -->
+  <aside class="sb" aria-label="ページ">
+    <div class="sb-top" id="sbtop">
+      <div class="brand" id="brand"></div>
+      <button class="ib tip-r" id="btn-search" data-tip="検索 ⌘K" aria-label="検索（⌘K）"></button>
+      <span class="newwrap">
+        <button class="ib tip-r" id="btn-new" data-menu="new" data-tip="新しいページ ⌘N" aria-label="新しいページ（⌘N）" aria-haspopup="menu"></button>
+        <div class="menu" id="menu-new" role="menu" aria-label="新しいページ"></div>
+      </span>
+      <button class="ib tip-r" id="btn-collapse" data-tip="一覧をしまう" aria-label="一覧をしまう"></button>
+    </div>
+    <div class="sb-top" id="sbfind" hidden>
+      <div class="sb-find" role="search"><span id="find-ico"></span><input type="search" placeholder="ページを探す" aria-label="ページを探す" id="find-input"><button class="ib" id="btn-find-close" aria-label="やめる">×</button></div>
+    </div>
+    <ul class="sb-list" id="list" aria-label="ページの一覧"></ul>
+    <div class="sb-photos" aria-label="このページの写真"><span aria-hidden="true">▸</span><span id="photos-ico"></span></div>
+    <div class="sb-foot">
+      <a class="sb-set" id="go-settings" href="#settings"><span id="gear"></span>設定<em class="badge" aria-label="未処理の招待 1 件">1</em></a>
+    </div>
+  </aside>
+
+  <!-- 中央: ページ -->
+  <main class="doc" id="doc">
+    <header class="dt">
+      <button class="ib tip-l" id="btn-expand" data-tip="一覧を出す" aria-label="一覧を出す" hidden></button>
+      <button class="ib tip-l" id="btn-list" data-tip="一覧" aria-label="一覧へ" hidden></button>
+      <div class="brand" id="brand-hd" hidden></div>
+      <span class="crumb untitled" id="crumb">無題</span>
+      <div class="ins">
+        <button class="ib" data-tip="ブロック" aria-label="ブロックを挿入"><span data-ic="plus"></span></button>
+        <button class="ib" data-tip="画像" aria-label="画像"><span data-ic="img"></span></button>
+        <button class="ib" data-tip="録音" aria-label="録音"><span data-ic="mic"></span></button>
+      </div>
+      <span class="sp"></span>
+      <button class="pubbtn" data-toast="公開のシート（モック）">公開</button>
+      <button class="ib on" id="aitoggle" data-tip="AIと作る" aria-label="AIと作る"><span data-ic="panel"></span></button>
+      <span class="newwrap">
+        <button class="ib tip-r" data-menu="dots" data-tip="その他" aria-label="その他"><span data-ic="more"></span></button>
+        <div class="menu" id="menu-dots" role="menu" aria-label="ページのメニュー"></div>
+      </span>
+    </header>
+    <div class="dbody open" id="dbody">
+      <div class="canvas">
+        <div class="in">
+          <h1 class="tt ph" id="title" contenteditable="true" data-ph="無題" spellcheck="false"></h1>
+          <div class="bd ph" contenteditable="true" data-ph="書きはじめる。「/」でブロック" spellcheck="false"></div>
+        </div>
+      </div>
+      <aside class="ai" aria-label="AIと作る">
+        <div class="hd"><span>AIと作る</span>
+          <button class="ib" data-tip="新しい会話" aria-label="新しい会話"><span data-ic="edit"></span></button>
+          <span class="newwrap">
+            <button class="ib tip-r" data-menu="ai" data-tip="会話の履歴" aria-label="会話の履歴"><span data-ic="more"></span></button>
+            <div class="menu" id="menu-ai" role="menu" aria-label="会話の履歴"></div>
+          </span>
+        </div>
+        <div class="thread"></div>
+        <div class="composer">
+          <div class="box">
+            <textarea rows="2" placeholder="直したいこと・作りたいもの…" aria-label="AI への依頼"></textarea>
+            <div class="foot">
+              <button class="ib" data-tip="工程・スキル" aria-label="工程・スキル"><span data-ic="plus"></span></button>
+              <button class="send" aria-label="送る"><span data-ic="up"></span></button>
+            </div>
+          </div>
+        </div>
+      </aside>
+      <button class="count" id="count">0 字</button>
+    </div>
+  </main>
+
+  <!-- 設定（メインの列に出る。スマホでは全画面） -->
+  <main class="page" id="settings" hidden>
+    <div class="mb"><button class="ib" id="btn-list2" aria-label="一覧へ"></button><span class="ttl" id="mb-ttl">設定</span></div>
+    <div class="in" id="settings-in"></div>
+  </main>
+</div>
+
+<!-- 行の「…」（削除だけ） -->
+<div class="menu at" id="menu-row" role="menu" aria-label="ページのメニュー"></div>
+
+<!-- 削除の確認 -->
+<div class="veil" id="veil">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="del-h">
+    <h2 id="del-h">このページを削除しますか？</h2>
+    <p id="del-p">ゴミ箱に 30 日残ります。</p>
+    <div class="foot"><button class="btn line sm" id="del-cancel">やめる</button><button class="btn danger sm" id="del-ok">削除</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+/* ===== アイコン（packages/docs-ui/src/shell/icons.tsx の写し） ===== */
+const IC = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  chev: '<path d="m9.5 6 6 6-6 6"/>',
+  back: '<path d="m14.5 6-6 6 6 6"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/>',
+  side: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/>',
+  panel: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/>',
+  more: '<circle cx="6" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="18" cy="12" r="1.2" fill="currentColor"/>',
+  mic: '<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M6 11.5a6 6 0 0 0 12 0M12 17.5v3"/>',
+  img: '<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4 17 5-4.5 4 3.5 3-2.5 4 3.5"/>',
+  doc: '<path d="M7 3.5h7l4 4v13H7z"/><path d="M14 3.5v4h4M10 12h5M10 15.5h5"/>',
+  up: '<path d="M12 19V6M6 12l6-6 6 6"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.5M12 18v2.5M3.5 12H6M18 12h2.5M6 6l1.8 1.8M16.2 16.2 18 18M6 18l1.8-1.8M16.2 7.8 18 6"/>',
+  ship: '<path d="M4 15.5 12 19l8-3.5M4 15.5V9l8-4 8 4v6.5M12 5v14"/>',
+  people: '<circle cx="9" cy="9" r="3"/><path d="M3.5 19c.6-3 2.7-4.8 5.5-4.8s4.9 1.8 5.5 4.8"/><circle cx="16.5" cy="8.5" r="2.5"/><path d="M15.5 13c2.4 0 4.3 1.6 4.9 4.5"/>',
+  trash: '<path d="M5 7h14M9 7V4.5h6V7M7 7l1 13h8l1-13"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  cal: '<rect x="4" y="5.5" width="16" height="14" rx="2.5"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/>',
+  edit: '<path d="M4.5 19.5h4l10-10a2.8 2.8 0 0 0-4-4l-10 10z"/><path d="m13 7 4 4M4.5 19.5l1-4"/>',
+  ext: '<path d="M14 5h5v5M19 5l-8 8M17 14v5H5V7h5"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
+};
+const svg = (n, cls = "ico") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${IC[n]}</svg>`;
+/* アプリのアイコン: apps/docs/src-tauri/icons/icon.svg のグリフ（書類と筆）を、全面の地に中央 80% で置く（PWA の maskable と同じ置き方） */
+const LOGO = `<svg class="logo" viewBox="0 0 256 256" aria-hidden="true"><rect width="256" height="256" fill="#F3F0E8"/><g transform="translate(128 128) scale(2.05) translate(-50 -50)">
+<path fill="#A6D2DE" d="M22 14 C34 11 46 12 58 11 L79 31 C80 48 81 68 79 87 C60 90 40 88 21 89 C19 66 20 40 22 14 Z"/>
+<path fill="#DCEDF2" d="M58 11 C59 18 58 25 59 31 C66 31 73 31 79 31 Z"/>
+<path fill="#4B5F73" d="M31 42 C38 40 48 40 56 41 C58 43 58 46 56 48 C48 49 38 49 31 48 C29 46 29 44 31 42 Z"/>
+<path fill="#4B5F73" d="M31 56 C36 54 42 54 46 55 C48 57 48 60 46 62 C42 63 36 63 31 62 C29 60 29 58 31 56 Z"/>
+<g transform="translate(78 34.2) rotate(36.4)"><path fill="#EE9B7E" d="M-5.6 -1 C-5.2 -5.4 5.4 -6 6.2 -1.4 C6.6 10 5.6 24 6.4 36 C6.6 41 5.9 45 5.2 47.5 C2 48.6 -2 48.4 -5.4 47.4 C-6.2 44 -5.8 38 -6.4 30 C-6.8 20 -5.4 10 -5.6 -1 Z"/><path fill="#FAF0D6" d="M-4.2 -3.4 C-2.6 -6.6 3.2 -6.4 4.8 -3 C5.4 -0.4 3 2.6 -0.4 2.4 C-3.4 2.2 -5.2 -0.6 -4.2 -3.4 Z"/><path fill="#4B5F73" d="M-5.2 46.4 C-3.6 45 -0.8 45.8 1.6 45.6 C3.4 45.4 4.6 46.2 5.1 47.2 C4.4 48.9 4.9 50.7 3.9 52.3 C3.3 53.6 2.6 54.8 0.8 55.4 C-1 55.8 -2.8 54.9 -3.6 53.6 C-4.1 52.6 -4 51.3 -4.7 50 C-5.3 48.9 -5.6 47.7 -5.2 46.4 Z"/></g></g></svg>`;
+
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const chev = svg("chev", "ico chev");
+
+/* ===== 固定の中身 ===== */
+$("#brand").innerHTML = `${LOGO}<span>Editor</span>`;
+$("#brand-hd").innerHTML = `${LOGO}<span>Editor</span>`;
+$("#btn-search").innerHTML = svg("search");
+$("#btn-new").innerHTML = svg("plus");
+$("#btn-collapse").innerHTML = svg("side");
+$("#btn-expand").innerHTML = svg("side");
+$("#btn-list").innerHTML = svg("side");
+$("#btn-list2").innerHTML = svg("side");
+$("#find-ico").innerHTML = svg("search");
+$("#photos-ico").innerHTML = svg("img");
+$("#gear").innerHTML = svg("gear");
+$$("[data-ic]").forEach((el) => (el.outerHTML = svg(el.dataset.ic)));
+$("#menu-new").innerHTML = `<button data-toast="空のページを作ります（モック）">${svg("doc")}空のページ<small>⌘N</small></button><button data-toast="録音のページを作ります（モック）">${svg("mic")}録音から</button><button data-toast="音声ファイルを選びます（モック）">${svg("up")}音声ファイルから</button>`;
+$("#menu-dots").innerHTML = `<button data-toast="共有のリンク（モック）">${svg("link")}リンクで共有</button><button data-toast="書き出し（モック）">${svg("doc")}書き出し<small>.md · Google ドキュメント</small></button><button data-toast="履歴（モック）">${svg("cal")}履歴</button><button data-toast="複製（モック）">${svg("doc")}複製</button><hr><button class="danger" data-del="current">${svg("trash")}削除</button>`;
+$("#menu-ai").innerHTML = `<div class="hd">会話の履歴</div><button data-toast="会話を開きます（モック）"><span>鎌倉の朝の散歩を記事に</span><small>昨日</small></button><button data-toast="会話を開きます（モック）"><span>固有名詞の確認</span><small>2日前</small></button><div class="hd" style="color:var(--line3);padding-top:8px">（「左のドックへ移す」「メインの下に浮かせる」は無い。見出しをドラッグ）</div>`;
+$("#menu-row").innerHTML = `<button class="danger" data-del="row">${svg("trash")}削除<small>ゴミ箱に 30 日</small></button>`;
+
+/* ===== 一覧（スクリーンショット 2026-11-06 の並び） ===== */
+const PAGES = [
+  { id: "p1", t: "", when: "2分前", on: true },
+  { id: "p2", t: "鎌倉大好き", when: "昨日" },
+  { id: "p3", t: "", when: "昨日" },
+  { id: "p4", t: "合成記事：鎌倉の朝の散歩", when: "2日前" },
+  { id: "p5", t: "NIHO editor 合成記事の録音", when: "2日前", sub: "録音" },
+  { id: "p6", t: "", when: "2日前" },
+  { id: "p7", t: "", when: "3日前" },
+  { id: "p8", t: "cdc", when: "3日前" },
+  { id: "p9", t: "hhh", when: "3日前" },
+  { id: "p10", t: "niho-editor-vtt-offline", when: "3日前", sub: "録音" },
+  { id: "p11", t: "NIHO editor 受入テスト 2026-11-03", when: "3日前" },
+];
+$("#list").innerHTML = PAGES.map((p) => `<li class="row${p.on ? " on" : ""}" data-id="${p.id}" draggable="true" style="--d:0" tabindex="0">
+  <b class="${p.t ? "" : "untitled"}">${p.t || "無題"}</b><span class="when">${p.when}</span>
+  <button class="more" aria-label="${p.t || "無題"} のメニュー" aria-haspopup="menu">${svg("more")}</button>${p.sub ? `<span class="sub">${p.sub}</span>` : ""}</li>`).join("");
+
+/* ===== 設定の画面（メインの列） ===== */
+const V = {};
+V.settings = () => ({ url: "/settings", title: "設定", html: `
+  <h1>設定</h1>
+  <div class="sect"><h2>アカウント</h2>
+    <div class="grp">
+      <button class="r link me" data-view="account"><span class="av lg" aria-hidden="true">M</span><div class="t"><b>Mika</b><small>役割とつながり · 未処理の招待 1 件</small></div><div class="e"><em class="badge">1</em>${chev}</div></button>
+      <button class="r link" data-view="dest"><div class="k"><span>発信先</span></div><div class="v">NIHO · 鎌倉ひとはこ · 自分のサイト<small>公開中 3</small></div><div class="e">${chev}</div></button>
+    </div>
+  </div>
+  <div class="sect"><h2>AI</h2>
+    <div class="grp">
+      <div class="r lang"><div class="k"><span>提案の言語</span></div><div class="v"></div><div class="e"><div class="seg" role="group" aria-label="提案の言語"><button class="on" aria-pressed="true">書いた言語のまま</button><button>日本語</button><button>English</button></div></div></div>
+      <button class="r link" data-toast="あなたについて（editor-settings-refine-v1 のまま）"><div class="k"><span>あなたについて</span></div><div class="v">Mika · 地域で暮らす人の視点を大切にし、簡潔で落ち着いた文体に…</div><div class="e">${chev}</div></button>
+      <button class="r link" data-toast="固有名詞（editor-settings-refine-v1 のまま）"><div class="k"><span>固有名詞</span></div><div class="v">北鎌倉 · 円覚寺 · 材木座 · NIHO kamakura<small>＋2</small></div><div class="e">${chev}</div></button>
+    </div>
+  </div>
+  <div class="sect"><h2>手順</h2>
+    <div class="grp">
+      <button class="r link" data-toast="手順の詳細（editor-settings-refine-v1 のまま）"><div class="k"><span>記事制作</span></div><div class="v">文字起こし › 修正版 › 構成案 › 記事</div><div class="e">${chev}</div></button>
+      <button class="r link" data-toast="手順の詳細（editor-settings-refine-v1 のまま）"><div class="k"><span>議事録</span></div><div class="v">文字起こし › 修正版 › 議事録</div><div class="e">${chev}</div></button>
+      <button class="r add" data-toast="新しい手順を作ります（モック）">${svg("plus")}<span>手順を追加</span></button>
+    </div>
+  </div>
+  <div class="sect"><h2>データ</h2>
+    <div class="grp">
+      <div class="r"><div class="k"><span>今月の AI 使用量</span></div><div class="v" style="display:flex;align-items:center;gap:10px"><span class="bar" aria-hidden="true"><i style="width:2%"></i></span><span>$0.00 <small style="margin:0">/ $10.00</small></span></div><div class="e"><button class="ib" style="width:22px;height:22px" aria-label="使用量の内訳" data-toast="使用量の内訳（ⓘ）">${svg("info", "ico")}</button></div></div>
+      <div class="r"><div class="k"><span>メディア容量</span></div><div class="v">103 KiB<small>画像 0 · 音声 103 KiB</small></div><div class="e"><button class="ib" style="width:22px;height:22px" aria-label="保存とデータについて" data-toast="保存とデータ（ⓘ）">${svg("info", "ico")}</button></div></div>
+    </div>
+  </div>
+  <button class="logout" data-toast="ログアウト（モック）">${svg("back")}ログアウト</button>
+` });
+
+V.dest = () => ({ url: "/destinations", title: "発信先", html: `
+  <button class="back" data-view="settings">${svg("back")}設定</button>
+  <h1>発信先</h1>
+  <div class="sect">
+    <div class="grp">
+      <div class="dcard"><i aria-hidden="true"></i><div class="t"><b>NIHO</b><code>niho.life/guides/</code><div class="m"><span>旅行者向け · 英語</span><span class="tag ok">✓ ライター</span><span>公開中 2</span></div></div><a class="btn quiet sm ext" href="#" data-toast="niho.life を開きます（モック）">niho.life ${svg("ext")}</a></div>
+      <div class="dcard"><i class="kam" aria-hidden="true"></i><div class="t"><b>鎌倉ひとはこ</b><code>kamakura-fudousan.com/column/</code><div class="m"><span>地域向け · 日本語</span><span class="tag ok">✓ 接続済み</span><span>公開中 1</span></div></div><a class="btn quiet sm ext" href="#" data-toast="サイトを開きます（モック）">kamakura-fudousan.com ${svg("ext")}</a></div>
+      <div class="dcard"><i class="site" aria-hidden="true"></i><div class="t"><b>自分のサイト</b><code>example.jp/</code><div class="m"><span>公開 API</span><span class="tag no">未接続</span><span>公開中 0</span></div></div><button class="btn line sm ext" data-toast="自分のサイトの設定（モック）">設定</button></div>
+      <button class="r add" data-toast="発信先を追加（モック）">${svg("plus")}<span>発信先を追加</span></button>
+    </div>
+  </div>
+` });
+
+V.account = () => ({ url: "/account", title: "役割とつながり", html: `
+  <button class="back" data-view="settings">${svg("back")}設定</button>
+  <h1>役割とつながり</h1>
+  <div class="sect"><h2>NIHO アカウント</h2>
+    <div class="grp"><div class="acct"><span class="av lg" aria-hidden="true">M</span><div style="flex:1;min-width:0"><b>Mika</b><code>mika@example.com</code></div><button class="btn quiet sm" data-toast="NIHO で管理（モック）">NIHOで管理 ${svg("ext")}</button></div></div>
+  </div>
+  <div class="sect"><h2>役割</h2>
+    <div class="grp">
+      <div class="role"><div class="t"><b>ライター</b><small>NIHO のガイドに記事を出せる</small></div><span class="tag ok">NIHO</span></div>
+      <div class="role off"><div class="t"><b>体験ホスト</b><small>体験のページに記事を添えられる</small></div><button class="btn quiet sm" data-toast="申し込み（モック）">申し込む ${svg("ext")}</button></div>
+    </div>
+  </div>
+  <div class="sect"><h2>記事連携</h2>
+    <div class="invite"><span class="av" aria-hidden="true">K</span><div class="t"><b>鎌倉ひとはこ からの招待</b><small>物件コラムの記事を出せるようになります</small></div><div class="acts"><button class="btn line sm" data-toast="辞退（モック）">辞退</button><button class="btn sm" data-toast="受けました（モック）">受ける</button></div></div>
+    <div class="grp">
+      <div class="role"><span class="av" aria-hidden="true">N</span><div class="t"><b>NIHO Kamakura</b><small>使える体験 3 · 関連付けたページ 2</small></div></div>
+    </div>
+  </div>
+` });
+
+/* ===== 画面の切替 ===== */
+const ws = $("#ws");
+let view = "page";
+function show(name) {
+  view = name;
+  const settings = name !== "page";
+  $("#doc").hidden = settings;
+  $("#settings").hidden = !settings;
+  $("#go-settings").classList.toggle("on", settings);
+  if (settings) {
+    const v = V[name]();
+    $("#settings-in").innerHTML = v.html;
+    $("#mb-ttl").textContent = v.title;
+    $("#url").textContent = v.url;
+    ws.dataset.screen = "settings";
+    window.scrollTo(0, 0);
+  } else {
+    $("#url").textContent = "/p/b3db6a17";
+    ws.dataset.screen = "page";
+  }
+  $$("#sw button").forEach((b) => b.classList.toggle("on", b.dataset.go === (name === "page" ? "page" : name)));
+}
+document.addEventListener("click", (e) => {
+  const go = e.target.closest("[data-go]");
+  if (go) { show(go.dataset.go); return; }
+  const v = e.target.closest("[data-view]");
+  if (v) { show(v.dataset.view); return; }
+  const t = e.target.closest("[data-toast]");
+  if (t && !e.target.closest("[data-del]")) { e.preventDefault(); toast(t.dataset.toast); closeMenus(); }
+});
+$("#go-settings").addEventListener("click", (e) => { e.preventDefault(); show("settings"); });
+
+/* ===== メニュー ===== */
+function closeMenus() {
+  $$(".menu.open").forEach((m) => m.classList.remove("open"));
+  $$("[data-menu].on").forEach((b) => { b.classList.remove("on"); b.setAttribute("aria-expanded", "false"); });
+  $$(".row.menu-on").forEach((r) => r.classList.remove("menu-on"));
+}
+$$("[data-menu]").forEach((b) => b.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const m = $("#menu-" + b.dataset.menu);
+  const was = m.classList.contains("open");
+  closeMenus();
+  if (!was) { m.classList.add("open"); b.classList.add("on"); b.setAttribute("aria-expanded", "true"); }
+}));
+document.addEventListener("click", (e) => { if (!e.target.closest(".menu")) closeMenus(); }, true);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeMenus(); $("#veil").classList.remove("open"); } });
+
+/* 行: 押すと開く。「…」と右クリックで削除のメニュー */
+let menuRow = null;
+function openRowMenu(row, x, y) {
+  closeMenus();
+  menuRow = row;
+  row.classList.add("menu-on");
+  const m = $("#menu-row");
+  m.classList.add("open");
+  const w = 220, h = 50;
+  m.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + "px";
+  m.style.top = Math.max(8, Math.min(y, window.innerHeight - h - 8)) + "px";
+}
+$("#list").addEventListener("click", (e) => {
+  const more = e.target.closest(".more");
+  const row = e.target.closest(".row");
+  if (!row) return;
+  if (more) { e.stopPropagation(); const r = more.getBoundingClientRect(); openRowMenu(row, r.left, r.bottom + 4); return; }
+  $$("#list .row").forEach((r) => r.classList.toggle("on", r === row));
+  const t = $("b", row).textContent;
+  $("#crumb").textContent = t; $("#crumb").classList.toggle("untitled", $("b", row).classList.contains("untitled"));
+  $("#title").textContent = $("b", row).classList.contains("untitled") ? "" : t;
+  show("page");
+});
+$("#list").addEventListener("contextmenu", (e) => { const row = e.target.closest(".row"); if (!row) return; e.preventDefault(); openRowMenu(row, e.clientX, e.clientY); });
+
+/* 削除の確認 */
+document.addEventListener("click", (e) => {
+  const d = e.target.closest("[data-del]");
+  if (!d) return;
+  e.stopPropagation();
+  const row = d.dataset.del === "row" ? menuRow : $("#list .row.on");
+  const name = row ? $("b", row).textContent : "無題";
+  closeMenus();
+  $("#del-h").textContent = `「${name}」を削除しますか？`;
+  $("#veil").classList.add("open");
+  $("#del-cancel").focus();
+  $("#del-ok").onclick = () => { $("#veil").classList.remove("open"); if (row) row.remove(); toast("ゴミ箱に入れました（30 日で消えます）"); };
+});
+$("#del-cancel").addEventListener("click", () => $("#veil").classList.remove("open"));
+$("#veil").addEventListener("click", (e) => { if (e.target === $("#veil")) $("#veil").classList.remove("open"); });
+
+/* 検索: その行が検索欄に変わる */
+$("#btn-search").addEventListener("click", () => { $("#sbtop").hidden = true; $("#sbfind").hidden = false; $("#find-input").focus(); });
+$("#btn-find-close").addEventListener("click", () => { $("#sbfind").hidden = true; $("#sbtop").hidden = false; $("#btn-search").focus(); });
+$("#find-input").addEventListener("keydown", (e) => { if (e.key === "Escape") $("#btn-find-close").click(); });
+
+/* 一覧をしまう／出す: しまったときはヘッダーの左に Editor */
+function setSidebar(open) {
+  ws.classList.toggle("nosb", !open);
+  $("#btn-expand").hidden = open;
+  $("#brand-hd").hidden = open;
+}
+$("#btn-collapse").addEventListener("click", () => setSidebar(false));
+$("#btn-expand").addEventListener("click", () => setSidebar(true));
+/* スマホ: ページ・設定の左上で一覧へ */
+$("#btn-list").addEventListener("click", () => (ws.dataset.screen = "list"));
+$("#btn-list2").addEventListener("click", () => (ws.dataset.screen = "list"));
+const mq = matchMedia("(max-width:720px)");
+function onMq() { $("#btn-list").hidden = !mq.matches; if (mq.matches) setSidebar(true); }
+mq.addEventListener("change", onMq); onMq();
+
+/* AI の開閉 */
+$("#aitoggle").addEventListener("click", () => { $("#dbody").classList.toggle("open"); $("#aitoggle").classList.toggle("on"); });
+
+/* toast */
+let tt;
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(tt); tt = setTimeout(() => t.classList.remove("show"), 1800); }
+
+/* ===== URL の指定（確認用） ===== */
+const q = new URLSearchParams(location.search);
+if (q.get("view")) show({ settings: "settings", dest: "dest", account: "account" }[q.get("view")] || "page");
+if (q.get("sb") === "closed") setSidebar(false);
+if (q.get("screen")) ws.dataset.screen = q.get("screen");
+if (q.get("menu") === "row") { const row = $$("#list .row")[1]; row.classList.add("menu-on"); const r = $(".more", row).getBoundingClientRect(); openRowMenu(row, r.left, r.bottom + 4); }
+if (q.get("menu") === "new") $("#btn-new").click();
+if (q.get("menu") === "del") { const row = $$("#list .row")[1]; menuRow = row; $("#del-h").textContent = `「${$("b", row).textContent}」を削除しますか？`; $("#veil").classList.add("open"); }
+</script>
+</body>
+</html>

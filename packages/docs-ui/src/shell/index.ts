@@ -35,7 +35,8 @@ export { StatusDot } from "./status-dot";
 export { shellPublishButton, shellStatus } from "./status";
 export { ShellTools, ShellMobileToolbar, type ShellToolAction, type ShellToolsProps } from "./tools";
 export { ShellHeader, ShellLocation, shellMoreItems, type ShellHeaderProps, type ShellLocationItem } from "./header";
-export { ShellSidebar, shellAccountItems, type ShellDropTarget, type ShellSidebarProps } from "./sidebar";
+export { ShellSidebar, type ShellDropTarget, type ShellSidebarProps } from "./sidebar";
+export { ShellBrand } from "./brand";
 export { NEW_PAGE_KINDS, NewPageMenu, type NewPageKind } from "./new-page-menu";
 export { ShellRail, ShellRailSection, type ShellRailProps, type ShellRailSectionProps } from "./rail";
 export { ShellSteps, ShellStepsStart, shellStepSay, type ShellStep, type ShellStepsAction, type ShellStepsChoice } from "./steps";
@@ -95,6 +96,7 @@ export {
   ShellSection,
   ShellSettingsPage,
   ShellTable,
+  linkTo,
   ShellToggle,
 } from "./settings-parts";
 export { DestinationsPage, SitePage, type DestinationRow, type DestinationsPageProps, type SitePageProps } from "./destinations";
