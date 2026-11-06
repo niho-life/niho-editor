@@ -23,7 +23,7 @@ const frame = {
   pages: [] as unknown[],
   narrow: false,
 };
-/** 手順の帯が「この段階の本文が入れ替わった」と知らせる口（PageSteps のモックが預かる）。 */
+/** 流れが「この段階の本文が入れ替わった」と知らせる口（FlowWatcher のモックが預かる）。 */
 const steps: { onBodyReplaced?: () => void } = {};
 const router = { refresh: vi.fn(), replace: vi.fn(), push: vi.fn() };
 
@@ -49,17 +49,11 @@ vi.mock("./FolderPage", () => ({
 vi.mock("./RecordingTranscript", () => ({
   RecordingTranscript: ({ pageId }: { pageId: string }) => <div data-transcript={pageId} />,
 }));
-// 手順の帯（#37）は PageSteps.test.tsx が見る。ここは、帯・文字起こし・本文の並びと渡す値だけを見る
-vi.mock("./PageSteps", () => ({
-  PageSteps: (props: { pageId: string; kind: string; parentId: string | null; quiet?: boolean; media?: unknown; onBodyReplaced?: () => void; children?: unknown }) => {
+// 流れ（#309）は FlowWatcher.test.tsx が見る。ここは、流れの見張り・文字起こし・本文の並びと渡す値だけを見る
+vi.mock("./FlowWatcher", () => ({
+  FlowWatcher: (props: { pageId: string; kind: string; onBodyReplaced?: () => void }) => {
     steps.onBodyReplaced = props.onBodyReplaced;
-    return (
-      <>
-        <div data-steps={`${props.pageId}:${props.kind}:${props.parentId ?? "none"}${props.quiet ? ":quiet" : ""}`} />
-        {props.media as never}
-        {props.children as never}
-      </>
-    );
+    return <div data-steps={`${props.pageId}:${props.kind}`} />;
   },
 }));
 vi.mock("@/lib/page-actions-client", async (original) => ({
@@ -188,7 +182,7 @@ describe("NewPage: a page left without anything added is discarded (owner decisi
   });
 });
 
-describe("OpenPage: the tab bar, the steps state (quiet), the transcript, then the title and body", () => {
+describe("OpenPage: the tab bar, the flow watcher, the transcript, then the title and body", () => {
   const PAGE = "33333333-3333-4333-8333-333333333333";
   const HOLDER = "55555555-5555-4555-8555-555555555555";
   const OTHER = "66666666-6666-4666-8666-666666666666";
@@ -210,9 +204,9 @@ describe("OpenPage: the tab bar, the steps state (quiet), the transcript, then t
       node.classList.contains("es-tabbar") ? "tabbar" : (node.getAttribute("data-steps") ?? node.getAttribute("data-transcript") ?? (node.hasAttribute("data-recording-info") ? "info" : "editor")),
     );
 
-  it("puts the tab bar first, the steps state quiet (no band), then この録音について and the transcript (kind=rec), then the page editor", async () => {
+  it("puts the tab bar first, the flow watcher (nothing drawn), then この録音について and the transcript (kind=rec), then the page editor", async () => {
     const host = await open("rec");
-    expect(order(host)).toEqual(["tabbar", `${PAGE}:rec:none:quiet`, "info", PAGE, "editor"]);
+    expect(order(host)).toEqual(["tabbar", `${PAGE}:rec`, "info", PAGE, "editor"]);
     expect(frame.pageOpened).toHaveBeenCalledTimes(1);
   });
 
@@ -243,7 +237,7 @@ describe("OpenPage: the tab bar, the steps state (quiet), the transcript, then t
 
   it("shows the editor for an ordinary page, without the transcript", async () => {
     const host = await open("note");
-    expect(order(host)).toEqual(["tabbar", `${PAGE}:note:none:quiet`, "editor"]);
+    expect(order(host)).toEqual(["tabbar", `${PAGE}:note`, "editor"]);
     expect(host.querySelector("[data-transcript]")).toBeNull();
     // 既にあるページ（このタブの「新しいページ」で作っていない）は、空でも捨てない
     expect(editors.at(-1)!.onLeftEmpty).toBeUndefined();
@@ -265,7 +259,7 @@ describe("OpenPage: the tab bar, the steps state (quiet), the transcript, then t
 
   it("gives the steps state the parent of a step subpage (the run belongs to the recording page)", async () => {
     const host = await open("step", "44444444-4444-4444-8444-444444444444");
-    expect(order(host)).toEqual(["tabbar", `${PAGE}:step:44444444-4444-4444-8444-444444444444:quiet`, "editor"]);
+    expect(order(host)).toEqual(["tabbar", `${PAGE}:step`, "editor"]);
   });
 
   it("段階が終わって本文が入れ替わったら、読み直してエディタを開き直す（#37。帯だけ「済み」にしない）", async () => {

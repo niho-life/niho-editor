@@ -17,9 +17,6 @@ import {
   ShellRecording,
   ShellSelectionBar,
   ShellSidebar,
-  ShellSteps,
-  ShellStepsStart,
-  shellStepSay,
   ShellTools,
   StatusDot,
   shellMoreItems,
@@ -289,15 +286,7 @@ describe("ShellRail", () => {
   const html = renderToStaticMarkup(
     <ShellRail>
       <ShellRailSection title="手順" icon="spark" summary="記事本文" open={false} onToggle={noop}>
-        <ShellSteps
-          steps={[
-            { id: "a", label: "文字起こし", state: "done" },
-            { id: "b", label: "文字起こし修正", state: "run" },
-            { id: "c", label: "記事本文", state: "wait" },
-          ]}
-          currentId="b"
-          onRedo={noop}
-        />
+        <p>手順</p>
       </ShellRailSection>
       <ShellRailSection title="ページ設定" summary="自分だけ" open onToggle={noop}>
         <p>x</p>
@@ -427,98 +416,6 @@ describe("ShellRail", () => {
     expect(html).toMatch(/class="es-cb" hidden=""/);
   });
 
-  it("手順は 済み・作成中・待機 と、いまの手順に aria-current=step", () => {
-    expect(html).toContain("済み");
-    expect(html).toContain("作成中");
-    expect(html).toContain("待機");
-    expect(html).toContain('aria-current="step"');
-    expect(html).toContain("この手順を作り直す");
-  });
-});
-
-describe("ShellSteps（本文の列の上の帯。#37）", () => {
-  const html = renderToStaticMarkup(
-    <ShellSteps
-      band
-      title="記事制作の手順"
-      steps={[
-        { id: "a", label: "文字起こし修正", state: "done" },
-        { id: "b", label: "記事方針", state: "run" },
-        { id: "c", label: "記事本文", state: "wait" },
-        { id: "d", label: "共有用の要約", state: "failed" },
-        { id: "e", label: "インサイト", state: "stale" },
-      ]}
-      currentId="b"
-      note="「記事方針」を作成中です。画面を閉じても進みます。"
-      actions={[
-        { id: "retry", label: "「記事方針」からやり直す", tone: "primary" },
-        { id: "cancel", label: "やめる", tone: "quiet", busy: true },
-      ]}
-      onAction={noop}
-      onSelect={noop}
-    />,
-  );
-
-  it("5 つの状態を、色だけでなく言葉でも出す（済み・作成中・待機・失敗・前提変更）", () => {
-    for (const [state, say] of [
-      ["done", "済み"],
-      ["run", "作成中"],
-      ["wait", "待機"],
-      ["failed", "失敗"],
-      ["stale", "前提変更"],
-    ] as const) {
-      expect(html, state).toContain(`es-step es-step--${state}`);
-      expect(html, say).toContain(`<small>${say}</small>`);
-    }
-    expect(shellStepSay("stale")).toBe("前提変更");
-  });
-
-  it("帯は節として名前を持ち、段階は ol、いまの段階に aria-current=step", () => {
-    expect(html).toMatch(/<section class="es-stepband" aria-label="記事制作の手順の進み">/);
-    expect(html).toContain('<ol class="es-steps es-steps--band" aria-label="手順">');
-    expect(html).toMatch(/aria-current="step"[^>]*>.*?記事方針/);
-  });
-
-  it("状態の変わり目は role=status の一言が読み上げる（空でも置いておく）", () => {
-    expect(html).toMatch(/<p class="es-stepband-note" role="status">「記事方針」を作成中です。画面を閉じても進みます。<\/p>/);
-    const quiet = renderToStaticMarkup(<ShellSteps band steps={[{ id: "a", label: "インサイト", state: "done" }]} />);
-    expect(quiet).toContain('<p class="es-stepband-note" role="status">');
-  });
-
-  it("送っている間のボタンは aria-disabled と回るマークで示す（文字は薄めない）", () => {
-    expect(html).toContain("es-btn es-btn--primary es-btn--sm");
-    expect(html).toMatch(/es-btn--quiet es-btn--sm es-btn--busy"[^>]*aria-disabled="true"/);
-    expect(html).toContain('<i class="es-busy" aria-hidden="true"></i>');
-    expect(unlabeledButtons(html)).toEqual([]);
-  });
-});
-
-describe("ShellStepsStart（この録音から。#37）", () => {
-  const html = renderToStaticMarkup(
-    <ShellStepsStart
-      choices={[
-        { id: "tpl-1", label: "記事にする" },
-        { id: "tpl-2", label: "議事録にする" },
-        { id: "tpl-3", label: "インサイトを整理する" },
-      ]}
-      onPick={noop}
-      onChangeSteps={noop}
-    />,
-  );
-
-  it("最初の 1 つが主ボタン、残りは縁のボタン。「手順を変える」は静かなボタン", () => {
-    expect(html).toMatch(/aria-label="この録音から"/);
-    expect(html).toMatch(/es-btn es-btn--primary es-btn--sm"[^>]*>記事にする/);
-    expect(html).toMatch(/es-btn es-btn--outline es-btn--sm"[^>]*>議事録にする/);
-    expect(html).toMatch(/es-btn es-btn--outline es-btn--sm"[^>]*>インサイトを整理する/);
-    expect(html).toMatch(/es-btn es-btn--quiet es-btn--sm"[^>]*>手順を変える/);
-    expect(unlabeledButtons(html)).toEqual([]);
-  });
-
-  it("「手順を変える」を渡さなければ出さない（Mac の設定の画面が無いとき）", () => {
-    const only = renderToStaticMarkup(<ShellStepsStart choices={[{ id: "tpl-1", label: "記事にする" }]} onPick={noop} />);
-    expect(only).not.toContain("手順を変える");
-  });
 });
 
 describe("ページの部品", () => {

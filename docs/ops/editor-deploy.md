@@ -208,7 +208,7 @@ AI（チャット・手順の段階・翻訳）は Anthropic の Messages API（
 ### 構成
 
 ```text
-画面 ── POST /api/pages/{id}/steps/runs ──▶ niho-editor（受付: run を作り、最初の段階を積む）
+画面 ── POST /api/pages/{id}/flow/runs ──▶ niho-editor（受付: run を作り、最初の段階を積む）
                                                │ tasks.create（名前 = <run>-<段階>-<世代>。同じ名前は ALREADY_EXISTS ＝積み済み）
                                                ▼
                                   Cloud Tasks キュー niho-editor-steps

@@ -20,6 +20,8 @@ export const PAGE_TABS_TEXT = {
   addFailed: "タブを足せませんでした",
   renameFailed: "名前を変えられませんでした",
   moveFailed: "別のページへ移せませんでした",
+  regenerateFailed: "作り直せませんでした",
+  regenerateUnsaved: "まだ届いていない変更があります。保存されてから作り直してください。",
   confirmTab: (label: string) => `タブ「${label}」を削除しますか？`,
   confirmPage: (title: string) => `「${title || "無題"}」を削除しますか？`,
 } as const;
@@ -55,6 +57,20 @@ export function PageTabs({ page, tabs, saveNow }: { page: Pick<PageSummary, "id"
       setBusy(false);
     }
   };
+
+  // 段階の出力のタブなら、▾ に「作り直す（AI）」「同じ入力でもう 1 つ（AI）」（流れ。#309）
+  const flow = frame.flow && frame.flow.ownerId === id ? frame.flow : null;
+  const stepOutput = flow !== null && flow.generated;
+  const regenerate = (how: "regenerate" | "sibling") =>
+    run(async () => {
+      if (!flow) return;
+      if (how === "regenerate" && !(await saveNow())) {
+        setNote(PAGE_TABS_TEXT.regenerateUnsaved);
+        return;
+      }
+      const result = await flow.regenerate(id, how);
+      if (!result.ok) setNote(result.message);
+    }, PAGE_TABS_TEXT.regenerateFailed);
 
   // 別のページへ移す入れ先: 同じフォルダのページ（入れ物と、入れ物の無いページ）。自分の入れ物は除く
   const loaded = frame.pages ?? [];
@@ -115,6 +131,7 @@ export function PageTabs({ page, tabs, saveNow }: { page: Pick<PageSummary, "id"
               frame.pageCreated(copy.id, copy.title, copy.kind, copy.parent, copy.page);
               router.push(`/p/${copy.id}`);
             }, PAGE_MENU_TEXT.duplicateFailed),
+          ...(stepOutput ? { onRegenerate: () => void regenerate("regenerate"), onSibling: () => void regenerate("sibling") } : {}),
           // 並べて開く（設計 §5.5。デスクトップだけ。右は読むだけ）
           ...(frame.narrow ? {} : { onSplit: (otherId: string) => router.replace(`/p/${id}?side=${otherId}`) }),
           moveTargets,

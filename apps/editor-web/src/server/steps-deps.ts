@@ -9,6 +9,7 @@ import { createInlineQueue, resolveStepsMode } from "../steps/inline";
 import type { TaskQueue } from "../steps/queue";
 import type { RecipeReader } from "../steps/recipes";
 import { pgStepRunStore, pgStepSweepStore } from "../steps/store";
+import { availableTranscriptionEngines } from "../transcription/config";
 import { getPool } from "./db";
 import { verifyGoogleOidc } from "./google-oidc";
 import { ownerRecipes as readOwnerRecipes } from "./recipe-source";
@@ -77,6 +78,8 @@ export const stepsDeps: StepsApiDeps = {
     return pool ? pgStepRunStore(pool) : null;
   },
   recipes: ownerRecipes,
+  // いま使える文字起こしのエンジン（鍵が入っているもの。流れの「文字起こし 作成 ▾」の候補）
+  engines: () => availableTranscriptionEngines(process.env),
   queue: () => {
     const mode = resolveStepsMode(process.env);
     if (mode === "cloud-tasks") {

@@ -14,12 +14,15 @@ const tpl1 = findRecipeIn(DEFAULT_RECIPES, "tpl-1")!;
 async function setup(executor: StepExecutor = fakeExecutor, extra: Partial<RunnerDeps> = {}) {
   const store = new MemoryStepRunStore();
   const queue = new MemoryTaskQueue();
-  const parent = store.addPage(OWNER, { kind: "rec", blocks: transcript });
+  // run の親はフォルダ、入力はその中の録音のタブ（#309）。`parent` は録音のタブ（資料・欄はそこ）、`folder` が run の親
+  const folder = store.addFolder(OWNER);
+  const parent = store.addPage(OWNER, { kind: "rec", blocks: transcript, parent: folder });
   const deps: RunnerDeps = { store, recipes: async () => DEFAULT_RECIPES, executor, queue, ...extra };
-  const start = async (fromStep = 0, recipe = tpl1) => {
-    const result = await store.createRun(OWNER, parent, { recipe, fromStep });
+  /** 入力のタブ（既定は録音）から段階 `toStep`（既定は最後）まで作って、最初の段階を積む。 */
+  const start = async (input: { from?: string; toStep?: number } = {}, recipe = tpl1) => {
+    const result = await store.createRun(OWNER, folder, { recipe, inputTab: input.from ?? parent, toStep: input.toStep ?? recipe.steps.length - 1 });
     if (result.status !== "created") throw new Error(result.status);
-    await queue.enqueue({ name: taskName(result.run.id, fromStep, 0), runId: result.run.id, stepIndex: fromStep });
+    await queue.enqueue({ name: taskName(result.run.id, result.run.fromStep, 0), runId: result.run.id, stepIndex: result.run.fromStep });
     return result.run;
   };
   /** 積まれた task を空になるまで実行する（再試行の間隔は待たない）。 */
@@ -30,8 +33,8 @@ async function setup(executor: StepExecutor = fakeExecutor, extra: Partial<Runne
     }
     return outcomes;
   };
-  const view = async () => (await store.listRun(OWNER, parent))?.run;
-  return { store, queue, parent, deps, start, drainAll, view };
+  const view = async () => (await store.listRun(OWNER, folder))?.run;
+  return { store, queue, parent, folder, deps, start, drainAll, view };
 }
 
 describe("runAttempt", () => {
@@ -41,14 +44,14 @@ describe("runAttempt", () => {
       seen.push({ source: input.parentBlocks, background: input.background });
       return fakeExecutor.run(input);
     } };
-    const { store, parent, start, drainAll } = await setup(executor);
+    const { store, parent, folder, start, drainAll } = await setup(executor);
     store.fields.set(parent, { entities: [], terms: [], background: "合成の背景" });
     await start();
     await drainAll();
     expect(seen[0]).toEqual({ source: transcript, background: "合成の背景" });
     store.fields.set(parent, { entities: [], terms: [], background: "変更した背景" });
-    expect(await store.refreshStale(OWNER, parent, tpl1)).toBe(tpl1.steps.length);
-    expect((await store.readStaleReasons(OWNER, parent, tpl1))[2]).toEqual(["info"]);
+    expect(await store.refreshStale(OWNER, folder, tpl1)).toBe(tpl1.steps.length);
+    expect((await store.readStaleReasons(OWNER, folder, tpl1))[2]).toEqual(["info"]);
   });
 
   it("runs tpl-1 to the end and leaves its three sub-pages done", async () => {
@@ -80,7 +83,7 @@ describe("runAttempt", () => {
     const { store, start, drainAll, view } = await setup(fakeExecutor, {
       recipes: async () => { throw new Error("runner must not read current recipes"); },
     });
-    await start(0, edited[0]!);
+    await start({}, edited[0]!);
     await drainAll();
     const run = await view();
     expect(run?.state).toBe("succeeded");
@@ -160,33 +163,37 @@ describe("runAttempt", () => {
     expect(store.partialOf(run.id, 0)).toBeNull();
   });
 
-  it("rebuilds from fromStep and reuses the upstream sub-pages", async () => {
+  it("starts again from a step's output tab: only the later step runs, into a new tab of the same role page, and the upstream tabs are untouched (#309)", async () => {
     const executor = createFakeExecutor();
     const { store, start, drainAll, view } = await setup(executor);
     const first = await start();
     await drainAll();
     const upstream = [0, 1].map((index) => structuredClone(store.pages.get(first.steps[index]!.pageId)?.blocks));
 
-    const rerun = await start(2);
-    expect(rerun.steps.map((step) => step.state)).toEqual(["reused", "reused", "queued"]);
+    const rerun = await start({ from: first.steps[1]!.pageId });
+    expect(rerun.fromStep).toBe(2);
+    expect(rerun.steps.map((step) => [step.index, step.state])).toEqual([[2, "queued"]]);
     expect(await drainAll()).toEqual([{ status: "completed" }]);
     expect(executor.calls).toBe(4);
     const run = await view();
     expect(run?.id).toBe(rerun.id);
-    expect(run?.steps.map((step) => step.pageId)).toEqual(first.steps.map((step) => step.pageId));
+    const made = run!.steps[0]!.pageId;
+    expect(made).not.toBe(first.steps[2]!.pageId);
+    expect(store.pages.get(made)?.page).toBe(store.pages.get(first.steps[2]!.pageId)?.page);
+    expect(store.pages.get(made)?.madeFrom).toEqual({ kind: "step", run: rerun.id, input: first.steps[1]!.pageId, inputRevision: 2 });
     expect([0, 1].map((index) => store.pages.get(first.steps[index]!.pageId)?.blocks)).toEqual(upstream);
-    expect(run?.steps.map((step) => step.stepStatus)).toEqual(["done", "done", "done"]);
+    expect(run?.steps.map((step) => step.stepStatus)).toEqual(["done"]);
   });
 
   it("ignores the result of an older generation (cancelled while the step ran)", async () => {
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => (release = resolve));
     const executor: StepExecutor = { run: async (input) => (await gate, fakeExecutor.run(input)) };
-    const { store, queue, parent, start, deps, view } = await setup(executor);
+    const { store, queue, folder, start, deps, view } = await setup(executor);
     const run = await start();
     const running = runAttempt(deps, queue.drain()[0]!);
     await vi.waitFor(() => expect(store.runs.get(run.id)?.attempts[0]?.state).toBe("running"));
-    await store.cancelRun(OWNER, parent, run.id);
+    await store.cancelRun(OWNER, folder, run.id);
     release();
     expect(await running).toEqual({ status: "stale" });
     expect(store.pages.get(run.steps[0]!.pageId)?.blocks).toEqual([]);
@@ -245,11 +252,11 @@ describe("runAttempt", () => {
   });
 
   it("stops the step when the heartbeat finds the lease lost (cancelled)", async () => {
-    const { store, queue, parent, start, deps } = await setup(createFakeExecutor({ delayMs: 10_000 }), { leaseSeconds: 0.15 });
+    const { store, queue, folder, start, deps } = await setup(createFakeExecutor({ delayMs: 10_000 }), { leaseSeconds: 0.15 });
     const run = await start();
     const running = runAttempt(deps, queue.drain()[0]!);
     await vi.waitFor(() => expect(store.runs.get(run.id)?.attempts[0]?.state).toBe("running"));
-    await store.cancelRun(OWNER, parent, run.id);
+    await store.cancelRun(OWNER, folder, run.id);
     const cancelledAt = Date.now();
     expect(await running).toEqual({ status: "stale" });
     expect(Date.now() - cancelledAt).toBeLessThan(1_000);
@@ -374,7 +381,7 @@ describe("runAttempt with chunks (#277)", () => {
 
   it("fails at chunk 3, then resumes from chunk 3 reusing 1 and 2", async () => {
     const { executor, seen } = recordingExecutor((index, call) => (index === 2 && call === 1 ? new StepError("invalid_output", false) : undefined));
-    const { store, queue, start, drainAll, view, parent } = await chunkSetup(executor);
+    const { store, queue, start, drainAll, view, folder } = await chunkSetup(executor);
     const run = await start();
     await drainAll();
     let current = await view();
@@ -383,7 +390,7 @@ describe("runAttempt with chunks (#277)", () => {
     // 終えた区切りは「人が見て写す」用に partial にも残る
     expect(JSON.stringify(store.partialOf(run.id, 0))).toContain("区切り 2/5");
 
-    const resumed = await store.resumeRun(OWNER, parent, run.id);
+    const resumed = await store.resumeRun(OWNER, folder, run.id);
     expect(resumed.status).toBe("resumed");
     if (resumed.status !== "resumed") return;
     await queue.enqueue({ name: taskName(run.id, resumed.stepIndex, resumed.generation), runId: run.id, stepIndex: resumed.stepIndex });
@@ -396,7 +403,7 @@ describe("runAttempt with chunks (#277)", () => {
 
   it("stops before the next chunk when the transcript is edited mid-way, and refuses to resume", async () => {
     const { executor, seen } = recordingExecutor();
-    const { store, queue, start, deps, view, parent } = await chunkSetup(executor);
+    const { store, queue, start, deps, view, parent, folder } = await chunkSetup(executor);
     const run = await start();
     expect(await runAttempt(deps, queue.drain()[0]!)).toEqual({ status: "chunk" });
     // 区切りの途中で文字起こしを直す
@@ -406,7 +413,7 @@ describe("runAttempt with chunks (#277)", () => {
     const current = await view();
     expect(current?.steps[0]).toMatchObject({ state: "failed", errorCode: "input_changed", chunk: { index: 1, count: 5 } });
     expect(JSON.stringify(store.partialOf(run.id, 0))).toContain("区切り 1/5");
-    expect((await store.resumeRun(OWNER, parent, run.id)).status).toBe("input_changed");
+    expect((await store.resumeRun(OWNER, folder, run.id)).status).toBe("input_changed");
   });
 
   it("fails without retrying when the input needs more than 60 chunks", async () => {

@@ -61,7 +61,6 @@ export { ShellSidebar, type ShellDropTarget, type ShellSidebarProps } from "./si
 export { ShellBrand } from "./brand";
 export { NEW_PAGE_KINDS, NewPageMenu, type NewPageKind } from "./new-page-menu";
 export { ShellRail, ShellRailSection, type ShellRailProps, type ShellRailSectionProps } from "./rail";
-export { ShellSteps, ShellStepsStart, shellStepSay, type ShellStep, type ShellStepsAction, type ShellStepsChoice } from "./steps";
 export { ShellChat, type ShellChatAction, type ShellChatMessage, type ShellChatProps } from "./chat";
 export { ShellPageSettings, type ShellPageSettingsProps } from "./page-settings";
 export { ShellPageInfo, type ShellPageInfoProps } from "./page-info";

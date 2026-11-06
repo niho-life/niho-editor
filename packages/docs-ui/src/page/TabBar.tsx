@@ -30,6 +30,10 @@ export type PageTabActions = {
   /** 別のページへ移す（入れ先が 1 つ以上あるときだけ項目を出す）。 */
   moveTargets?: readonly PageTabMoveTarget[];
   onMove?: (targetId: string) => void;
+  /** 作り直す（AI）: 同じ入力でこのタブへ書き直す（段階の出力のタブだけ渡す。#309）。 */
+  onRegenerate?: () => void;
+  /** 同じ入力でもう 1 つ（AI）: 同じ入れ物に新しいタブ（段階の出力のタブだけ渡す。#309）。 */
+  onSibling?: () => void;
   /** 削除（ゴミ箱に 30 日。確認は呼ぶ側）。 */
   onDelete: () => void;
 };
@@ -57,6 +61,8 @@ export const TAB_BAR_TEXT = {
   move: "別のページへ移す",
   remove: "削除",
   removeHint: "ゴミ箱に 30 日",
+  regenerate: "作り直す（AI）",
+  sibling: "同じ入力でもう 1 つ（AI）",
   untitled: "無題",
 } as const;
 
@@ -86,6 +92,8 @@ export function TabBar({ tabs, currentId, onOpen, onAdd, busy = false, actions }
   const items: ShellMenuItem[] = [
     { id: "rename", label: TAB_BAR_TEXT.rename, icon: "edit" },
     { id: "duplicate", label: TAB_BAR_TEXT.duplicate, icon: "copy" },
+    ...(actions?.onRegenerate ? [{ id: "regenerate", label: TAB_BAR_TEXT.regenerate, icon: "spark" as const }] : []),
+    ...(actions?.onSibling ? [{ id: "sibling", label: TAB_BAR_TEXT.sibling, icon: "spark" as const }] : []),
     ...(actions?.onSplit && others[0] ? [{ id: "split", label: TAB_BAR_TEXT.split, icon: "side" as const, hint: others[0].label }] : []),
     ...(actions?.onMove && moveTargets.length > 0 ? [{ id: "move", label: TAB_BAR_TEXT.move, icon: "doc" as const }] : []),
     { id: "delete", label: TAB_BAR_TEXT.remove, icon: "trash", danger: true, hint: TAB_BAR_TEXT.removeHint, separated: true },
@@ -114,6 +122,8 @@ export function TabBar({ tabs, currentId, onOpen, onAdd, busy = false, actions }
     // 項目は消えるので、フォーカスは ▾ へ戻す（確認のシートが開くのはそのあと）
     menuButton.current?.focus();
     if (id === "duplicate") actions?.onDuplicate();
+    else if (id === "regenerate") actions?.onRegenerate?.();
+    else if (id === "sibling") actions?.onSibling?.();
     else if (id === "split" && others[0]) actions?.onSplit?.(others[0].id);
     else if (id === "delete") actions?.onDelete();
   };

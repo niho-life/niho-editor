@@ -115,15 +115,15 @@ queue・worker・retry・inline は claim した run の写しを使うように
 | 仕組み | 実体 |
 | --- | --- |
 | 表と状態遷移 | `step_runs`・`step_attempts`（migration 0006）。`pages.step_status` に `failed` も有り |
-| 受付 API | `apps/editor-web/src/server/steps-api.ts`（`GET /steps`・`POST /steps/runs`・`cancel`）。未認証 401、他人・無しは同じ 404、冪等キー対応 |
+| 受付 API | `apps/editor-web/src/server/flow-api.ts`（`GET /flow`・`POST /flow/runs`・`PATCH /flow`。#309）と `steps-api.ts`（`GET /steps`・`cancel`・`resume`・`update-recipe`・`partial`。id はフォルダ）。未認証 401、他人・無しは同じ 404、冪等キー対応 |
 | 世代で守る確定 | `claimAttempt` が世代を進めて lease を取り、`commitAttempt`・`failAttempt` が世代で fence。遅れて返った結果で上書きしない |
 | 1 transaction の確定 | `commitAttempt`: サブページの本文の差し替え ＋ 古い本文を版（`ai`）に残す ＋ `revision` を進める（#58 の楽観ロックで人の保存と競合する）＋ 次の段階を `queued` ＋ 最後なら run を `succeeded` |
-| 決定的なサブページ id | `stepPageId(parent, recipe, stepIndex)`（sha256 → UUID v5 の形）。作り直しても同じページ |
-| サブページの題名 | `createRun` が段階の名前で作る（`INSERT INTO pages … kind = 'step'`） |
+| 出力先 | フォルダ直下の役割ページ（`role = { kind: 'step', recipe, stepId }`）の**新しいタブ**（#309。[editor-recipes-and-folders.md](editor-recipes-and-folders.md) §3.5）。作り直しは同じタブ（`regenerate`）、もう 1 つは同じ入れ物の新しいタブ（`sibling`） |
+| 役割ページの題名 | `createRun` が段階の名前で作る（無いときだけ） |
 | 生存確認と再開 | `heartbeatAttempt`（lease の 1/3 おき）、`sweepExpiredLeases`・`listQueuedAttempts`・`requeueAttempt` と Scheduler の掃除（#118 で「消えた task」と「積まれている task」を区別する修正済み） |
 | 再試行 | 一時的な失敗は試行 3 回まで（自動の再試行は 2 回。`MAX_TRIES`）、間隔は指数的（`defaultRetryDelaySeconds`）。入力の誤りはすぐ失敗 |
 | キュー | `cloud-tasks.ts`（本番）・`inline.ts`（開発・CI。本番では受け付けない） |
-| 画面 | PR #114: 帯（`PageSteps.tsx`・`steps-view.ts`）・「記事にする」の入口・前提変更と作り直し・サイドバーの回るマーク・終了の通知 |
+| 画面 | 「ページ」パネルの流れ（docs-ui `page/PageFlow.tsx`・`components/FlowWatcher.tsx`・`steps-view.ts`。#309）: 各行の「作成」「済み」・前提変更と作り直し・サイドバーの回るマーク・終了の通知。本文に帯は無い |
 
 **この層は触らない。**足りないものが見つかったら PR 本文で相談する。
 
@@ -662,7 +662,7 @@ docs-core の `guide-extraction.ts` をサーバーで呼ぶだけ。中身は�
 | 3 | **前提変更の理由を 1 行で言う**（「元の文字起こしが変わりました。」等）。「成果物」「前提変更」の語は使わない | `plan.ts` `staleReasons`・`staleNoticeText` | △ 印は出るが理由が無い | §2.4 で直す |
 | 4 | **前提の粒度**: 原文・上流の成果物それぞれ・参考・背景情報・文書ガイド・**指示文**の 6 つを別々に見る | `plan.ts` `basisFor`・`Basis` | △ 2 入力の 1 ハッシュ | §2.4 |
 | 5 | **名前を変えただけでは前提変更にしない**（段階名・参考のタイトルは比べない。指示文は前後の空白だけの違いを無視） | `plan.ts` `stepHash`・`refsHash` のコメント | ○ 基準は本文と指示文だけ | 広げるときに守る |
-| 6 | **失敗した段階だけやり直す。上流は再利用する** | `plan.ts` `canRunStep`、`FlowDesignDiff` | ○ `fromStep` の run・`reused` の状態 | — |
+| 6 | **失敗した段階だけやり直す。上流は再利用する** | `plan.ts` `canRunStep`、`FlowDesignDiff` | ○ 段階の出力のタブからの run（`inputTab`）・同じタブへの作り直し（`regenerate`） | — |
 | 7 | **段階の id は名前を変えても変えない**（成果物がその id に結んでいる） | `flow-edit.ts` の先頭のコメント | ○ `SettingsStep.id` は編集できない | 守る |
 | 8 | **既定の手順に手を入れたら、既定に戻せる** | テンプレートが指示文の正 | ○ #108 の「既定に戻す」 | — |
 | 9 | **手順の複製**（名前・文書ガイド・固有名詞・お手本・段階を写し、重ならない名前、revision 1） | `flow-edit.ts` `duplicateFlow` | △ 複製は有るが固有名詞とお手本が無い | §3.3 |

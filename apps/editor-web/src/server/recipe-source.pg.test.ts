@@ -85,7 +85,7 @@ describe.skipIf(databaseUrl === undefined)("ownerRecipes with PostgreSQL", () =>
     expect((await listRecipes(pool, owner)).map((recipe) => recipe.origin)).toEqual(["builtin", "builtin", "builtin", "builtin"]);
   });
 
-  it("starts a run from a table-read recipe with the same 段階 and the same サブページ as the constant did", async () => {
+  it("starts a run from a table-read recipe with the same 段階 and the same 役割ページ as the constant did", async () => {
     const owner = "synthetic-owner-run";
     const store = pgStepRunStore(pool);
     const recipes = await ownerRecipes(pool, owner);
@@ -93,8 +93,10 @@ describe.skipIf(databaseUrl === undefined)("ownerRecipes with PostgreSQL", () =>
     const fromConstant = findRecipeIn(DEFAULT_RECIPES, "tpl-1")!;
     expect(fromTable).toEqual(fromConstant);
 
-    const parentId = (await new EditorStore(pool).createPage(owner, { kind: "rec", blocks: transcript })).id;
-    const created = await store.createRun(owner, parentId, { recipe: fromTable });
+    const pages = new EditorStore(pool);
+    const folderId = (await pages.createPage(owner, { kind: "folder", title: "合成のフォルダ" })).id;
+    const recording = (await pages.createPage(owner, { kind: "rec", blocks: transcript, parent: folderId }))!.id;
+    const created = await store.createRun(owner, folderId, { recipe: fromTable, inputTab: recording, toStep: fromTable.steps.length - 1 });
     expect(created.status).toBe("created");
     if (created.status !== "created") return;
     expect(created.run.steps.map((step) => [step.index, step.stepId, step.state])).toEqual([
@@ -102,9 +104,9 @@ describe.skipIf(databaseUrl === undefined)("ownerRecipes with PostgreSQL", () =>
       [1, "r4t8wz3c", "pending"],
       [2, "h2n6v5pe", "pending"],
     ]);
-    // サブページの題名は手順の工程の名前（表から読んでも同じ）
-    const pages = await pool.query<{ title: string }>("SELECT title FROM pages WHERE owner = $1 AND parent = $2 AND kind = 'step' ORDER BY created_at, id", [owner, parentId]);
-    expect(pages.rows.map((row) => row.title).sort()).toEqual(fromConstant.steps.map((step) => step.name).sort());
+    // 役割ページ（出力のタブの入れ物）の題名は手順の工程の名前（表から読んでも同じ。#309）
+    const holders = await pool.query<{ title: string }>("SELECT title FROM pages WHERE owner = $1 AND parent = $2 AND kind = 'page' AND role IS NOT NULL ORDER BY created_at, id", [owner, folderId]);
+    expect(holders.rows.map((row) => row.title).sort()).toEqual(fromConstant.steps.map((step) => step.name).sort());
   });
 
   it("replaces the whole list when the 設定 saves, and the next read answers the saved order", async () => {

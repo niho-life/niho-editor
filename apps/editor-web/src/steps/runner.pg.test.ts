@@ -36,15 +36,19 @@ describe.skipIf(databaseUrl === undefined)("runAttempt with PostgreSQL", () => {
     await pool.end();
   });
 
-  async function begin(recipeId: "tpl-1" | "tpl-2", fromStep = 0, parent?: string) {
+  /** フォルダと録音のタブを作り、録音から最後の段階まで run を作る（#309。`parentId` はフォルダ）。 */
+  async function begin(recipeId: "tpl-1" | "tpl-2") {
     const store = pgStepRunStore(pool);
-    const parentId = parent ?? (await new EditorStore(pool).createPage(OWNER, { kind: "rec", blocks: transcript })).id;
-    const created = await store.createRun(OWNER, parentId, { recipe: findRecipeIn(DEFAULT_RECIPES, recipeId)!, fromStep });
+    const pages = new EditorStore(pool);
+    const parentId = (await pages.createPage(OWNER, { kind: "folder", title: "合成のフォルダ" })).id;
+    const recording = (await pages.createPage(OWNER, { kind: "rec", blocks: transcript, parent: parentId }))!.id;
+    const recipe = findRecipeIn(DEFAULT_RECIPES, recipeId)!;
+    const created = await store.createRun(OWNER, parentId, { recipe, inputTab: recording, toStep: recipe.steps.length - 1 });
     if (created.status !== "created") throw new Error(created.status);
-    return { store, parentId, run: created.run };
+    return { store, parentId, recording, run: created.run };
   }
 
-  it("runs tpl-1 to the end, fails a step after three tries, and rebuilds from fromStep reusing the upstream", async () => {
+  it("runs tpl-1 to the end, fails a step after three tries, and continues from a step's tab leaving the upstream untouched", async () => {
     const { store, parentId, run } = await begin("tpl-1");
     const queue = new MemoryTaskQueue();
     const drainAll = async (executor: StepExecutor) => {
@@ -62,13 +66,14 @@ describe.skipIf(databaseUrl === undefined)("runAttempt with PostgreSQL", () => {
     expect(await store.refreshStale(OWNER, parentId, findRecipeIn(DEFAULT_RECIPES, "tpl-1")!)).toBe(0);
 
     const upstream = await pool.query("SELECT id, blocks FROM pages WHERE parent = $1 ORDER BY id", [parentId]);
-    const rerun = await store.createRun(OWNER, parentId, { recipe: findRecipeIn(DEFAULT_RECIPES, "tpl-1")!, fromStep: 1 });
+    // 段階 1 の出力のタブから続きを作る: 段階 2〜3 だけが新しいタブに走る（上流のタブは触らない。#309）
+    const rerun = await store.createRun(OWNER, parentId, { recipe: findRecipeIn(DEFAULT_RECIPES, "tpl-1")!, inputTab: done!.steps[0]!.pageId, toStep: 2 });
     if (rerun.status !== "created") throw new Error(rerun.status);
     await queue.enqueue({ name: taskName(rerun.run.id, 1, 0), runId: rerun.run.id, stepIndex: 1 });
     const failing: StepExecutor = { run: async () => Promise.reject(new StepError("model_timeout", true)) };
     expect(await drainAll(failing)).toEqual(["retry", "retry", "failed"]);
     const failed = (await store.listRun(OWNER, parentId))?.run;
-    expect(failed?.steps.map((step) => [step.state, step.stepStatus])).toEqual([["reused", "done"], ["failed", "failed"], ["canceled", "wait"]]);
+    expect(failed?.steps.map((step) => [step.index, step.state, step.stepStatus])).toEqual([[1, "failed", "failed"], [2, "canceled", "wait"]]);
     const kept = await pool.query("SELECT blocks FROM pages WHERE id = $1", [done!.steps[0]!.pageId]);
     expect(kept.rows[0]?.blocks).toEqual(upstream.rows.find((row) => row.id === done!.steps[0]!.pageId)?.blocks);
   });

@@ -1,9 +1,11 @@
 import type { PageLang } from "@niho/editor-store";
 import type { Editor } from "@tiptap/react";
 import type { ReactNode } from "react";
+import type { PageFlowAction, PageFlowRow } from "niho-docs-ui/page/PageFlow";
 import type { AiBridge } from "./ai-bridge";
 import type { RestoredPage } from "./page-actions-client";
 import type { SaveStatus } from "./save-status";
+import type { StepRecipeChoice, StepRun } from "./steps-client";
 
 /** 本文の文字（情報パネルの文字数のため。開いているあいだだけ読み、変わったら知らせを受ける）。 */
 export type PageText = {
@@ -39,7 +41,7 @@ export type AttachedAi = {
   diff: AttachedAiDiff;
 };
 
-/** PageSteps が持つ既存の工程状態を、AI の工程選択へ読み取り専用で共有する。 */
+/** 流れ（FlowWatcher）が持つ工程の状態を、AI の工程選択へ読み取り専用で共有する。 */
 export type AttachedAiStep = {
   id: string;
   label: string;
@@ -53,6 +55,36 @@ export type AttachedAiSteps = {
   guide: string | null;
   options: readonly AttachedAiStep[];
   start: (id: string) => Promise<{ ok: boolean; message: string }>;
+};
+
+/**
+ * 「ページ」パネルの「流れ」（#309）。開いているタブの FlowWatcher が枠に登録し、PagePanel が描く。
+ * 行の内容と、押したときにすることを持つ（通信は FlowWatcher の側）。
+ */
+export type AttachedFlow = {
+  /** 開いているタブの id（別のタブの流れを描かないための持ち主）。 */
+  ownerId: string;
+  folder: { id: string; title: string } | null;
+  recipe: { id: string; name: string };
+  recipes: readonly StepRecipeChoice[];
+  rows: readonly PageFlowRow[];
+  /** フォルダの最新の run（失敗の途中出力・手順の版の知らせに使う）。 */
+  run: StepRun | null;
+  busy: boolean;
+  /** 一言（読めなかった・いま何が起きているか）。 */
+  note: string | null;
+  actions: readonly PageFlowAction[];
+  onAction: (id: string) => void;
+  open: (holderId: string) => void;
+  make: (row: PageFlowRow) => Promise<{ ok: boolean; message: string }>;
+  /** タブの ▾「作り直す（AI）」「同じ入力でもう 1 つ（AI）」（段階の出力のタブだけ）。 */
+  regenerate: (tabId: string, how: "regenerate" | "sibling") => Promise<{ ok: boolean; message: string }>;
+  transcribe: (engine: string) => Promise<{ ok: boolean; message: string }>;
+  changeRecipe: (recipeId: string) => Promise<{ ok: boolean; message: string }>;
+  /** 読み直す（手順の写しを更新したあとなど）。 */
+  refresh: () => void;
+  /** 開いているタブが段階の出力（`made_from.kind = 'step'`。▾ の「作り直す（AI）」はこのときだけ）。 */
+  generated: boolean;
 };
 
 /**

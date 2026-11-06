@@ -3,10 +3,10 @@
  * 契約はサーバー側の src/server/steps-api.ts。実行の仕組み（Cloud Tasks の worker）はサーバーだけが持ち、
  * 画面は「始める」「状態を読む」「取消」「設計の写しを更新」「区切りの続きからやり直す」の API を使う。
  *
- * - 状態は親（録音ページ）の id で読む（`GET /api/pages/{parent}/steps`）。サブページを開いているときも親で読む。
+ * - 状態はフォルダの id で読む（`GET /api/pages/{folder}/steps`。#309。始めるのは ./flow-client.ts の流れの API）。
  * - 手順は設定（#108）で変えられるので、画面は静的な一覧を持たず、同じ答えに入っている `recipes` に従う。
  * - 読むたびにサーバーが前提変更を測り直す（`stepStatus` が `stale` になる）。画面は測らない。
- * - 短い間隔で回さない（./use-step-run.ts が間隔を空け、画面を閉じたら止める）。
+ * - 短い間隔で回さない（components/FlowWatcher.tsx が間隔を空け、画面を閉じたら止める）。
  */
 
 import type { AttemptState, Block, RunState, StepStatus } from "@niho/editor-store";
@@ -59,9 +59,6 @@ export type StepRun = {
  * 帯の名前と、録音ページの入口に出すものをこれで決める。
  */
 export type StepRecipeChoice = { id: string; name: string; defaultName: string | null; unusableReason?: string | null };
-
-/** `GET /api/pages/{id}/steps` の答え。 */
-export type StepsState = { run: StepRun | null; recipes: StepRecipeChoice[] };
 
 /** API の失敗。`error` はサーバーの短い code（`steps_unavailable`・`run_in_progress`・`invalid_from_step` など）。 */
 export class StepsRequestError extends Error {
@@ -132,7 +129,8 @@ function toChunk(value: unknown): { chunk: { index: number; count: number } } | 
   return { chunk: { index, count } };
 }
 
-function toRun(value: unknown): StepRun | null {
+/** サーバーの RunView を読む（形の合わない値は null）。流れの応答（./flow-client.ts）も同じ形の run を持つ。 */
+export function parseStepRun(value: unknown): StepRun | null {
   if (!isPlainObject(value)) return null;
   const { id, recipe, recipeName, hasGuide, recipeRevision, currentRevision, designChanges, state, fromStep, steps } = value;
   if (typeof id !== "string" || typeof recipe !== "string") return null;
@@ -149,7 +147,8 @@ function toRun(value: unknown): StepRun | null {
   return { id, recipe, recipeName: recipeName as string | undefined, ...(hasGuide === undefined ? {} : { hasGuide }), recipeRevision: recipeRevision as number | undefined, currentRevision: currentRevision as number | null | undefined, designChanges: designChanges as string[] | undefined, state: state as StepRunState, fromStep, steps: parsed as StepRunStep[] };
 }
 
-function toChoice(value: unknown): StepRecipeChoice | null {
+/** サーバーの RecipeChoiceView を読む（形の合わない値は null）。 */
+export function parseRecipeChoice(value: unknown): StepRecipeChoice | null {
   if (!isPlainObject(value)) return null;
   const { id, name, defaultName, unusableReason } = value;
   if (typeof id !== "string" || id === "" || typeof name !== "string") return null;
@@ -160,20 +159,6 @@ function toChoice(value: unknown): StepRecipeChoice | null {
 
 function stepsPath(parentId: string, rest = ""): string {
   return `/api/pages/${encodeURIComponent(parentId)}/steps${rest}`;
-}
-
-/** 最新の run（無ければ null）と、その人の手順。読むたびにサーバーが前提変更を測り直す。 */
-export async function getSteps(parentId: string, fetchImpl: FetchLike = fetch): Promise<StepsState> {
-  const response = await fetchImpl(stepsPath(parentId), { method: "GET", credentials: "same-origin", cache: "no-store" });
-  if (!response.ok) throw await failure(response);
-  const data = await readJson(response);
-  if (!isPlainObject(data) || !("run" in data) || !Array.isArray(data.recipes)) throw new StepsRequestError(500);
-  const recipes = data.recipes.map(toChoice);
-  if (recipes.some((recipe) => recipe === null)) throw new StepsRequestError(500);
-  if (data.run === null) return { run: null, recipes: recipes as StepRecipeChoice[] };
-  const run = toRun(data.run);
-  if (!run) throw new StepsRequestError(500);
-  return { run, recipes: recipes as StepRecipeChoice[] };
 }
 
 /** 開示を利用者が選んだときだけ、失敗した最新段階の途中出力を取得する。 */
@@ -195,30 +180,6 @@ export async function getStepPartialOutput(
   return data.blocks as Block[];
 }
 
-/** 手順を始める（`fromStep` を渡すとその段階からの作り直し）。202 は作った run、200 は同じ要求の再送。 */
-export async function startStepRun(
-  parentId: string,
-  input: { recipe: string; fromStep?: number; idempotencyKey?: string },
-  fetchImpl: FetchLike = fetch,
-): Promise<StepRun> {
-  const body: Record<string, unknown> = { recipe: input.recipe };
-  if (input.fromStep !== undefined) body.fromStep = input.fromStep;
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (input.idempotencyKey !== undefined) headers["idempotency-key"] = input.idempotencyKey;
-  const response = await fetchImpl(stepsPath(parentId, "/runs"), {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    credentials: "same-origin",
-    cache: "no-store",
-  });
-  if (response.status !== 200 && response.status !== 202) throw await failure(response);
-  const data = await readJson(response);
-  const run = isPlainObject(data) ? toRun(data.run) : null;
-  if (!run) throw new StepsRequestError(500);
-  return run;
-}
-
 /** 取消（冪等）。 */
 export async function cancelStepRun(parentId: string, runId: string, fetchImpl: FetchLike = fetch): Promise<StepRun> {
   const response = await fetchImpl(stepsPath(parentId, `/runs/${encodeURIComponent(runId)}/cancel`), {
@@ -228,7 +189,7 @@ export async function cancelStepRun(parentId: string, runId: string, fetchImpl: 
   });
   if (!response.ok) throw await failure(response);
   const data = await readJson(response);
-  const run = isPlainObject(data) ? toRun(data.run) : null;
+  const run = isPlainObject(data) ? parseStepRun(data.run) : null;
   if (!run) throw new StepsRequestError(500);
   return run;
 }
@@ -242,7 +203,7 @@ export async function resumeStepRun(parentId: string, runId: string, fetchImpl: 
   });
   if (response.status !== 202) throw await failure(response);
   const data = await readJson(response);
-  const run = isPlainObject(data) ? toRun(data.run) : null;
+  const run = isPlainObject(data) ? parseStepRun(data.run) : null;
   if (!run) throw new StepsRequestError(500);
   return run;
 }
@@ -254,7 +215,7 @@ export async function updateStepRunRecipe(parentId: string, runId: string, expec
   });
   if (!response.ok) throw await failure(response);
   const data = await readJson(response);
-  const run = isPlainObject(data) ? toRun(data.run) : null;
+  const run = isPlainObject(data) ? parseStepRun(data.run) : null;
   if (!run) throw new StepsRequestError(500);
   return run;
 }

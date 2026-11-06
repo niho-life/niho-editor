@@ -212,6 +212,12 @@ describe("migration files", () => {
         assert.match(statements, holders, `${file.name} must make a holder from each existing page`);
         statements = statements.replace(holders, "");
       }
+      if (file.name.endsWith("_step_runs_folder.sql")) {
+        // 手順の run をフォルダに結ぶ（#309）: 録音の下の段階のサブページごとに役割ページを作る（既存の行から写す。固定レコードではない）
+        const holders = /\bINSERT\s+INTO\s+pages\s*\(\s*id,\s*owner,\s*kind,\s*title,\s*lang,\s*blocks,\s*parent,\s*role,\s*created_at,\s*updated_at\s*\)\s*SELECT\s+holder,\s*owner,\s*'page',\s*title,\s*lang,\s*'\[\]'::jsonb,\s*folder,\s*jsonb_build_object\([^;]*?\)\s*,\s*created_at,\s*created_at\s+FROM\s+step_holder_map\s*;/i;
+        assert.match(statements, holders, `${file.name} must make a role holder from existing step pages`);
+        statements = statements.replace(holders, "");
+      }
       assert.doesNotMatch(statements, /\bINSERT\s+INTO\b|\bCOPY\s/i, `${file.name} must not embed records`);
       assert.doesNotMatch(sql, /-----BEGIN [A-Z ]*PRIVATE KEY-----/);
       assert.doesNotMatch(sql, /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i, "credential URL");
