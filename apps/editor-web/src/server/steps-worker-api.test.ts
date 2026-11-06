@@ -64,8 +64,11 @@ function setup(options: { executor?: StepExecutor; queue?: TaskQueue; config?: C
 }
 
 async function startRun(store: MemoryStepRunStore, recipe: "tpl-1" | "tpl-2" = "tpl-1") {
-  const parent = store.addPage(OWNER, { kind: "rec", blocks: transcript });
-  const created = await store.createRun(OWNER, parent, { recipe: findRecipeIn(DEFAULT_RECIPES, recipe)! });
+  // run の親はフォルダ、入力はその中の録音のタブ（#309）
+  const parent = store.addFolder(OWNER);
+  const recording = store.addPage(OWNER, { kind: "rec", blocks: transcript, parent });
+  const definition = findRecipeIn(DEFAULT_RECIPES, recipe)!;
+  const created = await store.createRun(OWNER, parent, { recipe: definition, inputTab: recording, toStep: definition.steps.length - 1 });
   if (created.status !== "created") throw new Error(created.status);
   return { parent, runId: created.run.id };
 }

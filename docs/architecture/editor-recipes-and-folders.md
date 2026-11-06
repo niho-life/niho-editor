@@ -121,7 +121,7 @@ recipes (owner, id)   -- 主キー。人ごとに 1 行ずつ
 - 入れ物の無い 1 枚だけのページ（移行前の行・入れ物が完全に消えた行・手順のサブページ）はそのまま 1 枚として扱い、タブを足すときに入れ物を作って結ぶ。
 - API: `GET /api/pages/{id}/tabs`（`{ page, tab, tabs }`）、`POST …/tabs`（足す。`{ name? }`）、`PATCH …/tabs`（並び）、`PATCH …/tab`（`{ name }` で名前、`{ page }` で移す）、`GET /api/pages?view=all`。`/p/<入れ物の id>` は最後に開いたタブへ redirect（`?side=` は保つ）。
 - 画面（#308）: 本文の上にタブの帯（docs-ui `page/TabBar.tsx`、`components/PageTabs.tsx`）。ページ名の上、本文のコンテンツ幅の薄い罫線と右端の ＋（まっさらなタブをすぐ足す）。タブが 2 つ以上なら左に札、開いているタブに ▾（名前を変える・複製・並べて開く・別のページへ移す・削除）。
-  本文に手順の帯・ボタンは置かない（`PageSteps` は `quiet`。手順の操作は「ページ」パネルへ。#309）。一覧は入れ物 1 行（タブの数の印。今の行は網掛けせず太字。録音の 2 行目「録音」は出さない）。フォルダの画面は入れ物 1 行で、タブが 2 つ以上なら 2 行目に札。
+  本文に手順の帯・ボタンは置かない（手順の操作は「ページ」パネルの「流れ」。§3.5）。一覧は入れ物 1 行（タブの数の印。今の行は網掛けせず太字。録音の 2 行目「録音」は出さない）。フォルダの画面は入れ物 1 行で、タブが 2 つ以上なら 2 行目に札。
 
 ```
 フォルダ（0 の段。kind = 'folder'）
@@ -129,8 +129,22 @@ recipes (owner, id)   -- 主キー。人ごとに 1 行ずつ
 ├ タブ A-1（note／rec／article。page = A）   ← 本文・版・公開・共有
 ├ タブ A-2（page = A）
 ├ 入れ物 B …
-└ （録音のタブの下の工程のサブページは 2 の段のまま。#309 でフォルダ直下の役割ページのタブへ）
+└ 役割ページ（kind = 'page'。role = { kind: 'step', recipe, stepId }）
+  └ タブ（段階の出力。made_from = { kind: 'step', run, input, inputRevision }）
 ```
+
+### 3.5 流れ（手順の実行の出力先。#309。オーナー決定 2026-11-06、#288）
+
+状態: **データ（migration `20261107021307_step_runs_folder`）・API・画面**。モックは [docs/mockups/editor-folder-pages-v1.html](../mockups/editor-folder-pages-v1.html) の「流れ」。
+
+- **1 フォルダに 1 つの手順**（`pages.recipe`。フォルダだけ。無ければ既定の `tpl-1`。`PATCH /api/pages/{id}/flow { recipe }` で替える）。
+- **run の親はフォルダ**（`step_runs.parent`。1 フォルダに進行中の run は 1 つ）。入力は `step_runs.input_tab`（タブ）と `input_revision`。始めの段階は入力のタブの役割で決まる（録音・役割なし → 0、段階 k の入れ物のタブ → k+1）。`createRun(owner, folder, { recipe, inputTab, toStep })`。
+- **出力は新しいタブ**: 段階ごとに、フォルダ直下の役割ページ（`role = { kind: 'step', recipe, stepId }` の入れ物。無ければ段階の名前で作る）へタブを 1 つ足す（`kind = 'note'`・題名は入れ物の題名・`step_status`・`made_from = { kind: 'step', run, input, inputRevision }`）。録音の下には何も増えない。決定的な id の `step` サブページ（`stepPageId`）は廃止。migration は、フォルダの中の録音の下にあった `step` サブページを役割ページのタブに動かし、run をフォルダに結ぶ（フォルダの外の録音の run はそのまま）。
+- **作り直す**（タブの ▾・失敗の「作り直す」）＝ `{ regenerate: tabId }`: 同じ入力（`made_from.input`）で同じタブへ書く（直前の本文は版 `ai` に残る）。**同じ入力でもう 1 つ** ＝ `{ sibling: tabId }`: 同じ入れ物に新しいタブ。
+- 入力の読み方（`readStepInput`）: 入力のタブの系譜（`made_from.input` を最大 8 段）の根が資料（録音なら `page_recordings.segments` を「[分:秒] 話者: 文」の段落に。#310 までは録音のタブ＝文字起こし）、「この録音について」はその根の欄、参考は同じフォルダの役割の無い入れ物のタブ。前提変更（`refreshStale`）はフォルダの最新 run の出力のタブについて測る。
+- **フォルダの外のタブ**で「作成」を押すと、その入れ物の題名でフォルダを作って入れ物ごと入れてから始める（`wrapInFolder`）。
+- API（`apps/editor-web/src/server/flow-api.ts`）: `GET /api/pages/{タブ}/flow`（フォルダの id に `?tab=` でも）→ 行・フォルダの手順・候補・最新の run。`POST /api/pages/{タブ}/flow/runs { inputTab, toStep } | { regenerate } | { sibling }`（202。`opened` は開くタブ）。取消・やり直し・途中出力・設計の更新は `…/{フォルダ}/steps/runs/{run}/…` のまま。文字起こしの「作成 ▾」は `POST …/recording/transcribe { engine, replace: true }`。
+- 画面: docs-ui `page/PageFlow.tsx`（Tauri-free）を「ページ」パネル（`PagePanel.tsx`）に。見出し「<手順名> ▾ · <フォルダ名>」、行は 録音 › 文字起こし › 段階…。あるページは名前と札、無い段階は「（まだ）」。今の行は強調し「◯◯ から」。各行の右端に **作成**／**済み**（今のタブより前の段階と録音には出ない。「済み」は今のタブから系譜で作られたタブがその入れ物にあるとき）。文字起こしの行は録音のタブでエンジンのメニュー（使ったものは済み）。作成中は回る印。状態の読み込みは `components/FlowWatcher.tsx`（何も描かない。動いている間だけ読み直し、パネル・AI の工程の選択・一覧の行へ渡す）。
 
 ## 4. 一覧の並びと「最近」と書き出し（`20261101013000_folder_order_fields_opens`）
 

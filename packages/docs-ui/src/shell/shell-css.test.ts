@@ -103,7 +103,7 @@ describe("shell.css（モック v6 の枠のスタイル）", () => {
       }
     }
     // 選択チップ・現在の手順・ヒントは淡色面 ＋ accent-ink の文字
-    for (const selector of [".es-step--cur", ".es-pills button.es-on", ".es-trhint"]) {
+    for (const selector of [".es-flow-row--cur .es-flow-go", ".es-pills button.es-on", ".es-trhint"]) {
       const body = bodyOf(selector) ?? "";
       expect(body, selector).toContain("background:var(--ed-accent-soft)");
       expect(body, selector).toContain("color:var(--ed-accent-ink)");

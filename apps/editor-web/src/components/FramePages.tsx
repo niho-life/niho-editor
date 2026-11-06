@@ -10,8 +10,8 @@ import { discardPageRequest, readPageRequest, type ConflictPage } from "@/lib/pa
 import { locationOf } from "@/lib/sidebar-items";
 import { isNarrowNow, useEditorFrame } from "./EditorFrame";
 import { FolderPage } from "./FolderPage";
+import { FlowWatcher } from "./FlowWatcher";
 import { PageEditor } from "./PageEditor";
-import { PageSteps } from "./PageSteps";
 import { PageTabs, type OpenPageTab } from "./PageTabs";
 import { RecordingInfo } from "./RecordingInfo";
 import { RecordingTranscript } from "./RecordingTranscript";
@@ -169,29 +169,20 @@ export function OpenPage({
       }
     />
   );
-  // タブの帯（#308）はページのいちばん上。手順（#37）の状態は PageSteps が読み続けるが、帯・入口は本文に描かない（quiet。#309 でパネルへ）。
+  // タブの帯（#308）はページのいちばん上。流れ（#309）の状態は FlowWatcher が読み続け、「ページ」パネルに出す（本文には帯もボタンも置かない）。
   // 録音ページの文字起こし（設計 §7.1。本文の上）はその下
   return (
     <>
       <PageTabs key={`tabs-${id}`} page={summary} tabs={tabs} saveNow={saveNow} />
-      <PageSteps
-        pageId={id}
-        kind={summary.kind}
-        parentId={summary.parent}
-        quiet
-        // 録音ページ: 「この録音について」（§3.3）と、録音ブロック・見出し「文字起こし」の下の文字起こし
-        media={
-          summary.kind === "rec" ? (
-            <>
-              <RecordingInfo key={`info-${id}`} pageId={id} />
-              <RecordingTranscript key={id} pageId={id} />
-            </>
-          ) : null
-        }
-        onBodyReplaced={onBodyReplaced}
-      >
-        {editor}
-      </PageSteps>
+      <FlowWatcher pageId={id} kind={summary.kind} onBodyReplaced={onBodyReplaced} />
+      {/* 録音ページ: 「この録音について」（§3.3）と、録音ブロック・見出し「文字起こし」の下の文字起こし */}
+      {summary.kind === "rec" && (
+        <>
+          <RecordingInfo key={`info-${id}`} pageId={id} />
+          <RecordingTranscript key={id} pageId={id} />
+        </>
+      )}
+      {editor}
     </>
   );
 }

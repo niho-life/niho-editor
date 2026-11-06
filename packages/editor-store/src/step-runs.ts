@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { isPageId } from "./store.ts";
-import type { Block, OwnerId, Queryable, StepStatus } from "./types.ts";
+import type { Block, MadeFrom, OwnerId, PageKind, PageRole, Queryable, StepStatus } from "./types.ts";
 import { parseRecipeSnapshot, snapshotOf, type RecipeSnapshot } from "./recipe-snapshot.ts";
 import { computeChunkBasis, computeStepBasis, parseStepBasis, stepStaleReasons, type StepBasis, type StepMaterials, type StepStaleReason } from "./step-basis.ts";
 import { isPageEntity } from "./page-fields.ts";
@@ -11,10 +11,14 @@ export { parseRecipeSnapshot, snapshotOf, type RecipeSnapshot } from "./recipe-s
 /**
  * 手順（#37）の実行の層。docs/architecture/editor-steps-execution.md §5（方式 B）。
  *
+ * run は**フォルダ**に属し（`step_runs.parent`。#309。1 フォルダに 1 つの手順、進行中の run は 1 つ）、**入力のタブ**（`input_tab`）から
+ * 段階 `from_step`〜最後の attempt までを作る。各段階の出力は、フォルダ直下の役割ページ（`role = { kind: 'step', recipe, stepId }` の入れ物）の
+ * **新しいタブ**（`made_from = { kind: 'step', run, input }`）。作り直す（regenerate）は同じタブへ、同じ入力でもう 1 つ（sibling）は同じ入れ物の新しいタブ。
+ *
  * 状態遷移はすべて「世代（generation）と状態を条件にした UPDATE」（CAS）で行い、読んだ値をもとに書かない。
  * 複数の行を書く遷移は 1 transaction で、最初に run の行を FOR UPDATE で取る（同じ run の遷移を直列にし、
- * 行の lock の順を run → attempt → ページ に固定してデッドロックを避ける）。サブページを書くのは、その親で
- * 進行中の唯一の run だけ（step_runs_active_idx）なので、別の run とサブページの lock を取り合わない。
+ * 行の lock の順を run → attempt → ページ に固定してデッドロックを避ける）。出力のタブを書くのは、そのフォルダで
+ * 進行中の唯一の run だけ（step_runs_active_idx）なので、別の run と出力のタブの lock を取り合わない。
  */
 
 export const RUN_STATES = ["queued", "running", "succeeded", "failed", "canceled"] as const;
@@ -80,7 +84,10 @@ export type StepRunView = {
   id: string;
   recipe: string;
   state: RunState;
+  /** 最初の attempt の段階（入力のタブの役割の次。#309）。 */
   fromStep: number;
+  /** 入力のタブ（#309。migration 前の run は null）。 */
+  inputTab: string | null;
   recipeSnapshot: RecipeSnapshot;
   recipeRevision: number;
   steps: StepRunStepView[];
@@ -88,32 +95,6 @@ export type StepRunView = {
 
 // ---------------------------------------------------------------------------
 // 純粋な部分
-
-function formatUuid(bytes: Buffer): string {
-  const hex = bytes.toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
-}
-
-/**
- * 段階の結果を書くサブページの id。親・recipe・段階から決定的に作る（作り直しても同じページになる）。
- * `sha256(parent + ':' + recipe + ':' + stepIndex)` の先頭 16 byte を UUID v5 の形（version 5・RFC 4122 の variant）に整える。
- */
-export function stepPageId(parentId: string, recipeId: string, stepIndex: number): string {
-  const digest = createHash("sha256").update(`${parentId.toLowerCase()}:${recipeId}:${stepIndex}`).digest();
-  const bytes = Buffer.from(digest.subarray(0, 16));
-  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  return formatUuid(bytes);
-}
-
-/** New artifact identity: bind the page to the stable step ID, not its current position. */
-export function stepPageIdForStep(parentId: string, recipeId: string, stepId: string): string {
-  const digest = createHash("sha256").update(`${parentId.toLowerCase()}:${recipeId}:step:${stepId}`).digest();
-  const bytes = Buffer.from(digest.subarray(0, 16));
-  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  return formatUuid(bytes);
-}
 
 /** Historical generated titles for pages that were the final step in a run snapshot. */
 export async function finalStepPageNames(db: Queryable, owner: OwnerId, pageId: string): Promise<string[]> {
@@ -244,6 +225,7 @@ type ViewRow = {
   recipe: string;
   state: RunState;
   from_step: number;
+  input_tab: string | null;
   recipe_snapshot: unknown;
   recipe_revision: number | null;
   step_index: number;
@@ -261,7 +243,7 @@ type ViewRow = {
 
 async function loadRunView(db: Queryable, owner: OwnerId, runId: string): Promise<StepRunView | null> {
   const result = await db.query<ViewRow>(
-    `SELECT r.id, r.recipe, r.state, r.from_step, r.recipe_snapshot, r.recipe_revision,
+    `SELECT r.id, r.recipe, r.state, r.from_step, r.input_tab, r.recipe_snapshot, r.recipe_revision,
             a.step_index, a.step_id, a.state AS step_state, a.page_id, a.tries, a.error_code,
             p.step_status,
             CASE WHEN r.state = 'failed' AND a.state = 'failed' AND p.id IS NOT NULL
@@ -288,6 +270,7 @@ async function loadRunView(db: Queryable, owner: OwnerId, runId: string): Promis
     recipe: first.recipe,
     state: first.state,
     fromStep: first.from_step,
+    inputTab: first.input_tab,
     recipeSnapshot,
     recipeRevision: first.recipe_revision!,
     steps: result.rows.map((row) => ({
@@ -313,50 +296,72 @@ async function requireRunView(db: Queryable, owner: OwnerId, runId: string): Pro
 
 export type CreateRunInput = {
   recipe: StepRecipe;
-  /** ここから作り直す（既定 0）。前の段階は完了済みのサブページを再利用する。 */
-  fromStep?: number;
   idempotencyKey?: string | null;
-};
+} & (
+  /** 入力のタブから、その段階まで作る（間の段階が無ければ一緒に。#309）。入力の役割が段階 k なら k+1 から。 */
+  | { inputTab: string; toStep: number }
+  /** 作り直す: 段階の出力のタブを、同じ入力で同じタブへ書き直す。 */
+  | { regenerate: string }
+  /** 同じ入力でもう 1 つ: 段階の出力のタブと同じ入力で、同じ入れ物に新しいタブ。 */
+  | { sibling: string }
+);
 
 export type CreateRunResult =
   | { status: "created"; run: StepRunView }
   /** 同じ `Idempotency-Key` の run が既にある（新しく作らない）。 */
   | { status: "existing"; run: StepRunView }
-  /** 親が本人の録音ページでない（別の人・削除済み・存在しない・不正な id）。404 にする。 */
+  /** フォルダ・タブが本人の生きているものでない（別の人・削除済み・存在しない・不正な id・そのフォルダの中にない）。404 にする。 */
   | { status: "not_found" }
-  /** 同じ録音ページで queued / running の run が既にある。409 にする。 */
+  /** 同じフォルダで queued / running の run が既にある。409 にする。 */
   | { status: "run_in_progress" }
-  /** `fromStep` より前に完了済みのサブページが無い段階がある。400 にする。 */
+  /** 段階が範囲の外（入力の役割より前・最後より後）、作り直す・もう 1 つの対象が段階の出力でない、その入力が消えている。400 にする。 */
   | { status: "invalid_from_step" }
   | { status: "recipe_changed" };
 
+/** 入力のタブの役割から、最初に作る段階（役割が段階 k の入れ物のタブなら k+1、それ以外は 0）。手順が違う役割は 0。 */
+function startStepOf(role: PageRole | null, recipeId: string, steps: readonly { id: string }[]): number {
+  if (!role || role.kind !== "step" || role.recipe !== recipeId) return 0;
+  const index = steps.findIndex((step) => step.id === role.stepId);
+  return index < 0 ? 0 : index + 1;
+}
+
+type TargetTabRow = { id: string; revision: number; page: string | null; kind: PageKind; made_from: MadeFrom | null; role: PageRole | null };
+
 /**
- * run を作る。`fromStep` 以降のサブページを用意して `wait` に戻し（削除されていれば戻す）、`fromStep` の attempt を
- * `queued`・以降を `pending`・前を `reused` にする。親・冪等・進行中の検査と作成を同じ transaction で行う。
+ * run を作る（#309）。フォルダ・入力のタブ・冪等・進行中の検査と、出力のタブの用意を同じ transaction で行う。
+ * 段階 `from_step`〜`toStep` ごとに、フォルダ直下の役割ページ（無ければ作る）に**新しいタブ**を足し（本文なし・`wait`・
+ * `made_from` は run と入力）、最初の attempt を `queued`・以降を `pending` にする。作り直す（`regenerate`）は新しいタブを作らず
+ * そのタブへ、同じ入力でもう 1 つ（`sibling`）はそのタブの入れ物に新しいタブ。
  */
-export async function createRun(db: StepRunsDb, owner: OwnerId, parentId: string, input: CreateRunInput): Promise<CreateRunResult> {
+export async function createRun(db: StepRunsDb, owner: OwnerId, folderId: string, input: CreateRunInput): Promise<CreateRunResult> {
   assertOwner(owner);
   assertRecipe(input.recipe);
   const { recipe } = input;
-  const fromStep = input.fromStep ?? 0;
-  if (!Number.isInteger(fromStep) || fromStep < 0) {
-    throw new RangeError("editor-store: fromStep is out of range");
-  }
+  const target = "inputTab" in input ? input.inputTab : "regenerate" in input ? input.regenerate : input.sibling;
+  if ("inputTab" in input && (!Number.isInteger(input.toStep) || input.toStep < 0)) throw new RangeError("editor-store: toStep is out of range");
   const key = input.idempotencyKey ?? null;
   if (key !== null && !isIdempotencyKey(key)) throw new TypeError("editor-store: invalid idempotency key");
-  if (!isPageId(parentId)) return { status: "not_found" };
+  if (!isPageId(folderId) || !isPageId(target)) return { status: "not_found" };
 
   return inTransaction<CreateRunResult>(db, async (client) => {
-    // 親が本人の生きている録音ページであること（作り終えるまで削除させない）
-    const parent = await client.query<{ id: string; lang: string }>(
-      `SELECT id, lang FROM pages
-        WHERE owner = $1 AND id = $2 AND kind = 'rec' AND deleted_at IS NULL
-        FOR UPDATE`,
-      [owner, parentId],
+    // フォルダが本人の生きているフォルダであること（作り終えるまで消させない。進行中の run の判定と直列にする）
+    const folder = await client.query<{ id: string; lang: string }>(
+      "SELECT id, lang FROM pages WHERE owner = $1 AND id = $2 AND kind = 'folder' AND deleted_at IS NULL FOR UPDATE",
+      [owner, folderId],
     );
-    const parentRow = parent.rows[0];
-    if (!parentRow) throw new Rollback<CreateRunResult>({ status: "not_found" });
-    const parentKey = parentRow.id;
+    const folderRow = folder.rows[0];
+    if (!folderRow) throw new Rollback<CreateRunResult>({ status: "not_found" });
+    // 対象のタブ（入力・作り直す・もう 1 つ）はそのフォルダの本文を持つ行
+    const tab = await client.query<TargetTabRow>(
+      `SELECT t.id, t.revision, t.page, t.kind, t.made_from, h.role
+         FROM pages t
+         LEFT JOIN pages h ON h.owner = t.owner AND h.id = t.page AND h.deleted_at IS NULL
+        WHERE t.owner = $1 AND t.id = $2 AND t.parent = $3 AND t.deleted_at IS NULL AND t.kind IN ('note', 'rec', 'article')
+        FOR UPDATE OF t`,
+      [owner, target, folderRow.id],
+    );
+    const tabRow = tab.rows[0];
+    if (!tabRow) throw new Rollback<CreateRunResult>({ status: "not_found" });
 
     const existingByKey = async (): Promise<string | null> => {
       if (key === null) return null;
@@ -378,7 +383,7 @@ export async function createRun(db: StepRunsDb, owner: OwnerId, parentId: string
       `SELECT id, recipe_snapshot, recipe_revision FROM step_runs
         WHERE owner = $1 AND parent = $2 AND recipe = $3
         ORDER BY created_at DESC, id DESC LIMIT 1 FOR SHARE`,
-      [owner, parentKey, recipe.id],
+      [owner, folderRow.id, recipe.id],
     );
     const prior = previous.rows[0];
     const snapshot = prior ? parseRecipeSnapshot(prior.recipe_snapshot) : snapshotFromRecipe(recipe);
@@ -386,15 +391,46 @@ export async function createRun(db: StepRunsDb, owner: OwnerId, parentId: string
       throw new Error("editor-store: invalid run recipe snapshot");
     }
     const revision = prior ? prior.recipe_revision! : currentRevision;
-    if (fromStep >= snapshot.steps.length) throw new Rollback<CreateRunResult>({ status: "invalid_from_step" });
+
+    // 段階の始まりと終わり・入力のタブ
+    let inputTab: string;
+    let inputRevision: number;
+    let fromStep: number;
+    let toStep: number;
+    let regenerateTab: string | null = null;
+    let siblingHolder: string | null = null;
+    if ("inputTab" in input) {
+      fromStep = startStepOf(tabRow.role, recipe.id, snapshot.steps);
+      toStep = input.toStep;
+      inputTab = tabRow.id;
+      inputRevision = tabRow.revision;
+      if (toStep < fromStep || toStep >= snapshot.steps.length) throw new Rollback<CreateRunResult>({ status: "invalid_from_step" });
+    } else {
+      // 作り直す・同じ入力でもう 1 つ: 段階の出力のタブだけ。入力はそのタブの系譜（made_from.input）
+      const made = tabRow.made_from;
+      const role = tabRow.role;
+      const stepIndex = role && role.kind === "step" && role.recipe === recipe.id ? snapshot.steps.findIndex((step) => step.id === role.stepId) : -1;
+      if (!made || made.kind !== "step" || stepIndex < 0 || !isPageId(made.input)) throw new Rollback<CreateRunResult>({ status: "invalid_from_step" });
+      const source = await client.query<{ id: string; revision: number }>(
+        "SELECT id, revision FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL",
+        [owner, made.input],
+      );
+      const sourceRow = source.rows[0];
+      if (!sourceRow) throw new Rollback<CreateRunResult>({ status: "invalid_from_step" });
+      inputTab = sourceRow.id;
+      inputRevision = sourceRow.revision;
+      fromStep = toStep = stepIndex;
+      if ("regenerate" in input) regenerateTab = tabRow.id;
+      else siblingHolder = tabRow.page;
+    }
 
     // 進行中の run・同じ key の run とぶつかったら作らない（一意の索引が判定する。読んでから作る race を作らない）
     const inserted = await client.query<{ id: string }>(
-      `INSERT INTO step_runs (owner, parent, recipe, from_step, idempotency_key, recipe_snapshot, recipe_revision)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+      `INSERT INTO step_runs (owner, parent, recipe, from_step, idempotency_key, recipe_snapshot, recipe_revision, input_tab, input_revision)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
        ON CONFLICT DO NOTHING
        RETURNING id`,
-      [owner, parentKey, recipe.id, fromStep, key, JSON.stringify(snapshot), revision],
+      [owner, folderRow.id, recipe.id, fromStep, key, JSON.stringify(snapshot), revision, inputTab, inputRevision],
     );
     const runId = inserted.rows[0]?.id;
     if (!runId) {
@@ -403,54 +439,73 @@ export async function createRun(db: StepRunsDb, owner: OwnerId, parentId: string
       throw new Rollback<CreateRunResult>({ status: "run_in_progress" });
     }
 
-    // Preserve existing artifact IDs by their stable step ID. Older runs used the index-derived ID;
-    // their attempt rows provide the compatibility mapping when a user reorders the recipe.
-    const previousAttempts = prior
-      ? await client.query<{ step_id: string; page_id: string }>("SELECT step_id, page_id FROM step_attempts WHERE run_id = $1 ORDER BY step_index", [prior.id])
-      : { rows: [] as { step_id: string; page_id: string }[] };
-    const previousPageByStep = new Map(previousAttempts.rows.map((row) => [row.step_id, row.page_id] as const));
-    const pageIds = snapshot.steps.map((step) => previousPageByStep.get(step.id) ?? stepPageIdForStep(parentKey, recipe.id, step.id));
-
-    // fromStep より前は、完了済みのサブページを再利用する（作り終えるまで状態を変えさせない）
-    if (fromStep > 0) {
-      const reused = await client.query(
-        `SELECT id FROM pages
-          WHERE owner = $1 AND parent = $2 AND recipe = $3 AND kind = 'step' AND deleted_at IS NULL
-            AND step_status = 'done' AND id = ANY($4::uuid[])
-          FOR SHARE`,
-        [owner, parentKey, recipe.id, pageIds.slice(0, fromStep)],
-      );
-      if (reused.rowCount !== fromStep) throw new Rollback<CreateRunResult>({ status: "invalid_from_step" });
+    // 段階ごとの出力先（役割ページの新しいタブ。作り直すときはそのタブ）。入力は前の段階の出力（最初は入力のタブ）
+    const outputs: string[] = [];
+    let previousTab = inputTab;
+    for (let index = fromStep; index <= toStep; index++) {
+      const step = snapshot.steps[index]!;
+      const madeFrom = JSON.stringify({ kind: "step", run: runId, input: previousTab, inputRevision: index === fromStep ? inputRevision : 0 });
+      let outputTab: string;
+      if (regenerateTab !== null) {
+        await client.query("UPDATE pages SET step_status = 'wait', made_from = $3::jsonb WHERE owner = $1 AND id = $2", [owner, regenerateTab, madeFrom]);
+        outputTab = regenerateTab;
+      } else {
+        const holder = siblingHolder !== null && index === fromStep ? siblingHolder : await stepHolder(client, owner, folderRow.id, folderRow.lang, recipe.id, step);
+        const made = await client.query<{ id: string }>(
+          `INSERT INTO pages (owner, kind, title, lang, blocks, parent, page, recipe, step_status, made_from, sort_order)
+           SELECT $1, 'note', h.title, h.lang, '[]'::jsonb, h.parent, h.id, $3, 'wait', $4::jsonb,
+                  COALESCE((SELECT max(t.sort_order) FROM pages t WHERE t.owner = h.owner AND t.page = h.id AND t.deleted_at IS NULL), 0) + 1
+             FROM pages h
+            WHERE h.owner = $1 AND h.id = $2 AND h.deleted_at IS NULL
+           RETURNING id`,
+          [owner, holder, recipe.id, madeFrom],
+        );
+        const made0 = made.rows[0];
+        if (!made0) throw new Error("editor-store: insert returned no output tab");
+        outputTab = made0.id;
+        await client.query("UPDATE pages SET last_tab = $3, updated_at = GREATEST(clock_timestamp(), updated_at) WHERE owner = $1 AND id = $2", [owner, holder, outputTab]);
+      }
+      outputs.push(outputTab);
+      previousTab = outputTab;
     }
 
-    // fromStep 以降のサブページ（無ければ作り、あれば wait に戻す。削除されていれば戻す）
-    const upserted = await client.query(
-      `INSERT INTO pages (id, owner, kind, title, lang, parent, recipe, step_status)
-       SELECT v.id, $1::text, 'step', v.title, $3::text, $2::uuid, $4::text, 'wait'
-         FROM unnest($5::uuid[], $6::text[]) AS v(id, title)
-       ON CONFLICT (id) DO UPDATE
-          SET step_status = 'wait', deleted_at = NULL
-        WHERE pages.owner = EXCLUDED.owner AND pages.parent = EXCLUDED.parent
-          AND pages.recipe = EXCLUDED.recipe AND pages.kind = 'step'
-       RETURNING id`,
-      [owner, parentKey, parentRow.lang, recipe.id, pageIds.slice(fromStep), snapshot.steps.slice(fromStep).map((step) => step.name)],
-    );
-    if (upserted.rowCount !== snapshot.steps.length - fromStep) throw new Error("editor-store: a step page id is taken by another page");
-
     await client.query(
-      `INSERT INTO step_attempts (run_id, step_index, step_id, page_id, state, finished_at)
-       SELECT $1::uuid, v.step_index, v.step_id, v.page_id, v.state, CASE WHEN v.state = 'reused' THEN clock_timestamp() END
+      `INSERT INTO step_attempts (run_id, step_index, step_id, page_id, state)
+       SELECT $1::uuid, v.step_index, v.step_id, v.page_id, v.state
          FROM unnest($2::integer[], $3::text[], $4::uuid[], $5::text[]) AS v(step_index, step_id, page_id, state)`,
       [
         runId,
-        snapshot.steps.map((_, index) => index),
-        snapshot.steps.map((step) => step.id),
-        pageIds,
-        snapshot.steps.map((_, index) => (index < fromStep ? "reused" : index === fromStep ? "queued" : "pending")),
+        outputs.map((_, offset) => fromStep + offset),
+        outputs.map((_, offset) => snapshot.steps[fromStep + offset]!.id),
+        outputs,
+        outputs.map((_, offset) => (offset === 0 ? "queued" : "pending")),
       ],
     );
     return { status: "created", run: await requireRunView(client, owner, runId) } satisfies CreateRunResult;
   });
+}
+
+/** 段階の役割ページ（フォルダ直下の `role = { kind: 'step', recipe, stepId }` の入れ物）。無ければ作る（題名は段階の名前）。 */
+async function stepHolder(client: PoolClient, owner: OwnerId, folderId: string, lang: string, recipeId: string, step: { id: string; name: string }): Promise<string> {
+  const role = JSON.stringify({ kind: "step", recipe: recipeId, stepId: step.id });
+  const found = await client.query<{ id: string }>(
+    `SELECT id FROM pages
+      WHERE owner = $1 AND parent = $2 AND kind = 'page' AND deleted_at IS NULL AND role = $3::jsonb
+      ORDER BY created_at, id LIMIT 1
+      FOR UPDATE`,
+    [owner, folderId, role],
+  );
+  const existing = found.rows[0];
+  if (existing) return existing.id;
+  const made = await client.query<{ id: string }>(
+    `INSERT INTO pages (owner, kind, title, lang, blocks, parent, role)
+     VALUES ($1, 'page', $2, $3, '[]'::jsonb, $4, $5::jsonb)
+     RETURNING id`,
+    [owner, step.name, lang, folderId, role],
+  );
+  const row = made.rows[0];
+  if (!row) throw new Error("editor-store: insert returned no holder");
+  return row.id;
 }
 
 /** Explicitly replace the latest run's design. Running work is never changed in place. */
@@ -462,7 +517,7 @@ export async function updateRunRecipeSnapshot(
   assertRecipe(recipe);
   if (!isPageId(parentId) || !isPageId(runId) || !Number.isInteger(expectedRevision) || expectedRevision < 1) return { status: "not_found" };
   return inTransaction(db, async (client) => {
-    const parent = await client.query("SELECT id FROM pages WHERE owner=$1 AND id=$2 AND kind='rec' AND deleted_at IS NULL FOR UPDATE", [owner, parentId]);
+    const parent = await client.query("SELECT id FROM pages WHERE owner=$1 AND id=$2 AND kind='folder' AND deleted_at IS NULL FOR UPDATE", [owner, parentId]);
     if (!parent.rowCount) return { status: "not_found" };
     const current = await client.query<{ revision: number }>("SELECT revision FROM recipes WHERE owner=$1 AND id=$2 FOR SHARE", [owner, recipe.id]);
     if (!current.rows[0] || current.rows[0].revision !== recipe.revision) return { status: "conflict" };
@@ -481,27 +536,30 @@ export async function updateRunRecipeSnapshot(
       "SELECT step_id, step_index FROM step_attempts WHERE run_id=$1 ORDER BY step_index FOR UPDATE",
       [runId],
     );
-    const currentStepIds = new Set(attempts.rows.map((attempt) => attempt.step_id));
-    if (attempts.rows.length !== snapshot.steps.length || snapshot.steps.some((step) => !currentStepIds.has(step.id))) {
-      // Reordering and editing a step preserve its artifact identity. Adding or removing a step
-      // needs a new run because this completed run has no matching attempt row for that design.
-      return { status: "conflict" };
-    }
-    if (previousSnapshot.steps.length !== snapshot.steps.length) return { status: "conflict" };
+    const newIndex = new Map(snapshot.steps.map((step, index) => [step.id, index] as const));
+    // この run の attempt（段階の一部のこともある。#309）が全部、新しい設計にもあり、並びが連続していること。
+    // 段階の追加・削除で attempt の無い段階ができるのは新しい run の仕事（この run には書く行が無い）
+    const targets = attempts.rows.map((attempt) => newIndex.get(attempt.step_id));
+    if (targets.some((index) => index === undefined) || previousSnapshot.steps.length !== snapshot.steps.length) return { status: "conflict" };
+    const sorted = [...(targets as number[])].sort((a, b) => a - b);
+    if (sorted.some((index, at) => at > 0 && index !== sorted[at - 1]! + 1)) return { status: "conflict" };
     // Move indices out of the active range first so unique (run_id, step_index) remains valid
     // while two or more step IDs exchange positions.
-    const offset = attempts.rows.length;
-    if (offset > 0) {
+    const offset = snapshot.steps.length;
+    if (attempts.rows.length > 0) {
       await client.query("UPDATE step_attempts SET step_index=step_index+$2 WHERE run_id=$1", [runId, offset]);
-      for (const [index, step] of snapshot.steps.entries()) {
+      for (const attempt of attempts.rows) {
         const remapped = await client.query(
           "UPDATE step_attempts SET step_index=$3 WHERE run_id=$1 AND step_id=$2",
-          [runId, step.id, index],
+          [runId, attempt.step_id, newIndex.get(attempt.step_id)],
         );
         if (remapped.rowCount !== 1) throw new Error("editor-store: recipe snapshot step remap was incomplete");
       }
     }
-    await client.query("UPDATE step_runs SET recipe_snapshot=$2::jsonb, recipe_revision=$3, updated_at=GREATEST(clock_timestamp(), updated_at) WHERE id=$1", [runId, JSON.stringify(snapshot), current.rows[0].revision]);
+    await client.query(
+      "UPDATE step_runs SET recipe_snapshot=$2::jsonb, recipe_revision=$3, from_step=$4, updated_at=GREATEST(clock_timestamp(), updated_at) WHERE id=$1",
+      [runId, JSON.stringify(snapshot), current.rows[0].revision, sorted[0] ?? 0],
+    );
     return { status: "updated", run: await requireRunView(client, owner, runId) };
   });
 }
@@ -531,8 +589,8 @@ export async function listRun(db: Queryable, owner: OwnerId, parentId: string): 
 export type RunGuide = { recipeName: string; guide: string; terms: RecipeSnapshot["terms"] };
 
 /**
- * 開いているのが録音ページ、または録音の下の段階のページ（`kind = 'step'`）のとき、その録音の最新の run の
- * 文書ガイドと手順の固有名詞を返す。run が無い・写しが読めない・ほかの種類のページ・他人のページは null。
+ * 開いているページのフォルダ（フォルダ自身か、その中のページ・タブ）の最新の run の文書ガイドと手順の固有名詞を返す（#309）。
+ * run が無い・写しが読めない・フォルダの外のページ・他人のページは null。
  * 手順の段階と同じ「run の写し」を読むので、設定でガイドを書き換えても、作ったときのガイドで直せる。
  */
 export async function getRunGuide(db: Queryable, owner: OwnerId, pageId: string): Promise<RunGuide | null> {
@@ -541,11 +599,11 @@ export async function getRunGuide(db: Queryable, owner: OwnerId, pageId: string)
   const result = await db.query<{ recipe_snapshot: unknown }>(
     `SELECT r.recipe_snapshot
        FROM pages p
-       JOIN pages rec ON rec.owner = p.owner AND rec.deleted_at IS NULL
-                     AND ((p.kind = 'rec' AND rec.id = p.id) OR (p.kind = 'step' AND rec.id = p.parent))
+       JOIN pages f ON f.owner = p.owner AND f.deleted_at IS NULL AND f.kind = 'folder'
+                   AND f.id = CASE WHEN p.kind = 'folder' THEN p.id ELSE p.parent END
        JOIN LATERAL (
          SELECT recipe_snapshot FROM step_runs
-          WHERE owner = rec.owner AND parent = rec.id
+          WHERE owner = f.owner AND parent = f.id
           ORDER BY created_at DESC, id DESC
           LIMIT 1
        ) r ON true
@@ -598,14 +656,17 @@ export type StepClaim = {
   generation: number;
   tries: number;
   owner: OwnerId;
+  /** run のフォルダ（#309）。 */
   parentId: string;
+  /** run の入力のタブ（migration 前の run は null）。資料の本文の出どころはこのタブの系譜の根。 */
+  inputTabId: string | null;
   recipe: string;
   recipeSnapshot: RecipeSnapshot | null;
   stepId: string;
   pageId: string;
-  /** 前の段階のサブページ（段階 0 は null）。 */
+  /** 前の段階の出力（この run の最初の段階なら入力のタブ。段階 0 は null）。 */
   previousPageId: string | null;
-  /** この run の上流段階と成果物ページ。並べ替え後も段階 ID とページ ID の対応を保つ。 */
+  /** 上流の段階と成果物のタブ（run の最初の段階より前の分は入力のタブ）。並べ替え後も段階 ID とページ ID の対応を保つ。 */
   upstreamPageIds: { id: string; pageId: string }[];
   /**
    * 区切りの状態（#277）。`count` が null なら区切りを始めていない。`index` は終えた区切りの数、
@@ -636,8 +697,8 @@ export async function claimAttempt(
   assertLease(leaseSeconds);
   if (!isPageId(runId) || !Number.isInteger(stepIndex) || stepIndex < 0) return { ok: false, reason: "run_inactive" };
   return inTransaction<ClaimResult>(db, async (client) => {
-    const run = await client.query<{ owner: string; parent: string; recipe: string; recipe_snapshot: unknown; state: RunState }>(
-      "SELECT owner, parent, recipe, recipe_snapshot, state FROM step_runs WHERE id = $1 FOR UPDATE",
+    const run = await client.query<{ owner: string; parent: string; recipe: string; recipe_snapshot: unknown; state: RunState; from_step: number; input_tab: string | null }>(
+      "SELECT owner, parent, recipe, recipe_snapshot, state, from_step, input_tab FROM step_runs WHERE id = $1 FOR UPDATE",
       [runId],
     );
     const runRow = run.rows[0];
@@ -657,12 +718,12 @@ export async function claimAttempt(
               partial_blocks = NULL,
               input_used_chars = NULL
         WHERE a.run_id = $1 AND a.step_index = $2 AND a.state = 'queued'
-          AND (a.step_index = 0 OR EXISTS (
+          AND (a.step_index = $4::integer OR EXISTS (
                 SELECT 1 FROM step_attempts prev
                  WHERE prev.run_id = a.run_id AND prev.step_index = a.step_index - 1
                    AND prev.state IN ('succeeded', 'reused')))
         RETURNING a.generation, a.tries, a.step_id, a.page_id, a.chunk_count, a.chunk_index, a.chunk_basis, a.chunk_blocks`,
-      [runId, stepIndex, leaseSeconds],
+      [runId, stepIndex, leaseSeconds, runRow.from_step],
     );
     const attempt = claimed.rows[0];
     if (!attempt) {
@@ -675,12 +736,13 @@ export async function claimAttempt(
       [runId],
     );
     await client.query("UPDATE pages SET step_status = 'run' WHERE owner = $1 AND id = $2 AND deleted_at IS NULL", [runRow.owner, attempt.page_id]);
-    const upstream = stepIndex === 0
+    const snapshot = parseRecipeSnapshot(runRow.recipe_snapshot);
+    const upstream = upstreamOf(snapshot, runRow.from_step, runRow.input_tab, stepIndex === 0
       ? []
       : (await client.query<{ step_id: string; page_id: string }>(
           "SELECT step_id, page_id FROM step_attempts WHERE run_id = $1 AND step_index < $2 ORDER BY step_index",
           [runId, stepIndex],
-        )).rows.map((row) => ({ id: row.step_id, pageId: row.page_id }));
+        )).rows.map((row) => ({ id: row.step_id, pageId: row.page_id })));
     return {
       ok: true,
       claim: {
@@ -690,11 +752,12 @@ export async function claimAttempt(
         tries: attempt.tries,
         owner: runRow.owner,
         parentId: runRow.parent,
+        inputTabId: runRow.input_tab,
         recipe: runRow.recipe,
-        recipeSnapshot: parseRecipeSnapshot(runRow.recipe_snapshot),
+        recipeSnapshot: snapshot,
         stepId: attempt.step_id,
         pageId: attempt.page_id,
-        previousPageId: upstream.at(-1)?.pageId ?? null,
+        previousPageId: stepIndex === 0 ? null : (upstream.at(-1)?.pageId ?? null),
         upstreamPageIds: upstream,
         chunk: {
           count: attempt.chunk_count,
@@ -705,6 +768,16 @@ export async function claimAttempt(
       },
     } satisfies ClaimResult;
   });
+}
+
+/**
+ * 上流の段階と成果物（#309）: run が段階 k から始まるなら、段階 k-1 の成果物は入力のタブ。その前の段階の成果物は無い
+ * （基準では空の本文として数える。記録と現在で同じ数え方なので前提変更の判定はそろう）。
+ */
+function upstreamOf(snapshot: RecipeSnapshot | null, fromStep: number, inputTab: string | null, attempts: readonly { id: string; pageId: string }[]): { id: string; pageId: string }[] {
+  const before = snapshot?.steps[fromStep - 1];
+  const input = fromStep > 0 && inputTab !== null && before ? [{ id: before.id, pageId: inputTab }] : [];
+  return [...input, ...attempts];
 }
 
 export type AttemptRef = { runId: string; stepIndex: number; generation: number };
@@ -726,36 +799,69 @@ export async function heartbeatAttempt(db: Queryable, ref: AttemptRef, options: 
 
 export type StepInput = StepMaterials & { previousBlocks: Block[] | null };
 
-/** 段階の入力。録音本文と録音ページ自身の欄（背景・登場人物・固有名詞）を、owner で絞った単一 SQL snapshot で読む。 */
+/**
+ * ページの本文を資料として読む SQL（`x` は pages の行）。録音のタブで文字起こし（`page_recordings.segments`）があれば、
+ * 段落ごとに「[分:秒] 話者: 文」の段落にする（#309。#310 までは録音のタブ＝文字起こし）。それ以外は `blocks` のまま。
+ */
+const PAGE_TEXT_SQL = `
+  CASE WHEN x.kind = 'rec'
+        AND EXISTS (SELECT 1 FROM page_recordings pr WHERE pr.owner = x.owner AND pr.page_id = x.id AND jsonb_array_length(pr.segments) > 0)
+       THEN (SELECT jsonb_agg(jsonb_build_object('type', 'paragraph', 'content', jsonb_build_array(jsonb_build_object('type', 'text', 'text',
+                      CASE WHEN jsonb_typeof(s.seg->'start') = 'number'
+                           THEN '[' || floor((s.seg->>'start')::numeric / 60)::int::text || ':' || lpad(floor(mod((s.seg->>'start')::numeric, 60))::int::text, 2, '0') || '] '
+                           ELSE '' END
+                      || CASE WHEN jsonb_typeof(s.seg->'speaker') = 'number'
+                              THEN COALESCE(pr.speaker_names->>(s.seg->>'speaker'), '話者' || (s.seg->>'speaker')) || ': '
+                              ELSE '' END
+                      || COALESCE(s.seg->>'text', '')))) ORDER BY s.ord)
+               FROM page_recordings pr, jsonb_array_elements(pr.segments) WITH ORDINALITY s(seg, ord)
+              WHERE pr.owner = x.owner AND pr.page_id = x.id)
+       ELSE x.blocks END`;
+
+/**
+ * 段階の入力（#309）。run の入力のタブの系譜（`made_from.input` を最大 8 段たどった根）を資料の本文（録音なら文字起こし）とし、
+ * 「この録音について」（背景・登場人物・固有名詞）はその根の欄。前の段階の出力・上流の成果物・同じフォルダの役割の無いページ
+ * （参考）・設定を、owner で絞った単一 SQL snapshot で読む。入力のタブが無ければ null。
+ */
 export async function readStepInput(
   db: Queryable,
-  claim: Pick<StepClaim, "owner" | "parentId" | "previousPageId"> & { recipe?: string; stepIndex?: number; recipeSnapshot?: Pick<RecipeSnapshot, "steps"> | null; stepIds?: readonly string[]; upstreamPageIds?: readonly { id: string; pageId: string }[] },
+  claim: Pick<StepClaim, "owner" | "parentId" | "inputTabId" | "previousPageId"> & { upstreamPageIds?: readonly { id: string; pageId: string }[] },
 ): Promise<StepInput | null> {
   assertOwner(claim.owner);
-  const stepIndex = claim.stepIndex ?? 0;
-  const upstream = claim.upstreamPageIds ?? Array.from({ length: stepIndex }, (_, index) => ({
-    id: claim.stepIds?.[index] ?? claim.recipeSnapshot?.steps[index]?.id ?? String(index),
-    pageId: stepPageId(claim.parentId, claim.recipe ?? "", index),
-  }));
-  const result = await db.query<{ parent_blocks: Block[] | null; background: string | null; previous_blocks: Block[] | null; upstream: { id: string; blocks: Block[] }[]; refs: { id: string; blocks: Block[] }[]; entities: StepMaterials["fields"]["entities"]; terms: StepMaterials["fields"]["terms"]; ai_lang: string | null; glossary: StepMaterials["settings"]["glossary"] | null; about_name: string | null; about: string | null }>(
-    `SELECT p.blocks AS parent_blocks,
+  if (!isPageId(claim.parentId) || claim.inputTabId === null || !isPageId(claim.inputTabId)) return null;
+  if (claim.previousPageId !== null && !isPageId(claim.previousPageId)) return null;
+  const upstream = claim.upstreamPageIds ?? [];
+  const result = await db.query<{ root: string | null; parent_blocks: Block[] | null; background: string | null; previous_blocks: Block[] | null; upstream: { id: string; blocks: Block[] }[]; refs: { id: string; blocks: Block[] }[]; entities: StepMaterials["fields"]["entities"]; terms: StepMaterials["fields"]["terms"]; ai_lang: string | null; glossary: StepMaterials["settings"]["glossary"] | null; about_name: string | null; about: string | null }>(
+    `WITH RECURSIVE chain AS (
+       SELECT p.id, p.made_from, 0 AS hops FROM pages p WHERE p.owner = $1 AND p.id = $3 AND p.deleted_at IS NULL
+       UNION ALL
+       SELECT p.id, p.made_from, c.hops + 1
+         FROM chain c
+         JOIN pages p ON p.owner = $1 AND p.deleted_at IS NULL AND c.made_from->>'kind' = 'step' AND p.id = (c.made_from->>'input')::uuid
+        WHERE c.hops < 8
+     ),
+     root AS (SELECT c.id FROM chain c ORDER BY c.hops DESC LIMIT 1)
+     SELECT root.id AS root,
+            (SELECT ${PAGE_TEXT_SQL} FROM pages x WHERE x.owner = $1 AND x.id = root.id AND x.deleted_at IS NULL) AS parent_blocks,
             COALESCE(f.background, '') AS background,
-            (SELECT blocks FROM pages WHERE owner = $1 AND id = $3 AND deleted_at IS NULL) AS previous_blocks,
-            COALESCE((SELECT jsonb_agg(jsonb_build_object('id', prior.step_id, 'blocks', COALESCE(s.blocks, '[]'::jsonb)) ORDER BY prior.ord)
-              FROM unnest($4::text[], $5::uuid[]) WITH ORDINALITY prior(step_id, page_id, ord)
-              LEFT JOIN pages s ON s.owner = $1 AND s.id = prior.page_id AND s.deleted_at IS NULL), '[]'::jsonb) AS upstream,
+            (SELECT ${PAGE_TEXT_SQL} FROM pages x WHERE x.owner = $1 AND x.id = $4 AND x.deleted_at IS NULL) AS previous_blocks,
+            COALESCE((SELECT jsonb_agg(jsonb_build_object('id', prior.step_id, 'blocks', COALESCE((SELECT ${PAGE_TEXT_SQL} FROM pages x WHERE x.owner = $1 AND x.id = prior.page_id AND x.deleted_at IS NULL), '[]'::jsonb)) ORDER BY prior.ord)
+              FROM unnest($5::text[], $6::uuid[]) WITH ORDINALITY prior(step_id, page_id, ord)), '[]'::jsonb) AS upstream,
             COALESCE((SELECT jsonb_agg(jsonb_build_object('id', s.id, 'blocks', s.blocks) ORDER BY s.created_at, s.id)
-              FROM pages s WHERE s.owner = $1 AND s.parent = p.parent AND s.deleted_at IS NULL AND s.id <> p.id AND s.kind <> 'page'), '[]'::jsonb) AS refs,
+              FROM pages s
+              LEFT JOIN pages h ON h.owner = s.owner AND h.id = s.page
+             WHERE s.owner = $1 AND s.parent = $2 AND s.deleted_at IS NULL AND s.kind IN ('note', 'article')
+               AND (h.id IS NULL OR h.role IS NULL) AND COALESCE(s.made_from->>'kind', '') <> 'step'
+               AND s.id <> ALL(SELECT c.id FROM chain c) AND s.id IS DISTINCT FROM $4::uuid AND s.id <> ALL($6::uuid[])), '[]'::jsonb) AS refs,
             COALESCE(f.entities, '[]'::jsonb) AS entities, COALESCE(f.terms, '[]'::jsonb) AS terms,
             e.ai_lang, e.glossary, e.about_name, e.about
-       FROM pages p
-       LEFT JOIN page_fields f ON f.owner = p.owner AND f.page_id = p.id
-       LEFT JOIN editor_settings e ON e.owner = p.owner
-      WHERE p.owner = $1 AND p.id = $2 AND p.deleted_at IS NULL`,
-    [claim.owner, claim.parentId, claim.previousPageId, upstream.map((item) => item.id), upstream.map((item) => item.pageId)],
+       FROM root
+       LEFT JOIN page_fields f ON f.owner = $1 AND f.page_id = root.id
+       LEFT JOIN editor_settings e ON e.owner = $1`,
+    [claim.owner, claim.parentId, claim.inputTabId, claim.previousPageId, upstream.map((item) => item.id), upstream.map((item) => item.pageId)],
   );
   const row = result.rows[0];
-  if (!row?.parent_blocks) return null;
+  if (!row?.root || !row.parent_blocks) return null;
   return {
     parentBlocks: row.parent_blocks, background: typeof row.background === "string" ? row.background : "",
     previousBlocks: claim.previousPageId === null ? null : (row.previous_blocks ?? []),
@@ -948,11 +1054,11 @@ export async function resumeRun(db: StepRunsDb, owner: OwnerId, parentId: string
   assertOwner(owner);
   if (!isPageId(parentId) || !isPageId(runId)) return { status: "not_found" };
   return inTransaction<ResumeRunResult>(db, async (client) => {
-    // createRun と同じ順（親 → run）で lock する。進行中の run の作成と直列にする
-    const parent = await client.query("SELECT id FROM pages WHERE owner = $1 AND id = $2 AND kind = 'rec' AND deleted_at IS NULL FOR UPDATE", [owner, parentId]);
+    // createRun と同じ順（フォルダ → run）で lock する。進行中の run の作成と直列にする
+    const parent = await client.query("SELECT id FROM pages WHERE owner = $1 AND id = $2 AND kind = 'folder' AND deleted_at IS NULL FOR UPDATE", [owner, parentId]);
     if (!parent.rowCount) return { status: "not_found" } satisfies ResumeRunResult;
-    const run = await client.query<{ state: RunState; recipe: string; recipe_snapshot: unknown }>(
-      "SELECT state, recipe, recipe_snapshot FROM step_runs WHERE owner = $1 AND id = $2 AND parent = $3 FOR UPDATE",
+    const run = await client.query<{ state: RunState; recipe: string; recipe_snapshot: unknown; from_step: number; input_tab: string | null }>(
+      "SELECT state, recipe, recipe_snapshot, from_step, input_tab FROM step_runs WHERE owner = $1 AND id = $2 AND parent = $3 FOR UPDATE",
       [owner, runId, parentId],
     );
     const runRow = run.rows[0];
@@ -977,10 +1083,9 @@ export async function resumeRun(db: StepRunsDb, owner: OwnerId, parentId: string
     }
     const page = await client.query("SELECT 1 FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL", [owner, failed.page_id]);
     if (!page.rowCount) return { status: "not_resumable" } satisfies ResumeRunResult;
-    const upstreamPageIds = attempts.rows.filter((row) => row.step_index < failed.step_index).map((row) => ({ id: row.step_id, pageId: row.page_id }));
+    const upstreamPageIds = upstreamOf(snapshot, runRow.from_step, runRow.input_tab, attempts.rows.filter((row) => row.step_index < failed.step_index).map((row) => ({ id: row.step_id, pageId: row.page_id })));
     const input = await readStepInput(client, {
-      owner, parentId, previousPageId: upstreamPageIds.at(-1)?.pageId ?? null, recipe: runRow.recipe,
-      stepIndex: failed.step_index, recipeSnapshot: snapshot, upstreamPageIds,
+      owner, parentId, inputTabId: runRow.input_tab, previousPageId: failed.step_index === 0 ? null : (upstreamPageIds.at(-1)?.pageId ?? null), upstreamPageIds,
     });
     if (!input) return { status: "not_resumable" } satisfies ResumeRunResult;
     if (computeChunkBasis(computeStepBasis(snapshot, failed.step_index, input)) !== failed.chunk_basis) {
@@ -1237,68 +1342,75 @@ export async function listQueuedAttempts(
   return queued.rows.map((row) => ({ runId: row.run_id, stepIndex: row.step_index, generation: row.generation }));
 }
 
-type StalePageRow = { id: string; blocks: Block[]; step_status: StepStatus | null; version: string };
+type StalePageRow = { id: string; step_status: StepStatus | null; version: string };
 
-/**
- * 前提変更の再計算。完了済み（done / stale）の段階について、今の基準（前の段階のサブページ・段階 0 は録音ページの blocks と指示文）
- * が記録した基準（最後に成功した attempt の input_basis_v2）と違えば、その段階から後の done を stale にし、戻れば done に戻す。
- * 読むのは 1 つの snapshot、書くのは「読んだときから行が変わっていない（xmin が同じ）」ときだけ（並行する確定・作り直しを上書きしない）。
- * 戻り値は状態を変えたサブページの数。
- */
-export async function refreshStale(db: StepRunsDb, owner: OwnerId, parentId: string, recipe: StepRecipe): Promise<number> {
-  assertOwner(owner);
-  assertRecipe(recipe);
-  if (!isPageId(parentId)) return 0;
-  const pageIds: string[] = [];
+/** 最新 run（フォルダ・手順）の attempt と、その出力のタブの今の基準（REPEATABLE READ の 1 snapshot で読む。#309）。 */
+type StaleSnapshot = {
+  run: { id: string; from_step: number; input_tab: string | null; snapshot: RecipeSnapshot | null };
+  attempts: { step_index: number; step_id: string; page_id: string }[];
+  pages: Map<string, StalePageRow>;
+  /** 出力のタブごとの、最後に成功した attempt の記録した基準。 */
+  recorded: Map<string, unknown>;
+  /** 出力のタブごとの、今の基準（入力が読めなければ無い）。 */
+  current: Map<string, StepBasis>;
+  /** attempt の段階が手順の並びと合っていない（段階の追加・削除・並べ替えのあと）。 */
+  structuralMismatch: boolean;
+};
+
+async function readStaleSnapshot(client: PoolClient, owner: OwnerId, folderId: string, recipe: StepRecipe): Promise<StaleSnapshot | null> {
+  const latest = await client.query<{ id: string; from_step: number; input_tab: string | null; recipe_snapshot: unknown }>(
+    `SELECT id, from_step, input_tab, recipe_snapshot FROM step_runs
+      WHERE owner = $1 AND parent = $2 AND recipe = $3
+      ORDER BY created_at DESC, id DESC LIMIT 1`,
+    [owner, folderId, recipe.id],
+  );
+  const runRow = latest.rows[0];
+  if (!runRow) return null;
+  const attempts = (await client.query<{ step_index: number; step_id: string; page_id: string }>(
+    "SELECT step_index, step_id, page_id FROM step_attempts WHERE run_id = $1 ORDER BY step_index",
+    [runRow.id],
+  )).rows;
+  const structuralMismatch = attempts.length === 0 || attempts.some((row) => row.step_id !== recipe.steps[row.step_index]?.id);
+  const rows = await client.query<StalePageRow>(
+    "SELECT id, step_status, xmin::text AS version FROM pages WHERE owner = $1 AND deleted_at IS NULL AND id = ANY($2::uuid[])",
+    [owner, attempts.map((row) => row.page_id)],
+  );
+  const bases = await client.query<{ page_id: string; input_basis_v2: unknown }>(
+    `SELECT DISTINCT ON (a.page_id) a.page_id, a.input_basis_v2
+       FROM step_attempts a
+       JOIN step_runs r ON r.id = a.run_id
+      WHERE r.owner = $1 AND r.parent = $2 AND r.recipe = $3 AND a.state = 'succeeded' AND a.input_basis_v2 IS NOT NULL
+        AND a.page_id = ANY($4::uuid[])
+      ORDER BY a.page_id, a.finished_at DESC`,
+    [owner, folderId, recipe.id, attempts.map((row) => row.page_id)],
+  );
+  const snapshot = parseRecipeSnapshot(runRow.recipe_snapshot);
+  const current = new Map<string, StepBasis>();
+  for (const [at, attempt] of attempts.entries()) {
+    const index = attempt.step_index;
+    if (index >= recipe.steps.length) continue;
+    const upstreamPageIds = upstreamOf(snapshot, runRow.from_step, runRow.input_tab, attempts.slice(0, at).map((row) => ({ id: row.step_id, pageId: row.page_id })));
+    const input = await readStepInput(client, { owner, parentId: folderId, inputTabId: runRow.input_tab, previousPageId: index === 0 ? null : (upstreamPageIds.at(-1)?.pageId ?? null), upstreamPageIds });
+    if (input) current.set(attempt.page_id, computeStepBasis(recipe, index, input));
+  }
+  return {
+    run: { id: runRow.id, from_step: runRow.from_step, input_tab: runRow.input_tab, snapshot },
+    attempts,
+    pages: new Map(rows.rows.map((row) => [row.id, row])),
+    recorded: new Map(bases.rows.map((row) => [row.page_id, row.input_basis_v2])),
+    current,
+    structuralMismatch,
+  };
+}
+
+async function inReadSnapshot<T>(db: StepRunsDb, work: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await db.connect();
-  let parentBlocks: Block[] | null;
-  let pages: Map<string, StalePageRow>;
-  let recorded: Map<string, unknown>;
-  let current: Map<string, StepBasis>;
-  let structuralMismatch: boolean;
   try {
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
     try {
-      const parent = await client.query<{ blocks: Block[] }>(
-        "SELECT blocks FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL",
-        [owner, parentId],
-      );
-      parentBlocks = parent.rows[0]?.blocks ?? null;
-      const latestAttemptIds = await client.query<{ step_id: string; page_id: string }>(
-        `SELECT a.step_id, a.page_id FROM step_attempts a
-          WHERE a.run_id = (
-            SELECT id FROM step_runs WHERE owner = $1 AND parent = $2 AND recipe = $3
-             ORDER BY created_at DESC, id DESC LIMIT 1
-          )
-          ORDER BY a.step_index`,
-        [owner, parentId, recipe.id],
-      );
-      structuralMismatch = latestAttemptIds.rows.length !== recipe.steps.length ||
-        latestAttemptIds.rows.some((row, index) => row.step_id !== recipe.steps[index]?.id);
-      const previousPageByStep = new Map(latestAttemptIds.rows.map((row) => [row.step_id, row.page_id] as const));
-      pageIds.push(...recipe.steps.map((step) => previousPageByStep.get(step.id) ?? stepPageIdForStep(parentId, recipe.id, step.id)));
-      const rows = await client.query<StalePageRow>(
-        `SELECT id, blocks, step_status, xmin::text AS version FROM pages
-          WHERE owner = $1 AND parent = $2 AND recipe = $3 AND kind = 'step' AND deleted_at IS NULL AND id = ANY($4::uuid[])`,
-        [owner, parentId, recipe.id, pageIds],
-      );
-      pages = new Map(rows.rows.map((row) => [row.id, row]));
-      const bases = await client.query<{ step_id: string; input_basis_v2: unknown }>(
-        `SELECT DISTINCT ON (a.step_id) a.step_id, a.input_basis_v2
-           FROM step_attempts a
-           JOIN step_runs r ON r.id = a.run_id
-          WHERE r.owner = $1 AND r.parent = $2 AND r.recipe = $3 AND a.state = 'succeeded' AND a.input_basis_v2 IS NOT NULL
-          ORDER BY a.step_id, a.finished_at DESC`,
-        [owner, parentId, recipe.id],
-      );
-      recorded = new Map(bases.rows.map((row) => [row.step_id, row.input_basis_v2]));
-      current = new Map();
-      for (const [index] of recipe.steps.entries()) {
-        const stepIds = recipe.steps.slice(0, index).map((step, prior) => ({ id: step.id, pageId: pageIds[prior]! }));
-        const input = await readStepInput(client, { owner, parentId, previousPageId: index === 0 ? null : pageIds[index - 1]!, recipe: recipe.id, stepIndex: index, stepIds: recipe.steps.map((step) => step.id), upstreamPageIds: stepIds });
-        if (input) current.set(recipe.steps[index]!.id, computeStepBasis(recipe, index, input));
-      }
+      const result = await work(client);
       await client.query("COMMIT");
+      return result;
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
       throw error;
@@ -1306,22 +1418,35 @@ export async function refreshStale(db: StepRunsDb, owner: OwnerId, parentId: str
   } finally {
     client.release();
   }
-  if (parentBlocks === null) return 0;
+}
+
+/**
+ * 前提変更の再計算（#309: フォルダの最新 run の出力のタブについて）。完了済み（done / stale）の段階について、今の基準
+ * （入力のタブの系譜の本文・前の段階の出力・参考・欄・設定・指示文）が記録した基準（最後に成功した attempt の input_basis_v2）と
+ * 違えば、その段階から後の done を stale にし、戻れば done に戻す。
+ * 読むのは 1 つの snapshot、書くのは「読んだときから行が変わっていない（xmin が同じ）」ときだけ（並行する確定・作り直しを上書きしない）。
+ * 戻り値は状態を変えたタブの数。
+ */
+export async function refreshStale(db: StepRunsDb, owner: OwnerId, parentId: string, recipe: StepRecipe): Promise<number> {
+  assertOwner(owner);
+  assertRecipe(recipe);
+  if (!isPageId(parentId)) return 0;
+  const read = await inReadSnapshot(db, (client) => readStaleSnapshot(client, owner, parentId, recipe));
+  if (!read) return 0;
 
   let changed = 0;
   let upstreamFresh = true;
-  for (const [index] of recipe.steps.entries()) {
-    const page = pages.get(pageIds[index]!);
+  for (const attempt of read.attempts) {
+    const page = read.pages.get(attempt.page_id);
     const status = page?.step_status ?? null;
     if (!page || (status !== "done" && status !== "stale")) {
       // 済みでない段階の後ろは、前提が定まっていない
       upstreamFresh = false;
       continue;
     }
-    const stepId = recipe.steps[index]!.id;
-    const basis = current.get(stepId);
-    const reasons = basis ? stepStaleReasons(parseStepBasis(recorded.get(stepId)), basis) : [];
-    const fresh: boolean = !structuralMismatch && upstreamFresh && basis !== undefined && reasons.length === 0;
+    const basis = read.current.get(attempt.page_id);
+    const reasons = basis ? stepStaleReasons(parseStepBasis(read.recorded.get(attempt.page_id)), basis) : [];
+    const fresh: boolean = !read.structuralMismatch && upstreamFresh && basis !== undefined && reasons.length === 0;
     upstreamFresh = fresh;
     const want: StepStatus = fresh ? "done" : "stale";
     if (want === status) continue;
@@ -1335,45 +1460,123 @@ export async function refreshStale(db: StepRunsDb, owner: OwnerId, parentId: str
   return changed;
 }
 
-/** GET の帯に渡す理由。成功 attempt の記録だけを、現在の入力と同一 snapshot で比較する。 */
+/** 画面に渡す理由（段階の index ごと）。成功 attempt の記録だけを、現在の入力と同一 snapshot で比較する。後ろの段階は前の理由も受け継ぐ。 */
 export async function readStepStaleReasons(db: StepRunsDb, owner: OwnerId, parentId: string, recipe: StepRecipe): Promise<Record<number, StepStaleReason[]>> {
   assertOwner(owner);
   if (!isPageId(parentId)) return {};
-  const client = await db.connect();
-  try {
-    await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-    try {
-      const latest = await client.query<{ step_id: string; page_id: string }>(
-        `SELECT a.step_id, a.page_id FROM step_attempts a
-          WHERE a.run_id = (
-            SELECT id FROM step_runs WHERE owner = $1 AND parent = $2 AND recipe = $3
-             ORDER BY created_at DESC, id DESC LIMIT 1
-          )
-          ORDER BY a.step_index`, [owner, parentId, recipe.id],
-      );
-      const pageByStep = new Map(latest.rows.map((row) => [row.step_id, row.page_id] as const));
-      const rows = await client.query<{ step_id: string; input_basis_v2: unknown }>(
-        `SELECT DISTINCT ON (a.step_id) a.step_id, a.input_basis_v2
-           FROM step_attempts a JOIN step_runs r ON r.id = a.run_id
-          WHERE r.owner = $1 AND r.parent = $2 AND r.recipe = $3 AND a.state = 'succeeded' AND a.input_basis_v2 IS NOT NULL
-          ORDER BY a.step_id, a.finished_at DESC`, [owner, parentId, recipe.id],
-      );
-      const recorded = new Map(rows.rows.map((row) => [row.step_id, row.input_basis_v2]));
-      const reasons: Record<number, StepStaleReason[]> = {};
-      let inherited: StepStaleReason[] = [];
-      for (const [index] of recipe.steps.entries()) {
-        const upstreamPageIds = recipe.steps.slice(0, index).map((step, prior) => ({ id: step.id, pageId: pageByStep.get(step.id) ?? stepPageIdForStep(parentId, recipe.id, step.id) }));
-        const input = await readStepInput(client, { owner, parentId, previousPageId: upstreamPageIds.at(-1)?.pageId ?? null, recipe: recipe.id, stepIndex: index, stepIds: recipe.steps.map((step) => step.id), upstreamPageIds });
-        const stepId = recipe.steps[index]!.id;
-        const own = input ? stepStaleReasons(parseStepBasis(recorded.get(stepId)), computeStepBasis(recipe, index, input)) : [];
-        inherited = [...new Set([...inherited, ...own])];
-        reasons[index] = inherited;
-      }
-      await client.query("COMMIT");
-      return reasons;
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    }
-  } finally { client.release(); }
+  const read = await inReadSnapshot(db, (client) => readStaleSnapshot(client, owner, parentId, recipe));
+  if (!read) return {};
+  const reasons: Record<number, StepStaleReason[]> = {};
+  let inherited: StepStaleReason[] = [];
+  for (const attempt of read.attempts) {
+    const basis = read.current.get(attempt.page_id);
+    const own = basis ? stepStaleReasons(parseStepBasis(read.recorded.get(attempt.page_id)), basis) : [];
+    inherited = [...new Set([...inherited, ...own])];
+    reasons[attempt.step_index] = inherited;
+  }
+  return reasons;
+}
+
+// ---------------------------------------------------------------------------
+// 流れ（#309。「ページ」パネルの行: フォルダの役割ページとそのタブ・録音・使ったエンジン）
+
+export type FlowTab = {
+  id: string;
+  kind: PageKind;
+  title: string;
+  tabName: string | null;
+  tabPos: number;
+  revision: number;
+  stepStatus: StepStatus | null;
+  madeFrom: MadeFrom | null;
+};
+
+export type FlowHolder = { id: string; title: string; role: PageRole | null; tabs: FlowTab[] };
+
+export type FlowView = {
+  folder: { id: string; title: string; recipe: string | null };
+  /** フォルダ直下の入れ物（役割の有無を問わず。タブは入れ物の中の並び）。 */
+  holders: FlowHolder[];
+  /** フォルダの録音のタブで済んだ文字起こしのエンジン（#309。#310 までは録音のタブ＝文字起こし）。 */
+  usedEngines: { recording: string; engine: string }[];
+};
+
+type FlowRow = { holder: string; holder_title: string; role: PageRole | null; id: string; kind: PageKind; title: string; tab_name: string | null; tab_pos: number | string; revision: number; step_status: StepStatus | null; made_from: MadeFrom | null };
+
+/** フォルダ（本人の生きているフォルダ）の流れに要るもの。フォルダでなければ null。 */
+export async function readFlow(db: Queryable, owner: OwnerId, folderId: string): Promise<FlowView | null> {
+  assertOwner(owner);
+  if (!isPageId(folderId)) return null;
+  const folder = await db.query<{ id: string; title: string; recipe: string | null }>(
+    "SELECT id, title, recipe FROM pages WHERE owner = $1 AND id = $2 AND kind = 'folder' AND deleted_at IS NULL",
+    [owner, folderId],
+  );
+  const folderRow = folder.rows[0];
+  if (!folderRow) return null;
+  const rows = await db.query<FlowRow>(
+    `SELECT h.id AS holder, h.title AS holder_title, h.role, t.id, t.kind, t.title, t.tab_name, t.revision, t.step_status, t.made_from,
+            (SELECT count(*) FROM pages o WHERE o.owner = t.owner AND o.page = t.page AND o.deleted_at IS NULL
+               AND (o.sort_order, o.created_at, o.id) <= (t.sort_order, t.created_at, t.id)) AS tab_pos
+       FROM pages h
+       JOIN pages t ON t.owner = h.owner AND t.page = h.id AND t.deleted_at IS NULL
+      WHERE h.owner = $1 AND h.parent = $2 AND h.kind = 'page' AND h.deleted_at IS NULL
+      ORDER BY h.created_at, h.id, t.sort_order, t.created_at, t.id`,
+    [owner, folderId],
+  );
+  const holders = new Map<string, FlowHolder>();
+  for (const row of rows.rows) {
+    const holder = holders.get(row.holder) ?? { id: row.holder, title: row.holder_title, role: row.role, tabs: [] };
+    holder.tabs.push({ id: row.id, kind: row.kind, title: row.title, tabName: row.tab_name, tabPos: Number(row.tab_pos), revision: row.revision, stepStatus: row.step_status, madeFrom: row.made_from });
+    holders.set(row.holder, holder);
+  }
+  const recordings = rows.rows.filter((row) => row.kind === "rec").map((row) => row.id);
+  const engines = recordings.length === 0
+    ? []
+    : (await db.query<{ page_id: string; engine: string }>(
+        "SELECT DISTINCT page_id, engine FROM transcription_runs WHERE owner = $1 AND status = 'succeeded' AND page_id = ANY($2::uuid[])",
+        [owner, recordings],
+      )).rows.map((row) => ({ recording: row.page_id, engine: row.engine }));
+  return { folder: { id: folderRow.id, title: folderRow.title, recipe: folderRow.recipe }, holders: [...holders.values()], usedEngines: engines };
+}
+
+// ---------------------------------------------------------------------------
+// タブの居場所とフォルダの手順（#309。流れの API が、押されたタブのフォルダを決め、フォルダの手順を替えるのに使う）
+
+export type TabLocation = {
+  id: string;
+  kind: PageKind;
+  /** ページの名前（入れ物と全てのタブで同じ。#308）。 */
+  title: string;
+  /** 入れ物（`kind='page'`）。#307 より前のページには無い。 */
+  holder: string | null;
+  /** 入っているフォルダ（親がフォルダのときだけ）。 */
+  folder: string | null;
+};
+
+/** 本人の生きている本文のページ（note / rec / article）の居場所。入れ物・フォルダは生きているものだけ。無ければ null。 */
+export async function readTabLocation(db: Queryable, owner: OwnerId, tabId: string): Promise<TabLocation | null> {
+  assertOwner(owner);
+  if (!isPageId(tabId)) return null;
+  const result = await db.query<{ id: string; kind: PageKind; title: string; holder: string | null; folder: string | null }>(
+    `SELECT t.id, t.kind, t.title, h.id AS holder, f.id AS folder
+       FROM pages t
+       LEFT JOIN pages h ON h.owner = t.owner AND h.id = t.page AND h.kind = 'page' AND h.deleted_at IS NULL
+       LEFT JOIN pages f ON f.owner = t.owner AND f.id = t.parent AND f.kind = 'folder' AND f.deleted_at IS NULL
+      WHERE t.owner = $1 AND t.id = $2 AND t.deleted_at IS NULL AND t.kind IN ('note', 'rec', 'article')`,
+    [owner, tabId],
+  );
+  const row = result.rows[0];
+  return row ? { id: row.id, kind: row.kind, title: row.title, holder: row.holder, folder: row.folder } : null;
+}
+
+/** フォルダの手順を替える（1 フォルダに 1 つ。null で既定に戻す）。本人の生きているフォルダでなければ false。 */
+export async function setFolderRecipe(db: Queryable, owner: OwnerId, folderId: string, recipe: string | null): Promise<boolean> {
+  assertOwner(owner);
+  if (!isPageId(folderId)) return false;
+  if (recipe !== null && (typeof recipe !== "string" || recipe.length === 0 || recipe.length > 256)) throw new TypeError("editor-store: recipe must be a short id or null");
+  const result = await db.query(
+    "UPDATE pages SET recipe = $3, updated_at = GREATEST(clock_timestamp(), updated_at) WHERE owner = $1 AND id = $2 AND kind = 'folder' AND deleted_at IS NULL",
+    [owner, folderId, recipe],
+  );
+  return (result.rowCount ?? 0) > 0;
 }

@@ -17,7 +17,7 @@
 | 二重に実行しない | 同じ段階を同時に 2 回走らせない。実行する側が落ちても、あとで安全に再開できる |
 | 失敗した段階だけやり直す | 成功済みの上流は再利用する。「作り直す」はその段階から |
 | 前提変更 | 上流のページが直されたら、下流の段階に印を付ける（基準の比較） |
-| 結果はふつうのページ | 各段階の結果はサブページ。ページの正本は editor の DB |
+| 結果はふつうのページ | 各段階の結果はフォルダ直下の役割ページのタブ（#309。それより前は録音のサブページ）。ページの正本は editor の DB |
 | 費用と許可 | AI の費用に上限を置ける。誰がどれだけ使うかを止められる |
 | 公開境界 | 鍵・認可・実データは非公開（[publication-gates.md](../security/publication-gates.md)）。公開 CI から本番へ配備しない |
 
@@ -50,7 +50,7 @@
 
 ### 5.1 データ（案）
 
-- `step_runs`: id・owner・親ページ（録音ページ）・テンプレート（recipe）・状態（queued／running／succeeded／failed／canceled）・開始の段階（`from_step`）・作成と終了の時刻。
+- `step_runs`: id・owner・親（**フォルダ**。#309。それより前は録音ページ）・入力のタブ（`input_tab`・`input_revision`）・テンプレート（recipe）・状態（queued／running／succeeded／failed／canceled）・開始の段階（`from_step`）・作成と終了の時刻。
 - `step_attempts`: run・段階の index・**世代（generation）**・状態・lease の期限・生存確認の時刻・エラーの種類（短い code だけ）・結果のページ・入力の基準（hash）・資料を上限で切ったときに使った字数（`input_used_chars`。切っていなければ NULL。#277）・区切りの状態（`chunk_count`・`chunk_index`・`chunk_blocks`・`chunk_basis`。区切らない段階は `chunk_count` が NULL。§5.7）。
 - `pages.step_status` に `failed` を足す（migration）。`pages.parent`・`pages.recipe` は既にある。
 

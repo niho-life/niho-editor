@@ -577,56 +577,57 @@ describe("EditorFrame", () => {
     expect(dialog()?.getAttribute("aria-label")).toBe("公開");
   });
 
-  describe("手順のサブページ（#37 の stepPagesChanged）", () => {
-    const REC = "00000000-0000-4000-8000-0000000000aa";
-    const STEP_1 = "00000000-0000-4000-8000-0000000000b1";
-    const STEP_2 = "00000000-0000-4000-8000-0000000000b2";
-    type Step = { id: string; title: string; stepStatus: "done" | "run" | "wait" | "stale" | "failed" | null };
-    let send: (parentId: string, steps: Step[]) => void = () => undefined;
+  describe("流れの入れ物とタブ（#309 の flowPagesChanged）", () => {
+    const FOLDER = "00000000-0000-4000-8000-0000000000f0";
+    const HOLDER = "00000000-0000-4000-8000-0000000000aa";
+    const TAB_1 = "00000000-0000-4000-8000-0000000000b1";
+    const TAB_2 = "00000000-0000-4000-8000-0000000000b2";
+    type Row = { id: string; title: string; kind: "folder" | "page" | "note" | "rec"; parent: string | null; page: string | null; stepStatus: "done" | "run" | "wait" | "stale" | "failed" | null; tabPos?: number };
+    let send: (pages: Row[]) => void = () => undefined;
+    let remove: (id: string) => void = () => undefined;
 
-    function FromBand() {
-      const { stepPagesChanged } = useEditorFrame();
-      send = stepPagesChanged;
+    function FromFlow() {
+      const { flowPagesChanged, pageRemoved } = useEditorFrame();
+      send = flowPagesChanged;
+      remove = pageRemoved;
       return <p>合成の中身</p>;
     }
 
-    const recording = (): PageSummary => ({ ...page(REC, "録音"), kind: "rec" });
+    const folder = (): PageSummary => ({ ...page(FOLDER, "取材"), kind: "folder" });
+    const holder = (): Row => ({ id: HOLDER, title: "記事方針", kind: "page", parent: FOLDER, page: null, stepStatus: null });
 
-    it("まだ一覧に無いサブページを、親の下に段階の順で足す", async () => {
-      await mount({ pages: [recording()] }, <FromBand />);
+    it("まだ一覧に無い入れ物とタブを、フォルダの下に足す（タブは入れ物の行にまとまり、作成中は言葉と回るマーク）", async () => {
+      await mount({ pages: [folder()] }, <FromFlow />);
       await act(async () =>
-        send(REC, [
-          { id: STEP_1, title: "文字起こし修正", stepStatus: "done" },
-          { id: STEP_2, title: "記事方針", stepStatus: "run" },
+        send([
+          holder(),
+          { id: TAB_1, title: "記事方針", kind: "note", parent: FOLDER, page: HOLDER, stepStatus: "done", tabPos: 1 },
+          { id: TAB_2, title: "記事方針", kind: "note", parent: FOLDER, page: HOLDER, stepStatus: "run", tabPos: 2 },
         ]),
       );
-      expect(rows()).toEqual(["録音", "文字起こし修正", "記事方針"]);
-      // 済みの段階は 2 行目を出さず、作成中の段階は言葉（と回るマーク）を出す（録音の行に「録音」の 2 行目は無い。#308）
+      // 入れ物の行は「題名 ＋ タブの数の印」（#308）
+      expect(rows()).toEqual(["取材", "記事方針タブ 2"]);
       expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["作成中…"]);
       expect(container!.querySelectorAll(".es-sb-list .es-busy")).toHaveLength(1);
     });
 
-    it("サブページがゴミ箱に入っている段階（stepStatus が null）の行は作らない", async () => {
-      await mount({ pages: [recording()] }, <FromBand />);
-      await act(async () =>
-        send(REC, [
-          { id: STEP_1, title: "文字起こし修正", stepStatus: "done" },
-          // 実行の記録（attempt）は残るので run から届くが、押しても 404 のページへ行くだけ
-          { id: STEP_2, title: "記事方針", stepStatus: null },
-        ]),
-      );
-      expect(rows()).toEqual(["録音", "文字起こし修正"]);
+    it("ゴミ箱に入れた行は作り直さない", async () => {
+      await mount({ pages: [folder(), { ...page(TAB_1, "記事方針"), parent: FOLDER }] }, <FromFlow />);
+      await act(async () => remove(TAB_1));
+      await act(async () => send([holder(), { id: TAB_1, title: "記事方針", kind: "note", parent: FOLDER, page: HOLDER, stepStatus: "done", tabPos: 1 }]));
+      expect(rows()).toEqual(["取材", "記事方針"]);
     });
 
-    it("同じ知らせを繰り返しても、行は増えず、状態だけが替わる", async () => {
-      await mount({ pages: [recording()] }, <FromBand />);
-      const run: Step[] = [{ id: STEP_1, title: "文字起こし修正", stepStatus: "run" }];
-      await act(async () => send(REC, run));
-      await act(async () => send(REC, run));
-      expect(rows()).toEqual(["録音", "文字起こし修正"]);
+    it("同じ知らせを繰り返しても、行は増えず、状態だけが替わる。入れ物がフォルダに包まれたら親が替わる", async () => {
+      await mount({ pages: [{ ...page(HOLDER, "記事方針"), kind: "page" }, { ...page(TAB_1, "記事方針"), page: HOLDER, tabPos: 1 }] }, <FromFlow />);
+      const running: Row[] = [{ ...holder(), parent: null }, { id: TAB_1, title: "記事方針", kind: "note", parent: null, page: HOLDER, stepStatus: "run", tabPos: 1 }];
+      await act(async () => send(running));
+      await act(async () => send(running));
+      expect(rows()).toEqual(["記事方針"]);
       expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["作成中…"]);
-      await act(async () => send(REC, [{ id: STEP_1, title: "文字起こし修正", stepStatus: "done" }]));
-      expect(rows()).toEqual(["録音", "文字起こし修正"]);
+      // フォルダに包まれた（親が付いた）: フォルダの行ができ、入れ物はその下
+      await act(async () => send([{ id: FOLDER, title: "記事方針", kind: "folder", parent: null, page: null, stepStatus: null }, holder(), { id: TAB_1, title: "記事方針", kind: "note", parent: FOLDER, page: HOLDER, stepStatus: "done", tabPos: 1 }]));
+      expect(rows()).toEqual(["記事方針", "記事方針"]);
       expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual([]);
     });
   });

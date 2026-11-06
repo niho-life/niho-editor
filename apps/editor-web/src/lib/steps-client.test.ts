@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { StepsRequestError, cancelStepRun, getStepPartialOutput, getSteps, isStepRunDone, startStepRun, type StepRecipeChoice, type StepRun } from "./steps-client";
+import { StepsRequestError, cancelStepRun, getStepPartialOutput, getSteps, isStepRunDone, type StepRecipeChoice, type StepRun } from "./steps-client";
 
 const PARENT = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
 
@@ -47,22 +47,6 @@ describe("steps-client", () => {
     expect(fetchImpl.mock.calls[0]![1]).toEqual({ method: "GET", credentials: "same-origin", cache: "no-store" });
   });
 
-  it("始めるときは recipe（と fromStep）だけを送る。Idempotency-Key は渡されたときだけ", async () => {
-    const fetchImpl = fetchOnce(202, { run: RUN });
-    await startStepRun(PARENT, { recipe: "tpl-1" }, fetchImpl);
-    const [path, init] = fetchImpl.mock.calls[0]!;
-    expect(path).toBe(`/api/pages/${PARENT}/steps/runs`);
-    expect(init!.method).toBe("POST");
-    expect(JSON.parse(init!.body as string)).toEqual({ recipe: "tpl-1" });
-    expect(new Headers(init!.headers).has("idempotency-key")).toBe(false);
-
-    const again = fetchOnce(200, { run: RUN });
-    await startStepRun(PARENT, { recipe: "tpl-1", fromStep: 2, idempotencyKey: "abc-1" }, again);
-    const next = again.mock.calls[0]![1]!;
-    expect(JSON.parse(next.body as string)).toEqual({ recipe: "tpl-1", fromStep: 2 });
-    expect(new Headers(next.headers).get("idempotency-key")).toBe("abc-1");
-  });
-
   it("取消は run の id を path に入れる", async () => {
     const fetchImpl = fetchOnce(200, { run: { ...RUN, state: "canceled" } });
     expect((await cancelStepRun(PARENT, "run 1", fetchImpl)).state).toBe("canceled");
@@ -70,7 +54,7 @@ describe("steps-client", () => {
   });
 
   it("失敗は status と短い code だけを持つ（本文は持たない）", async () => {
-    await expect(startStepRun(PARENT, { recipe: "tpl-1" }, fetchOnce(409, { error: "run_in_progress" }))).rejects.toMatchObject({
+    await expect(cancelStepRun(PARENT, "run-1", fetchOnce(409, { error: "run_in_progress" }))).rejects.toMatchObject({
       name: "StepsRequestError",
       status: 409,
       error: "run_in_progress",

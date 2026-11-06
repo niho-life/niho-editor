@@ -7,10 +7,11 @@ import type { AuthProvider } from "../auth/types";
 import { CLOUD_TASKS_ORIGIN, CloudTasksQueue, METADATA_TOKEN_URL, WORKER_RUN_PATH, type CloudTasksConfig } from "../steps/cloud-tasks";
 import { fakeExecutor } from "../steps/executor";
 import { taskName } from "../steps/queue";
-import { DEFAULT_RECIPES, toRecipeInputs } from "../steps/recipes";
+import { DEFAULT_RECIPES, findRecipeIn, toRecipeInputs } from "../steps/recipes";
 import { pgStepRunStore, pgStepSweepStore } from "../steps/store";
 import type { OidcVerifyResult } from "./google-oidc";
-import { createStepRun, type StepsApiDeps } from "./steps-api";
+import { createFlowRun } from "./flow-api";
+import type { StepsApiDeps } from "./steps-api";
 import { runStepTask, sweepStepTasks, type StepsWorkerDeps } from "./steps-worker-api";
 
 // 受付 → Cloud Tasks（偽物の fetch）→ worker の route → 次の段階の積み込み → 最後まで、を実 PostgreSQL で通す。
@@ -131,15 +132,20 @@ describe.skipIf(databaseUrl === undefined)("Cloud Tasks worker with PostgreSQL",
       expect(response.status).toBe(200);
       return ((await response.json()) as { requeued: number }).requeued;
     };
+    // run の親はフォルダ、入力はその中の録音のタブ、手順はフォルダのもの（#309）
     const start = async (recipe: "tpl-1" | "tpl-2") => {
-      const parent = (await new EditorStore(pool).createPage(OWNER, { kind: "rec", blocks: transcript })).id;
-      const response = await createStepRun(
-        new Request(`${ORIGIN}/api/pages/${parent}/steps/runs`, {
+      const pages = new EditorStore(pool);
+      const parent = (await pages.createPage(OWNER, { kind: "folder", title: "合成のフォルダ" })).id;
+      const recording = (await pages.createPage(OWNER, { kind: "rec", blocks: transcript, parent }))!.id;
+      expect(await pgStepRunStore(pool).setFolderRecipe(OWNER, parent, recipe)).toBe(true);
+      const toStep = findRecipeIn(DEFAULT_RECIPES, recipe)!.steps.length - 1;
+      const response = await createFlowRun(
+        new Request(`${ORIGIN}/api/pages/${recording}/flow/runs`, {
           method: "POST",
           headers: { host: "editor.test", origin: ORIGIN, "content-type": "application/json" },
-          body: JSON.stringify({ recipe }),
+          body: JSON.stringify({ inputTab: recording, toStep }),
         }),
-        parent,
+        recording,
         api,
       );
       expect(response.status).toBe(202);

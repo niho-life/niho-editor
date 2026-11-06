@@ -14,7 +14,6 @@ import {
   ShellRail,
   ShellRailSection,
   ShellSidebar,
-  ShellSteps,
   ShellTools,
   shellMoreItems,
   shellPublishButton,
@@ -25,7 +24,6 @@ import {
   type ShellChatMessage,
   type ShellDest,
   type ShellProposalBlock,
-  type ShellStep,
   type ShellToolAction,
 } from "../src/shell";
 import { DEST, EXPERIENCES, ME, byId, isPublished, missingFor, publicationOf, urlOf, PAGES, type GalleryPage } from "./data";
@@ -78,22 +76,6 @@ const SEED_CHAT: ShellChatMessage[] = [
   },
 ];
 
-function stepsFor(page: GalleryPage): { root: GalleryPage; steps: ShellStep[] } | null {
-  const root = page.parent ? byId(page.parent) : page;
-  if (!root || root.kind !== "rec" || !root.recipe) return null;
-  const kids = (root.children ?? []).flatMap((id) => {
-    const kid = byId(id);
-    return kid ? [kid] : [];
-  });
-  return {
-    root,
-    steps: [
-      { id: root.id, label: "文字起こし", state: "done" },
-      ...kids.map((kid) => ({ id: kid.id, label: kid.kind === "article" ? "記事本文" : kid.title, state: kid.st ?? ("done" as const) })),
-    ],
-  };
-}
-
 /**
  * web: editor-web が今つないでいる形の情報パネル（#34 第 3 段。肩書なし・書き出しは Markdown だけ・ページを削除。
  * 手順と AI の節は出さない）。note: 言語を保存できなかったときの一言を出す。
@@ -126,7 +108,7 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
   const [moreMenu, setMoreMenu] = useState(false);
   const [blockMenu, setBlockMenu] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
-  const [cards, setCards] = useState({ steps: true, page: true });
+  const [cards, setCards] = useState({ page: true });
   const [chat, setChat] = useState<ShellChatMessage[]>(def?.proposal ? SEED_CHAT : []);
   const [draft, setDraft] = useState("");
   const [proposalOpen, setProposalOpen] = useState(Boolean(def?.proposal));
@@ -144,7 +126,6 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
   const planned = false;
   const status = shellStatus(pub);
   const publish = isNew || isStart ? null : shellPublishButton({ pub, planned, isArticle: page.kind === "article" });
-  const steps = stepsFor(page);
   const dest = pub && pub.range !== "stopped" ? pub.dest : undefined;
   const hasRail = !isStart;
 
@@ -250,11 +231,6 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
     </ShellRail>
   ) : (
     <ShellRail onClose={() => setRailOpen(false)}>
-      {steps && (
-        <ShellRailSection title={steps.root.recipe ?? "手順"} icon="spark" summary={steps.steps.find((s) => s.id === page.id)?.label ?? ""} open={cards.steps} onToggle={() => setCards((c) => ({ ...c, steps: !c.steps }))}>
-          <ShellSteps steps={steps.steps} currentId={page.id} onSelect={(stepId) => navigate(`page:${stepId}`)} onRedo={page.parent ? () => undefined : undefined} />
-        </ShellRailSection>
-      )}
       <ShellRailSection title="ページ設定" summary={pageSummary} open={cards.page} onToggle={() => setCards((c) => ({ ...c, page: !c.page }))}>
         {settings}
       </ShellRailSection>
@@ -319,23 +295,6 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
         kicker={dest && page.cat ? page.cat : undefined}
         meta={meta}
         lead={page.kind === "article" ? (page.lead ?? "") : undefined}
-        band={
-          steps ? (
-            <ShellSteps
-              band
-              title={`${steps.root.recipe ?? "手順"}の手順`}
-              steps={steps.steps}
-              currentId={page.id}
-              note={`「${steps.steps.find((step) => step.state === "run")?.label ?? steps.steps[0]!.label}」を作成中です。画面を閉じても進みます。`}
-              actions={[
-                { id: "redo", label: "この手順を作り直す", tone: "primary" },
-                { id: "restart", label: "はじめから作り直す", tone: "outline" },
-              ]}
-              onAction={noop}
-              onSelect={(stepId) => navigate(`page:${stepId}`)}
-            />
-          ) : undefined
-        }
         bodyPlaceholder={page.st === "run" ? "作成中…" : page.st === "wait" ? "前の手順が終わると作成します" : undefined}
         media={
           page.kind === "rec" ? (

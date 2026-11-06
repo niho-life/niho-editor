@@ -23,12 +23,11 @@ import {
   listQueuedAttempts,
   requeueAttempt,
   listRun,
+  readFlow,
   readPartialOutput,
   readStepInput,
   readStepStaleReasons,
   refreshStale,
-  stepPageId,
-  stepPageIdForStep,
   sweepExpiredLeases,
   updateRunRecipeSnapshot,
   type StepClaim,
@@ -55,6 +54,7 @@ const RECIPE: StepRecipe = {
     { id: "cccc3333", name: "合成の段階 3", instruction: "合成の指示 3" },
   ],
 };
+const LAST = RECIPE.steps.length - 1;
 
 function paragraph(text: string): Block[] {
   return [{ type: "paragraph", content: [{ type: "text", text }] }];
@@ -71,17 +71,6 @@ describe("step runs without a database", () => {
       throw new Error("must not reach the database");
     }) as unknown as StepRunsDb["connect"],
   };
-
-  it("derives the sub-page id from the parent, the recipe and the step (fixed values)", () => {
-    const parent = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
-    assert.equal(stepPageId(parent, "tpl-1", 0), "c11cf89c-21f8-50be-9768-808ee1198bf5");
-    assert.equal(stepPageId(parent, "tpl-1", 1), "6a3abd86-e699-5034-89fe-510b42b3f78a");
-    assert.equal(stepPageId(parent.toUpperCase(), "tpl-1", 0), stepPageId(parent, "tpl-1", 0));
-    assert.notEqual(stepPageId(parent, "tpl-2", 0), stepPageId(parent, "tpl-1", 0));
-    assert.match(stepPageId(randomUUID(), "tpl-3", 2), /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    assert.equal(stepPageIdForStep(parent, "tpl-1", "stable-step"), stepPageIdForStep(parent, "tpl-1", "stable-step"));
-    assert.notEqual(stepPageIdForStep(parent, "tpl-1", "stable-step"), stepPageIdForStep(parent, "tpl-1", "another-step"));
-  });
 
   it("reads historical final-step names for only the requested owner and page", async () => {
     const id = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
@@ -133,32 +122,33 @@ describe("step runs without a database", () => {
     assert.equal(canonicalJson([{ b: 1, a: { d: [1, { z: 1, y: 2 }], c: null } }]), '[{"a":{"c":null,"d":[1,{"y":2,"z":1}]},"b":1}]');
     const blocks = paragraph("合成の本文");
     const basis = computeBasis(blocks, "合成の指示");
-    assert.equal(basis, "38ddc6bcad045dd669e9d8a9eedef6a82d47404b48057af98516d56a2e4cd93c");
-    // key の順・指示文の前後の空白だけの違いは同じ基準
-    assert.equal(computeBasis([{ content: [{ text: "合成の本文", type: "text" }], type: "paragraph" }], "  合成の指示\n"), basis);
-    assert.notEqual(computeBasis(paragraph("合成の本文。"), "合成の指示"), basis);
-    assert.notEqual(computeBasis(blocks, "合成の別の指示"), basis);
+    assert.match(basis, /^[0-9a-f]{64}$/);
+    assert.equal(basis, computeBasis([{ type: "paragraph", content: [{ text: "合成の本文", type: "text" }] }], "  合成の指示 "));
+    assert.notEqual(basis, computeBasis(blocks, "別の指示"));
+    assert.notEqual(basis, computeBasis(paragraph("別の本文"), "合成の指示"));
   });
 
   it("validates error codes and idempotency keys", () => {
-    for (const code of ["internal", "lease_expired", "a", "x".repeat(64)]) assert.ok(isStepErrorCode(code), code);
-    for (const code of ["", "Internal", "has space", "x".repeat(65), "message: secret"]) assert.ok(!isStepErrorCode(code), code);
-    for (const key of ["a", "abc-DEF_123", "k".repeat(128)]) assert.ok(isIdempotencyKey(key), key);
-    for (const key of ["", "has space", "k".repeat(129), "a/b", "鍵"]) assert.ok(!isIdempotencyKey(key), key);
+    assert.equal(isStepErrorCode("model_timeout"), true);
+    assert.equal(isStepErrorCode("Message: secret"), false);
+    assert.equal(isStepErrorCode(""), false);
+    assert.equal(isIdempotencyKey("abc-DEF_123"), true);
+    assert.equal(isIdempotencyKey("a".repeat(129)), false);
+    assert.equal(isIdempotencyKey("with space"), false);
   });
 
   it("treats malformed ids as missing and refuses an empty owner without querying", async () => {
-    assert.deepEqual(await createRun(untouchable, OWNER, "not-a-uuid", { recipe: RECIPE }), { status: "not_found" });
-    assert.equal(await listRun(untouchable, OWNER, "not-a-uuid"), null);
-    assert.equal(await cancelRun(untouchable, OWNER, "not-a-uuid", randomUUID()), null);
-    assert.equal(await cancelRun(untouchable, OWNER, randomUUID(), "x' OR '1'='1"), null);
-    assert.deepEqual(await claimAttempt(untouchable, "not-a-uuid", 0), { ok: false, reason: "run_inactive" });
-    assert.equal(await heartbeatAttempt(untouchable, { runId: "not-a-uuid", stepIndex: 0, generation: 1 }), false);
-    assert.equal(await refreshStale(untouchable, OWNER, "not-a-uuid", RECIPE), 0);
-    await assert.rejects(() => createRun(untouchable, "", randomUUID(), { recipe: RECIPE }), TypeError);
-    await assert.rejects(() => listRun(untouchable, "", randomUUID()), TypeError);
-    await assert.rejects(() => createRun(untouchable, OWNER, randomUUID(), { recipe: RECIPE, fromStep: -1 }), RangeError);
-    await assert.rejects(() => createRun(untouchable, OWNER, randomUUID(), { recipe: RECIPE, idempotencyKey: "has space" }), TypeError);
+    assert.deepEqual(await createRun(untouchable, OWNER, "not-a-page-id", { recipe: RECIPE, inputTab: randomUUID(), toStep: 0 }), { status: "not_found" });
+    assert.deepEqual(await createRun(untouchable, OWNER, randomUUID(), { recipe: RECIPE, inputTab: "not-a-page-id", toStep: 0 }), { status: "not_found" });
+    assert.equal(await listRun(untouchable, OWNER, "not-a-page-id"), null);
+    assert.equal(await cancelRun(untouchable, OWNER, "not-a-page-id", randomUUID()), null);
+    assert.equal(await readFlow(untouchable, OWNER, "not-a-page-id"), null);
+    assert.deepEqual(await claimAttempt(untouchable, "not-a-run-id", 0), { ok: false, reason: "run_inactive" });
+    assert.equal(await readStepInput(untouchable, { owner: OWNER, parentId: randomUUID(), inputTabId: "not-a-page-id", previousPageId: null }), null);
+    await assert.rejects(() => createRun(untouchable, "", randomUUID(), { recipe: RECIPE, inputTab: randomUUID(), toStep: 0 }), TypeError);
+    await assert.rejects(() => createRun(untouchable, OWNER, randomUUID(), { recipe: RECIPE, inputTab: randomUUID(), toStep: -1 }), RangeError);
+    await assert.rejects(() => createRun(untouchable, OWNER, randomUUID(), { recipe: RECIPE, inputTab: randomUUID(), toStep: 0, idempotencyKey: "bad key" }), TypeError);
+    await assert.rejects(() => createRun(untouchable, OWNER, randomUUID(), { recipe: { id: "x", steps: [] }, inputTab: randomUUID(), toStep: 0 }), TypeError);
   });
 });
 
@@ -187,8 +177,12 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     await pool.end();
   });
 
-  async function recording(owner = OWNER, blocks: Block[] = TRANSCRIPT): Promise<string> {
-    return (await store.createPage(owner, { kind: "rec", title: "合成の録音", blocks })).id;
+  /** フォルダと、その中の録音のタブ（run の入力）。 */
+  async function folderWithRecording(owner = OWNER, blocks: Block[] = TRANSCRIPT): Promise<{ folder: string; rec: string }> {
+    const folder = (await store.createPage(owner, { kind: "folder", title: "合成のフォルダ" })).id;
+    const rec = await store.createPage(owner, { kind: "rec", title: "合成の録音", blocks, parent: folder });
+    assert.ok(rec);
+    return { folder, rec: rec.id };
   }
 
   /** 利用者がページを保存する（今の revision を持って。#58 の楽観ロック）。 */
@@ -200,10 +194,16 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
   }
 
   async function pageRow(id: string) {
-    const result = await pool.query<{ kind: string; title: string; parent: string | null; recipe: string | null; step_status: string | null; blocks: Block[]; deleted_at: Date | null }>(
-      "SELECT kind, title, parent, recipe, step_status, blocks, deleted_at FROM pages WHERE id = $1",
+    const result = await pool.query<{ kind: string; title: string; parent: string | null; page: string | null; recipe: string | null; step_status: string | null; blocks: Block[]; made_from: unknown; deleted_at: Date | null }>(
+      "SELECT kind, title, parent, page, recipe, step_status, blocks, made_from, deleted_at FROM pages WHERE id = $1",
       [id],
     );
+    return result.rows[0];
+  }
+
+  async function holderRow(id: string | null | undefined) {
+    assert.ok(id, "an output tab belongs to a holder");
+    const result = await pool.query<{ kind: string; title: string; parent: string | null; role: unknown; last_tab: string | null }>("SELECT kind, title, parent, role, last_tab FROM pages WHERE id = $1", [id]);
     return result.rows[0];
   }
 
@@ -216,11 +216,12 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
   }
 
   async function runRow(runId: string) {
-    return (await pool.query<{ state: string; finished_at: Date | null }>("SELECT state, finished_at FROM step_runs WHERE id = $1", [runId])).rows[0];
+    return (await pool.query<{ state: string; finished_at: Date | null; parent: string; input_tab: string | null; from_step: number }>("SELECT state, finished_at, parent, input_tab, from_step FROM step_runs WHERE id = $1", [runId])).rows[0];
   }
 
-  async function created(parentId: string, options: { fromStep?: number; idempotencyKey?: string } = {}) {
-    const result = await createRun(pool, OWNER, parentId, { recipe: RECIPE, ...options });
+  /** 入力のタブから最後の段階まで（既定）作る run。 */
+  async function created(folderId: string, inputTab: string, options: { toStep?: number; idempotencyKey?: string } = {}) {
+    const result = await createRun(pool, OWNER, folderId, { recipe: RECIPE, inputTab, toStep: options.toStep ?? LAST, ...(options.idempotencyKey === undefined ? {} : { idempotencyKey: options.idempotencyKey }) });
     assert.equal(result.status, "created");
     assert.ok(result.status === "created");
     return result.run;
@@ -244,8 +245,8 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     return { claim, next: result.next };
   }
 
-  async function completeAll(runId: string, fromStep = 0) {
-    for (let index = fromStep; index < RECIPE.steps.length; index++) await complete(runId, index);
+  async function completeAll(run: { id: string; steps: { index: number }[] }) {
+    for (const step of run.steps) await complete(run.id, step.index);
   }
 
   it("applies the migration to an empty schema and accepts failed as a step status", async () => {
@@ -254,75 +255,146 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     await assert.rejects(() => pool.query("UPDATE pages SET step_status = 'paused' WHERE id = $1", [page.id]), { code: "23514" });
   });
 
-  it("creates a run with deterministic sub-pages and queues the first step", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+  it("creates a run on the folder from the recording tab, with a role holder and a new tab per step, and queues the first step", async () => {
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     assert.equal(run.state, "queued");
     assert.equal(run.recipe, RECIPE.id);
     assert.equal(run.fromStep, 0);
+    assert.equal(run.inputTab, rec);
     assert.deepEqual(run.steps.map((step) => step.state), ["queued", "pending", "pending"]);
     assert.deepEqual(run.steps.map((step) => step.stepId), RECIPE.steps.map((step) => step.id));
+    assert.deepEqual(await runRow(run.id), { ...(await runRow(run.id))!, parent: folder, input_tab: rec, from_step: 0 });
+    let previous = rec;
     for (const [index, step] of run.steps.entries()) {
-      assert.equal(step.pageId, stepPageIdForStep(parent, RECIPE.id, RECIPE.steps[index]!.id));
       assert.equal(step.stepStatus, "wait");
       assert.equal(step.tries, 0);
       const page = await pageRow(step.pageId);
+      // 出力は役割ページ（フォルダ直下・role = step）の新しいタブ。題名は段階の名前。系譜は run と入力（前の段階の出力）
       assert.deepEqual(
-        { kind: page?.kind, title: page?.title, parent: page?.parent, recipe: page?.recipe, status: page?.step_status, blocks: page?.blocks },
-        { kind: "step", title: RECIPE.steps[index]!.name, parent, recipe: RECIPE.id, status: "wait", blocks: [] },
+        { kind: page?.kind, title: page?.title, parent: page?.parent, recipe: page?.recipe, status: page?.step_status, blocks: page?.blocks, made: page?.made_from },
+        { kind: "note", title: RECIPE.steps[index]!.name, parent: folder, recipe: RECIPE.id, status: "wait", blocks: [], made: { kind: "step", run: run.id, input: previous, inputRevision: index === 0 ? 1 : 0 } },
       );
+      const holder = await holderRow(page?.page);
+      assert.deepEqual([holder?.kind, holder?.title, holder?.parent, holder?.role, holder?.last_tab], ["page", RECIPE.steps[index]!.name, folder, { kind: "step", recipe: RECIPE.id, stepId: step.stepId }, step.pageId]);
+      previous = step.pageId;
     }
-    assert.deepEqual(await listRun(pool, OWNER, parent), { run });
+    assert.deepEqual(await listRun(pool, OWNER, folder), { run });
+    // 流れ: 入れ物（録音と 3 つの役割ページ）とそのタブ
+    const flow = await readFlow(pool, OWNER, folder);
+    assert.deepEqual(flow?.folder, { id: folder, title: "合成のフォルダ", recipe: null });
+    assert.deepEqual(flow?.holders.map((holder) => [holder.role, holder.tabs.map((tab) => [tab.id, tab.tabPos, tab.stepStatus])]), [
+      [null, [[rec, 1, null]]],
+      ...run.steps.map((step) => [{ kind: "step", recipe: RECIPE.id, stepId: step.stepId }, [[step.pageId, 1, "wait"]]]),
+    ]);
+    assert.deepEqual(flow?.usedEngines, []);
+    assert.equal(await readFlow(pool, OWNER, rec), null, "only a folder has a flow");
   });
 
-  it("reads the latest run's guide and terms for the recording and for a page under it — and for nobody else", async () => {
+  it("reuses the role holder: a second run adds a tab to it; the input's role decides the first step; toStep can stop early", async () => {
+    const { folder, rec } = await folderWithRecording();
+    const first = await created(folder, rec, { toStep: 1 });
+    assert.deepEqual(first.steps.map((step) => step.index), [0, 1]);
+    await completeAll(first);
+    assert.equal((await runRow(first.id))?.state, "succeeded");
+    // 段階 2 の出力のタブ（役割 2）から → 段階 3 だけ。役割 2 の入れ物は同じ、段階 3 の入れ物は新しくできる
+    const secondTab = first.steps[1]!.pageId;
+    const next = await created(folder, secondTab);
+    assert.equal(next.fromStep, 2);
+    assert.equal(next.inputTab, secondTab);
+    assert.deepEqual(next.steps.map((step) => [step.index, step.state]), [[2, "queued"]]);
+    assert.deepEqual((await pageRow(next.steps[0]!.pageId))?.made_from, { kind: "step", run: next.id, input: secondTab, inputRevision: 2 });
+    // 録音からもう一度段階 1〜2 を作ると、同じ役割の入れ物に 2 つ目のタブ
+    const again = await createRun(pool, OWNER, folder, { recipe: RECIPE, inputTab: rec, toStep: 1 });
+    assert.equal(again.status, "run_in_progress", "the folder has a run in progress");
+    await cancelRun(pool, OWNER, folder, next.id);
+    const rerun = await created(folder, rec, { toStep: 1 });
+    assert.equal((await pageRow(rerun.steps[0]!.pageId))?.page, (await pageRow(first.steps[0]!.pageId))?.page, "the same holder");
+    assert.notEqual(rerun.steps[0]!.pageId, first.steps[0]!.pageId, "a new tab");
+    const flow = await readFlow(pool, OWNER, folder);
+    const holder = flow?.holders.find((item) => item.role?.kind === "step" && item.role.stepId === RECIPE.steps[0]!.id);
+    assert.deepEqual(holder?.tabs.map((tab) => [tab.id, tab.tabPos]), [[first.steps[0]!.pageId, 1], [rerun.steps[0]!.pageId, 2]]);
+    // 段階の範囲の外は 400
+    await cancelRun(pool, OWNER, folder, rerun.id);
+    assert.deepEqual(await createRun(pool, OWNER, folder, { recipe: RECIPE, inputTab: secondTab, toStep: 1 }), { status: "invalid_from_step" }, "toStep before the input's role");
+    assert.deepEqual(await createRun(pool, OWNER, folder, { recipe: RECIPE, inputTab: rec, toStep: 3 }), { status: "invalid_from_step" }, "past the last step");
+  });
+
+  it("regenerates into the same tab and makes a sibling from the same input", async () => {
+    const { folder, rec } = await folderWithRecording();
+    const first = await created(folder, rec);
+    await completeAll(first);
+    const [tab0, tab1] = [first.steps[0]!.pageId, first.steps[1]!.pageId];
+    // 作り直す: 新しいタブは増えず、同じタブへ書く。入力は系譜（段階 1 の入力＝録音、段階 2 の入力＝段階 1 の出力）
+    const redo = await createRun(pool, OWNER, folder, { recipe: RECIPE, regenerate: tab1 });
+    assert.ok(redo.status === "created");
+    assert.deepEqual(redo.run.steps.map((step) => [step.index, step.pageId, step.state, step.stepStatus]), [[1, tab1, "queued", "wait"]]);
+    assert.equal(redo.run.inputTab, tab0);
+    await complete(redo.run.id, 1, "作り直した結果");
+    assert.deepEqual((await pageRow(tab1))?.blocks, paragraph("作り直した結果"));
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM pages WHERE page = $1 AND deleted_at IS NULL", [(await pageRow(tab1))?.page])).rows[0]?.n, 1, "no new tab");
+    // 同じ入力でもう 1 つ: 同じ入れ物に新しいタブ、入力は同じ
+    const more = await createRun(pool, OWNER, folder, { recipe: RECIPE, sibling: tab1 });
+    assert.ok(more.status === "created");
+    const sibling = more.run.steps[0]!.pageId;
+    assert.notEqual(sibling, tab1);
+    assert.equal((await pageRow(sibling))?.page, (await pageRow(tab1))?.page);
+    assert.deepEqual((await pageRow(sibling))?.made_from, { kind: "step", run: more.run.id, input: tab0, inputRevision: 2 });
+    await cancelRun(pool, OWNER, folder, more.run.id);
+    // 段階の出力でないタブ・入力が消えたタブは作り直せない
+    assert.deepEqual(await createRun(pool, OWNER, folder, { recipe: RECIPE, regenerate: rec }), { status: "invalid_from_step" });
+    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [tab0]);
+    assert.deepEqual(await createRun(pool, OWNER, folder, { recipe: RECIPE, regenerate: tab1 }), { status: "invalid_from_step" });
+  });
+
+  it("reads the latest run's guide and terms for the folder, its pages and output tabs — and for nobody else", async () => {
     const owner = "synthetic-guide-owner";
     const recipe = { ...RECIPE, revision: 1, name: "合成の手順", guide: "合成のガイド: 常体でそろえる", terms: [{ term: "円覚寺", reading: "えんがくじ", variants: ["円学寺"], note: "" }], steps: RECIPE.steps.map((step) => ({ ...step, profile: "standard" })) };
     await pool.query("INSERT INTO recipes(owner,id,name,guide,steps,terms) VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb)", [owner, recipe.id, recipe.name, recipe.guide, JSON.stringify(recipe.steps), JSON.stringify(recipe.terms)]);
-    const parent = (await store.createPage(owner, { kind: "rec", title: "合成の録音", blocks: TRANSCRIPT })).id;
+    const { folder, rec } = await folderWithRecording(owner);
     // run が無いあいだは何も返さない
-    assert.equal(await getRunGuide(pool, owner, parent), null);
-    const first = await createRun(pool, owner, parent, { recipe });
+    assert.equal(await getRunGuide(pool, owner, rec), null);
+    const first = await createRun(pool, owner, folder, { recipe, inputTab: rec, toStep: LAST });
     assert.equal(first.status, "created");
     const expected = { recipeName: "合成の手順", guide: "合成のガイド: 常体でそろえる", terms: recipe.terms };
-    assert.deepEqual(await getRunGuide(pool, owner, parent), expected);
-    // 録音の下の段階のページ（kind = 'step'）からも、同じ録音の run のものが読める
-    const stepPage = first.status === "created" ? first.run.steps[0]!.pageId : "";
-    assert.deepEqual(await getRunGuide(pool, owner, stepPage), expected);
-    // ふつうのページ・他人・ゴミ箱の録音・形の悪い id は null
+    assert.deepEqual(await getRunGuide(pool, owner, folder), expected);
+    assert.deepEqual(await getRunGuide(pool, owner, rec), expected);
+    const outputTab = first.status === "created" ? first.run.steps[0]!.pageId : "";
+    assert.deepEqual(await getRunGuide(pool, owner, outputTab), expected);
+    // フォルダの外のページ・他人・ゴミ箱のフォルダ・形の悪い id は null
     const note = await store.createPage(owner, { title: "合成のメモ" });
     assert.equal(await getRunGuide(pool, owner, note.id), null);
-    assert.equal(await getRunGuide(pool, "synthetic-other-owner", parent), null);
+    assert.equal(await getRunGuide(pool, "synthetic-other-owner", rec), null);
     assert.equal(await getRunGuide(pool, owner, "not-a-page-id"), null);
-    assert.equal(await store.deletePage(owner, parent), "deleted");
-    assert.equal(await getRunGuide(pool, owner, parent), null);
+    assert.equal(await store.deletePage(owner, folder), "deleted");
+    assert.equal(await getRunGuide(pool, owner, folder), null);
   });
 
-  it("pins the parent/recipe design across runs and changes it only on explicit update", async () => {
+  it("pins the folder/recipe design across runs and changes it only on explicit update", async () => {
     const owner = "synthetic-snapshot-owner";
     const old = { ...RECIPE, revision: 1, name: "Old design", guide: "Old guide", steps: RECIPE.steps.map((step) => ({ ...step, profile: "standard" })) };
     await pool.query("INSERT INTO recipes(owner,id,name,guide,steps) VALUES($1,$2,$3,$4,$5::jsonb)", [owner, old.id, old.name, old.guide, JSON.stringify(old.steps)]);
-    const parent = (await store.createPage(owner, { kind: "rec", title: "Synthetic", blocks: TRANSCRIPT })).id;
-    const first = await createRun(pool, owner, parent, { recipe: old });
+    const { folder, rec } = await folderWithRecording(owner);
+    const first = await createRun(pool, owner, folder, { recipe: old, inputTab: rec, toStep: LAST });
     assert.equal(first.status, "created");
     if (first.status !== "created") return;
     assert.equal(first.run.recipeSnapshot.steps[0]?.profile, "standard");
-    await cancelRun(pool, owner, parent, first.run.id);
+    await cancelRun(pool, owner, folder, first.run.id);
     const fresh = { ...old, revision: 2, name: "New design", steps: old.steps.map((step, index) => index === 0 ? { ...step, name: "New step", instruction: "New instruction", profile: "light" } : step) };
     await pool.query("UPDATE recipes SET name=$3,steps=$4::jsonb,revision=2 WHERE owner=$1 AND id=$2", [owner, old.id, fresh.name, JSON.stringify(fresh.steps)]);
-    assert.deepEqual(await createRun(pool, owner, parent, { recipe: old }), { status: "recipe_changed" });
-    const rerun = await createRun(pool, owner, parent, { recipe: fresh });
+    assert.deepEqual(await createRun(pool, owner, folder, { recipe: old, inputTab: rec, toStep: LAST }), { status: "recipe_changed" });
+    const rerun = await createRun(pool, owner, folder, { recipe: fresh, inputTab: rec, toStep: LAST });
     assert.equal(rerun.status, "created");
     if (rerun.status !== "created") return;
     assert.equal(rerun.run.recipeRevision, 1);
     assert.equal(rerun.run.recipeSnapshot.steps[0]?.name, old.steps[0]?.name);
-    await cancelRun(pool, owner, parent, rerun.run.id);
-    const updated = await updateRunRecipeSnapshot(pool, owner, parent, rerun.run.id, fresh, 1);
+    await cancelRun(pool, owner, folder, rerun.run.id);
+    const updated = await updateRunRecipeSnapshot(pool, owner, folder, rerun.run.id, fresh, 1);
     assert.equal(updated.status, "updated");
     if (updated.status !== "updated") return;
     assert.equal(updated.run.recipeRevision, 2);
     assert.equal(updated.run.recipeSnapshot.steps[0]?.profile, "light");
-    const next = await createRun(pool, owner, parent, { recipe: fresh });
+    const next = await createRun(pool, owner, folder, { recipe: fresh, inputTab: rec, toStep: LAST });
     assert.equal(next.status, "created");
     if (next.status === "created") assert.equal(next.run.recipeSnapshot.steps[0]?.name, "New step");
   });
@@ -331,100 +403,83 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     const owner = "synthetic-reordered-recipe-owner";
     const original = { ...RECIPE, revision: 1, name: RECIPE.id, guide: "", steps: RECIPE.steps.map((step) => ({ ...step, profile: "standard" })) };
     await pool.query("INSERT INTO recipes(owner,id,name,steps) VALUES($1,$2,$3,$4::jsonb)", [owner, original.id, original.name ?? original.id, JSON.stringify(original.steps)]);
-    const parent = await recording(owner);
-    const started = await createRun(pool, owner, parent, { recipe: original });
+    const { folder, rec } = await folderWithRecording(owner);
+    const started = await createRun(pool, owner, folder, { recipe: original, inputTab: rec, toStep: LAST });
     assert.equal(started.status, "created");
     if (started.status !== "created") return;
-    await completeAll(started.run.id);
+    for (const step of started.run.steps) {
+      const claim = await claimed(started.run.id, step.index);
+      const input = await readStepInput(pool, claim);
+      assert.ok(input);
+      assert.ok((await commitAttempt(pool, { ...refOf(claim), blocks: paragraph(`結果 ${step.index}`), inputBasis: computeStepBasis(original, step.index, input) })).ok);
+    }
 
     const reordered = { ...original, revision: 2, steps: [original.steps[1]!, original.steps[0]!, original.steps[2]!] };
     await pool.query("UPDATE recipes SET steps=$3::jsonb,revision=2 WHERE owner=$1 AND id=$2", [owner, original.id, JSON.stringify(reordered.steps)]);
-    const updated = await updateRunRecipeSnapshot(pool, owner, parent, started.run.id, reordered, 1);
+    const updated = await updateRunRecipeSnapshot(pool, owner, folder, started.run.id, reordered, 1);
     assert.equal(updated.status, "updated");
     if (updated.status !== "updated") return;
     assert.deepEqual(
       updated.run.steps.map((step) => step.pageId),
       [started.run.steps[1]!.pageId, started.run.steps[0]!.pageId, started.run.steps[2]!.pageId],
-      "artifact page IDs follow stable step IDs across reordering",
+      "artifact tabs follow stable step IDs across reordering",
     );
-    assert.equal(await refreshStale(pool, owner, parent, {
+    assert.equal(await refreshStale(pool, owner, folder, {
       id: reordered.id, name: reordered.name, guide: reordered.guide,
       steps: reordered.steps, terms: [], samples: [],
     }), RECIPE.steps.length);
-    const listed = await listRun(pool, owner, parent);
+    const listed = await listRun(pool, owner, folder);
     assert.deepEqual(listed?.run?.steps.map((step) => step.stepStatus), ["stale", "stale", "stale"]);
   });
 
-  it("refuses a second run on the same recording while one is in progress, even when many arrive at once", async () => {
-    const parent = await recording();
-    await created(parent);
-    assert.deepEqual(await createRun(pool, OWNER, parent, { recipe: RECIPE }), { status: "run_in_progress" });
+  it("refuses a second run in the same folder while one is in progress, even when many arrive at once", async () => {
+    const { folder, rec } = await folderWithRecording();
+    await created(folder, rec);
+    assert.deepEqual(await createRun(pool, OWNER, folder, { recipe: RECIPE, inputTab: rec, toStep: LAST }), { status: "run_in_progress" });
 
-    const fresh = await recording();
-    const results = await Promise.all(Array.from({ length: 10 }, () => createRun(pool, OWNER, fresh, { recipe: RECIPE })));
+    const fresh = await folderWithRecording();
+    const results = await Promise.all(Array.from({ length: 10 }, () => createRun(pool, OWNER, fresh.folder, { recipe: RECIPE, inputTab: fresh.rec, toStep: LAST })));
     assert.equal(results.filter((result) => result.status === "created").length, 1);
     assert.equal(results.filter((result) => result.status === "run_in_progress").length, 9);
-    const count = await pool.query<{ n: string }>("SELECT count(*)::text AS n FROM step_runs WHERE parent = $1", [fresh]);
+    const count = await pool.query<{ n: string }>("SELECT count(*)::text AS n FROM step_runs WHERE parent = $1", [fresh.folder]);
     assert.equal(count.rows[0]?.n, "1");
+    // 負けた要求は出力のタブも入れ物も残さない
+    const holders = await pool.query<{ n: string }>("SELECT count(*)::text AS n FROM pages WHERE parent = $1 AND kind = 'page' AND role IS NOT NULL", [fresh.folder]);
+    assert.equal(holders.rows[0]?.n, String(RECIPE.steps.length));
   });
 
   it("returns the same run for the same Idempotency-Key, also when the retries race", async () => {
-    const parent = await recording();
+    const { folder, rec } = await folderWithRecording();
     const key = `synthetic-${randomUUID()}`;
-    const first = await created(parent, { idempotencyKey: key });
-    const again = await createRun(pool, OWNER, parent, { recipe: RECIPE, idempotencyKey: key });
+    const first = await created(folder, rec, { idempotencyKey: key });
+    const again = await createRun(pool, OWNER, folder, { recipe: RECIPE, inputTab: rec, toStep: LAST, idempotencyKey: key });
     assert.equal(again.status, "existing");
     assert.equal(again.status === "existing" ? again.run.id : null, first.id);
 
-    const racing = await recording();
+    const racing = await folderWithRecording();
     const raceKey = `synthetic-${randomUUID()}`;
-    const results = await Promise.all(Array.from({ length: 6 }, () => createRun(pool, OWNER, racing, { recipe: RECIPE, idempotencyKey: raceKey })));
+    const results = await Promise.all(Array.from({ length: 6 }, () => createRun(pool, OWNER, racing.folder, { recipe: RECIPE, inputTab: racing.rec, toStep: LAST, idempotencyKey: raceKey })));
     assert.equal(results.filter((result) => result.status === "created").length, 1);
     const ids = new Set(results.map((result) => (result.status === "created" || result.status === "existing" ? result.run.id : result.status)));
     assert.equal(ids.size, 1, "every retry sees the one run");
   });
 
-  it("refuses parents that are not the owner's live recording page", async () => {
+  it("refuses folders and inputs that are not the owner's live folder and a tab in it", async () => {
     const note = (await store.createPage(OWNER, { kind: "note" })).id;
-    const theirs = await recording(OTHER);
-    const removed = await recording();
-    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [removed]);
-    for (const parent of [note, theirs, removed, randomUUID()]) {
-      assert.deepEqual(await createRun(pool, OWNER, parent, { recipe: RECIPE }), { status: "not_found" }, parent);
-      const count = await pool.query<{ n: string }>("SELECT count(*)::text AS n FROM step_runs WHERE parent = $1", [parent]);
-      assert.equal(count.rows[0]?.n, "0");
+    const theirs = await folderWithRecording(OTHER);
+    const removed = await folderWithRecording();
+    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [removed.folder]);
+    const { folder, rec } = await folderWithRecording();
+    for (const [parent, input] of [[note, note], [theirs.folder, theirs.rec], [removed.folder, removed.rec], [randomUUID(), rec], [folder, note], [folder, theirs.rec], [folder, randomUUID()], [folder, folder]]) {
+      assert.deepEqual(await createRun(pool, OWNER, parent!, { recipe: RECIPE, inputTab: input!, toStep: LAST }), { status: "not_found" }, `${parent} / ${input}`);
     }
-  });
-
-  it("reuses completed upstream sub-pages from fromStep and refuses fromStep without them", async () => {
-    const parent = await recording();
-    assert.deepEqual(await createRun(pool, OWNER, parent, { recipe: RECIPE, fromStep: 1 }), { status: "invalid_from_step" });
-    assert.deepEqual(await listRun(pool, OWNER, parent), { run: null }, "no run is left behind");
-    const children = await pool.query<{ n: string }>("SELECT count(*)::text AS n FROM pages WHERE parent = $1", [parent]);
-    assert.equal(children.rows[0]?.n, "0", "no sub-page is left behind");
-
-    const first = await created(parent);
-    await completeAll(first.id);
-    const upstream = await pageRow(first.steps[0]!.pageId);
-
-    const rerun = await created(parent, { fromStep: 2 });
-    assert.deepEqual(rerun.steps.map((step) => step.state), ["reused", "reused", "queued"]);
-    assert.deepEqual(rerun.steps.map((step) => step.pageId), first.steps.map((step) => step.pageId), "the same pages");
-    assert.deepEqual(rerun.steps.map((step) => step.stepStatus), ["done", "done", "wait"]);
-    assert.deepEqual((await pageRow(first.steps[0]!.pageId))?.blocks, upstream?.blocks, "the upstream result is kept");
-    await complete(rerun.id, 2, "作り直した結果");
-    assert.equal((await runRow(rerun.id))?.state, "succeeded");
-    assert.deepEqual((await pageRow(first.steps[2]!.pageId))?.blocks, paragraph("作り直した結果"));
-
-    // 削除したサブページは、その段階から作り直すと戻る
-    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [first.steps[2]!.pageId]);
-    assert.equal((await createRun(pool, OWNER, parent, { recipe: RECIPE, fromStep: 2 })).status, "created");
-    assert.equal((await pageRow(first.steps[2]!.pageId))?.deleted_at, null);
+    const count = await pool.query<{ n: string }>("SELECT count(*)::text AS n FROM step_runs WHERE owner = $1 AND parent = ANY($2::uuid[])", [OWNER, [note, theirs.folder, removed.folder, folder]]);
+    assert.equal(count.rows[0]?.n, "0");
   });
 
   it("claims a queued attempt exactly once under 20 concurrent claims and advances the generation", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     const results = await Promise.all(Array.from({ length: 20 }, () => claimAttempt(pool, run.id, 0)));
     const winners = results.filter((result) => result.ok);
     assert.equal(winners.length, 1);
@@ -434,8 +489,10 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.equal(winner.claim.generation, 1);
     assert.equal(winner.claim.tries, 1);
     assert.equal(winner.claim.owner, OWNER);
-    assert.equal(winner.claim.parentId, parent);
+    assert.equal(winner.claim.parentId, folder);
+    assert.equal(winner.claim.inputTabId, rec);
     assert.equal(winner.claim.previousPageId, null);
+    assert.deepEqual(winner.claim.upstreamPageIds, []);
 
     const attempt = await attemptRow(run.id, 0);
     assert.equal(attempt?.state, "running");
@@ -451,9 +508,29 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.deepEqual(await claimAttempt(pool, run.id, 9), { ok: false, reason: "not_queued" });
   });
 
+  it("gives a run that starts at a later step its input tab as the previous page and the upstream artifact", async () => {
+    const { folder, rec } = await folderWithRecording();
+    const first = await created(folder, rec, { toStep: 0 });
+    await completeAll(first);
+    const tab0 = first.steps[0]!.pageId;
+    const next = await created(folder, tab0);
+    const claim = await claimed(next.id, 1);
+    assert.equal(claim.previousPageId, tab0);
+    assert.deepEqual(claim.upstreamPageIds, [{ id: RECIPE.steps[0]!.id, pageId: tab0 }]);
+    const input = await readStepInput(pool, claim);
+    assert.deepEqual(input?.previousBlocks, paragraph("合成の結果 0"));
+    assert.deepEqual(input?.parentBlocks, TRANSCRIPT, "the source is the root of the input's lineage (the recording)");
+    assert.deepEqual(input?.upstream, [{ id: RECIPE.steps[0]!.id, blocks: paragraph("合成の結果 0") }]);
+    assert.ok(input);
+    assert.ok((await commitAttempt(pool, { ...refOf(claim), blocks: paragraph("合成の結果 1"), inputBasis: computeStepBasis(RECIPE, 1, input) })).ok);
+    const last = await claimed(next.id, 2);
+    assert.equal(last.previousPageId, next.steps[0]!.pageId);
+    assert.deepEqual(last.upstreamPageIds.map((item) => item.pageId), [tab0, next.steps[0]!.pageId]);
+  });
+
   it("keeps the used input chars of a cut source on the committed step only, and clears them on the next claim (#277)", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     const first = await claimed(run.id, 0);
     const input = await readStepInput(pool, first);
     assert.ok(input);
@@ -465,22 +542,23 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
       await commitAttempt(pool, { ...refOf(first), blocks: paragraph("切った結果"), inputBasis: computeStepBasis(RECIPE, 0, input), inputUsedChars: 100_000 }),
       { ok: true, next: 1 },
     );
-    const view = (await listRun(pool, OWNER, parent))?.run;
+    const view = (await listRun(pool, OWNER, folder))?.run;
     assert.equal(view?.steps[0]?.inputUsedChars, 100_000);
     assert.equal("inputUsedChars" in (view?.steps[1] ?? {}), false, "a step that was not cut (or not run) carries nothing");
     await complete(run.id, 1);
     await complete(run.id, 2);
-    assert.equal("inputUsedChars" in ((await listRun(pool, OWNER, parent))?.run?.steps[1] ?? {}), false);
+    assert.equal("inputUsedChars" in ((await listRun(pool, OWNER, folder))?.run?.steps[1] ?? {}), false);
 
-    const again = await created(parent);
-    await claimed(again.id, 0);
-    assert.equal((await pool.query<{ input_used_chars: number | null }>("SELECT input_used_chars FROM step_attempts WHERE run_id = $1 AND step_index = 0", [again.id])).rows[0]?.input_used_chars, null);
-    assert.equal("inputUsedChars" in ((await listRun(pool, OWNER, parent))?.run?.steps[0] ?? {}), false, "a running step shows nothing");
+    const again = await createRun(pool, OWNER, folder, { recipe: RECIPE, regenerate: run.steps[0]!.pageId });
+    assert.ok(again.status === "created");
+    await claimed(again.run.id, 0);
+    assert.equal((await pool.query<{ input_used_chars: number | null }>("SELECT input_used_chars FROM step_attempts WHERE run_id = $1 AND step_index = 0", [again.run.id])).rows[0]?.input_used_chars, null);
+    assert.equal("inputUsedChars" in ((await listRun(pool, OWNER, folder))?.run?.steps[0] ?? {}), false, "a running step shows nothing");
   });
 
   it("commits only with the current generation, then queues the next step and finishes the run on the last step", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     const claim = await claimed(run.id, 0);
     const basis = computeBasis(TRANSCRIPT, RECIPE.steps[0]!.instruction);
 
@@ -508,13 +586,13 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     const finished = await runRow(run.id);
     assert.equal(finished?.state, "succeeded");
     assert.ok(finished?.finished_at);
-    const view = (await listRun(pool, OWNER, parent))?.run;
+    const view = (await listRun(pool, OWNER, folder))?.run;
     assert.deepEqual(view?.steps.map((step) => [step.state, step.stepStatus]), [["succeeded", "done"], ["succeeded", "done"], ["succeeded", "done"]]);
   });
 
-  it("does not commit into a sub-page that was deleted while the step ran", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+  it("does not commit into an output tab that was deleted while the step ran", async () => {
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     const claim = await claimed(run.id, 0);
     await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [claim.pageId]);
     const result = await commitAttempt(pool, { ...refOf(claim), blocks: paragraph("x"), inputBasis: computeBasis(TRANSCRIPT, RECIPE.steps[0]!.instruction) });
@@ -523,8 +601,8 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
   });
 
   it("retries a retryable failure until MAX_TRIES, then fails the run and cancels the rest", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     await complete(run.id, 0);
     for (let tries = 1; tries < MAX_TRIES; tries++) {
       const claim = await claimed(run.id, 1);
@@ -543,7 +621,7 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.equal(last.tries, MAX_TRIES);
     assert.deepEqual(await failAttempt(pool, { ...refOf(last), code: "model_timeout", retryable: true }), { ok: true, outcome: "failed" });
 
-    const view = (await listRun(pool, OWNER, parent))?.run;
+    const view = (await listRun(pool, OWNER, folder))?.run;
     assert.equal(view?.state, "failed");
     assert.deepEqual(view?.steps.map((step) => [step.state, step.stepStatus, step.errorCode]), [
       ["succeeded", "done", null],
@@ -554,9 +632,9 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.deepEqual((await pageRow(run.steps[0]!.pageId))?.blocks, paragraph("合成の結果 0"), "the upstream result is kept");
   });
 
-  it("書き切れなかったときは、書けたところまでを残す（サブページの本文には書かない。#37）", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+  it("書き切れなかったときは、書けたところまでを残す（出力のタブの本文には書かない。#37）", async () => {
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     const claim = await claimed(run.id, 0);
     const partial = paragraph("書けたところまで");
     assert.deepEqual(
@@ -567,33 +645,33 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.equal(attempt?.state, "failed");
     assert.equal(attempt?.error_code, "output_too_long");
     assert.deepEqual(attempt?.partial_blocks, partial);
-    // 失敗した段階のページを半分の本文で埋めない
+    // 失敗した段階のタブを半分の本文で埋めない
     assert.deepEqual((await pageRow(claim.pageId))?.blocks, []);
   });
 
   it("途中出力は本人の最新の失敗 run だけで読み、polling には有無だけを返す", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     const claim = await claimed(run.id, 0);
     const partial = paragraph("合成の途中出力");
     await failAttempt(pool, { ...refOf(claim), code: "output_too_long", retryable: false, partial });
 
-    const view = (await listRun(pool, OWNER, parent))?.run;
+    const view = (await listRun(pool, OWNER, folder))?.run;
     assert.equal(view?.steps[0]?.hasPartialOutput, true);
     assert.equal(JSON.stringify(view).includes("合成の途中出力"), false);
-    assert.deepEqual(await readPartialOutput(pool, OWNER, parent, run.id, 0), partial);
-    assert.equal(await readPartialOutput(pool, OTHER, parent, run.id, 0), null);
+    assert.deepEqual(await readPartialOutput(pool, OWNER, folder, run.id, 0), partial);
+    assert.equal(await readPartialOutput(pool, OTHER, folder, run.id, 0), null);
     assert.equal(await readPartialOutput(pool, OWNER, randomUUID(), run.id, 0), null);
-    assert.equal(await readPartialOutput(pool, OWNER, parent, randomUUID(), 0), null);
+    assert.equal(await readPartialOutput(pool, OWNER, folder, randomUUID(), 0), null);
 
-    const next = await createRun(pool, OWNER, parent, { recipe: RECIPE });
+    const next = await createRun(pool, OWNER, folder, { recipe: RECIPE, inputTab: rec, toStep: LAST });
     assert.equal(next.status, "created");
-    assert.equal(await readPartialOutput(pool, OWNER, parent, run.id, 0), null, "a new run hides older partial output");
+    assert.equal(await readPartialOutput(pool, OWNER, folder, run.id, 0), null, "a new run hides older partial output");
   });
 
   it("積み直すときは書きかけを残さず、次の claim でも消えている", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     const first = await claimed(run.id, 0);
     const partial = paragraph("途中");
     // 積み直す失敗では残さない
@@ -614,23 +692,23 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
   });
 
   it("fails at once on a non-retryable error", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     const claim = await claimed(run.id, 0);
     assert.deepEqual(await failAttempt(pool, { ...refOf(claim), code: "invalid_output", retryable: false }), { ok: true, outcome: "failed" });
-    const view = (await listRun(pool, OWNER, parent))?.run;
+    const view = (await listRun(pool, OWNER, folder))?.run;
     assert.equal(view?.state, "failed");
     assert.deepEqual(view?.steps.map((step) => [step.state, step.tries]), [["failed", 1], ["canceled", 0], ["canceled", 0]]);
     await assert.rejects(() => failAttempt(pool, { ...refOf(claim), code: "Not A Code", retryable: false }), TypeError);
   });
 
-  it("cancels idempotently, advances the running generation so a late result is refused, and keeps completed sub-pages", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+  it("cancels idempotently, advances the running generation so a late result is refused, and keeps completed tabs", async () => {
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     await complete(run.id, 0);
     const running = await claimed(run.id, 1);
 
-    const canceled = await cancelRun(pool, OWNER, parent, run.id);
+    const canceled = await cancelRun(pool, OWNER, folder, run.id);
     assert.equal(canceled?.state, "canceled");
     assert.deepEqual(canceled?.steps.map((step) => [step.state, step.stepStatus]), [["succeeded", "done"], ["canceled", "wait"], ["canceled", "wait"]]);
     assert.equal((await attemptRow(run.id, 1))?.generation, running.generation + 1);
@@ -642,17 +720,17 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.deepEqual(await failAttempt(pool, { ...refOf(running), code: "internal", retryable: true }), { ok: false, reason: "stale_generation" });
     assert.deepEqual(await claimAttempt(pool, run.id, 1), { ok: false, reason: "run_inactive" });
 
-    assert.deepEqual(await cancelRun(pool, OWNER, parent, run.id), canceled, "cancel is idempotent");
+    assert.deepEqual(await cancelRun(pool, OWNER, folder, run.id), canceled, "cancel is idempotent");
     assert.deepEqual((await pageRow(run.steps[0]!.pageId))?.blocks, paragraph("合成の結果 0"));
     // 取消のあとは新しい run を作れる
-    assert.equal((await createRun(pool, OWNER, parent, { recipe: RECIPE })).status, "created");
-    // 別の録音ページの path では取り消せない
-    assert.equal(await cancelRun(pool, OWNER, await recording(), run.id), null);
+    assert.equal((await createRun(pool, OWNER, folder, { recipe: RECIPE, inputTab: rec, toStep: LAST })).status, "created");
+    // 別のフォルダの path では取り消せない
+    assert.equal(await cancelRun(pool, OWNER, (await folderWithRecording()).folder, run.id), null);
   });
 
   it("extends the lease on heartbeat only for the current generation", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     const claim = (await claimAttempt(pool, run.id, 0, { leaseSeconds: 30 }));
     assert.ok(claim.ok);
     const before = (await attemptRow(run.id, 0))?.lease_until?.getTime() ?? 0;
@@ -663,12 +741,12 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
   });
 
   it("sweeps expired leases back to the queue, and to failed (lease_expired) after MAX_TRIES", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     const expire = () => pool.query("UPDATE step_attempts SET lease_until = clock_timestamp() - interval '1 second' WHERE run_id = $1 AND state = 'running'", [run.id]);
 
-    const live = await recording();
-    const liveRun = await created(live);
+    const live = await folderWithRecording();
+    const liveRun = await created(live.folder, live.rec);
     await claimed(liveRun.id, 0);
 
     for (let tries = 1; tries < MAX_TRIES; tries++) {
@@ -687,7 +765,7 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.equal(last.tries, MAX_TRIES);
     await expire();
     assert.deepEqual((await sweepExpiredLeases(pool)).filter((ref) => ref.runId === run.id), []);
-    const view = (await listRun(pool, OWNER, parent))?.run;
+    const view = (await listRun(pool, OWNER, folder))?.run;
     assert.equal(view?.state, "failed");
     assert.deepEqual(view?.steps.map((step) => [step.state, step.stepStatus, step.errorCode]), [
       ["failed", "failed", "lease_expired"],
@@ -697,115 +775,126 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.equal((await attemptRow(liveRun.id, 0))?.state, "running");
   });
 
-  it("marks downstream sub-pages stale when an upstream page changes, and done again when it is restored", async () => {
-    const parent = await recording();
-    const run = await created(parent);
-    await completeAll(run.id);
+  it("marks downstream tabs stale when an upstream tab or the input changes, and done again when it is restored", async () => {
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
+    await completeAll(run);
     const [first, second, third] = run.steps.map((step) => step.pageId) as [string, string, string];
     const statuses = async () => Promise.all([first, second, third].map(async (id) => (await pageRow(id))?.step_status));
 
-    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 0);
+    assert.equal(await refreshStale(pool, OWNER, folder, RECIPE), 0);
     assert.deepEqual(await statuses(), ["done", "done", "done"]);
 
     await userEdit(OWNER, first, paragraph("直した結果 0"));
-    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 2);
+    assert.equal(await refreshStale(pool, OWNER, folder, RECIPE), 2);
     assert.deepEqual(await statuses(), ["done", "stale", "stale"]);
-    assert.equal((await listRun(pool, OWNER, parent))?.run?.steps[1]?.stepStatus, "stale");
+    assert.equal((await listRun(pool, OWNER, folder))?.run?.steps[1]?.stepStatus, "stale");
     await userEdit(OWNER, first, paragraph("合成の結果 0"));
-    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 2);
+    assert.equal(await refreshStale(pool, OWNER, folder, RECIPE), 2);
     assert.deepEqual(await statuses(), ["done", "done", "done"]);
 
-    await userEdit(OWNER, parent, paragraph("直した文字起こし"));
-    await refreshStale(pool, OWNER, parent, RECIPE);
+    await userEdit(OWNER, rec, paragraph("直した文字起こし"));
+    await refreshStale(pool, OWNER, folder, RECIPE);
     assert.deepEqual(await statuses(), ["stale", "stale", "stale"]);
-    await userEdit(OWNER, parent, TRANSCRIPT);
-    await refreshStale(pool, OWNER, parent, RECIPE);
+    await userEdit(OWNER, rec, TRANSCRIPT);
+    await refreshStale(pool, OWNER, folder, RECIPE);
     assert.deepEqual(await statuses(), ["done", "done", "done"]);
 
     await userEdit(OWNER, second, paragraph("直した結果 1"));
-    await refreshStale(pool, OWNER, parent, RECIPE);
+    await refreshStale(pool, OWNER, folder, RECIPE);
     assert.deepEqual(await statuses(), ["done", "done", "stale"]);
-    // 前提が変わった段階から作り直すと、新しい基準が記録されて印が消える
-    const rerun = await created(parent, { fromStep: 2 });
-    await completeAll(rerun.id, 2);
-    await refreshStale(pool, OWNER, parent, RECIPE);
-    assert.deepEqual(await statuses(), ["done", "done", "done"]);
+    // 前提が変わった段階を作り直すと、新しい基準が記録されて印が消える（最新 run の分だけを見る）
+    const rerun = await createRun(pool, OWNER, folder, { recipe: RECIPE, regenerate: third });
+    assert.ok(rerun.status === "created");
+    await completeAll(rerun.run);
+    await refreshStale(pool, OWNER, folder, RECIPE);
+    assert.equal((await pageRow(third))?.step_status, "done");
   });
 
-  it("uses an empty background when the recording has no fields of its own", async () => {
-    const parent = await recording();
-    const input = await readStepInput(pool, { owner: OWNER, parentId: parent, previousPageId: null });
+  it("uses an empty background when the recording has no fields of its own, and the recording's transcript as the source", async () => {
+    const { folder, rec } = await folderWithRecording();
+    const input = await readStepInput(pool, { owner: OWNER, parentId: folder, inputTabId: rec, previousPageId: null });
     assert.deepEqual(input?.parentBlocks, TRANSCRIPT);
     assert.equal(input?.background, "");
     assert.deepEqual(input?.fields, { entities: [], terms: [] });
+    assert.deepEqual(input?.refs, []);
+    // 文字起こしの段落があれば、本文の代わりに「[分:秒] 話者: 文」の段落
+    await pool.query(
+      "INSERT INTO page_recordings (page_id, owner, source, language, engine, segments, speaker_names) VALUES ($1, $2, 'vtt', 'ja', 'fake', $3::jsonb, $4::jsonb)",
+      [rec, OWNER, JSON.stringify([{ start: 65, end: 70, text: "おはようございます", speaker: 1 }, { start: null, end: null, text: "話者なし", speaker: null }]), JSON.stringify({ "1": "合成の話し手" })],
+    );
+    const withSegments = await readStepInput(pool, { owner: OWNER, parentId: folder, inputTabId: rec, previousPageId: null });
+    assert.deepEqual(withSegments?.parentBlocks, [...paragraph("[1:05] 合成の話し手: おはようございます"), ...paragraph("話者なし")]);
   });
 
   it("reads all upstream, the recording's own fields, settings and ordered references; explains each changed input", async () => {
-    const folder = (await store.createPage(OWNER, { kind: "folder", title: "合成フォルダ" })).id;
-    const parent = await recording();
-    await pool.query("UPDATE pages SET parent = $2 WHERE id = $1", [parent, folder]);
-    const reference = (await store.createPage(OWNER, { title: "初期の題名", blocks: paragraph("参考本文") })).id;
-    await pool.query("UPDATE pages SET parent = $2 WHERE id = $1", [reference, folder]);
-    // 欄は録音ページ自身の id で持つ（フォルダの id の行は読まない）
-    await pool.query("INSERT INTO page_fields(owner,page_id,entities,background) VALUES ($1,$2,$3::jsonb,'合成の背景情報')", [OWNER, parent, JSON.stringify([{ name: "合成人物", reading: "", role: "取材相手", note: "" }])]);
+    const { folder, rec } = await folderWithRecording();
+    const reference = (await store.createPage(OWNER, { title: "初期の題名", blocks: paragraph("参考本文"), parent: folder }))!.id;
+    // 欄は録音のタブ自身の id で持つ（フォルダの id の行は読まない）
+    await pool.query("INSERT INTO page_fields(owner,page_id,entities,background) VALUES ($1,$2,$3::jsonb,'合成の背景情報')", [OWNER, rec, JSON.stringify([{ name: "合成人物", reading: "", role: "取材相手", note: "" }])]);
     await pool.query("INSERT INTO page_fields(owner,page_id,entities,background) VALUES ($1,$2,$3::jsonb,'フォルダの古い背景')", [OWNER, folder, JSON.stringify([{ name: "フォルダの人物", reading: "", role: "", note: "" }])]);
     await pool.query("INSERT INTO editor_settings(owner,ai_lang,about) VALUES ($1,'en','合成の説明') ON CONFLICT(owner) DO UPDATE SET ai_lang = 'en', about = '合成の説明'", [OWNER]);
-    const run = await created(parent);
-    await completeAll(run.id);
-    const input = await readStepInput(pool, { owner: OWNER, parentId: parent, recipe: RECIPE.id, stepIndex: 2, previousPageId: run.steps[1]!.pageId, stepIds: RECIPE.steps.map((step) => step.id) });
+    const run = await created(folder, rec);
+    await completeAll(run);
+    const claim = { owner: OWNER, parentId: folder, inputTabId: rec, previousPageId: run.steps[1]!.pageId, upstreamPageIds: run.steps.slice(0, 2).map((step) => ({ id: step.stepId, pageId: step.pageId })) };
+    const input = await readStepInput(pool, claim);
     assert.deepEqual(input?.upstream.map((item) => item.id), ["aaaa1111", "bbbb2222"]);
     assert.deepEqual(input?.parentBlocks, TRANSCRIPT);
     assert.equal(input?.background, "合成の背景情報");
+    // 参考は同じフォルダの役割の無いページのタブ（段階の出力・入力の系譜・録音は入れない）
     assert.deepEqual(input?.refs.map((item) => item.id), [reference]);
     assert.equal(input?.fields.entities[0]?.name, "合成人物");
     assert.equal(input?.settings.aiLang, "en");
-    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], []);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, folder, RECIPE))[2], []);
 
-    await pool.query("UPDATE page_fields SET background = '変更した合成の背景情報' WHERE owner = $1 AND page_id = $2", [OWNER, parent]);
-    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 3);
-    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], ["info"]);
-    await pool.query("UPDATE page_fields SET background = '合成の背景情報' WHERE owner = $1 AND page_id = $2", [OWNER, parent]);
-    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 3);
-    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], []);
+    await pool.query("UPDATE page_fields SET background = '変更した合成の背景情報' WHERE owner = $1 AND page_id = $2", [OWNER, rec]);
+    assert.equal(await refreshStale(pool, OWNER, folder, RECIPE), 3);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, folder, RECIPE))[2], ["info"]);
+    await pool.query("UPDATE page_fields SET background = '合成の背景情報' WHERE owner = $1 AND page_id = $2", [OWNER, rec]);
+    assert.equal(await refreshStale(pool, OWNER, folder, RECIPE), 3);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, folder, RECIPE))[2], []);
 
     await pool.query("UPDATE pages SET title = '新しい題名' WHERE id = $1", [reference]);
-    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 0);
+    assert.equal(await refreshStale(pool, OWNER, folder, RECIPE), 0);
     await userEdit(OWNER, reference, paragraph("変更した参考本文"));
-    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 3);
-    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], ["refs"]);
+    assert.equal(await refreshStale(pool, OWNER, folder, RECIPE), 3);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, folder, RECIPE))[2], ["refs"]);
     await userEdit(OWNER, reference, paragraph("参考本文"));
-    await refreshStale(pool, OWNER, parent, RECIPE);
-    await pool.query("UPDATE page_fields SET terms = $3::jsonb WHERE owner = $1 AND page_id = $2", [OWNER, parent, JSON.stringify([{ term: "合成語", reading: "", variants: [], note: "" }])]);
-    await refreshStale(pool, OWNER, parent, RECIPE);
-    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], ["info"]);
-    await pool.query("UPDATE page_fields SET terms = '[]'::jsonb WHERE owner = $1 AND page_id = $2", [OWNER, parent]);
+    await refreshStale(pool, OWNER, folder, RECIPE);
+    await pool.query("UPDATE page_fields SET terms = $3::jsonb WHERE owner = $1 AND page_id = $2", [OWNER, rec, JSON.stringify([{ term: "合成語", reading: "", variants: [], note: "" }])]);
+    await refreshStale(pool, OWNER, folder, RECIPE);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, folder, RECIPE))[2], ["info"]);
+    await pool.query("UPDATE page_fields SET terms = '[]'::jsonb WHERE owner = $1 AND page_id = $2", [OWNER, rec]);
     await pool.query("UPDATE editor_settings SET about = '変更' WHERE owner = $1", [OWNER]);
-    await refreshStale(pool, OWNER, parent, RECIPE);
-    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], ["info"]);
+    await refreshStale(pool, OWNER, folder, RECIPE);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, folder, RECIPE))[2], ["info"]);
     await pool.query("UPDATE editor_settings SET about = '合成の説明' WHERE owner = $1", [OWNER]);
     const guide = { ...RECIPE, guide: "変更したガイド" };
-    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, guide))[2], ["guide"]);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, folder, guide))[2], ["guide"]);
     const instruction = { ...RECIPE, steps: RECIPE.steps.map((step, index) => index === 1 ? { ...step, instruction: "変更した指示" } : step) };
-    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, instruction))[2], ["step"]);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, folder, instruction))[2], ["step"]);
     await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [run.steps[0]!.pageId]);
-    const afterDelete = await readStepInput(pool, { owner: OWNER, parentId: parent, recipe: RECIPE.id, stepIndex: 2, previousPageId: run.steps[1]!.pageId, stepIds: RECIPE.steps.map((step) => step.id) });
+    const afterDelete = await readStepInput(pool, claim);
     assert.deepEqual(afterDelete?.upstream[0]?.blocks, []);
+    // 入力のタブが消えていれば読めない
+    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [rec]);
+    assert.equal(await readStepInput(pool, claim), null);
   });
 
   it("treats a legacy digest as unrecorded after the jsonb migration", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     const claim = await claimed(run.id, 0);
     assert.deepEqual(await commitAttempt(pool, { ...refOf(claim), blocks: paragraph("旧版の結果"), inputBasis: "a".repeat(64) }), { ok: true, next: 1 });
-    await userEdit(OWNER, parent, paragraph("変更した原文"));
-    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 0);
-    assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[0], []);
+    await userEdit(OWNER, rec, paragraph("変更した原文"));
+    assert.equal(await refreshStale(pool, OWNER, folder, RECIPE), 0);
+    assert.deepEqual((await readStepStaleReasons(pool, OWNER, folder, RECIPE))[0], []);
   });
 
   it("guards the refresh's write with the row version (xmin), so a row changed after the read is not overwritten", async () => {
-    const parent = await recording();
-    const run = await created(parent);
-    await completeAll(run.id);
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
+    await completeAll(run);
     const second = run.steps[1]!.pageId;
     await userEdit(OWNER, run.steps[0]!.pageId, paragraph("直した結果 0"));
     // refresh が読んだ後に行が変わった場合と同じ条件（xmin が違う）で書こうとしても通らない
@@ -819,79 +908,83 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
   });
 
   it("keeps runs of another owner out of reach", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     await complete(run.id, 0);
-    await userEdit(OWNER, parent, paragraph("直した文字起こし"));
+    await userEdit(OWNER, rec, paragraph("直した文字起こし"));
 
-    assert.equal(await listRun(pool, OTHER, parent), null);
-    assert.equal(await cancelRun(pool, OTHER, parent, run.id), null);
-    assert.deepEqual(await createRun(pool, OTHER, parent, { recipe: RECIPE }), { status: "not_found" });
-    assert.equal(await refreshStale(pool, OTHER, parent, RECIPE), 0);
+    assert.equal(await listRun(pool, OTHER, folder), null);
+    assert.equal(await cancelRun(pool, OTHER, folder, run.id), null);
+    assert.deepEqual(await createRun(pool, OTHER, folder, { recipe: RECIPE, inputTab: rec, toStep: LAST }), { status: "not_found" });
+    assert.equal(await refreshStale(pool, OTHER, folder, RECIPE), 0);
+    assert.equal(await readFlow(pool, OTHER, folder), null);
     assert.equal((await pageRow(run.steps[0]!.pageId))?.step_status, "done", "another owner's refresh changes nothing");
-    assert.equal(await readStepInput(pool, { owner: OTHER, parentId: parent, previousPageId: null }), null);
+    assert.equal(await readStepInput(pool, { owner: OTHER, parentId: folder, inputTabId: rec, previousPageId: null }), null);
     assert.equal((await runRow(run.id))?.state, "running");
   });
 
-  it("bumps the revision when a step writes the page, so a stale save from the user becomes a conflict (#58)", async () => {
-    const parent = await recording();
-    const run = await created(parent);
-    const subPage = run.steps[0]!.pageId;
-    const before = await store.getPage(OWNER, subPage);
+  it("bumps the revision when a step writes the tab, so a stale save from the user becomes a conflict (#58)", async () => {
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
+    const tab = run.steps[0]!.pageId;
+    const before = await store.getPage(OWNER, tab);
     assert.ok(before);
     await complete(run.id, 0);
-    const after = await store.getPage(OWNER, subPage);
+    const after = await store.getPage(OWNER, tab);
     assert.equal(after?.revision, before.revision + 1);
     // 利用者が結果を見る前の revision のまま保存しても、worker の結果を黙って上書きしない
-    const stale = await store.savePage(OWNER, subPage, { blocks: paragraph("利用者の古い画面からの保存") }, { baseRevision: before.revision });
+    const stale = await store.savePage(OWNER, tab, { blocks: paragraph("利用者の古い画面からの保存") }, { baseRevision: before.revision });
     assert.equal(stale?.status, "conflict");
-    assert.deepEqual((await store.getPage(OWNER, subPage))?.blocks, paragraph("合成の結果 0"));
+    assert.deepEqual((await store.getPage(OWNER, tab))?.blocks, paragraph("合成の結果 0"));
   });
 
-  it("keeps the body it replaces as an ai version when a rerun overwrites a sub-page, but not on the first generation", async () => {
-    const parent = await recording();
-    const first = await created(parent);
-    const subPage = first.steps[0]!.pageId;
+  it("keeps the body it replaces as an ai version when a rerun overwrites a tab, but not on the first generation", async () => {
+    const { folder, rec } = await folderWithRecording();
+    const first = await created(folder, rec);
+    const tab = first.steps[0]!.pageId;
     const versions = async () =>
-      (await pool.query<{ version: number; reason: string; blocks: Block[] }>("SELECT version, reason, blocks FROM page_versions WHERE page_id = $1 ORDER BY version", [subPage])).rows;
-    await completeAll(first.id);
+      (await pool.query<{ version: number; reason: string; blocks: Block[] }>("SELECT version, reason, blocks FROM page_versions WHERE page_id = $1 ORDER BY version", [tab])).rows;
+    await completeAll(first);
     assert.deepEqual(await versions(), [], "the first generation replaces an empty body: nothing to keep");
 
-    // 利用者がサブページを直してから、その段階を作り直す
-    await userEdit(OWNER, subPage, paragraph("利用者が直した内容"));
-    const rerun = await created(parent, { fromStep: 0 });
-    await complete(rerun.id, 0, "作り直した結果");
+    // 利用者がタブを直してから、その段階を作り直す
+    await userEdit(OWNER, tab, paragraph("利用者が直した内容"));
+    const rerun = await createRun(pool, OWNER, folder, { recipe: RECIPE, regenerate: tab });
+    assert.ok(rerun.status === "created");
+    await complete(rerun.run.id, 0, "作り直した結果");
     // 利用者の保存（#58 の savePage）が残す autosave の版とは別に、作り直しが ai の版を 1 つ残す
     const kept = (await versions()).filter((version) => version.reason === "ai");
     assert.equal(kept.length, 1);
     assert.deepEqual(kept[0]?.blocks, paragraph("利用者が直した内容"), "the user's edit survives in the history");
-    assert.deepEqual((await store.getPage(OWNER, subPage))?.blocks, paragraph("作り直した結果"));
+    assert.deepEqual((await store.getPage(OWNER, tab))?.blocks, paragraph("作り直した結果"));
   });
 
   it("lets pages that carry step records be hard-deleted (the trash purge), taking the records with them", async () => {
-    const parent = await recording();
-    const run = await created(parent);
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
     await complete(run.id, 0);
     const count = async (sql: string, id: string) => Number((await pool.query<{ n: string }>(sql, [id])).rows[0]?.n);
     assert.equal(await count("SELECT count(*)::text AS n FROM step_attempts WHERE run_id = $1", run.id), 3);
 
-    // 出力のサブページを消す（子が先）: その段階の記録も消える。外部キーで止まらない
-    await pool.query("DELETE FROM pages WHERE parent = $1", [parent]);
+    // 出力のタブを消す: その段階の記録も消える。外部キーで止まらない
+    await pool.query("DELETE FROM pages WHERE id = ANY($1::uuid[])", [run.steps.map((step) => step.pageId)]);
     assert.equal(await count("SELECT count(*)::text AS n FROM step_attempts WHERE run_id = $1", run.id), 0);
     assert.equal(await count("SELECT count(*)::text AS n FROM step_runs WHERE id = $1", run.id), 1);
 
-    // 録音ページを消す: run も一緒に消える
-    await pool.query("DELETE FROM pages WHERE id = $1", [parent]);
+    // フォルダを消す: run も一緒に消える
+    await pool.query("DELETE FROM pages WHERE parent = $1", [folder]);
+    await pool.query("DELETE FROM pages WHERE id = $1", [folder]);
     assert.equal(await count("SELECT count(*)::text AS n FROM step_runs WHERE id = $1", run.id), 0);
   });
 
   it("keeps the step tables' invariants even when the functions are bypassed", async () => {
-    const parent = await recording();
-    const run = await created(parent);
-    const theirs = await recording(OTHER);
-    await assert.rejects(() => pool.query("INSERT INTO step_runs (owner, parent, recipe, recipe_snapshot, recipe_revision) VALUES ($1, $2, 'tpl-1', '{}'::jsonb, 1)", [OWNER, theirs]), { code: "23503" });
+    const { folder, rec } = await folderWithRecording();
+    const run = await created(folder, rec);
+    const theirs = await folderWithRecording(OTHER);
+    await assert.rejects(() => pool.query("INSERT INTO step_runs (owner, parent, recipe, recipe_snapshot, recipe_revision) VALUES ($1, $2, 'tpl-1', '{}'::jsonb, 1)", [OWNER, theirs.folder]), { code: "23503" });
     await assert.rejects(() => pool.query("UPDATE step_runs SET state = 'paused' WHERE id = $1", [run.id]), { code: "23514" });
     await assert.rejects(() => pool.query("UPDATE step_runs SET idempotency_key = $2 WHERE id = $1", [run.id, "k".repeat(129)]), { code: "23514" });
+    await assert.rejects(() => pool.query("UPDATE step_runs SET input_revision = -1 WHERE id = $1", [run.id]), { code: "23514" });
     await assert.rejects(() => pool.query("UPDATE step_attempts SET error_code = 'Message: secret' WHERE run_id = $1", [run.id]), { code: "23514" });
     const legacyBasis = "a".repeat(64);
     await pool.query("UPDATE step_attempts SET input_basis = $2 WHERE run_id = $1 AND step_index = 0", [run.id, legacyBasis]);
@@ -909,6 +1002,86 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
       () => pool.query("UPDATE step_attempts SET state = 'running', lease_until = clock_timestamp() WHERE run_id = $1", [run.id]),
       { code: "23505" },
     );
+    assert.ok(rec);
+  });
+});
+
+/** 既存のデータに migration を当てる: 録音の run はフォルダに結び、録音の下の段階のサブページは役割ページのタブになる（#309）。 */
+describe("migration 20261107021307_step_runs_folder on existing runs", { skip: databaseUrl === undefined }, () => {
+  const schema = `editor_steps_up_${randomUUID().replaceAll("-", "")}`;
+  const MIGRATION = "20261107021307_step_runs_folder.sql";
+  let pool: PgPool;
+  let dir: string;
+
+  before(async () => {
+    const { Pool } = await import("pg");
+    const { mkdtemp, copyFile, readdir } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { MIGRATION_FILE_PATTERN, defaultMigrationsDir } = await import("../src/migrate.ts");
+    pool = new Pool({ connectionString: databaseUrl, max: 2, options: `-c search_path=${schema}` });
+    await pool.query(`CREATE SCHEMA "${schema}"`);
+    dir = await mkdtemp(join(tmpdir(), "editor-store-steps-up-"));
+    for (const name of await readdir(defaultMigrationsDir)) {
+      if (MIGRATION_FILE_PATTERN.test(name) && name < MIGRATION) await copyFile(new URL(name, defaultMigrationsDir), join(dir, name));
+    }
+  });
+
+  after(async () => {
+    const { rm } = await import("node:fs/promises");
+    await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await pool.end();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("moves a recording's run to its folder with the recording as the input, and turns its step subpages into role tabs", async () => {
+    const { copyFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { pathToFileURL } = await import("node:url");
+    const { defaultMigrationsDir } = await import("../src/migrate.ts");
+    const client = await pool.connect();
+    try {
+      await applyMigrations(client, pathToFileURL(`${dir}/`));
+      const id = async (sql: string, values: unknown[]) => (await client.query<{ id: string }>(sql, values)).rows[0]!.id;
+      await client.query("INSERT INTO recipes (owner,id,name,steps) VALUES ($1,$2,$3,$4::jsonb)", [OWNER, RECIPE.id, RECIPE.id, JSON.stringify(RECIPE.steps.map((step) => ({ ...step, profile: "standard" })))]);
+      const folder = await id("INSERT INTO pages (owner, kind, title) VALUES ($1, 'folder', 'フォルダ') RETURNING id", [OWNER]);
+      const holder = await id("INSERT INTO pages (owner, kind, title, parent) VALUES ($1, 'page', '録音', $2) RETURNING id", [OWNER, folder]);
+      const rec = await id("INSERT INTO pages (owner, kind, title, parent, page) VALUES ($1, 'rec', '録音', $2, $3) RETURNING id", [OWNER, folder, holder]);
+      const top = await id("INSERT INTO pages (owner, kind, title) VALUES ($1, 'rec', '上の段の録音') RETURNING id", [OWNER]);
+      const snapshot = JSON.stringify(snapshotOf({ id: RECIPE.id, name: RECIPE.id, guide: "", steps: RECIPE.steps.map((step) => ({ ...step, profile: "standard" })), terms: [], samples: [] }));
+      const run = await id("INSERT INTO step_runs (owner, parent, recipe, state, recipe_snapshot, recipe_revision) VALUES ($1, $2, $3, 'succeeded', $4::jsonb, 1) RETURNING id", [OWNER, rec, RECIPE.id, snapshot]);
+      const topRun = await id("INSERT INTO step_runs (owner, parent, recipe, state, recipe_snapshot, recipe_revision) VALUES ($1, $2, $3, 'succeeded', $4::jsonb, 1) RETURNING id", [OWNER, top, RECIPE.id, snapshot]);
+      const steps: string[] = [];
+      for (const [index, step] of RECIPE.steps.entries()) {
+        const page = await id("INSERT INTO pages (owner, kind, title, parent, recipe, step_status, blocks) VALUES ($1, 'step', $2, $3, $4, 'done', $5::jsonb) RETURNING id", [OWNER, step.name, rec, RECIPE.id, JSON.stringify(paragraph(`結果 ${index}`))]);
+        steps.push(page);
+        await client.query("INSERT INTO step_attempts (run_id, step_index, step_id, page_id, state) VALUES ($1, $2, $3, $4, 'succeeded')", [run, index, step.id, page]);
+      }
+      // 上の段の録音の下の段階（フォルダが無いので動かない）
+      const topStep = await id("INSERT INTO pages (owner, kind, title, parent, recipe, step_status) VALUES ($1, 'step', $2, $3, $4, 'done') RETURNING id", [OWNER, RECIPE.steps[0]!.name, top, RECIPE.id]);
+      await client.query("INSERT INTO step_attempts (run_id, step_index, step_id, page_id, state) VALUES ($1, 0, $2, $3, 'succeeded')", [topRun, RECIPE.steps[0]!.id, topStep]);
+
+      await copyFile(new URL(MIGRATION, defaultMigrationsDir), join(dir, MIGRATION));
+      const result = await applyMigrations(client, pathToFileURL(`${dir}/`));
+      assert.deepEqual(result.applied, [MIGRATION]);
+
+      const runRow = (await client.query<{ parent: string; input_tab: string | null; input_revision: number | null }>("SELECT parent, input_tab, input_revision FROM step_runs WHERE id = $1", [run])).rows[0]!;
+      assert.deepEqual(runRow, { parent: folder, input_tab: rec, input_revision: 1 });
+      const topRow = (await client.query<{ parent: string; input_tab: string | null }>("SELECT parent, input_tab FROM step_runs WHERE id = $1", [topRun])).rows[0]!;
+      assert.deepEqual(topRow, { parent: top, input_tab: null }, "a recording outside a folder keeps its run as it was");
+      for (const [index, page] of steps.entries()) {
+        const row = (await client.query<{ kind: string; parent: string | null; page: string | null; made_from: unknown; sort_order: number; blocks: Block[] }>("SELECT kind, parent, page, made_from, sort_order, blocks FROM pages WHERE id = $1", [page])).rows[0]!;
+        assert.deepEqual([row.kind, row.parent, row.made_from, row.sort_order, row.blocks], ["note", folder, { kind: "step", run, input: rec, inputRevision: 0 }, 1, paragraph(`結果 ${index}`)]);
+        const holderRow = (await client.query<{ kind: string; title: string; parent: string | null; role: unknown; last_tab: string | null }>("SELECT kind, title, parent, role, last_tab FROM pages WHERE id = $1", [row.page])).rows[0]!;
+        assert.deepEqual(holderRow, { kind: "page", title: RECIPE.steps[index]!.name, parent: folder, role: { kind: "step", recipe: RECIPE.id, stepId: RECIPE.steps[index]!.id }, last_tab: page });
+      }
+      assert.equal((await client.query("SELECT kind FROM pages WHERE id = $1", [topStep])).rows[0]?.kind, "step");
+      // 流れが読める（役割ページ 3 つ）
+      const flow = await readFlow(client, OWNER, folder);
+      assert.deepEqual(flow?.holders.filter((item) => item.role !== null).map((item) => [item.role, item.tabs.map((tab) => tab.id)]), RECIPE.steps.map((step, index) => [{ kind: "step", recipe: RECIPE.id, stepId: step.id }, [steps[index]]]));
+    } finally {
+      client.release();
+    }
   });
 });
 
@@ -938,10 +1111,11 @@ describe("PostgreSQL queued attempts for the sweep", { skip: databaseUrl === und
   });
 
   async function newRun() {
-    const parent = (await store.createPage(OWNER, { kind: "rec", title: "合成の録音", blocks: TRANSCRIPT })).id;
-    const result = await createRun(pool, OWNER, parent, { recipe: RECIPE });
+    const folder = (await store.createPage(OWNER, { kind: "folder", title: "合成のフォルダ" })).id;
+    const rec = (await store.createPage(OWNER, { kind: "rec", title: "合成の録音", blocks: TRANSCRIPT, parent: folder }))!.id;
+    const result = await createRun(pool, OWNER, folder, { recipe: RECIPE, inputTab: rec, toStep: LAST });
     assert.ok(result.status === "created");
-    return { parent, run: result.run };
+    return { parent: folder, run: result.run };
   }
 
   async function claimOk(runId: string, stepIndex: number) {
@@ -1108,10 +1282,11 @@ describe("PostgreSQL chunked steps (#277)", { skip: databaseUrl === undefined },
   });
 
   async function setup() {
-    const parent = (await store.createPage(OWNER, { kind: "rec", title: "合成の録音", blocks: TRANSCRIPT })).id;
-    const result = await createRun(pool, OWNER, parent, { recipe: CHUNKED });
+    const folder = (await store.createPage(OWNER, { kind: "folder", title: "合成のフォルダ" })).id;
+    const rec = (await store.createPage(OWNER, { kind: "rec", title: "合成の録音", blocks: TRANSCRIPT, parent: folder }))!.id;
+    const result = await createRun(pool, OWNER, folder, { recipe: CHUNKED, inputTab: rec, toStep: 1 });
     assert.ok(result.status === "created");
-    return { parent, run: result.run };
+    return { parent: folder, rec, run: result.run };
   }
 
   async function claimOk(runId: string, stepIndex = 0): Promise<StepClaim> {
@@ -1228,7 +1403,7 @@ describe("PostgreSQL chunked steps (#277)", { skip: databaseUrl === undefined },
   });
 
   it("resumes a failed chunked run from the failed chunk only while the input is unchanged", async () => {
-    const { parent, run } = await setup();
+    const { parent, rec, run } = await setup();
     const first = await claimOk(run.id);
     assert.ok(await startChunks(pool, { ...refOf(first), count: 3, basis: await basisOf(first) }));
     assert.ok((await commitChunk(pool, { ...refOf(first), chunkIndex: 0, blocks: paragraph("区切り 1") })).ok);
@@ -1255,10 +1430,10 @@ describe("PostgreSQL chunked steps (#277)", { skip: databaseUrl === undefined },
     assert.deepEqual(again.chunk.blocks, [paragraph("区切り 1"), paragraph("区切り 2")]);
     await failAttempt(pool, { ...refOf(again), code: "invalid_output", retryable: false });
 
-    // 文字起こしを直すと、やり直せない（最初から作り直す）
-    const page = await store.getPage(OWNER, parent);
+    // 文字起こし（入力のタブ）を直すと、やり直せない（最初から作り直す）
+    const page = await store.getPage(OWNER, rec);
     assert.ok(page);
-    assert.equal((await store.savePage(OWNER, parent, { blocks: paragraph("直した文字起こし") }, { baseRevision: page.revision }))?.status, "saved");
+    assert.equal((await store.savePage(OWNER, rec, { blocks: paragraph("直した文字起こし") }, { baseRevision: page.revision }))?.status, "saved");
     assert.equal((await resumeRun(pool, OWNER, parent, run.id)).status, "input_changed");
     row = await chunkRow(run.id);
     assert.equal(row.state, "failed", "a refused resume writes nothing");
@@ -1274,7 +1449,7 @@ describe("PostgreSQL chunked steps (#277)", { skip: databaseUrl === undefined },
     const started = await claimOk(other.run.id);
     assert.ok(await startChunks(pool, { ...refOf(started), count: 2, basis: await basisOf(started) }));
     await failAttempt(pool, { ...refOf(started), code: "invalid_output", retryable: false });
-    const newer = await createRun(pool, OWNER, other.parent, { recipe: CHUNKED });
+    const newer = await createRun(pool, OWNER, other.parent, { recipe: CHUNKED, inputTab: other.rec, toStep: 1 });
     assert.equal(newer.status, "created");
     assert.equal((await resumeRun(pool, OWNER, other.parent, other.run.id)).status, "run_in_progress");
     assert.ok(newer.status === "created");

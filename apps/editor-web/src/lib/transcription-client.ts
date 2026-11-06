@@ -26,6 +26,8 @@ export type StartTranscriptionInput = {
   diarize?: boolean;
   replace?: boolean;
   terms?: string[];
+  /** 使うエンジン（流れの「文字起こし 作成 ▾」。#309。無ければ設定の既定）。 */
+  engine?: string;
 };
 
 /** API の失敗。`error` と `reason` はサーバーの短い code（`cannot_start`・`has_transcript`・`transcription_unavailable` など）。 */
@@ -89,6 +91,7 @@ export async function startTranscription(
   if (input.diarize !== undefined) body.diarize = input.diarize;
   if (input.replace !== undefined) body.replace = input.replace;
   if (input.terms !== undefined) body.terms = input.terms;
+  if (input.engine !== undefined) body.engine = input.engine;
   const response = await fetchImpl(pagePath(pageId, "transcribe"), {
     method: "POST",
     headers: { "content-type": "application/json" },

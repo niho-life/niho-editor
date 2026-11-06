@@ -45,7 +45,7 @@ import {
 import { usePageHistory } from "@/lib/use-page-history";
 import { AI_GRAY_ITEM, usePageMenu, type AttachedPage, type PageMenuLocalItem } from "@/lib/use-page-menu";
 import { setAiGray, useAiGray } from "@/lib/ai-gray";
-import type { AttachedAiSteps } from "@/lib/attached-page";
+import type { AttachedAiSteps, AttachedFlow } from "@/lib/attached-page";
 import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
 import { usePageShare } from "@/lib/use-page-share";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
@@ -96,8 +96,18 @@ export type OpenedDetails = {
   recordingSec?: number | null;
 };
 
-/** 手順（#37）のサブページ。帯（./PageSteps.tsx）が読んだ run から渡す。 */
-export type FrameStepPage = { id: string; title: string; stepStatus: StepStatus | null };
+/** 流れ（#309。./FlowWatcher.tsx）が読んだフォルダの入れ物・タブ・フォルダ。一覧の行の印を替え、まだ無い行を足す。 */
+export type FrameFlowPage = {
+  id: string;
+  title: string;
+  kind: PageKind;
+  parent: string | null;
+  /** タブなら入れ物（#307）。 */
+  page: string | null;
+  stepStatus: StepStatus | null;
+  tabName?: string | null;
+  tabPos?: number;
+};
 
 /** ページの画面から枠（一覧・ヘッダー）へ知らせること。 */
 export type EditorFrameApi = {
@@ -114,10 +124,10 @@ export type EditorFrameApi = {
   /** ページをゴミ箱へ入れた。一覧から、そのページと子孫（読み込んである分）を外す。 */
   pageRemoved: (id: string) => void;
   /**
-   * 手順が進んだ（#37）。一覧の行の印（stepStatus）を替え、まだ読み込んでいないサブページは親の下に足す。
-   * 並びは arrangeSidebarItems が作った順に揃える（段階の順になるよう、足す行の createdAt を段階の順にする）。
+   * 流れが進んだ（#309）。一覧の行の印（stepStatus）・親・入れ物を替え、まだ読み込んでいない入れ物・タブ・フォルダは足す
+   * （段階の実行が足したタブ、フォルダに包まれた入れ物）。並びは arrangeSidebarItems が作った順に揃える。
    */
-  stepPagesChanged: (parentId: string, steps: readonly FrameStepPage[]) => void;
+  flowPagesChanged: (pages: readonly FrameFlowPage[]) => void;
   /**
    * 開いているページ（エディタ）を枠に登録する。ヘッダーの状態の丸と「…」がこれを使う。
    * 保存の状態が変わるたびに登録し直し、画面を離れたら返す関数で外す（後から登録したページは外さない）。
@@ -130,8 +140,10 @@ export type EditorFrameApi = {
    * ページを閉じるときは null（帯は出したままで、押しても何もしない）。
    */
   registerTools: (tools: PageChromeTools | null) => void;
-  /** PageSteps の既存 state/start を右レールの AI へ共有する。登録元が外れたら返す関数で外す。 */
+  /** 流れ（FlowWatcher）の工程の状態と開始を右レールの AI へ共有する。登録元が外れたら返す関数で外す。 */
   registerAiSteps: (steps: AttachedAiSteps) => () => void;
+  /** 「ページ」パネルの流れ（#309）を登録する。登録元が外れたら返す関数で外す。 */
+  registerFlow: (flow: AttachedFlow) => () => void;
   /** 公開のシートを開く（ページを開いている画面だけで出る）。 */
   openPublish: () => void;
   /** 「写真」のパネルで写真を上げている途中か（何も足していないページを捨てる判定に使う）。 */
@@ -156,8 +168,9 @@ const FrameContext = createContext<EditorFrameApi>({
   registerPageSaver: () => noop,
   registerTools: noop,
   registerAiSteps: () => noop,
+  registerFlow: () => noop,
   pageRemoved: noop,
-  stepPagesChanged: noop,
+  flowPagesChanged: noop,
   attachPage: () => noop,
   openPublish: noop,
   photosUploading: () => false,
@@ -484,6 +497,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const attachedRef = useRef<AttachedPage | null>(null);
   const [aiSteps, setAiSteps] = useState<AttachedAiSteps | null>(null);
   const aiStepsRef = useRef<AttachedAiSteps | null>(null);
+  // 「ページ」パネルの流れ（開いているタブの FlowWatcher が登録する）
+  const [flow, setFlow] = useState<AttachedFlow | null>(null);
+  const flowRef = useRef<AttachedFlow | null>(null);
   // 版に戻して開き直したページ。そのページが登録し直したとき、フォーカスが外れていたら「…」へ戻す
   const refocusRef = useRef<string | null>(null);
   // 「写真」のパネルで上げている途中か
@@ -657,6 +673,15 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           setAiSteps(null);
         };
       },
+      registerFlow: (next) => {
+        flowRef.current = next;
+        setFlow(next);
+        return () => {
+          if (flowRef.current !== next) return;
+          flowRef.current = null;
+          setFlow(null);
+        };
+      },
       pageRemoved: (id) => {
         setRemovedTick((tick) => tick + 1);
         setList((current) => {
@@ -666,36 +691,39 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           return { ...current, pages, gone, opened: current.opened && gone.has(current.opened.id) ? null : current.opened };
         });
       },
-      stepPagesChanged: (parentId, steps) =>
+      flowPagesChanged: (flowPages) =>
         setList((current) => {
           const known = new Map(current.pages.map((page) => [page.id, page]));
-          const parent = known.get(parentId);
           let moved = false;
           const pages = current.pages.map((page) => {
-            const step = steps.find((item) => item.id === page.id);
-            if (!step || page.stepStatus === step.stepStatus) return page;
+            const next = flowPages.find((item) => item.id === page.id);
+            if (!next) return page;
+            const samePlace = (page.parent ?? null) === next.parent && (page.page ?? null) === next.page;
+            if (page.stepStatus === next.stepStatus && samePlace) return page;
             moved = true;
-            return { ...page, stepStatus: step.stepStatus };
+            return { ...page, stepStatus: next.stepStatus, parent: next.parent, page: next.page };
           });
           const at = Date.now();
-          const added = steps
-            // サブページがゴミ箱に入っている段階（stepStatus が null）の行は作らない。実行の記録（attempt）は残るので
-            // 再読み込みのあとに run から届くが、押しても 404 のページへ行くだけ。作り直しの導線は帯が持つ
-            .filter((step) => step.stepStatus !== null && !known.has(step.id) && !current.gone.has(step.id))
-            .map((step, index): PageSummary => {
+          const added = flowPages
+            // ゴミ箱に入れた行は作り直さない
+            .filter((item) => !known.has(item.id) && !current.gone.has(item.id))
+            .map((item, index): PageSummary => {
               const created = new Date(at + index).toISOString();
               return {
-                id: step.id,
-                kind: "step",
-                title: step.title,
-                lang: parent?.lang ?? "ja",
-                parent: parentId,
-                stepStatus: step.stepStatus,
-                // 手順のサブページは段の順（作った順）に並ぶので、手動の並びは持たない
+                id: item.id,
+                kind: item.kind,
+                title: item.title,
+                lang: known.get(item.parent ?? "")?.lang ?? "ja",
+                parent: item.parent,
+                page: item.page,
+                stepStatus: item.stepStatus,
+                // 段階の出力は作った順に並ぶので、手動の並びは持たない
                 sortOrder: 0,
                 createdAt: created,
                 updatedAt: created,
                 publication: null,
+                ...(item.tabName === undefined ? {} : { tabName: item.tabName }),
+                ...(item.tabPos === undefined ? {} : { tabPos: item.tabPos }),
               };
             });
           if (!moved && added.length === 0) return current;
@@ -1173,7 +1201,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               />
             ) : undefined
           }
-          page={railSummary ? <PagePanel steps={aiSteps?.ownerId === railId ? aiSteps : null} onClose={() => closePanel("page")} drag={!narrow} /> : undefined}
+          page={railSummary ? <PagePanel flow={flow?.ownerId === railId ? flow : null} onClose={() => closePanel("page")} drag={!narrow} /> : undefined}
           photos={photos}
           dock={{
             wide: !narrow,
