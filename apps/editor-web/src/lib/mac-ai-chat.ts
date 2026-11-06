@@ -27,6 +27,7 @@ export const MAC_AI_ERROR_TEXT = {
   timed_out: "CLI が時間内に終わりませんでした。ページには反映していません。",
   session: "CLI で前の会話の続きを見つけられませんでした。ページには反映していません。新しい会話で頼んでください。",
   failed: "CLI の依頼を終えられませんでした。ページには反映していません。",
+  context: "文書ガイドなど、AI に渡す資料を読めませんでした。ページには反映していません。もう一度お試しください。",
 } as const;
 
 export type MacAiErrorCode = keyof typeof MAC_AI_ERROR_TEXT;
@@ -151,6 +152,8 @@ export async function runMacAiTurn(input: {
   model: string;
   page: { pageId: string; title: string; markdown: string };
   selection: string | null;
+  /** 読むだけの文脈（`context/<name>.md`。あなたについて・この録音について・文書ガイド・固有名詞）。サーバー経路が指示に入れるものと同じ。 */
+  context?: readonly { name: string; title: string; markdown: string }[];
   instruction: string;
   conversationId: string | null;
   resumeSession: string | null;
@@ -166,6 +169,8 @@ export async function runMacAiTurn(input: {
       (input.selection !== null && new TextEncoder().encode(input.selection).byteLength > 64 * 1024)) {
     throw new MacAiError("too_large");
   }
+  // 文脈のファイル（選択範囲は別名 `selection`。文脈の名前と重ならない）
+  const files = [...(input.context ?? []), ...(input.selection === null ? [] : [{ name: "selection", title: "選択範囲", markdown: input.selection }])];
   const turnId = crypto.randomUUID();
   let retryStopOnEvent = false;
   const stop = () => {
@@ -183,7 +188,7 @@ export async function runMacAiTurn(input: {
       ...(input.resumeSession ? { resumeSession: input.resumeSession } : {}),
       instruction: input.selection === null ? input.instruction : `${input.instruction}\n\n選択範囲を主な対象にしてください。選択範囲は context/selection.md にあります。`,
       page: input.page,
-      ...(input.selection === null ? {} : { context: [{ name: "selection", title: "選択範囲", markdown: input.selection }] }),
+      ...(files.length === 0 ? {} : { context: files }),
     }, (envelope) => {
       if (!envelope || envelope.turnId !== turnId || !Number.isSafeInteger(envelope.seq) || envelope.seq <= lastSeq) return;
       lastSeq = envelope.seq;

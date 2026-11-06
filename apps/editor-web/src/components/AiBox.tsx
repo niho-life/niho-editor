@@ -14,6 +14,7 @@ import type { AiDiffState, AttachedAi, AttachedAiStep, AttachedAiSteps } from "@
 import {
   AiConflictError,
   AiRequestError,
+  fetchAiChatContext,
   getAiChat,
   listAiChats,
   recordDeviceAiChat,
@@ -257,7 +258,7 @@ export type AiPanelProps = {
   placement?: AiPanelPlacement;
   /** AI がページを書き換えた・元に戻した（右に並べたページを読み直すため）。直したページの id。 */
   onPagesChanged?: (pageIds: readonly string[]) => void;
-  /** 入力欄の上の「読むもの」（このページ・この録音について・元の録音・同じフォルダの N ページ）。無ければ出さない。 */
+  /** 入力欄の上の「読むもの」（このページ・この録音について・文書ガイド・元の録音・同じフォルダの N ページ）。無ければ出さない。 */
   reads?: AiReads | null;
 };
 
@@ -268,13 +269,18 @@ export type AiPanelProps = {
 export type AiReads = {
   kind: "note" | "rec" | "step" | "article";
   folder: { title: string; others: number } | null;
+  /** 最新の run に文書ガイドがあれば、その手順の名前。チャットの指示に文書ガイドが入るときだけ札を出す（無ければ null）。 */
+  guide?: string | null;
 };
 
 /** 「読むもの」の札（文字で出す。色だけにしない）。 */
 export function aiReadsTags(reads: AiReads): { icon: "doc" | "mic" | "spark" | "folder"; text: string }[] {
   const tags: { icon: "doc" | "mic" | "spark" | "folder"; text: string }[] = [{ icon: "doc", text: "このページ" }];
-  if (reads.kind === "rec") tags.push({ icon: "mic", text: "この録音について" });
+  // 録音ページと、録音の下の段階のページ（記事本文など）には、録音の欄（この録音について）が指示に入る
+  if (reads.kind === "rec" || reads.kind === "step") tags.push({ icon: "mic", text: "この録音について" });
   if (reads.kind === "step") tags.push({ icon: "mic", text: "元の録音" }, { icon: "spark", text: "ほかの段階 · 読むだけ" });
+  // 文書ガイド（手順の run の写し）。無いものは出さない（執筆だけのページには出ない）
+  if ((reads.kind === "rec" || reads.kind === "step") && reads.guide) tags.push({ icon: "doc", text: `文書ガイド（${reads.guide}）` });
   if (reads.kind !== "step" && reads.folder && reads.folder.others > 0) tags.push({ icon: "folder", text: `${reads.folder.title || "無題"} の ${reads.folder.others} ページ` });
   return tags;
 }
@@ -631,6 +637,14 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     if (!saved || !checked || !checked.ok) throw new MacAiError("unreadable");
     const markdown = blocksToMarkdown(checked.blocks);
     if (!markdown.ok) throw new MacAiError("unreadable");
+    // サーバー経路が指示に入れる資料（あなたについて・この録音について・文書ガイド・固有名詞）を、CLI にも context/*.md で渡す。
+    // 読めないまま黙って渡さずに止める（「札に出ているのに守られない」を作らない）
+    let contextFiles: Awaited<ReturnType<typeof fetchAiChatContext>>;
+    try {
+      contextFiles = await fetchAiChatContext(target.pageId, { signal: controller.signal });
+    } catch (error) {
+      throw controller.signal.aborted || (error instanceof AiRequestError && error.code === "aborted") ? new MacAiError("aborted") : new MacAiError("context");
+    }
     editedRef.current = false;
     const resumable = resumeSession;
     const output = await runMacAiTurn({
@@ -640,6 +654,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
       effort: activeMacEffort,
       page: { pageId: target.pageId, title: saved.title, markdown: markdown.markdown },
       selection: null,
+      context: contextFiles,
       instruction: macInstruction,
       conversationId,
       resumeSession: resumable && resumable.engine === macRoute && resumable.conversationId === conversationId ? resumable.id : null,

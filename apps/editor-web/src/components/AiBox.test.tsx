@@ -112,11 +112,19 @@ function context(id = PAGE_1, overrides: Partial<AttachedAi["bridge"]> = {}, dif
   };
 }
 
+/** サーバーが返す、CLI に渡す文脈（サーバー経路の指示に入る節と同じ形）。 */
+const CONTEXT_FILES = [
+  { name: "recording", title: "この録音について", markdown: "## この録音について（資料。事実の根拠にはしない）\n<untrusted_data>\n背景:\n合成の取材\n</untrusted_data>" },
+  { name: "guide", title: "文書ガイド", markdown: "## 文書ガイド（お手本。文体・構成の指示。事実の根拠にはしない）\n<untrusted_data>\n常体でそろえる\n</untrusted_data>" },
+];
+
 function defaultServer(options: {
   list?: Response | Promise<Response>;
   get?: (id: string) => Response | Promise<Response>;
   device?: () => Response | Promise<Response>;
   chat?: (body: Record<string, unknown>, signal: AbortSignal | null | undefined) => Response | Promise<Response>;
+  /** Mac の CLI に渡す文脈（GET /ai/context）。 */
+  context?: () => Response | Promise<Response>;
 } = {}) {
   const calls: { url: string; method: string; body: Record<string, unknown>; signal?: AbortSignal | null }[] = [];
   const fetcher = vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
@@ -124,6 +132,7 @@ function defaultServer(options: {
     const method = String(init.method ?? "GET");
     const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
     calls.push({ url, method, body, signal: init.signal });
+    if (method === "GET" && url.endsWith("/ai/context")) return options.context ? await options.context() : json(200, { context: CONTEXT_FILES });
     if (method === "GET" && url.endsWith("/ai/conversations")) return await (options.list ?? json(200, { conversations: [] }));
     if (method === "GET" && url.includes("/ai/conversations/")) {
       const id = decodeURIComponent(url.split("/").at(-1)!);
@@ -207,8 +216,17 @@ describe("AI の欄の「読むもの」", () => {
   it("このページ／この録音について（録音）／元の録音・ほかの段階（工程）／同じフォルダの N ページを文字で出す", () => {
     expect(aiReadsTags({ kind: "note", folder: null }).map((tag) => tag.text)).toEqual(["このページ"]);
     expect(aiReadsTags({ kind: "rec", folder: { title: "鎌倉の取材", others: 2 } }).map((tag) => tag.text)).toEqual(["このページ", "この録音について", "鎌倉の取材 の 2 ページ"]);
-    expect(aiReadsTags({ kind: "step", folder: { title: "鎌倉の取材", others: 2 } }).map((tag) => tag.text)).toEqual(["このページ", "元の録音", "ほかの段階 · 読むだけ"]);
+    expect(aiReadsTags({ kind: "step", folder: { title: "鎌倉の取材", others: 2 } }).map((tag) => tag.text)).toEqual(["このページ", "この録音について", "元の録音", "ほかの段階 · 読むだけ"]);
     expect(aiReadsTags({ kind: "note", folder: { title: "鎌倉の取材", others: 0 } }).map((tag) => tag.text)).toEqual(["このページ"]);
+  });
+
+  it("文書ガイドの札は、手順の run にガイドがある録音ページ・段階のページにだけ出る（執筆だけのページには出ない）", () => {
+    const texts = (reads: Parameters<typeof aiReadsTags>[0]) => aiReadsTags(reads).map((tag) => tag.text);
+    expect(texts({ kind: "rec", folder: null, guide: "記事制作" })).toEqual(["このページ", "この録音について", "文書ガイド（記事制作）"]);
+    expect(texts({ kind: "step", folder: null, guide: "記事制作" })).toEqual(["このページ", "この録音について", "元の録音", "ほかの段階 · 読むだけ", "文書ガイド（記事制作）"]);
+    expect(texts({ kind: "rec", folder: null, guide: null })).toEqual(["このページ", "この録音について"]);
+    expect(texts({ kind: "note", folder: null, guide: "記事制作" })).toEqual(["このページ"]);
+    expect(texts({ kind: "article", folder: null, guide: "記事制作" })).toEqual(["このページ"]);
   });
 
   it("入力欄の上に「読むもの」の札を出す", async () => {
@@ -322,6 +340,24 @@ describe("AiPanel", () => {
     expect(ai.bridge.replace).toHaveBeenCalledWith(expect.objectContaining({ title: latest.title, blocks: latest.blocks, revision: latest.revision }), { saved: false });
   });
 
+  it("does not run the Mac CLI when the context (document guide etc.) cannot be read", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const aiTurn = vi.fn();
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-5"], effort: true, resume: true }]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    const server = defaultServer({ context: () => json(500, { error: "failed" }) });
+    await render();
+    await until(() => enginePill()?.textContent?.includes("Codex CLI") ?? false);
+    setValue("端末で直す");
+    await press("Enter");
+    await until(() => container!.textContent!.includes("AI に渡す資料を読めませんでした"));
+    expect(aiTurn).not.toHaveBeenCalled();
+    expect(server.calls.some((call) => call.url.endsWith("/ai/chat/turns"))).toBe(false);
+  });
+
   it("runs a Mac CLI turn, records it once, and does not carry resume session into a new conversation", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     const aiTurn = vi.fn(async (turnId: string, request: Record<string, unknown>) => {
@@ -358,6 +394,9 @@ describe("AiPanel", () => {
     expect(server.calls.find((call) => call.url.endsWith("/ai/chat/turns"))?.body).toMatchObject({ input: "端末で直す", reply: "CLI の返答", engine: "cli:codex" });
     // 思考量を選んでいなければ（既定）、CLI へ送らない
     expect(aiTurn.mock.calls[0]?.[1]).not.toHaveProperty("effort");
+    // サーバー経路の指示に入る資料（この録音について・文書ガイドなど）を context/*.md として渡す
+    expect(aiTurn.mock.calls[0]?.[1]).toMatchObject({ context: CONTEXT_FILES });
+    expect(server.calls.filter((call) => call.method === "GET" && call.url.endsWith("/ai/context"))).toHaveLength(1);
 
     await click(button("新しい会話"));
     setValue("新しい会話");
@@ -656,7 +695,7 @@ describe("AiPanel", () => {
   it("attaches a real PageSteps option and reports its start result", async () => {
     defaultServer();
     const start = vi.fn(async () => ({ ok: true, message: "記事制作を開始しました" }));
-    const steps: AttachedAiSteps = { ownerId: PAGE_1, options: [{ id: "article", label: "記事制作", hint: "記事にする", disabledReason: null }], start };
+    const steps: AttachedAiSteps = { ownerId: PAGE_1, guide: null, options: [{ id: "article", label: "記事制作", hint: "記事にする", disabledReason: null }], start };
     const ai = context();
     await render(PAGE_1, ai, steps);
     await until(() => !button("工程とスキルを開く").disabled);

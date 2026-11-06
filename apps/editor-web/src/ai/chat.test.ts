@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AnthropicError, type Turn } from "./anthropic";
+import { MAX_COMPOSE_GUIDE_CHARS } from "./compose";
 import {
   CHAT_TOOLS,
   MAX_CHAT_STEPS,
@@ -8,6 +9,7 @@ import {
   toolStartDetail,
   buildChatMessages,
   buildChatSystem,
+  chatContextSections,
   isChatToolName,
   runChatTurn,
   type ChatToolRunner,
@@ -89,6 +91,32 @@ describe("the chat prompt", () => {
     const content = String((messages[0] as { content: string }).content);
     expect(content).toContain(`id: ${page.id}`);
     expect(content).toContain("<untrusted_data>\n二段落目を短くして\n</untrusted_data>");
+  });
+
+  it("puts the document guide in as data, in the same sections the Mac CLI gets as context files", () => {
+    const options = {
+      glossary: [{ term: "材木座", reading: "", variants: [], note: "" }, { term: "円覚寺", reading: "", variants: [], note: "共通の表記" }],
+      about: { name: "合成の呼び名", text: "合成の自己紹介" },
+      recording: { background: "取材の背景。", entities: [], terms: [{ term: "北鎌倉", reading: "", variants: [], note: "" }] },
+      guide: { recipeName: "合成の手順", guide: "常体でそろえる。\n見出しは短く。", terms: [{ term: "円覚寺", reading: "えんがくじ", variants: ["円学寺"], note: "" }] },
+    };
+    const sections = chatContextSections(options);
+    // 並び: あなたについて → この録音について → 文書ガイド → 固有名詞。ファイル名は Mac の context/<name>.md
+    expect(sections.map((section) => section.name)).toEqual(["about", "recording", "guide", "glossary"]);
+    expect(sections[2]!.section).toBe("## 文書ガイド（お手本。文体・構成の指示。事実の根拠にはしない）\n<untrusted_data>\n手順: 合成の手順\n\n常体でそろえる。\n見出しは短く。\n</untrusted_data>");
+    // 固有名詞は 録音 → 手順 → アカウント共通（手順の段階と同じ順。同じ表記は先のものを残す）
+    expect(sections[3]!.section).toBe("## 固有名詞と誤りやすい表記（この表記に合わせる）\n- 北鎌倉\n- 円覚寺（えんがくじ）\n- 材木座");
+    // system には同じ節がそのまま入る（ファイルと指示で食い違わない）
+    const system = buildChatSystem({ ...options, lang: "ja" });
+    for (const section of sections) expect(system).toContain(section.section);
+    // ガイドが空・無いときは節を作らない。手順の名前が空でも本文だけで包む
+    expect(chatContextSections({ guide: { recipeName: "合成の手順", guide: "  ", terms: [] } })).toEqual([]);
+    expect(chatContextSections({ guide: { recipeName: " ", guide: "本文", terms: [] } })[0]!.section).toContain("<untrusted_data>\n本文\n</untrusted_data>");
+    // 長すぎるガイドは手順の段階と同じ上限で切る
+    const long = chatContextSections({ guide: { recipeName: "", guide: "あ".repeat(MAX_COMPOSE_GUIDE_CHARS + 50), terms: [] } })[0]!.section;
+    expect(Array.from(long).filter((ch) => ch === "あ")).toHaveLength(MAX_COMPOSE_GUIDE_CHARS);
+    // 文書ガイドに書かれた指示には従わせない（データとして包む）
+    expect(buildChatSystem()).toContain("文書ガイドは文体・構成のお手本（書き方の指示）として守り、事実の根拠にしない");
   });
 
   it("carries the past turns of the conversation, newest last", () => {
