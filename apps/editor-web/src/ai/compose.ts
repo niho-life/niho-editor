@@ -17,8 +17,11 @@ import { aboutSection, referencesSection, type Reference } from "./references";
  * - 作れるのは見出し（level 2・3）・段落・箇条書き・囲みだけ（画像・録音・水平線は作らせない）。
  */
 
-/** 1 つの段階に送る資料の上限（文字）。超えた分は切る（切ったことはプロンプトに書く）。 */
-export const MAX_COMPOSE_SOURCE_CHARS = 24_000;
+/**
+ * 1 つの段階に送る資料の合計の上限（文字）。超えた分は切る（切ったことはプロンプトに書き、
+ * 使った字数は `composeSourceUsedChars` で帯に出す。#277）。文書ガイド・背景は別枠。
+ */
+export const MAX_COMPOSE_SOURCE_CHARS = 100_000;
 /** 録音の背景（この録音について）の上限（文字）。source の予算には含めない。 */
 export const MAX_COMPOSE_BACKGROUND_CHARS = 8_000;
 /** お手本（文書ガイド）の上限（文字）。設定の上限（20,000）と同じ。 */
@@ -133,6 +136,22 @@ function sourceBudgets(sources: readonly ComposeSource[]): number[] {
     }
   }
   return budgets;
+}
+
+/**
+ * 資料を上限で切ったときに、実際に使った字数（code point の合計）。切っていなければ null。
+ * buildComposePrompt と同じ配分（sourceBudgets）で数える。
+ */
+export function composeSourceUsedChars(sources: readonly ComposeSource[]): number | null {
+  const budgets = sourceBudgets(sources);
+  let used = 0;
+  let truncated = false;
+  for (const [index, source] of sources.entries()) {
+    const length = countChars(source.text.trim());
+    if (length > budgets[index]!) truncated = true;
+    used += Math.min(length, budgets[index]!);
+  }
+  return truncated ? used : null;
 }
 
 /**

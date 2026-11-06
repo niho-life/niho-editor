@@ -84,6 +84,23 @@ describe("steps-view（手順の帯の見た目）", () => {
     ]);
   });
 
+  it("資料を上限で切って作った段階には、使った字数を済みの言葉に続けて出す（#277。切っていない・古い run は出さない）", () => {
+    const view = run({
+      state: "succeeded",
+      steps: [
+        step(0, { state: "succeeded", stepStatus: "done", inputUsedChars: 100_000 }),
+        step(1, { state: "succeeded", stepStatus: "done" }),
+        step(2, { state: "succeeded", stepStatus: "stale", inputUsedChars: 100_000 }),
+      ],
+    });
+    expect(stepBandSteps(view)).toEqual([
+      { id: "page-0", label: "文字起こし修正", state: "done", notice: "済み · 入力が長いので先頭 100,000 字だけ使いました" },
+      { id: "page-1", label: "記事方針", state: "done" },
+      // 前提変更の印が先（作り直せば字数も測り直す）
+      { id: "page-2", label: "記事本文", state: "stale" },
+    ]);
+  });
+
   it("動いているかどうかで、読み直すかを決める", () => {
     expect(isStepRunActive(null)).toBe(false);
     expect(isStepRunActive(run({ state: "queued" }))).toBe(true);

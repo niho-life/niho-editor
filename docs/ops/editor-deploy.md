@@ -109,7 +109,7 @@ migration は expand → contract（列の削除は配備の 1 つ後）。適�
 
 ## 7. 本番の起点（公開境界）
 
-[release-boundary.md](../architecture/release-boundary.md) の「公開 CI に本番秘密値・Cloud Run 権限を置かない。公開リポからの push で本番配備を直接起動しない」を守る。
+[editor-release-boundary.md](../architecture/editor-release-boundary.md)（オーナー決定 2026-11-06）の「本番反映の起点はこのリポジトリ側。鍵と配備の権限を GitHub に置かない。公開リポからの push で本番配備を直接起動しない」を守る。
 
 - 公開 CI（[editor-web-ci.yml](../../.github/workflows/editor-web-ci.yml)）は secret なし・合成データ・GitHub-hosted runner で、型検査・テスト・build・image の build までを確かめる。
 - 本番への配備は、権限のある gcloud ログインを持つオーナーが手元で `deploy.sh` を実行する。GitHub Actions からは配備しない（OIDC の Workload Identity も作らない）。
@@ -196,7 +196,7 @@ $2／100 万トークンで **1 回あたり $0.04〜0.06**）。フォルダが
 
 手順（記事制作・議事録・インサイト整理）の段階を、画面を閉じても進むようにサーバー側で実行する。方式は [editor-steps-execution.md](../architecture/editor-steps-execution.md) の B（§5.2 実行・§5.5 費用）。
 
-**段階は本物の AI（§10 と同じ Anthropic の鍵・モデル・月の上限）で実行する。** 実行器を偽物に戻さないこと（戻すと `[fake]` の印の付いた文書がページに書かれる）。この約束は `apps/editor-web/src/server/steps-deps.test.ts` が守っていて、偽物に差し替えると CI が落ちる。 1 段階 = モデルの 1 往復で、資料は段階 1 が録音ページの本文、それ以降は前の段階の結果（合わせて 24,000 文字まで。超えた分は先頭だけ送る）。作られるのは見出し・段落・箇条書き・囲みだけ。配線は `apps/editor-web/src/server/steps-deps.ts` の 1 か所。
+**段階は本物の AI（§10 と同じ Anthropic の鍵・モデル・月の上限）で実行する。** 実行器を偽物に戻さないこと（戻すと `[fake]` の印の付いた文書がページに書かれる）。この約束は `apps/editor-web/src/server/steps-deps.test.ts` が守っていて、偽物に差し替えると CI が落ちる。 1 段階 = モデルの 1 往復で、資料は段階 1 が録音ページの本文、それ以降は前の段階の結果（合わせて 100,000 文字まで。文書ガイド・背景は別枠。超えた分は先頭だけ送り、帯の段階の行に「入力が長いので先頭 N 字だけ使いました」を出す。#277）。作られるのは見出し・段落・箇条書き・囲みだけ。配線は `apps/editor-web/src/server/steps-deps.ts` の 1 か所。
 **`EDITOR_AI_MODE` が無効なあいだ、段階は `ai_unavailable` で失敗する**（手順を使うなら §10 の AI も有効にする）。開発と CI の `EDITOR_AI_MODE=fake` では偽物の 1 往復（`[fake]` の印が付く）で、本番では偽物を受け付けない。
 
 ### 構成

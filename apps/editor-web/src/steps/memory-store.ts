@@ -46,6 +46,7 @@ type MemoryAttempt = {
   leaseUntil: number | null;
   errorCode: string | null;
   partialBlocks: Block[] | null;
+  inputUsedChars: number | null;
   inputBasis: StepBasis | string | null;
   finishedAt: number | null;
 };
@@ -143,6 +144,7 @@ export class MemoryStepRunStore implements StepRunStore {
         ...(run.state === "failed" && attempt.state === "failed" && attempt.partialBlocks && attempt.partialBlocks.length > 0 && this.#page(run.owner, attempt.pageId)
           ? { hasPartialOutput: true }
           : {}),
+        ...(attempt.state === "succeeded" && attempt.inputUsedChars !== null ? { inputUsedChars: attempt.inputUsedChars } : {}),
       })),
     };
   }
@@ -239,6 +241,7 @@ export class MemoryStepRunStore implements StepRunStore {
         leaseUntil: null,
         errorCode: null,
         partialBlocks: null,
+        inputUsedChars: null,
         inputBasis: null,
         finishedAt: index < fromStep ? this.#now() : null,
       })),
@@ -364,6 +367,7 @@ export class MemoryStepRunStore implements StepRunStore {
     attempt.leaseUntil = Date.now() + (options.leaseSeconds ?? DEFAULT_LEASE_SECONDS) * 1000;
     attempt.errorCode = null;
     attempt.partialBlocks = null;
+    attempt.inputUsedChars = null;
     run.state = "running";
     this.#setStatus(run.owner, attempt.pageId, "run");
     return {
@@ -411,6 +415,7 @@ export class MemoryStepRunStore implements StepRunStore {
     page.stepStatus = "done";
     attempt.state = "succeeded";
     attempt.inputBasis = input.inputBasis;
+    attempt.inputUsedChars = input.inputUsedChars ?? null;
     attempt.leaseUntil = null;
     attempt.finishedAt = this.#now();
     const next = run.attempts[input.stepIndex + 1];

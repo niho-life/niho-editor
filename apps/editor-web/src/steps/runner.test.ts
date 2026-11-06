@@ -140,6 +140,16 @@ describe("runAttempt", () => {
     expect((await view())?.steps[0]?.errorCode).toBe("output_too_long");
   });
 
+  it("資料を切ったときは、使った字数を確定した段階に残す（#277）", async () => {
+    const executor: StepExecutor = {
+      run: async (input) => ({ ...(await fakeExecutor.run(input)), ...(input.stepIndex === 1 ? { inputUsedChars: 100_000 } : {}) }),
+    };
+    const { start, drainAll, view } = await setup(executor);
+    await start();
+    await drainAll();
+    expect((await view())?.steps.map((step) => step.inputUsedChars)).toEqual([undefined, 100_000, undefined]);
+  });
+
   it("もう一度積み直すときは、書きかけを残さない（次の試行が書き直す）", async () => {
     const partial = [{ type: "paragraph", content: [{ type: "text", text: "途中" }] }];
     const executor: StepExecutor = { run: () => Promise.reject(new StepError("ai_timeout", true, partial)) };

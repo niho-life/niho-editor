@@ -328,6 +328,24 @@ describe("PageSteps（手順の帯）", () => {
     expect(api.calls.length).toBe(read);
   });
 
+  it("資料を上限で切った段階は、帯の段階の行に使った字数を出す（#277）", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("記事にする");
+    await settle();
+    await unmount();
+    await api.work({ async run(input) {
+      return { blocks: fakeBlocks(input), ...(input.stepIndex === 1 ? { inputUsedChars: 100_000 } : {}) };
+    } });
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    expect(band()).toEqual([
+      { label: "文字起こし修正", say: "済み", state: "done" },
+      { label: "記事方針", say: "済み · 入力が長いので先頭 100,000 字だけ使いました", state: "done" },
+      { label: "記事本文", say: "済み", state: "done" },
+    ]);
+  });
+
   it("受入: 上流のサブページを直すと下流に「前提変更」が付き、その段階から作り直すと消える", async () => {
     const api = server();
     vi.stubGlobal("fetch", api.fetchImpl);

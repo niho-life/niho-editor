@@ -34,6 +34,8 @@ export type StepRunStep = {
   tries: number;
   errorCode: string | null;
   hasPartialOutput?: boolean;
+  /** 資料を上限で切ったときだけ、実際に使った字数（code point。#277）。無ければ切っていない（古い run も無い）。 */
+  inputUsedChars?: number;
 };
 
 export type StepRun = {
@@ -90,7 +92,7 @@ async function failure(response: Response): Promise<StepsRequestError> {
 
 function toStep(value: unknown): StepRunStep | null {
   if (!isPlainObject(value)) return null;
-  const { index, id, name, state, pageId, stepStatus, tries, errorCode, staleReasons, hasPartialOutput } = value;
+  const { index, id, name, state, pageId, stepStatus, tries, errorCode, staleReasons, hasPartialOutput, inputUsedChars } = value;
   if (typeof index !== "number" || !Number.isInteger(index) || index < 0) return null;
   if (typeof id !== "string" || typeof name !== "string" || typeof pageId !== "string") return null;
   if (typeof state !== "string" || !(ATTEMPT_STATES as readonly string[]).includes(state)) return null;
@@ -111,6 +113,8 @@ function toStep(value: unknown): StepRunStep | null {
     tries,
     errorCode,
     ...(hasPartialOutput === true ? { hasPartialOutput: true } : {}),
+    // 形の合わない値は捨てる（帯の一言が出ないだけで、段階そのものは読める）
+    ...(typeof inputUsedChars === "number" && Number.isInteger(inputUsedChars) && inputUsedChars >= 0 ? { inputUsedChars } : {}),
   };
 }
 

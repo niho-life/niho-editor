@@ -41,6 +41,8 @@ export type RunView = {
     tries: number;
     errorCode: string | null;
     hasPartialOutput?: boolean;
+    /** 資料を上限で切ったときだけ、実際に使った字数（#277）。 */
+    inputUsedChars?: number;
   }[];
 };
 
@@ -113,6 +115,7 @@ function toRunView(run: StepRunView, recipes: readonly RecipeDef[], reasons: Rec
       tries: step.tries,
       errorCode: step.errorCode,
       ...(step.hasPartialOutput ? { hasPartialOutput: true } : {}),
+      ...(step.inputUsedChars === undefined ? {} : { inputUsedChars: step.inputUsedChars }),
     })),
   };
 }

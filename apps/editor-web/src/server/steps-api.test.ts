@@ -73,6 +73,20 @@ async function runOf(response: Response): Promise<RunView> {
 }
 
 describe("/api/pages/{id}/steps", () => {
+  it("passes the used input chars of a cut step through, and nothing for a step that was not cut (#277)", async () => {
+    const { store, recording } = setup();
+    const d = deps("user-a", store);
+    const run = await runOf(await start(recording, { recipe: "tpl-1" }, d));
+    const claimed = await store.claimAttempt(run.id, 0);
+    expect(claimed.ok).toBe(true);
+    if (!claimed.ok) return;
+    const blocks: Block[] = [{ type: "paragraph", content: [{ type: "text", text: "合成の結果" }] }];
+    await store.commitAttempt({ runId: run.id, stepIndex: 0, generation: claimed.claim.generation, blocks, inputBasis: "a".repeat(64), inputUsedChars: 100_000 });
+    const steps = (await runOf(await read(recording, d))).steps;
+    expect(steps[0]?.inputUsedChars).toBe(100_000);
+    expect("inputUsedChars" in steps[1]!).toBe(false);
+  });
+
   it("reveals partial output only on explicit owner request and only for the latest failed run", async () => {
     const { store, recording } = setup();
     const d = deps("user-a", store);

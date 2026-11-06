@@ -131,6 +131,18 @@ describe("the real step executor", () => {
     }
   });
 
+  it("reports the used input chars only when the sources were cut at the 100,000-character limit (#277)", async () => {
+    const paragraphOf = (text: string) => [{ type: "paragraph", content: [{ type: "text", text }] }] as Block[];
+    const whole = await setup().run({ ...input, parentBlocks: paragraphOf("合".repeat(100_000)) });
+    expect(whole.inputUsedChars).toBeUndefined();
+    expect("inputUsedChars" in (await setup().run(input))).toBe(false);
+
+    const client = okClient();
+    const cut = await setup({ client: client.client }).run({ ...input, parentBlocks: paragraphOf("合".repeat(100_500)) });
+    expect(cut.inputUsedChars).toBe(100_000);
+    expect(client.calls[0]!.user).toContain("### 録音ページの本文（長いので先頭だけ）");
+  });
+
   it("sends the source and every earlier result in order", async () => {
     const first = okClient();
     await setup({ client: first.client }).run(input);

@@ -12,7 +12,7 @@ import {
   type ReferencePage,
 } from "@niho/editor-store";
 import { AnthropicError, maxTokensLimit, timeoutMs, type AnthropicErrorKind } from "../ai/anthropic";
-import { buildComposePrompt, composeBlocks, composeMaxTokens, parseComposeOutput, partialComposeBlocks, type ComposeInput, type ComposeSource } from "../ai/compose";
+import { buildComposePrompt, composeBlocks, composeMaxTokens, composeSourceUsedChars, parseComposeOutput, partialComposeBlocks, type ComposeInput, type ComposeSource } from "../ai/compose";
 import type { AiComposeBackend } from "../ai/config";
 import type { AiUsageReport } from "../ai/model";
 import { referencesFrom } from "../ai/references";
@@ -205,7 +205,8 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
         console.error("editor-web: step output rejected", { reason: blocks.reason });
         throw new StepError("invalid_output", false);
       }
-      return { blocks: blocks.blocks, usage: { inputTokens, outputTokens, model: report.model } };
+      const inputUsedChars = composeSourceUsedChars(composeInput.sources);
+      return { blocks: blocks.blocks, usage: { inputTokens, outputTokens, model: report.model }, ...(inputUsedChars === null ? {} : { inputUsedChars }) };
     },
   };
 }

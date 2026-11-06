@@ -26,6 +26,8 @@ export type StepExecutorInput = {
 export type StepExecutorOutput = {
   blocks: Block[];
   usage?: { inputTokens: number; outputTokens: number; model: string };
+  /** 資料を上限で切ったときだけ、実際に使った字数（code point）。帯に「先頭 N 字だけ使いました」と出す（#277）。 */
+  inputUsedChars?: number;
 };
 
 /** 1 つの段階を実行する（本物の AI は後段。#38 の AiModel をこの形に包む）。 */

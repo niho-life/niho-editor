@@ -88,6 +88,7 @@ export async function runAttempt(deps: RunnerDeps, task: { runId: string; stepIn
   const stopHeartbeat = startHeartbeat(deps, ref, leaseSeconds, controller);
   try {
     let blocks;
+    let inputUsedChars: number | undefined;
     try {
       const output = await deps.executor.run({
         recipe,
@@ -101,13 +102,19 @@ export async function runAttempt(deps: RunnerDeps, task: { runId: string; stepIn
         signal: controller.signal,
       });
       blocks = parseBlocks(output.blocks);
+      inputUsedChars = output.inputUsedChars;
     } catch (error) {
       return await recordFailure(deps, ref, asStepError(error));
     }
     if (!blocks.ok) return await recordFailure(deps, ref, new StepError("invalid_output", false));
 
     // 基準は実行器に渡した入力から作る（実行中に上流が直されていれば、あとの再計算で前提変更になる）
-    const committed = await deps.store.commitAttempt({ ...ref, blocks: blocks.value, inputBasis: computeStepBasis(recipe, claim.stepIndex, input) });
+    const committed = await deps.store.commitAttempt({
+      ...ref,
+      blocks: blocks.value,
+      inputBasis: computeStepBasis(recipe, claim.stepIndex, input),
+      ...(inputUsedChars === undefined ? {} : { inputUsedChars }),
+    });
     if (!committed.ok) {
       return committed.reason === "page_missing" ? await recordFailure(deps, ref, new StepError("page_missing", false)) : { status: "stale" };
     }

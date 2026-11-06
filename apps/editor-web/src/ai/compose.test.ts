@@ -6,6 +6,7 @@ import {
   buildComposePrompt,
   composeBlocks,
   composeMaxTokens,
+  composeSourceUsedChars,
   parseComposeOutput,
   partialComposeBlocks,
   type ComposeInput,
@@ -81,6 +82,16 @@ describe("buildComposePrompt", () => {
     expect(Array.from(prompt.user.match(/あ+/u)![0]).length).toBe(MAX_COMPOSE_SOURCE_CHARS);
   });
 
+  it("keeps a 100,000-character source whole (no longer cut at 24,000)", () => {
+    expect(MAX_COMPOSE_SOURCE_CHARS).toBe(100_000);
+    const sources = [{ label: "本文", text: "あ".repeat(MAX_COMPOSE_SOURCE_CHARS) }];
+    const prompt = buildComposePrompt({ ...base, sources });
+    expect(prompt.user).toContain("### 本文\n");
+    expect(prompt.user).not.toContain("（長いので先頭だけ）");
+    expect(Array.from(includedSource(prompt.user, "本文")).length).toBe(MAX_COMPOSE_SOURCE_CHARS);
+    expect(composeSourceUsedChars(sources)).toBeNull();
+  });
+
   it("reserves the short second source and gives its unused share to the long first source", () => {
     const prompt = buildComposePrompt({
       ...base,
@@ -116,10 +127,21 @@ describe("buildComposePrompt", () => {
   });
 });
 
+describe("composeSourceUsedChars", () => {
+  it("is null while every source fits, and the used code points once one is cut", () => {
+    expect(composeSourceUsedChars([{ label: "本文", text: "あ".repeat(40_000) }, { label: "工程 1 の結果", text: "い".repeat(60_000) }])).toBeNull();
+    expect(composeSourceUsedChars([{ label: "本文", text: "🟢".repeat(MAX_COMPOSE_SOURCE_CHARS + 1) }])).toBe(MAX_COMPOSE_SOURCE_CHARS);
+    expect(composeSourceUsedChars([{ label: "本文", text: "あ".repeat(70_000) }, { label: "工程 1 の結果", text: "い".repeat(40_000) }])).toBe(MAX_COMPOSE_SOURCE_CHARS);
+    expect(composeSourceUsedChars([{ label: "本文", text: "  " }])).toBeNull();
+  });
+});
+
 describe("composeMaxTokens", () => {
   it("grows with the source and stops at the limit", () => {
     expect(composeMaxTokens({ ...base, sources: [{ label: "本文", text: "あ".repeat(100) }] }, 12_000)).toBe(1024 + 200);
     expect(composeMaxTokens({ ...base, sources: [{ label: "本文", text: "あ".repeat(10_000) }] }, 2_000)).toBe(2_000);
+    // 100,000 字でも上限（EDITOR_AI_MAX_TOKENS の最大 32,000）で頭打ちになる
+    expect(composeMaxTokens({ ...base, sources: [{ label: "本文", text: "あ".repeat(MAX_COMPOSE_SOURCE_CHARS * 2) }] }, 32_000)).toBe(32_000);
   });
 });
 
