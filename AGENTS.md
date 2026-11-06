@@ -1,6 +1,6 @@
 # NIHO editor 作業ルール
 
-`editor.niho.life`（`apps/editor-web`）と Mac アプリ（`apps/docs`）、共有の `packages/` を扱うときの決まり。設計は [`docs/architecture/editor-niho-life-design.md`](docs/architecture/editor-niho-life-design.md)、配備は [`docs/ops/editor-deploy.md`](docs/ops/editor-deploy.md)。
+`editor.niho.life`（`apps/editor-web`）と Mac アプリ（`apps/docs`）、共有の `packages/` を扱うときの決まり。設計は [`docs/architecture/editor-niho-life-design.md`](docs/architecture/editor-niho-life-design.md)、配備は [`docs/ops/editor-deploy.md`](docs/ops/editor-deploy.md)、本番反映の境界（起点・鍵・守り）は [`docs/architecture/editor-release-boundary.md`](docs/architecture/editor-release-boundary.md)。
 
 ## 言語
 
@@ -8,7 +8,8 @@
 
 ## マージ
 
-- `main` へは PR だけ。必須チェック `premerge-gate` と未解決スレッドの解決は ruleset が強制する。
+- `main` へは PR だけ。守りは main の branch protection: 必須チェック・未解決スレッド 0・admin も例外なし・マージキュー。**必須レビューと CODEOWNERS の承認は置かない**（オーナー決定 2026-11-06。鍵と配備の権限を GitHub に置かないことが承認の代わり。[`docs/architecture/editor-release-boundary.md`](docs/architecture/editor-release-boundary.md) §3）。必須チェックの一覧は `ghN api repos/niho-life/niho-editor/branches/main/protection --jq .required_status_checks.contexts` で読む。
+- 必須チェックにする job は、workflow の `paths` で止めない（workflow ごと走らないと pending のままで queue に入れない）。`changes` job で変更を見分け、jobs の `if` で skip する（skip は成功と数える。`docs-core-ci.yml`・`editor-web-ci.yml` の形）。
 - **セッションは次の 3 つが揃ったときだけ、自分の PR をマージキューへ入れてよい**（オーナー決定 2026-11-01）。
   1. 全チェックが緑（失敗 0・保留 0）
   2. 未解決のレビュースレッドが 0

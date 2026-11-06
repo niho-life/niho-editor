@@ -2,6 +2,8 @@
 
 2026-10-19 時点の運用判断。非公開側の作業台帳は [niho-app #19125](https://github.com/niho-coliving/niho-app/issues/19125)。
 
+本文書は旧 Docs（`niho.life/app/docs`。非公開側の Web・API・DB を使う）の境界。`editor.niho.life` と Mac アプリ NIHO editor の本番反映は、起点をこのリポジトリ側に置く別の判断になった（オーナー決定 2026-11-06）: [editor-release-boundary.md](editor-release-boundary.md)。
+
 ## 現在地
 
 - この公開リポジトリは Docs の Mac アプリ、共有 UI・Core・端末保存クライアントの開発と、秘密値を使わない CI を担当する。

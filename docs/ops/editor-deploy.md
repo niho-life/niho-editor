@@ -109,7 +109,7 @@ migration は expand → contract（列の削除は配備の 1 つ後）。適�
 
 ## 7. 本番の起点（公開境界）
 
-[release-boundary.md](../architecture/release-boundary.md) の「公開 CI に本番秘密値・Cloud Run 権限を置かない。公開リポからの push で本番配備を直接起動しない」を守る。
+[editor-release-boundary.md](../architecture/editor-release-boundary.md)（オーナー決定 2026-11-06）の「本番反映の起点はこのリポジトリ側。鍵と配備の権限を GitHub に置かない。公開リポからの push で本番配備を直接起動しない」を守る。
 
 - 公開 CI（[editor-web-ci.yml](../../.github/workflows/editor-web-ci.yml)）は secret なし・合成データ・GitHub-hosted runner で、型検査・テスト・build・image の build までを確かめる。
 - 本番への配備は、権限のある gcloud ログインを持つオーナーが手元で `deploy.sh` を実行する。GitHub Actions からは配備しない（OIDC の Workload Identity も作らない）。
