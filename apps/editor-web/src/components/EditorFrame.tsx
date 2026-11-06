@@ -670,9 +670,14 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     routerRef.current = router;
   }, [router]);
   const openFromLocation = useCallback((id: string) => routerRef.current.push(`/p/${id}`), []);
+  // 読み込んである一覧の行（フォルダの画面の中身・場所・AI の「読むもの」が使う）。依存は値そのもので書く（React Compiler の規則）
+  const listPages = list.pages;
+  // ヘッダーの場所（親のフォルダ › 親の録音）。上の段のページでは空。
+  // frame の useMemo より前で計算する（React Compiler は、memo のあとに list.pages を外の関数へ渡す呼び出しがあると memo を保てない）
+  const location = locationOf(openedForFolder(list), currentId ?? null);
   const frame = useMemo<EditorFrameApi>(
-    () => ({ narrow, ...api, pages: list.pages, now, openPage: openFromLocation }),
-    [narrow, api, list.pages, now, openFromLocation],
+    () => ({ narrow, ...api, pages: listPages, now, openPage: openFromLocation }),
+    [narrow, api, listPages, now, openFromLocation],
   );
 
   // 前に `pagehide`（タブを閉じる・再読み込み）で離れた、何も足していないページを捨てる（src/lib/left-empty-pages.ts）。
@@ -819,8 +824,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const recordingStart = pathname === "/p/new" && searchParams.get("from") === "recording";
   // ページの題名はヘッダーに出さない（本文の題名にだけ。オーナー決定 2026-11-06）。ページでない画面（録音から・設定）は出す
   const title = currentId ? undefined : recordingStart ? "録音から" : (settings?.title ?? "");
-  // ヘッダーの場所（親のフォルダ › 親の録音）。上の段のページでは空
-  const location = locationOf(openedForFolder(list), currentId ?? null);
 
   // 公開の状態・ボタン・シートは、開いている（一覧か開いたページで分かっている）自分のページにだけ出す
   const openPage = currentId ? (list.opened?.id === currentId ? list.opened : list.pages.find((page) => page.id === currentId)) : undefined;
