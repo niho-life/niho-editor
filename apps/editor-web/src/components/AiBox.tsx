@@ -59,6 +59,22 @@ export const AI_BLOCKED_TEXT = {
   unavailable: "この画面では AI を使えません",
 } as const;
 
+/** 作業中に打った指示を積む「送信待ち」（#282）。画面の中だけに持つ（サーバーにも localStorage にも置かない）。 */
+export const MAX_QUEUED_INSTRUCTIONS = 3;
+/** 作業が終わってから次の待ちを送るまでの間（この間に取り消せる）。 */
+export const QUEUE_SEND_DELAY_MS = 1000;
+export const AI_QUEUE_TEXT = {
+  full: "先の指示を待ってから送ってください",
+  returned: "送信待ちは入力欄に戻しました",
+  countdown: "1 秒後に次の指示を送ります",
+  tooLong: `入力は ${MAX_CHAT_INPUT_CHARS} 文字以内にしてください`,
+} as const;
+
+/** 入力欄へ戻す文を、空でないものだけ 1 行あけて並べる。 */
+function joinDrafts(parts: readonly string[]): string {
+  return parts.filter((part) => part.trim().length > 0).join("\n\n");
+}
+
 export const AI_ERROR_TEXT: Record<Exclude<AiErrorCode, "aiUnavailable">, string> = {
   signedOut: "ログインし直してください",
   quota: "今月の AI の使用量の上限に達しました",
@@ -293,6 +309,11 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
   const [menuQuery, setMenuQuery] = useState("");
   const [menuIndex, setMenuIndex] = useState(0);
   const [text, setText] = useState("");
+  // 作業中に打った指示（#282）。順に自動で送る。refs は非同期の終わりで今の値を読むため
+  const [queue, setQueue] = useState<string[]>([]);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [countdown, setCountdown] = useState(false);
+  const queueRef = useRef<string[]>([]);
   const [selectedStep, setSelectedStep] = useState<AttachedAiStep | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
   const [status, setStatus] = useState("");
@@ -412,6 +433,11 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     setConversationId(null);
     setSessions([]);
     setText("");
+    // 待ちは開いていたページの指示。別のページへ持ち越さない
+    queueRef.current = [];
+    setQueue([]);
+    setQueueOpen(false);
+    setCountdown(false);
     setSelectedStep(null);
     setStatus("");
     setSessionError(null);
@@ -539,6 +565,25 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     setEngineOpen(false);
   };
 
+  const setQueued = (next: string[]) => {
+    queueRef.current = next;
+    setQueue(next);
+    if (next.length === 0) {
+      setQueueOpen(false);
+      setCountdown(false);
+    }
+  };
+
+  /** 待ちを入力欄に戻す（止めた・失敗した・取り消した）。書きかけの文は待ちの後ろに続ける。 */
+  const returnQueueToInput = (leading: string[] = []) => {
+    const items = queueRef.current;
+    if (items.length === 0) return;
+    setQueued([]);
+    setText((current) => joinDrafts([...leading, ...items, current]));
+    setStatus((current) => (current ? `${current.replace(/。$/, "")}。${AI_QUEUE_TEXT.returned}` : AI_QUEUE_TEXT.returned));
+    queueMicrotask(() => textareaRef.current?.focus());
+  };
+
   // 実行先の窓は、窓と下端のボタンの外を押したら閉じる
   useEffect(() => {
     if (!engineOpen) return;
@@ -552,7 +597,8 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
   }, [engineOpen]);
 
   const newConversation = () => {
-    if (busy || sessionLoading || flightRef.current) return;
+    // 待ちは今の会話への指示なので、送り終わる（か戻す）まで会話は替えない
+    if (busy || sessionLoading || flightRef.current || queueRef.current.length > 0) return;
     sessionControllerRef.current?.abort();
     setConversationId(null);
     setThread([]);
@@ -568,7 +614,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
   };
 
   const switchConversation = async (id: string) => {
-    if (!pageId || busy || sessionLoading || flightRef.current || id === conversationId) return;
+    if (!pageId || busy || sessionLoading || flightRef.current || queueRef.current.length > 0 || id === conversationId) return;
     sessionControllerRef.current?.abort();
     const controller = new AbortController();
     sessionControllerRef.current = controller;
@@ -672,16 +718,26 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     return { answer, nextResume };
   };
 
-  const runChat = async (value: string) => {
+  /**
+   * `fromBox`: 入力欄の文を送る。送ったら欄を空ける（作業中に次の指示を打てるように）。送信待ちから送るときは
+   * 欄に触れない（打ちかけの文を消さない）。どちらも、結果に残らなかった依頼（止めた・失敗した）は、終わりで
+   * 入力欄へ返す（打ちかけの文があれば、その前に並べる）。
+   */
+  const runChat = async (value: string, fromBox = false) => {
     if (!pageId || !context || busy || sessionLoading || flightRef.current) return;
     flightRef.current = true;
     const generation = generationRef.current;
     const controller = new AbortController();
     controllerRef.current = controller;
+    // 結果の発言に残った（サーバーが記録した）か。残らなかった依頼は入力欄へ返す
+    let recorded = false;
+    // 次の待ちを続けて送ってよい終わり方か（止めた・失敗したら送らず入力欄に戻す）
+    let settled = false;
     closeMenus();
     reveal();
     setBusy("working");
     setStatus("");
+    if (fromBox) setText("");
     setLive(liveTurn(value));
     // 書きかけの発言へ途中の文・道具を足す（別のページへ移ったあとの出来事は捨てる）
     const onEvent = (event: AiChatEvent) => {
@@ -711,13 +767,14 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
       setConversationId(answer.conversation?.id ?? null);
       if (native && macRoute !== "server") setResumeSession(nextResume);
       setThread((current) => appendTurn(current, value, answer));
-      setText("");
+      recorded = true;
       pagesChanged(answer.changes.map((change) => change.pageId));
       if (answer.page) await context.bridge.replace(answer.page, { saved: true });
       if (generation !== generationRef.current) return;
       setStatus(answer.resultCode === "revision_conflict" ? "ページが更新されました。もう一度お試しください" :
         native && macRoute !== "server" && answer.resultCode === "write_refused" ? AI_TEXT.nativeRefused :
           answer.result === "failed" ? AI_TEXT.chatFailed : answer.result === "stopped" ? aiStopText(answer.resultCode) : "");
+      settled = answer.result === "done" && answer.resultCode === null;
       if (answer.conversation) {
         const summary: AiChatSummary = { id: answer.conversation.id, updatedAt: new Date().toISOString(), messages: thread.length + 2, lastText: answer.reply };
         setSessions((current) => [summary, ...current.filter((item) => item.id !== summary.id)]);
@@ -731,12 +788,19 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
         setLive(null);
         setBusy(null);
         flightRef.current = false;
+        // 結果に残らなかった依頼は入力欄へ返す（打ちかけの文があれば、その前に並べて消さない）。待ちがあれば、
+        // 正常に終わったときだけ続けて送り、止めた・失敗したときは待ちも欄に戻す（言い直すかどうかは利用者が決める）
+        const unsent = recorded ? [] : [value];
+        if (queueRef.current.length > 0 && settled) setCountdown(true);
+        else if (queueRef.current.length > 0) returnQueueToInput(unsent);
+        else if (unsent.length > 0) setText((current) => joinDrafts([...unsent, current]));
       }
     }
   };
 
   const compactConversation = async (draft = text) => {
-    if (!pageId || !context || !conversationId || thread.length === 0 || busy || sessionLoading || flightRef.current) return;
+    // 送信待ちがあるあいだは要約を始めない（待ちを入力欄へ戻す先の文を、要約が上書きしてしまう）
+    if (!pageId || !context || !conversationId || thread.length === 0 || busy || sessionLoading || flightRef.current || queueRef.current.length > 0) return;
     const keptDraft = draft;
     const generation = generationRef.current;
     const controller = new AbortController();
@@ -898,7 +962,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
   };
 
   const runStep = async () => {
-    if (!pageId || !context || !selectedStep || !steps || busy || sessionLoading || flightRef.current) return;
+    if (!pageId || !context || !selectedStep || !steps || busy || sessionLoading || flightRef.current || queueRef.current.length > 0) return;
     const generation = generationRef.current;
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -931,19 +995,75 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     }
   };
 
+  /** 作業中（または待ちを順に送っている間）に打った指示を、送信待ちの後ろに積む。 */
+  const enqueue = (value: string) => {
+    if (queueRef.current.length >= MAX_QUEUED_INSTRUCTIONS) {
+      setStatus(AI_QUEUE_TEXT.full);
+      return;
+    }
+    closeMenus();
+    setQueued([...queueRef.current, value]);
+    setText("");
+  };
+
   const send = () => {
     if (selectedStep) {
       void runStep();
       return;
     }
     const value = text.trim();
-    if (value.length === 0 || Array.from(value).length > MAX_CHAT_INPUT_CHARS) return;
-    void runChat(value);
+    if (value.length === 0) return;
+    if (Array.from(value).length > MAX_CHAT_INPUT_CHARS) {
+      setStatus(AI_QUEUE_TEXT.tooLong);
+      return;
+    }
+    // 待ちがあるあいだは、新しい指示も待ちの後ろへ（順番を入れ替えない）
+    if (busy === "working" || busy === "saving" || queueRef.current.length > 0) {
+      enqueue(value);
+      return;
+    }
+    void runChat(value, true);
   };
+
+  const removeQueued = (index: number) => setQueued(queueRef.current.filter((_, at) => at !== index));
+
+  // 作業が終わって待ちが残っていたら、1 秒おいて先頭から順に送る（その間は「取り消す」で欄に戻せる）。
+  // タイマーが読むのは ref だけにして、毎回の描画でやり直されないようにする
+  const chatRef = useRef<{ canStart: () => boolean; run: (value: string) => Promise<void>; take: () => string | undefined; giveBack: () => void } | null>(null);
+  useEffect(() => {
+    chatRef.current = {
+      canStart: () => Boolean(pageId && context) && !busy && !sessionLoading && !flightRef.current,
+      run: runChat,
+      take: () => {
+        const [next, ...rest] = queueRef.current;
+        if (next !== undefined) setQueued(rest);
+        return next;
+      },
+      giveBack: () => returnQueueToInput(),
+    };
+  });
+  useEffect(() => {
+    if (!countdown) return;
+    const generation = generationRef.current;
+    const timer = window.setTimeout(() => {
+      setCountdown(false);
+      const chat = chatRef.current;
+      if (!chat || generation !== generationRef.current || queueRef.current.length === 0) return;
+      // ほかの操作（要約・工程）が先に始まっていたら、待ちを失わずに欄へ戻す
+      if (!chat.canStart()) {
+        chat.giveBack();
+        return;
+      }
+      const next = chat.take();
+      if (next !== undefined) void chat.run(next);
+    }, QUEUE_SEND_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [countdown]);
 
   const onInput = (value: string, caret: number) => {
     setText(value);
-    const token = slashToken(value, caret);
+    // 作業中と、送信待ちがあるあいだは、工程・要約のメニューを開かない（どちらも今は始められない）
+    const token = busy === null && queue.length === 0 ? slashToken(value, caret) : null;
     if (token) {
       setMenuQuery(token.query);
       setMenuIndex(0);
@@ -987,6 +1107,8 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
         : selectedMacEngine ? [MAC_ENGINE_LABELS[selectedMacEngine.engine], activeMacModel, activeMacEffort ? effortLabel(activeMacEffort) : null].filter(Boolean).join(" · ")
           : "実行先を選ぶ";
   const routeDisabled = native && macRoute !== "server" && (!selectedMacEngine || !macEngineReady(selectedMacEngine) || !selectedMacModels.includes(activeMacModel));
+  // 作業中は、次の指示を打って送信待ちに積める（要約・工程・元に戻すの間は今までどおり打てない）
+  const queueing = busy === "working" || busy === "saving";
   const sendDisabled = unavailable || sessionLoading || busy !== null || (!selectedStep && routeDisabled) || (!selectedStep && text.trim().length === 0);
 
   return (
@@ -1017,10 +1139,10 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
         {placement && <span className="es-grip" aria-hidden="true" title="ドラッグで置き場所を変える"><Icon name="grip" /></span>}
         <span>AIと作る</span>
         <span className="es-sp" />
-        <button type="button" className="es-ib es-ib--sm" aria-label="新しい会話" disabled={busy !== null || sessionLoading} onClick={newConversation}>
+        <button type="button" className="es-ib es-ib--sm" aria-label="新しい会話" disabled={busy !== null || sessionLoading || queue.length > 0} onClick={newConversation}>
           <Icon name="edit" />
         </button>
-        <button type="button" className="es-ib es-ib--sm" aria-label="会話履歴と切り替え" aria-expanded={historyOpen} disabled={busy !== null} onClick={() => {
+        <button type="button" className="es-ib es-ib--sm" aria-label="会話履歴と切り替え" aria-expanded={historyOpen} disabled={busy !== null || queue.length > 0} onClick={() => {
           setHistoryOpen((open) => !open);
           setMenuOpen(false);
           setEngineOpen(false);
@@ -1101,15 +1223,41 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
             </div>
           )}
           {selectedStep && <div className="es-ai-chip"><Icon name="play" /><span>{selectedStep.label}</span><button type="button" aria-label={`${selectedStep.label}を外す`} disabled={busy !== null} onClick={() => setSelectedStep(null)}>×</button></div>}
+          {queue.length > 0 && (
+            <div className="es-ai-queue" role="group" aria-label="送信待ち">
+              <div className="es-ai-queue-head">
+                <button type="button" className="es-ai-queue-toggle" aria-expanded={queueOpen} onClick={() => setQueueOpen((open) => !open)}>
+                  <Icon name={queueOpen ? "caret-up" : "caret-down"} />
+                  <span>送信待ち {queue.length} 件</span>
+                </button>
+                {countdown && (
+                  <>
+                    <span className="es-ai-queue-note" role="status">{AI_QUEUE_TEXT.countdown}</span>
+                    <button type="button" className="es-ai-link" onClick={() => returnQueueToInput()}>取り消す</button>
+                  </>
+                )}
+              </div>
+              {queueOpen && (
+                <ol className="es-ai-queue-list">
+                  {queue.map((item, index) => (
+                    <li key={`${index}-${item}`}>
+                      <span>{item}</span>
+                      <button type="button" aria-label={`送信待ちの ${index + 1} 件目を消す`} onClick={() => removeQueued(index)}>×</button>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             rows={2}
             aria-label="AIへのメッセージ"
-            placeholder="直したいこと・作りたいもの…"
+            placeholder={queueing ? "作業が終わったら送ります（送ると送信待ちに積みます）" : "直したいこと・作りたいもの…"}
             maxLength={MAX_CHAT_INPUT_CHARS}
             value={text}
             disabled={unavailable}
-            readOnly={busy !== null || sessionLoading}
+            readOnly={(busy !== null && !queueing) || sessionLoading}
             onChange={(event) => onInput(event.currentTarget.value, event.currentTarget.selectionStart)}
             onKeyDown={onKeyDown}
           />
@@ -1129,7 +1277,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
                 <Icon name="grip" />
               </span>
             )}
-            <button type="button" className="es-ib es-ib--sm" aria-label="工程とスキルを開く" aria-expanded={menuOpen} disabled={unavailable || busy !== null} onClick={() => {
+            <button type="button" className="es-ib es-ib--sm" aria-label="工程とスキルを開く" aria-expanded={menuOpen} disabled={unavailable || busy !== null || queue.length > 0} onClick={() => {
               setMenuOpen((open) => !open);
               setMenuQuery("");
               setMenuIndex(0);
@@ -1216,6 +1364,9 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
               <button type="button" className="es-ib es-ib--sm es-ai-float-tg" aria-label={placement.open ? "会話を畳む" : "会話を開く"} aria-expanded={placement.open} onClick={() => placement.onOpenChange(!placement.open)}>
                 <Icon name={placement.open ? "caret-down" : "caret-up"} />
               </button>
+            )}
+            {busy === "working" && text.trim().length > 0 && (
+              <button type="button" className="es-ai-send es-ai-send--queue" aria-label="送信待ちに積む" onClick={send}><Icon name="up" /></button>
             )}
             {busy === "working" || busy === "compact"
               ? <button type="button" className="es-ai-send es-ai-send--stop" aria-label="止める" onClick={() => controllerRef.current?.abort()}><span className="es-ai-stop-mark" aria-hidden="true" /></button>
