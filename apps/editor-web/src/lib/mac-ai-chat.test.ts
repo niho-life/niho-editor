@@ -30,7 +30,7 @@ describe("Mac CLI chat turn", () => {
     await expect(call.promise).resolves.toEqual({ reply: "直しました", sessionId: "local-session", writes: [{ pageId: "page-1", markdown: "変更後" }] });
     expect(call.aiTurn).toHaveBeenCalledWith(expect.any(String), {
       engine: "cli:codex", model: "gpt-6", conversationId: "conversation-1", resumeSession: "local-old",
-      instruction: expect.stringContaining("選択範囲を主な対象"), page: PAGE,
+      instruction: expect.stringContaining("範囲の外は 1 字も変えないでください"), page: PAGE,
       context: [{ name: "selection", title: "選択範囲", markdown: "選択文" }],
     }, expect.any(Function));
   });

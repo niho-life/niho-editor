@@ -49,6 +49,7 @@ import {
   paragraphLabel,
   webSearchTool,
 } from "../ai/chat";
+import { keepsOutsideEdges, outsideEdgesOf, parseChatSelection, selectionParagraphLabel, type ChatSelection, type OutsideEdges } from "../ai/chat-selection";
 import { wrapUntrusted } from "../ai/prompt";
 import type { AiUsageReport } from "../ai/model";
 import type { AuthProvider } from "../auth/types";
@@ -330,9 +331,13 @@ function createToolRunner(deps: {
    * in its input, so this map is its base (unchanged from before #278).
    */
   deviceRevisions?: ReadonlyMap<string, number>;
+  /** 人が本文で選んだ範囲（#280）。あれば、開いているページのその範囲の外が変わる書き込みを断る。 */
+  selection?: { pageId: string; value: ChatSelection };
 }): (call: { name: string; input: unknown }) => Promise<ToolOutcome & { conflict?: true }> {
   const { store, owner } = deps;
   const find = (id: unknown) => (typeof id === "string" ? deps.workspace.find((page) => page.id === id) : undefined);
+  // 選択範囲の外の段落の数。最初の書き込みで一度だけ決めて、依頼のあいだ固定する（#280）
+  let outsideEdges: OutsideEdges | null = null;
 
   /**
    * 書き込みの共通の道（write_page・edit_page）: 読んだ版の確認 → 本文の検査 → 版を残す → 保存 → `changes` に積む。
@@ -348,6 +353,25 @@ function createToolRunner(deps: {
     device: boolean,
     removeImages: readonly string[],
   ): Promise<{ ok: false; outcome: ToolOutcome & { conflict?: true } } | { ok: true; saved: Page; blocks: Block[]; chars: number; delta: number }> => {
+    // 選択範囲があるときは、その範囲の外が変わる書き込みを版を残す前に断る（プロンプトだけに頼らない。#280）
+    if (deps.selection) {
+      const { pageId, value } = deps.selection;
+      if (target.id !== pageId) {
+        return { ok: false, outcome: { ok: false, result: "選択範囲があるので、開いているページの範囲の外は書き換えられません（ほかのページも同じ）。範囲の外に手を入れないと頼みが果たせないときは、書かずに人に伝えてください。", page: current.title } };
+      }
+      if (outsideEdges === null) {
+        // 最初の書き込み: 本文が範囲を選んだときの版のままなら、範囲の外の段落の数をここで決めて、依頼のあいだ固定する
+        // （範囲の中を書き換えて段落の数が変わっても、2 回目以降の書き込みで範囲の外を守れるように）
+        const edges = current.revision === value.revision ? outsideEdgesOf(current.blocks.length, value) : null;
+        if (edges === null) {
+          return { ok: false, outcome: { ok: false, result: `選択範囲（${selectionParagraphLabel(value)}）を選んだあとに本文が変わったので、番号がずれていて書けません。書かずに、範囲を選び直してもらうよう人に伝えてください。`, page: current.title } };
+        }
+        outsideEdges = edges;
+      }
+      if (!keepsOutsideEdges(current.blocks, blocks.value, outsideEdges)) {
+        return { ok: false, outcome: { ok: false, result: `選択範囲（${selectionParagraphLabel(value)}）の外が変わる書き込みは断られます。範囲の中だけを edit_page で直してください（全体を書き直すと、範囲の外が少しでも変わるので断られます）。範囲の外に手を入れないと頼みが果たせないときは、書かずに人に伝えてください。`, page: current.title } };
+      }
+    }
     // 画像が消える・録音が変わる書き込みは、版も残さず保存もしない（画像は AI から見えず作り直せない。#281）
     const parts = checkParts(current.blocks, blocks.value, removeImages);
     if (!parts.ok) return { ok: false, outcome: { ok: false, result: parts.reason, page: current.title } };
@@ -575,16 +599,22 @@ function createToolRunner(deps: {
   };
 }
 
-type ChatInput = { text: string; conversationId: string | null };
+type ChatInput = { text: string; conversationId: string | null; selection: ChatSelection | null };
 
 function parseChatBody(body: unknown): { ok: true; value: ChatInput } | { ok: false } {
-  if (!isPlainObject(body) || !hasOnlyKeys(body, ["text", "conversationId"])) return { ok: false };
+  if (!isPlainObject(body) || !hasOnlyKeys(body, ["text", "conversationId", "selection"])) return { ok: false };
   if (typeof body.text !== "string") return { ok: false };
   const text = body.text.trim();
   const length = Array.from(text).length;
   if (length === 0 || length > MAX_CHAT_INPUT_CHARS || text.includes("\u0000")) return { ok: false };
   if (body.conversationId !== undefined && body.conversationId !== null && typeof body.conversationId !== "string") return { ok: false };
-  return { ok: true, value: { text, conversationId: typeof body.conversationId === "string" ? body.conversationId : null } };
+  // 選択範囲（#280）。省くか null なら普通の依頼。形が違えば 400
+  let selection: ChatSelection | null = null;
+  if (body.selection !== undefined && body.selection !== null) {
+    selection = parseChatSelection(body.selection);
+    if (!selection) return { ok: false };
+  }
+  return { ok: true, value: { text, conversationId: typeof body.conversationId === "string" ? body.conversationId : null, selection } };
 }
 
 /** 会話の記録から、モデルに渡す過去のやりとり（人の指示と AI の返答だけ）。 */
@@ -623,6 +653,14 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
     const writable = await chats.workspace(owner, id);
     if (!writable) return notFoundResponse();
     const open = writable.find((page) => page.open)!;
+    // 選択範囲の番号は、選んだときの版の本文のもの。版が違う・本文の外なら受けない（番号がずれる）
+    const selection = input.value.selection;
+    if (selection) {
+      const opened = await store.getPage(owner, id);
+      if (!opened) return notFoundResponse();
+      if (opened.revision !== selection.revision) return conflictResponse(opened);
+      if (selection.endParagraph > opened.blocks.length) return errorResponse("bad_request");
+    }
     // 同じフォルダのほかのページは読むだけで触れる（旧アプリの「フォルダ内の他ページを見る」）
     const readable = (await chats.references?.(owner, id)) ?? [];
     const known = new Set(writable.map((page) => page.id));
@@ -664,10 +702,11 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
           about: { name: settings.aboutName, text: settings.about },
           ...(settings.aiLang === "same" ? {} : { lang: settings.aiLang }),
           ...context,
+          ...(selection ? { selection } : {}),
           ...(webSearch !== undefined && webSearch !== "off" ? { webSearch: true } : {}),
         }),
-        messages: buildChatMessages(historyOf(past?.messages ?? []), input.value.text, { id: open.id, title: open.title, kind: open.kind }),
-        run: createToolRunner({ store, owner, workspace, changes, ...(chats.recording ? { recording: chats.recording } : {}) }),
+        messages: buildChatMessages(historyOf(past?.messages ?? []), input.value.text, { id: open.id, title: open.title, kind: open.kind }, selection),
+        run: createToolRunner({ store, owner, workspace, changes, ...(chats.recording ? { recording: chats.recording } : {}), ...(selection ? { selection: { pageId: id, value: selection } } : {}) }),
         // 往復のたびに上限を見る（会話が長くても 1 人 1 か月の上限は同じ意味で働く）
         // 上限を見るのはサーバーの API の経路だけ（CLI は利用者のサブスクで従量が出ないので止めない）
         beforeCall: async () => backend.route !== "server" || !overLimit(await usage.get(owner, month), limitUsd),
@@ -845,6 +884,8 @@ type DeviceTurnInput = {
   reply: string;
   engine: string;
   writes: { pageId: string; markdown: string; baseRevision: number }[];
+  /** CLI に頼んだときの選択範囲（#280）。あれば、範囲の外が変わる書き戻しは断る。 */
+  selection: ChatSelection | null;
 };
 
 /**
@@ -857,8 +898,8 @@ const MAX_DEVICE_TURN_WRITES = 12;
 const ENGINE_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,95}$/;
 
 function parseDeviceTurnBody(body: unknown): { ok: true; value: DeviceTurnInput } | { ok: false } {
-  if (!isPlainObject(body) || !hasOnlyKeys(body, ["conversationId", "input", "reply", "engine", "writes"])) return { ok: false };
-  const text = parseChatBody({ text: body.input, ...(body.conversationId === undefined ? {} : { conversationId: body.conversationId }) });
+  if (!isPlainObject(body) || !hasOnlyKeys(body, ["conversationId", "input", "reply", "engine", "writes", "selection"])) return { ok: false };
+  const text = parseChatBody({ text: body.input, ...(body.conversationId === undefined ? {} : { conversationId: body.conversationId }), ...(body.selection === undefined ? {} : { selection: body.selection }) });
   if (!text.ok) return { ok: false };
   if (typeof body.engine !== "string" || !ENGINE_PATTERN.test(body.engine)) return { ok: false };
   if (body.reply !== undefined && typeof body.reply !== "string") return { ok: false };
@@ -872,7 +913,7 @@ function parseDeviceTurnBody(body: unknown): { ok: true; value: DeviceTurnInput 
     if (writes.some((write) => write.pageId === raw.pageId)) return { ok: false };
     writes.push({ pageId: raw.pageId, markdown: raw.markdown, baseRevision: raw.baseRevision });
   }
-  return { ok: true, value: { conversationId: text.value.conversationId, input: text.value.text, reply, engine: body.engine, writes } };
+  return { ok: true, value: { conversationId: text.value.conversationId, input: text.value.text, reply, engine: body.engine, writes, selection: text.value.selection } };
 }
 
 /**
@@ -904,6 +945,13 @@ export function recordDeviceChatTurn(request: Request, id: string, deps: ChatApi
     const conversationId = input.value.conversationId;
     if (conversationId !== null && !(await chats.history(owner, id, conversationId))) return notFoundResponse();
     const currentWrite = input.value.writes.find((write) => write.pageId === id);
+    const selection = input.value.selection;
+    if (selection) {
+      // 選択範囲の番号は選んだときの版のもの。版が違えば、番号がずれているので受けない
+      const opened = await store.getPage(owner, id);
+      if (!opened) return notFoundResponse();
+      if (opened.revision !== selection.revision) return conflictResponse(opened);
+    }
     if (currentWrite) {
       const currentPage = await store.getPage(owner, id);
       if (!currentPage) return notFoundResponse();
@@ -913,7 +961,14 @@ export function recordDeviceChatTurn(request: Request, id: string, deps: ChatApi
     // 書き込みはチャットと同じ道具を通す（作業場の外・画像や録音が欠けた本文・大きすぎる本文はここで断られる。#281）
     const changes = new Map<string, ChatChangeInput & { title: string }>();
     const workspace: WorkspaceEntry[] = writable.map((page) => ({ ...page, writable: true }));
-    const run = createToolRunner({ store, owner, workspace, changes, deviceRevisions: new Map(input.value.writes.map((write) => [write.pageId, write.baseRevision])) });
+    const run = createToolRunner({
+      store,
+      owner,
+      workspace,
+      changes,
+      deviceRevisions: new Map(input.value.writes.map((write) => [write.pageId, write.baseRevision])),
+      ...(selection ? { selection: { pageId: id, value: selection } } : {}),
+    });
     const items: ChatItem[] = [];
     let failed = false;
     let revisionConflict = false;

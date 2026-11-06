@@ -146,12 +146,20 @@ export type MacAiTurnOutput = {
 };
 
 /**
+ * 選択範囲があるときに指示へ足す文（#280）。範囲の外が変わった書き戻しは、サーバーが断る（chat-api の `keepsOutsideEdges`）ので、
+ * その理由を CLI に先に伝える。
+ */
+function selectionInstruction(label: string | undefined): string {
+  return `選択範囲${label ? `（本文の${label}）` : ""}だけを直してください。範囲の外は 1 字も変えないでください（変えると書き戻しが断られます）。選択範囲の文は context/selection.md にあります。`;
+}
+
+/**
  * 本文に画像・録音の行（`niho-asset:`）があるときに指示へ添える注意（#281）。書き戻しはサーバーが検査し、行が欠ければ保存しない。
  */
 export const MAC_PARTS_NOTE = "本文の `niho-asset:` の行は画像・録音です（中身は見えません）。消さず、作らず、前後を空行で区切った 1 行のまま残してください。動かしてよいのは行の位置と、画像の代替文・キャプションだけです。1 つでも欠けると保存されません。録音と文字起こしは書き換えられません。";
 
-function instructionOf(input: { instruction: string; selection: string | null; page: { markdown: string } }): string {
-  const base = input.selection === null ? input.instruction : `${input.instruction}\n\n選択範囲を主な対象にしてください。選択範囲は context/selection.md にあります。`;
+function instructionOf(input: { instruction: string; selection: string | null; selectionLabel?: string; page: { markdown: string } }): string {
+  const base = input.selection === null ? input.instruction : `${input.instruction}\n\n${selectionInstruction(input.selectionLabel)}`;
   return input.page.markdown.includes("](niho-asset:") ? `${base}\n\n${MAC_PARTS_NOTE}` : base;
 }
 
@@ -162,6 +170,8 @@ export async function runMacAiTurn(input: {
   model: string;
   page: { pageId: string; title: string; markdown: string };
   selection: string | null;
+  /** 選んだ範囲の言い方（「第 2〜3 段落」）。CLI への指示に添える。 */
+  selectionLabel?: string;
   /** 読むだけの文脈（`context/<name>.md`。あなたについて・この録音について・文書ガイド・固有名詞）。サーバー経路が指示に入れるものと同じ。 */
   context?: readonly { name: string; title: string; markdown: string }[];
   instruction: string;

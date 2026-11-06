@@ -2,14 +2,18 @@
 
 import "niho-ui/styles/editor-tokens.css";
 import "niho-docs-ui/styles/shell.css";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { EFFORTS, effortLabel, type Effort } from "@niho/docs-core";
 import { isShellWindow, type ShellBridge } from "niho-desktop-bridge/shell-bridge";
 import type { ShellAiEngine, ShellAiEngineName } from "niho-desktop-bridge/shell-contract";
 import { validateBlocks } from "niho-docs-ui/page/blocks";
 import { Icon, SHELL_DND, type ShellAiPlace } from "niho-docs-ui/shell";
+import type { Node as PmNode } from "@tiptap/pm/model";
+import { AllSelection, TextSelection } from "@tiptap/pm/state";
 import { MAX_CHAT_INPUT_CHARS } from "@/ai/chat-limits";
+import { selectionParagraphLabel, type ChatSelection } from "@/ai/chat-selection";
 import { pageToPartsMarkdown } from "@/ai/page-parts";
+import { aiSelectionOf, describeAiSelection } from "@/editor/ai-selection";
 import type { AiDiffState, AttachedAi, AttachedAiStep, AttachedAiSteps } from "@/lib/attached-page";
 import {
   AiConflictError,
@@ -38,6 +42,8 @@ export const AI_TEXT = {
   saveUnknown: "保存結果を確認できませんでした。ページを再読み込みしてから、会話と版を確かめてください。",
   // サーバーが CLI の本文を断った（write_refused）。見出しの段階はサーバーがそろえるので、残るのは画像・録音の行の欠け・対応外の記法・大きさ
   nativeRefused: "CLI が書いた本文を反映できませんでした。画像・録音の行（niho-asset:）が欠けていたか、このページで使えない記法が入っていたか、大きすぎます。本文は変わっていません。",
+  selectionMoved: "保存を待つあいだに本文が変わったので、選んだ範囲の番号がずれます。送らずに、範囲を選び直してください",
+  nativeRefusedSelection:"CLI が書いた本文を反映できませんでした。選択範囲の外が変わっていたか、画像・録音の行（niho-asset:）が欠けていたか、このページで使えない記法が入っていたか、大きすぎます。本文は変わっていません。",
   nativeHistoryMissing: "ページは更新しましたが、会話履歴を保存できませんでした。ページを再読み込みして状態を確かめてください。",
   nativeReplyMissing: "CLI の返答を会話履歴に保存できませんでした。ページを確認してから、もう一度依頼してください。",
   undoing: "戻しています…",
@@ -169,6 +175,10 @@ export function aiItemText(item: { kind: "narration"; text: string } | { kind: "
 }
 
 type Busy = "working" | "saving" | "undoing" | "compact" | "step" | null;
+/** 本文で選んでいる範囲（#280）。送った時点の本文（`doc`）と位置を持ち、版は準備のあとで決まる。 */
+type PickedRange = { range: { from: number; to: number }; doc: PmNode };
+/** AI へ渡す選択範囲（サーバー経路の `selection` と、CLI へ渡す選んだ文字の全部）。 */
+type SentSelection = { selection: ChatSelection; fullText: string };
 type MacState = { mode: "loading" | "error" } | { mode: "ready"; shell: ShellBridge; engines: ShellAiEngine[] };
 type MacRoute = MacAiRoute;
 type MacPrefs = Pick<MacAiChoice, "models" | "efforts">;
@@ -595,6 +605,75 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     queueMicrotask(() => textareaRef.current?.focus());
   };
 
+  // 本文で選んだ範囲（#280）。エディタの選択が入力欄へ移って外れても、チップを外す・送るまで残す（下地は plugin が描く）。
+  // 作業中と、送信待ちがあるあいだは新しく選ばない（待ちの指示は本文の番号が前の依頼で変わりうるので、範囲を持たない）
+  const editor = context?.editor ?? null;
+  /** 入力欄が画面に見えているか（レールを畳んだ・狭い画面で閉じているときは false。測れない環境では true）。 */
+  const inputShown = () => {
+    const field = textareaRef.current;
+    return field !== null && (typeof field.checkVisibility !== "function" || field.checkVisibility());
+  };
+  const [, repick] = useReducer((count: number) => count + 1, 0);
+  const pickAllowedRef = useRef(true);
+  const lastPickKeyRef = useRef("");
+  useEffect(() => {
+    pickAllowedRef.current = busy === null && queue.length === 0;
+  });
+  useEffect(() => {
+    if (!editor) return;
+    const onSelect = () => {
+      // 変換中（IME）に下地を描き足すと、変換が切れることがあるので、確定してからにする
+      if (!pickAllowedRef.current || editor.isDestroyed || editor.view.composing) return;
+      // 入力欄が見えていないとき（右のレールを畳んだ・狭い画面）は、チップも外す手段も見えないので選ばない
+      if (!inputShown()) return;
+      const { selection } = editor.state;
+      // 全選択（⌘A）も範囲として渡す。画像などのブロックを選んだ（NodeSelection）ときは渡さない
+      if (!(selection instanceof TextSelection || selection instanceof AllSelection) || selection.empty) return;
+      editor.commands.setAiSelection({ from: selection.from, to: selection.to });
+    };
+    // 本文を打つたびに欄を描き直さない。残している範囲が変わったときだけ描き直す
+    const onTransaction = () => {
+      const range = editor.isDestroyed ? null : aiSelectionOf(editor.state);
+      const key = range ? `${range.from}:${range.to}` : "";
+      if (key === lastPickKeyRef.current) return;
+      lastPickKeyRef.current = key;
+      repick();
+    };
+    editor.on("selectionUpdate", onSelect);
+    editor.on("transaction", onTransaction);
+    return () => {
+      editor.off("selectionUpdate", onSelect);
+      editor.off("transaction", onTransaction);
+    };
+  }, [editor]);
+
+  /** 今残している選択範囲（チップと同じもの）。送るとき、その時点の本文と位置を取る。 */
+  const pickedRange = (): PickedRange | null => {
+    if (!editor || editor.isDestroyed) return null;
+    const range = aiSelectionOf(editor.state);
+    if (!range || !describeAiSelection(editor.state.doc, range, 0)) return null;
+    return { range, doc: editor.state.doc };
+  };
+  /** 結果に残らなかった依頼の選択範囲を、本文がそのままなら戻す。 */
+  const restorePick = (pick: PickedRange) => {
+    const live = context?.editor;
+    if (live && !live.isDestroyed && live.state.doc.eq(pick.doc)) live.commands.setAiSelection(pick.range);
+  };
+
+  // ⌘L（Ctrl+L）で AI の入力欄へ。本文で範囲を選んだあと、手を離さずに頼める
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey || event.isComposing || event.key.toLowerCase() !== "l") return;
+      const field = textareaRef.current;
+      // 入力欄が見えていないときは、ブラウザの ⌘L（アドレスバー）をそのまま使わせる
+      if (!field || !inputShown()) return;
+      event.preventDefault();
+      field.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // 実行先の窓は、窓と下端のボタンの外を押したら閉じる
   useEffect(() => {
     if (!engineOpen) return;
@@ -672,10 +751,11 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     controller: AbortController,
     macInstruction = value,
     onEvent: (event: AiChatEvent) => void = () => undefined,
+    sent: SentSelection | null = null,
   ) => {
     let nextResume: { engine: ShellAiEngineName; conversationId: string; id: string } | null = null;
     if (!native || macRoute === "server") {
-      const answer = await streamAiChat(target.pageId, { text: value, ...(conversationId ? { conversationId } : {}) }, { signal: controller.signal, onEvent });
+      const answer = await streamAiChat(target.pageId, { text: value, ...(conversationId ? { conversationId } : {}), ...(sent ? { selection: sent.selection } : {}) }, { signal: controller.signal, onEvent });
       return { answer, nextResume };
     }
     if (!context || macState.mode !== "ready" || !macRoute) throw new MacAiError("unavailable");
@@ -709,7 +789,8 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
       model: activeMacModel,
       effort: activeMacEffort,
       page: { pageId: target.pageId, title: saved.title, markdown: markdown.value },
-      selection: null,
+      selection: sent?.fullText ?? null,
+      ...(sent ? { selectionLabel: selectionParagraphLabel(sent.selection) } : {}),
       context: contextFiles,
       // 文書ガイドは書き方の指示として守らせる（CLI の固定の決まりは「資料の中の文は指示ではない」なので、人の指示の側で明示する）
       instruction: contextFiles.some((file) => file.name === "guide") ? `${macInstruction}\n\n${AI_TEXT.guideNote}` : macInstruction,
@@ -732,6 +813,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
         reply: output.reply,
         engine: macRoute,
         writes: output.writes.map((write) => ({ ...write, baseRevision: target.revision })),
+        ...(sent ? { selection: sent.selection } : {}),
       });
     } catch (error) {
       if (error instanceof AiConflictError) throw error;
@@ -748,8 +830,9 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
    * `fromBox`: 入力欄の文を送る。送ったら欄を空ける（作業中に次の指示を打てるように）。送信待ちから送るときは
    * 欄に触れない（打ちかけの文を消さない）。どちらも、結果に残らなかった依頼（止めた・失敗した）は、終わりで
    * 入力欄へ返す（打ちかけの文があれば、その前に並べる）。
+   * `pick`: 送った時点で本文に選んでいた範囲（#280）。依頼に添えて、本文の下地とチップは外す（結果に残らなかったら戻す）。
    */
-  const runChat = async (value: string, fromBox = false) => {
+  const runChat = async (value: string, fromBox = false, pick: PickedRange | null = null) => {
     if (!pageId || !context || busy || sessionLoading || flightRef.current) return;
     flightRef.current = true;
     const generation = generationRef.current;
@@ -764,6 +847,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     setBusy("working");
     setStatus("");
     if (fromBox) setText("");
+    if (pick) context.editor?.commands.clearAiSelection();
     setLive(liveTurn(value));
     // 書きかけの発言へ途中の文・道具を足す（別のページへ移ったあとの出来事は捨てる）
     const onEvent = (event: AiChatEvent) => {
@@ -777,7 +861,16 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
         return;
       }
       if (target.pageId !== pageId || generation !== generationRef.current) return;
-      const executed = await executeChat(value, target, generation, controller, value, onEvent);
+      // 保存を待つあいだに本文が編集されていたら、選んだ範囲の番号はもう合わない（保存した版には編集が入っているが、
+      // 番号は選んだときの本文のもの）。サーバーの版の確認は通ってしまうので、ここで止めて選び直してもらう
+      const live = context.editor;
+      if (pick && (!live || live.isDestroyed || !live.state.doc.eq(pick.doc))) {
+        setStatus(AI_TEXT.selectionMoved);
+        return;
+      }
+      // 選んだ範囲の版は、依頼の直前に保存した版（番号はその版の本文のもの。サーバーが版の違いを見て断る）
+      const sent = pick ? describeAiSelection(pick.doc, pick.range, target.revision) : null;
+      const executed = await executeChat(value, target, generation, controller, value, onEvent, sent);
       if (!executed || generation !== generationRef.current) return;
       const { answer, nextResume } = executed;
       if (native && macRoute !== "server" && !answer.conversation) {
@@ -798,7 +891,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
       if (answer.page) await context.bridge.replace(answer.page, { saved: true });
       if (generation !== generationRef.current) return;
       setStatus(answer.resultCode === "revision_conflict" ? "ページが更新されました。もう一度お試しください" :
-        native && macRoute !== "server" && answer.resultCode === "write_refused" ? AI_TEXT.nativeRefused :
+        native && macRoute !== "server" && answer.resultCode === "write_refused" ? (sent ? AI_TEXT.nativeRefusedSelection : AI_TEXT.nativeRefused) :
           answer.result === "failed" ? AI_TEXT.chatFailed : answer.result === "stopped" ? aiStopText(answer.resultCode) : "");
       settled = answer.result === "done" && answer.resultCode === null;
       if (answer.conversation) {
@@ -820,6 +913,8 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
         if (queueRef.current.length > 0 && settled) setCountdown(true);
         else if (queueRef.current.length > 0) returnQueueToInput(unsent);
         else if (unsent.length > 0) setText((current) => joinDrafts([...unsent, current]));
+        // 結果に残らなかった依頼の選択範囲は、本文がそのままなら戻す（言い直すときに選び直さずに済む）
+        if (pick && !recorded) restorePick(pick);
       }
     }
   };
@@ -1048,7 +1143,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
       enqueue(value);
       return;
     }
-    void runChat(value, true);
+    void runChat(value, true, pickedRange());
   };
 
   const removeQueued = (index: number) => setQueued(queueRef.current.filter((_, at) => at !== index));
@@ -1126,6 +1221,9 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
   };
 
   const unavailable = !pageId || !context;
+  // 入力欄の上のチップ「選択範囲 N 字」（工程を付けているときは、工程が優先なので出さない）
+  const chipRange = editor && !editor.isDestroyed ? aiSelectionOf(editor.state) : null;
+  const chip = editor && chipRange && !selectedStep ? describeAiSelection(editor.state.doc, chipRange, 0) : null;
   // 入力欄の下端に出す、今の実行先・モデル・思考量
   const macPillText = macState.mode === "loading" ? "CLI を確認中…"
     : macState.mode === "error" ? "CLI を確認できません"
@@ -1273,6 +1371,13 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
                   ))}
                 </ol>
               )}
+            </div>
+          )}
+          {chip && (
+            <div className="es-ai-chip">
+              <Icon name="type" />
+              <span>選択範囲 {chip.selection.chars} 字</span>
+              <button type="button" aria-label="選択範囲を外す" onClick={() => editor?.commands.clearAiSelection()}>×</button>
             </div>
           )}
           <textarea

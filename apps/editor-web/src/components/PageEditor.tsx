@@ -14,6 +14,7 @@ import { PageChrome } from "niho-docs-ui/page/PageChrome";
 import { docFromBlocks, replaceBlocks } from "@/editor/doc";
 import { buildPageExtensions } from "@/editor/page-extensions";
 import { AiDiffView, aiDiffOf } from "@/editor/ai-diff-view";
+import { AiSelection } from "@/editor/ai-selection";
 import { useAiGray } from "@/lib/ai-gray";
 import { getPageVersion } from "@/lib/page-actions-client";
 import { normalizePastedHtml } from "@/editor/paste";
@@ -493,7 +494,7 @@ function EditorScreen(props: ScreenProps) {
     // 画像（#33）はアップロードの口と、入れる先のページを渡す。この関数は画像を入れるとき（操作のとき）だけ呼ばれ、
     // 描画には使わない（新しいページの id は最初の保存で決まるので、保存の部品から読む）
     // eslint-disable-next-line react-hooks/refs -- 描画中には読まない（画像を入れる操作の中だけ）
-    extensions: [...buildPageExtensions({ images: pageImages, pageId: () => saverRef.current?.pageId ?? initialRef.current.id }), AiDiffView],
+    extensions: [...buildPageExtensions({ images: pageImages, pageId: () => saverRef.current?.pageId ?? initialRef.current.id }), AiDiffView, AiSelection],
     content: docFromBlocks(page.blocks),
     // 下書きを読み終えるまでは書けない
     editable: storage === null,

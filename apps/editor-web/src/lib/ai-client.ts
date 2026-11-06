@@ -3,6 +3,7 @@
  * 契約はサーバー側の src/server/chat-api.ts（チャット）と src/server/ai-api.ts（会話の読み出し）。
  */
 
+import type { ChatSelection } from "@/ai/chat-selection";
 import { conflictPageOf, type ConflictPage } from "./pages-client";
 
 /** 応答のページ（書いた結果・競合のときの今のページ）。 */
@@ -295,7 +296,7 @@ function chatResultFrom(data: unknown): AiChatResult {
   };
 }
 
-export async function sendAiChat(pageId: string, body: { text: string; conversationId?: string }, options: { signal?: AbortSignal } = {}): Promise<AiChatResult> {
+export async function sendAiChat(pageId: string, body: { text: string; conversationId?: string; selection?: ChatSelection }, options: { signal?: AbortSignal } = {}): Promise<AiChatResult> {
   return chatResultFrom(await post(pagePath(pageId, "/ai/chat"), body, options.signal));
 }
 
@@ -346,7 +347,7 @@ function toolEventOf(value: unknown): AiChatEvent | null {
  */
 export async function streamAiChat(
   pageId: string,
-  body: { text: string; conversationId?: string },
+  body: { text: string; conversationId?: string; selection?: ChatSelection },
   options: { signal?: AbortSignal; onEvent: (event: AiChatEvent) => void },
 ): Promise<AiChatResult> {
   const { signal } = options;
@@ -411,7 +412,7 @@ export async function streamAiChat(
 }
 
 /** Mac CLI の完了結果を保存する。通信が途切れたら保存済みか不明なので、この関数は自動再送しない。 */
-export async function recordDeviceAiChat(pageId: string, body: { conversationId?: string; input: string; reply: string; engine: string; writes: DeviceChatWrite[] }): Promise<AiChatResult> {
+export async function recordDeviceAiChat(pageId: string, body: { conversationId?: string; input: string; reply: string; engine: string; writes: DeviceChatWrite[]; selection?: ChatSelection }): Promise<AiChatResult> {
   const data = await post(pagePath(pageId, "/ai/chat/turns"), body);
   // Device turns save the page before best-effort conversation history. Preserve a successful page response
   // even when that history write failed, so the editor can refresh the changed page and tell the user.

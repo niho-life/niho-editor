@@ -307,6 +307,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be-diffbar button:disabled { color: var(--ed-ink-mute); cursor: default; }
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-ins { background: var(--ed-accent-soft); text-decoration: underline; text-decoration-color: var(--ed-leaf); text-decoration-thickness: 2px; text-underline-offset: 3px; }
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-del { color: var(--ed-ink-mute); text-decoration: line-through; }
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-ai-selection { background: color-mix(in srgb, var(--ed-ink-mute) 22%, transparent); border-radius: 2px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-deleted { display: block; margin: 0 0 .6em; }
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-del-block { display: block; margin: 0 0 .4em; color: var(--ed-ink-mute); text-decoration: line-through; white-space: pre-wrap; }
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc .es-diff-added,
