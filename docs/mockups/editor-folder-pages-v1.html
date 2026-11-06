@@ -7,7 +7,7 @@
 
   決めたこと（オーナー 2026-11-06。#288）:
     - 「案」という語も概念も置かない。あるのは フォルダ › ページ › タブ の 3 つ。
-    - 本文はタブにある。タブが無いページも、ページ名の上に薄い罫線が中央レールの幅いっぱいにあり、右端の ＋ でタブができる
+    - 本文はタブにある。タブが無いページも、ページ名の上に薄い罫線が本文のコンテンツ幅（680px）であり、右端の ＋ でタブができる
       （「タブを足す」というボタンは置かない）。新しいタブはまっさら（複製だけ元の本文を持つ）。
     - **1 フォルダに 1 つの手順。** 手順は「ページ」パネルの「流れ」に出ていて、各行の右端の「作成」が、今開いているタブを入力に
       その段階の出力を作る（間の段階が無ければ一緒に作る）。この入力から作成済みなら「済み」で押せない。
@@ -212,8 +212,9 @@ body.dragging .ph{cursor:grabbing}
 .dt .tg .ib.on{color:var(--ink);background:var(--sand2)}
 .pubbtn{height:30px;padding:0 13px;border-radius:8px;font-weight:600;font-size:13.5px;color:var(--ink);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:none}
 .pubbtn:hover{background:var(--sand)}
-/* タブの帯: ページ名の上、中央レールの幅いっぱいの薄い罫線。右端に ＋。タブが 2 つ以上なら左にタブ */
-.tabbar{position:sticky;top:calc(var(--bar) + 52px);z-index:19;display:flex;align-items:flex-end;gap:2px;height:38px;padding:0 14px 0 56px;border-bottom:1px solid var(--line2);background:var(--canvas)}
+/* タブの帯: ページ名の上、本文のコンテンツ幅（680px）と同じ薄い罫線。右端に ＋。タブが 2 つ以上なら左にタブ */
+.tabbar{position:sticky;top:calc(var(--bar) + 52px);z-index:19;padding:0 56px;background:var(--canvas)}
+.tabbar .in{display:flex;align-items:flex-end;gap:2px;height:38px;border-bottom:1px solid var(--line2)}
 .tabbar .tb{display:flex;align-items:flex-end;flex:none;position:relative}
 .tabbar [role=tab]{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 12px;margin-bottom:-1px;border-bottom:2px solid transparent;border-radius:8px 8px 0 0;font-size:13.5px;font-weight:600;color:var(--mute);white-space:nowrap;max-width:46vw;overflow:hidden;text-overflow:ellipsis}
 .tabbar [role=tab]:hover{background:var(--sand);color:var(--ink)}
@@ -436,7 +437,7 @@ body.dragging .ph{cursor:grabbing}
   .loc:empty{display:none}
   .loc button{max-width:60vw;margin-left:-7px}
   .loc button+i{margin-left:0}
-  .tabbar{padding:0 8px 0 10px}
+  .tabbar{padding:0 16px}
   .tabbar [role=tab]{max-width:none}
   .canvas{padding:22px 16px 120px}
   .tt{font-size:25px}
@@ -498,7 +499,7 @@ body.dragging .ph{cursor:grabbing}
         <div class="menu" id="menu-dots" role="menu" aria-label="ページのメニュー"></div>
       </span>
     </header>
-    <div class="tabbar" id="tabbar" role="tablist" aria-label="タブ"></div>
+    <div class="tabbar" id="tabbar"><div class="in" id="tabs" role="tablist" aria-label="タブ"></div></div>
     <div class="canvas" id="cv"><nav class="in loc crumbs" id="loc" aria-label="場所"></nav><div class="in" id="canvas"></div></div>
     <button class="count" id="count" aria-label="字数。押すとページのパネル">0 字</button>
   </main>
@@ -920,7 +921,7 @@ function open(id) {
   curPage = p.id; curTab = tab ? tab.id : null;
   $("#cv").classList.remove("wide");
   $("#tabbar").hidden = folder;
-  $("#tabbar").innerHTML = folder ? "" : tabbarHtml(p, tab);
+  $("#tabs").innerHTML = folder ? "" : tabbarHtml(p, tab);
   $("#canvas").innerHTML = folder ? folderHtml(p) : bodyHtml(p, tab);
   $("#crumbs").innerHTML = crumbsHtml(p);
   $("#loc").innerHTML = crumbsHtml(p);
