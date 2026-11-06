@@ -5,6 +5,7 @@ import {
   getChatChanges,
   getConversation,
   getEditorSettings,
+  getRecording,
   listChatWorkspace,
   listReferencePages,
   markChangesUndone,
@@ -39,6 +40,7 @@ export const chatDeps: ChatApiDeps = {
     return {
       workspace: (owner, pageId) => listChatWorkspace(pool, owner, pageId),
       references: (owner, pageId) => listReferencePages(pool, owner, pageId),
+      recording: (owner, pageId) => getRecording(pool, owner, pageId),
       history: (owner, pageId, conversationId) => getConversation(pool, owner, pageId, conversationId),
       append: (owner, input) => appendChatTurn(pool, owner, input),
       changes: (owner, pageId, messageId) => getChatChanges(pool, owner, pageId, messageId),

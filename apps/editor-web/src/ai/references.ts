@@ -1,6 +1,5 @@
 import type { About } from "@niho/docs-core";
 import type { ReferencePage } from "@niho/editor-store";
-import { blockText } from "./engine";
 import { wrapUntrusted } from "./prompt";
 
 /**
@@ -22,11 +21,41 @@ function countChars(text: string): number {
   return Array.from(text).length;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function inlineText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((node: unknown) => {
+      if (!isPlainObject(node)) return "";
+      if (node.type === "hardBreak") return "\n";
+      return node.type === "text" && typeof node.text === "string" ? node.text : "";
+    })
+    .join("");
+}
+
+/** ブロックの文字（段落・見出しは行の中の文字。入れ子は段落を改行でつなぎ、画像は代替の文字だけ）。 */
+function blockText(block: unknown): string {
+  if (!isPlainObject(block)) return "";
+  if (block.type === "paragraph" || block.type === "heading") return inlineText(block.content);
+  if (block.type === "image") {
+    const attrs = isPlainObject(block.attrs) ? block.attrs : {};
+    return typeof attrs.alt === "string" ? attrs.alt : "";
+  }
+  if (!Array.isArray(block.content)) return "";
+  return block.content
+    .map((child: unknown) => blockText(child))
+    .filter((text) => text.length > 0)
+    .join("\n");
+}
+
 /** ページの本文を、見出しと段落を改行でつないだ文字にする。 */
 export function referenceText(blocks: unknown): string {
   if (!Array.isArray(blocks)) return "";
   return blocks
-    .map((block) => blockText(block as Parameters<typeof blockText>[0]).trim())
+    .map((block) => blockText(block).trim())
     .filter((line) => line.length > 0)
     .join("\n");
 }

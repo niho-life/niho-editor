@@ -700,6 +700,61 @@ describe("AiPanel", () => {
     expect(button("メッセージを送る")).toBeTruthy();
   });
 
+  it("shows what the tool is doing from the server's detail, and the end detail until the next text (#278)", async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((done) => { release = done; });
+    let next!: () => void;
+    const second = new Promise<void>((done) => { next = done; });
+    const done = await chatResponse("第 3 段落を短くしました。").json();
+    const encoder = new TextEncoder();
+    defaultServer({
+      chat: () => new Response(new ReadableStream<Uint8Array>({
+        async start(controller) {
+          controller.enqueue(encoder.encode(sse("tool", { tool: "search_transcript", page: null, ok: null, phase: "start", detail: "文字起こしを『鎌倉』で探しています" })));
+          await hold;
+          controller.enqueue(encoder.encode(sse("tool", { tool: "edit_page", page: "合成ページ", ok: true, phase: "end", detail: "第 3 段落を直しました" })));
+          await second;
+          controller.enqueue(encoder.encode(sse("text", { text: "直しました。" }) + sse("done", done)));
+          controller.close();
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+    });
+    await render();
+    setValue("第 3 段落だけ短く");
+    await until(() => !button("メッセージを送る").disabled);
+    await press("Enter");
+    await until(() => container!.querySelector(".es-ai-work") !== null);
+    expect(container!.querySelector(".es-ai-work")?.textContent).toBe("文字起こしを『鎌倉』で探しています…");
+    release();
+    await until(() => container!.querySelector(".es-ai-work")?.textContent === "第 3 段落を直しました");
+    next();
+    await until(() => container!.querySelector(".es-ai-message--live") === null);
+    expect(logText()).toContain("第 3 段落を短くしました。");
+  });
+
+  it("says why a turn stopped at the tool, write or time limit, in the same tone as before (#278)", async () => {
+    for (const [code, text] of [
+      ["max_tools", "1 回の依頼で使える道具の回数（40 回）に達したので止まりました。ここまでの変更は残っています。もう一度頼めます"],
+      ["max_writes", "1 回の依頼で書ける回数（20 回）に達したので止まりました。ここまでの変更は残っています。もう一度頼めます"],
+      ["max_time", "1 回の依頼の時間（10 分）を過ぎたので止まりました。ここまでの変更は残っています。もう一度頼めます"],
+      ["max_tokens", "途中で止まりました。もう一度頼めます"],
+    ] as const) {
+      const body = await chatResponse("ここまで直しました。").json() as { message: Record<string, unknown> };
+      body.message.result = "stopped";
+      body.message.resultCode = code;
+      defaultServer({ chat: () => json(200, body) });
+      await render();
+      setValue("全部直して");
+      await until(() => !button("メッセージを送る").disabled);
+      await press("Enter");
+      await until(() => container!.textContent!.includes(text));
+      await act(async () => root?.unmount());
+      container?.remove();
+      container = null;
+      root = null;
+    }
+  });
+
   it("stops a running turn with the square stop button", async () => {
     defaultServer({
       chat: (_body, signal) => new Promise<Response>((_resolve, reject) => {

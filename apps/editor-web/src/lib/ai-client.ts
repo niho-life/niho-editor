@@ -1,15 +1,11 @@
 /**
- * ブラウザから AI の提案・採用の API を呼ぶ（同じ origin。cookie・token は扱わない。モデルと鍵はサーバー側だけ）。
- * 契約はサーバー側の src/server/ai-api.ts（提案はページに何も書かない。採用のときだけ、版に残してから保存する）。
+ * ブラウザから AI チャットと会話の API を呼ぶ（同じ origin。cookie・token は扱わない。モデルと鍵はサーバー側だけ）。
+ * 契約はサーバー側の src/server/chat-api.ts（チャット）と src/server/ai-api.ts（会話の読み出し）。
  */
 
-import type { AiScope, Proposal, ProposalChange, ProposalInsert } from "@/ai/engine";
-import type { AiIntent } from "@/ai/presets";
 import { conflictPageOf, type ConflictPage } from "./pages-client";
 
-export type { AiScope, Proposal, ProposalChange, ProposalInsert };
-
-/** 応答のページ（採用の結果・競合のときの今のページ）。 */
+/** 応答のページ（書いた結果・競合のときの今のページ）。 */
 export type AiPage = ConflictPage;
 
 /**
@@ -34,13 +30,8 @@ export class AiConflictError extends Error {
   }
 }
 
-export type ProposalRequest = { baseRevision: number; intent: AiIntent; scope?: AiScope; conversationId?: string };
-/** 会話に残った 1 回のやりとり（会話の id と、その提案の発言の id。残せなかったときは null）。 */
+/** 会話に残った 1 回のやりとり（会話の id と、その AI の発言の id。残せなかったときは null）。 */
 export type AiTurnRef = { id: string; messageId: string };
-export type ProposalResult = { proposal: Proposal; usage: { nearLimit: boolean }; conversation: AiTurnRef | null };
-export type AdoptionRequest = { baseRevision: number; changes: { index: number; text: string }[]; inserts: ProposalInsert[]; messageId?: string };
-/** 採用の結果（保存したページと、会話に書けた採用）。 */
-export type AdoptionResult = { page: AiPage; adopted: { messageId: string; version: number } | null };
 
 /** 会話の 1 つの発言（画面に出す分だけ。提案の中身は履歴では開かない）。 */
 export type AiChatMessage = {
@@ -91,8 +82,8 @@ export type AiChatResult = {
 
 export type DeviceChatWrite = { pageId: string; markdown: string; baseRevision: number };
 
-/** 作業の 1 行（道具の名前とページの名前）。 */
-export type AiChatItem = { kind: "narration"; text: string } | { kind: "tool"; tool: string; page: string | null; ok: boolean };
+/** 作業の 1 行（道具の名前とページの名前。edit_page は直した段落の番号も）。 */
+export type AiChatItem = { kind: "narration"; text: string } | { kind: "tool"; tool: string; page: string | null; ok: boolean; paragraphs?: number[] };
 
 /** 「元に戻す」の結果。`kept` は戻さなかったページとその理由。 */
 export type AiUndoResult = { undone: string[]; kept: { pageId: string; reason: string }[]; page: AiPage | null };
@@ -154,42 +145,7 @@ function pagePath(id: string, suffix: string): string {
 const isIndex = (value: unknown, min: number): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= min;
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
-function isPart(value: unknown): boolean {
-  if (typeof value === "string") return true;
-  if (!isRecord(value)) return false;
-  return typeof value.del === "string" || typeof value.ins === "string";
-}
-
-function changeOf(value: unknown): ProposalChange | null {
-  if (!isRecord(value) || !isIndex(value.index, 0) || typeof value.before !== "string" || typeof value.after !== "string") return null;
-  if (!Array.isArray(value.parts) || !value.parts.every(isPart)) return null;
-  return { index: value.index, before: value.before, after: value.after, parts: value.parts as ProposalChange["parts"] };
-}
-
-function insertOf(value: unknown): ProposalInsert | null {
-  if (!isRecord(value) || !isIndex(value.afterIndex, -1) || typeof value.text !== "string") return null;
-  if (value.kind !== "paragraph" && value.kind !== "heading" && value.kind !== "callout") return null;
-  return { afterIndex: value.afterIndex, kind: value.kind, text: value.text };
-}
-
-/** 提案の応答を知っている欄だけで組み直す（形が違えば null）。 */
-function proposalOf(data: unknown): ProposalResult | null {
-  if (!isRecord(data) || !isRecord(data.proposal)) return null;
-  const raw = data.proposal;
-  if (typeof raw.label !== "string" || !isIndex(raw.baseRevision, 1) || !Array.isArray(raw.changes) || !Array.isArray(raw.inserts)) return null;
-  const changes = raw.changes.map(changeOf);
-  const inserts = raw.inserts.map(insertOf);
-  if (changes.some((change) => change === null) || inserts.some((insert) => insert === null)) return null;
-  const unchanged = isIndex(raw.unchanged, 0) ? raw.unchanged : 0;
-  const nearLimit = isRecord(data.usage) && data.usage.nearLimit === true;
-  return {
-    proposal: { label: raw.label, baseRevision: raw.baseRevision, changes: changes as ProposalChange[], inserts: inserts as ProposalInsert[], unchanged },
-    usage: { nearLimit },
-    conversation: turnRefOf(data.conversation),
-  };
-}
-
-/** 会話の id と発言の id（形が違えば null。会話に残せなくても提案は使える）。 */
+/** 会話の id と発言の id（形が違えば null。会話に残せなくても結果は使える）。 */
 function turnRefOf(value: unknown): AiTurnRef | null {
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.messageId !== "string") return null;
   return { id: value.id, messageId: value.messageId };
@@ -199,7 +155,8 @@ function chatItemOf(value: unknown): AiChatItem | null {
   if (!isRecord(value)) return null;
   if (value.kind === "narration" && typeof value.text === "string") return { kind: "narration", text: value.text };
   if (value.kind !== "tool" || typeof value.tool !== "string") return null;
-  return { kind: "tool", tool: value.tool, page: typeof value.page === "string" ? value.page : null, ok: value.ok === true };
+  const paragraphs = Array.isArray(value.paragraphs) ? value.paragraphs.filter((n): n is number => isIndex(n, 1)).slice(0, 200) : [];
+  return { kind: "tool", tool: value.tool, page: typeof value.page === "string" ? value.page : null, ok: value.ok === true, ...(paragraphs.length > 0 ? { paragraphs } : {}) };
 }
 
 function chatItemsOf(value: unknown): AiChatItem[] {
@@ -256,29 +213,6 @@ function chatSummaryOf(value: unknown): AiChatSummary | null {
     messages: isIndex(value.messages, 0) ? value.messages : 0,
     lastText: typeof value.lastText === "string" ? value.lastText : null,
   };
-}
-
-/**
- * AI の提案を頼む（ページには何も書かれない）。`baseRevision` が今のページと違えば AiConflictError。
- * `signal` で中止できる（AiRequestError `aborted`）。
- */
-export async function proposeAiRequest(pageId: string, body: ProposalRequest, options: { signal?: AbortSignal } = {}): Promise<ProposalResult> {
-  const result = proposalOf(await post(pagePath(pageId, "/ai/proposals"), body, options.signal));
-  if (!result) throw new AiRequestError("failed");
-  return result;
-}
-
-/**
- * 採用したものだけを 1 回で保存する（今の本文は版 `ai` に残る）。保存したページと、会話に書けた採用を返す。
- * `baseRevision` が違えば AiConflictError。
- */
-export async function adoptAiRequest(pageId: string, body: AdoptionRequest): Promise<AdoptionResult> {
-  const data = await post(pagePath(pageId, "/ai/adoptions"), body);
-  const page = conflictPageOf(data);
-  if (!page) throw new AiRequestError("failed");
-  const raw = isRecord(data) ? data.adopted : null;
-  const adopted = isRecord(raw) && typeof raw.messageId === "string" && isIndex(raw.version, 1) ? { messageId: raw.messageId, version: raw.version } : null;
-  return { page, adopted };
 }
 
 async function get(path: string, signal?: AbortSignal): Promise<unknown> {
@@ -350,7 +284,10 @@ export async function sendAiChat(pageId: string, body: { text: string; conversat
  */
 export type AiChatEvent =
   | { type: "text"; text: string; kind?: "text" | "thinking" }
-  | { type: "tool"; tool: string; page: string | null; ok: boolean | null; phase: "start" | "end" };
+  | { type: "tool"; tool: string; page: string | null; ok: boolean | null; phase: "start" | "end"; detail?: string };
+
+/** 作業の行の 1 句の長さの上限（文字。サーバーが作る短い句だけを出す）。 */
+const TOOL_DETAIL_MAX_CHARS = 60;
 
 /** SSE の 1 つの出来事（`event:` と `data:`）。コメント行（`:`）は無視する。 */
 function parseSseBlock(block: string): { event: string; data: string } | null {
@@ -370,12 +307,14 @@ function parseSseBlock(block: string): { event: string; data: string } | null {
 function toolEventOf(value: unknown): AiChatEvent | null {
   if (!isRecord(value) || typeof value.tool !== "string") return null;
   if (value.phase !== "start" && value.phase !== "end") return null;
+  const detail = typeof value.detail === "string" && value.detail.trim().length > 0 ? Array.from(value.detail.trim()).slice(0, TOOL_DETAIL_MAX_CHARS).join("") : null;
   return {
     type: "tool",
     tool: value.tool,
     page: typeof value.page === "string" ? value.page : null,
     ok: typeof value.ok === "boolean" ? value.ok : null,
     phase: value.phase,
+    ...(detail ? { detail } : {}),
   };
 }
 

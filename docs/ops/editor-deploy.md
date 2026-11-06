@@ -8,7 +8,7 @@
 
 | 資源 | 名前（既定） | 内容 |
 | --- | --- | --- |
-| Cloud Run サービス | `niho-editor` | 画面、`/api/pages`、公開 API `/v1/*`。誰でも呼べる（ログインはアプリの中）。min 0 / max 2、`EDITOR_AUTH_MODE` は `deploy.env` の値（既定 `niho`。§13）。要求の時間切れは 300 秒（AI の提案は 1 回の呼び出し 120 秒まで × 分けた要求の数。§10） |
+| Cloud Run サービス | `niho-editor` | 画面、`/api/pages`、公開 API `/v1/*`。誰でも呼べる（ログインはアプリの中）。min 0 / max 2、`EDITOR_AUTH_MODE` は `deploy.env` の値（既定 `niho`。§13）。要求の時間切れは 300 秒（AI の 1 回の呼び出しは 120 秒まで。§10） |
 | Cloud Run ジョブ | `niho-editor-migrate` | 配備のたびに 1 回。migration の適用と、アプリ用ロールの作成・権限付与 |
 | Cloud SQL | 既存の共有インスタンスに データベース `niho_editor` | ロール 2 つ: `niho_editor_migrate`（表の所有者。migrate ジョブだけが使う）と `niho_editor_app`（DML だけ。DDL と migration の記録の書き換えは不可） |
 | GCS | 資産バケット（private） | 均一なバケットレベルのアクセス、公開アクセス禁止。実行 ID は作成と閲覧だけ（削除・上書き不可） |
@@ -135,7 +135,7 @@ migration は expand → contract（列の削除は配備の 1 つ後）。適�
 
 ## 10. AI（#38）
 
-AI の提案は Anthropic の Messages API（`https://api.anthropic.com/v1/messages`。ホストはコードで固定）を呼ぶ。鍵は Secret Manager の `niho-editor-anthropic-key` に置き、画面の実行 ID（`niho-editor-runner`）だけが読める。**Secret に版が無い、または最新の版が無効なあいだ、AI は閉じたまま**（提案・採用は 503 `ai_unavailable`。使用量の表示は動く）。`deploy.sh` は配備のたびに最新の版（作成が最も新しい版。サービスは `:latest` で読むので、古い有効な版は数えない）の状態を見て、有効なときだけ鍵と AI の環境変数を足す（ログに `AI: on` / `AI: off`）。
+AI（チャット・手順の段階・翻訳）は Anthropic の Messages API（`https://api.anthropic.com/v1/messages`。ホストはコードで固定）を呼ぶ。鍵は Secret Manager の `niho-editor-anthropic-key` に置き、画面の実行 ID（`niho-editor-runner`）だけが読める。**Secret に版が無い、または最新の版が無効なあいだ、AI は閉じたまま**（チャットは 503 `ai_unavailable`。使用量の表示は動く）。`deploy.sh` は配備のたびに最新の版（作成が最も新しい版。サービスは `:latest` で読むので、古い有効な版は数えない）の状態を見て、有効なときだけ鍵と AI の環境変数を足す（ログに `AI: on` / `AI: off`）。
 
 **鍵は公開リポジトリ・Issue・PR・チャット・ログ・シェルの履歴に出さない。** 入れる経路は `set-ai-key.sh` だけ（標準入力から読み、画面・ファイル・コマンドラインに出さない。引数では受け付けない）。アプリも鍵・プロンプト・本文をエラーやログに出さない（ログは失敗の種類と HTTP ステータスだけ）。
 
@@ -144,11 +144,11 @@ AI の提案は Anthropic の Messages API（`https://api.anthropic.com/v1/messa
 | `deploy.env` | 既定（推奨） | 渡る環境変数 | 理由 |
 | --- | --- | --- | --- |
 | `AI_MODEL` | `claude-sonnet-5-5` | `EDITOR_AI_MODEL` | 文を整える・要約・見出しには十分な品質で、Opus 系の約半額（入力 $2・出力 $10／100 万トークン）。docs-core の単価表にあり、見込み金額が出る |
-| `AI_MONTHLY_LIMIT_USD` | `10` | `EDITOR_AI_MONTHLY_LIMIT_USD` | 1 人・1 か月の見込みの上限。数段落の提案は 1 回 $0.01 前後、出力が上限まで出るいちばん悪い 1 回の呼び出し（本文 約 4,000 文字・出力 12,000 トークン）でも約 $0.13 なので、普段使いでは届かず、誤用や暴走は止まる |
+| `AI_MONTHLY_LIMIT_USD` | `10` | `EDITOR_AI_MONTHLY_LIMIT_USD` | 1 人・1 か月の見込みの上限。短い依頼の 1 往復は $0.01 前後、出力が上限まで出るいちばん悪い 1 回の呼び出し（出力 12,000 トークン）でも約 $0.13 なので、普段使いでは届かず、誤用や暴走は止まる |
 
-会話（AI チャット）はページごとに DB（`ai_conversations`・`ai_messages`・`ai_message_changes`。migration 0022・0025）に残る。残すのは頼んだことと提案の中身・作業の要約（道具とページの名前と成否）・採用や書き換えで残った版の番号だけで、**鍵・プロンプト・モデルへ送った文は残さない**。ページを消せば会話も消える。GCP の追加の資源は無い。
+会話（AI チャット）はページごとに DB（`ai_conversations`・`ai_messages`・`ai_message_changes`。migration 0022・0025）に残る。残すのは頼んだこと・返答・作業の要約（道具とページの名前と成否、`edit_page` が直した段落の番号）・書き換えで残った版の番号だけで（以前の提案の発言も履歴として読める）、**鍵・プロンプト・モデルへ送った文は残さない**。ページを消せば会話も消える。GCP の追加の資源は無い。
 
-**Mac アプリ（この Mac の CLI）がサーバーへ返す口は 2 つ**（設計 §6.1）。`POST /api/pages/{id}/ai/proposals/device` は**提案として返す**（ページは変わらず、採用のときだけ版に残して保存する＝ブラウザの提案と同じ扱い。差分はサーバーが今の本文から作り、Mac から来た差分は信用しない）。`POST /api/pages/{id}/ai/chat/turns` は**直接書き換える**（チャットと同じ道：作業場の確認 → 版を残す → 保存 → 会話に記録）。どちらもモデルをサーバーで呼ばず、**月の上限には数えない**。
+**Mac アプリ（この Mac の CLI）がサーバーへ返す口は `POST /api/pages/{id}/ai/chat/turns` の 1 つ**（設計 §6.1）。**直接書き換える**（チャットと同じ道：作業場の確認 → CLI が読んだ版の確認 → 版を残す → 保存 → 会話に記録）。モデルをサーバーで呼ばず、**月の上限には数えない**。提案 → 採用の API（`/ai/proposals`・`/ai/proposals/device`・`/ai/adoptions`）は画面から呼ばれなくなったので外した（#278。表・列は残っていて、落とすのは後の contract の migration）。
 
 **使用量は経路ごとに分けて数える**（サーバーの API は表 `ai_usage`、この Mac の CLI は表 `ai_usage_device`。**`ai_usage` の形は 0005 のまま変えない** — 主キーを貼り替えると、migration がサービスの入れ替えより先に走るぶん、**まだ動いている古い revision の `ON CONFLICT (owner, month)` が落ちる**。そのため列ではなく表で分けている）。**月の上限（USD）で止めるのは
 `server`（サーバーの API）だけ**で、`device`（Mac アプリがこの Mac の CLI で作ったもの。`POST /api/pages/{id}/ai/chat/turns`
@@ -157,13 +157,11 @@ AI の提案は Anthropic の Messages API（`https://api.anthropic.com/v1/messa
 
 **AI に渡す文脈が増えた**（旧 NIHO docs の引き継ぎ）: 「あなたについて」（設定。2,000 字まで）と、**自動参考ページ**
 （開いているページと同じフォルダの直下のほかのページ。サブページは入れない）。参考は 1 枚 4,000 字・合わせて 16,000 字まで
-入れ、それを超えた分は名前だけにする。**1 回の提案に入る量の目安**は、本文（最大 4,000 字 × 分けた回数）＋ 参考 16,000 字
-＋ あなたについて 2,000 字で、日本語なら 1 回の呼び出しで**およそ 2 万〜3 万トークン**（`claude-sonnet-5-5` の入力
-$2／100 万トークンで **1 回あたり $0.04〜0.06**）。フォルダが空なら今までどおり（$0.01 前後）。
+入れ、それを超えた分は名前だけにする（手順の段階が使う。チャットは同じフォルダのページを道具で読む）。
 
-**チャット（自由入力）は AI がページを直接書き換える**（候補の提案は採用を待つ）。1 回の依頼でモデルと往復するのは 8 回まで・道具は 12 回までで、触れるのは「開いているページ・その親・そのサブページ」だけ（同じフォルダのほかのページは読むだけ）。書く前の本文は必ず版（`ai`）に残り、画面の「元に戻す」で戻せる。1 回の依頼で何度か往復するので、提案 1 回より費用がかかる（往復のたびに上限を見て、上限以上はその場で止める）。**出力の上限で切れた往復の道具は実行しない**（引数が途中で切れた write で本文を欠けさせないため）ので、`EDITOR_AI_MAX_TOKENS`（既定 12,000 トークン）に収まらない長さのページは、チャットでは丸ごと書き換えられない（範囲を分けて頼む。段階の実行器だけは続きを書かせて繋ぐ）。
+**チャット（自由入力）は AI がページを直接書き換える。** 道具は `list_pages`（字数と revision つき）・`read_page`（段落の番号つき。`from`・`to` で範囲）・`edit_page`（1 か所だけの部分置換）・`write_page`（全体の書き直し）・`create_page`・`search_transcript`（録音の文字起こしを語句で探す。時刻・話者・前後 200 字）。**書き込みは AI が読んだ版（`base_revision`）が今の版と同じときだけ**で、違えば「本文が変わっています」と返して読み直させる（#278）。1 回の依頼の上限は**道具 40 回・書き込み 20 回・10 分**（往復は道具の上限＋1 回）で、超えたら書いた分を残して止まる（`max_tools`・`max_writes`・`max_time`）。触れるのは「開いているページ・その親・そのサブページ」だけ（同じフォルダのほかのページは読むだけ）。書く前の本文は必ず版（`ai`）に残り、画面の「元に戻す」で戻せる。1 回の依頼で何度か往復するので、往復のたびに月の上限を見て、上限以上はその場で止める。**出力の上限で切れた往復の道具は実行しない**（引数が途中で切れた write で本文を欠けさせないため）。長いページは `edit_page` で一部だけ直せるので、`EDITOR_AI_MAX_TOKENS`（既定 12,000 トークン）に本文の全体が収まらなくても直せる（`write_page` で丸ごと書き換えるのは収まる長さだけ）。**10 分の上限は Cloud Run の要求の時間切れ（300 秒）より長い**ので、今は 300 秒で要求ごと切れうる（書いた分と版は残る）。worker（Cloud Tasks）へ移すのは後段。
 
-1 回の提案で送る本文は 30,000 文字まで（超えたら 413 `too_large`。範囲を選んで頼む）で、段落の切れ目で約 4,000 文字ずつに分けて順に呼ぶ。1 回の呼び出しの時間切れ（`EDITOR_AI_TIMEOUT_MS`、既定 120 秒）と出力の上限（`EDITOR_AI_MAX_TOKENS`、既定 12,000 トークン。思考の分を含む）は `deploy.sh` から渡さない（アプリの既定のまま）。Cloud Run の要求の時間切れはそれに合わせて 300 秒。自動の再試行はしない。上流の失敗（401・429・529・5xx・時間切れ）と、使えない応答（JSON でない・出力の上限で途中で切れた）は 502 `ai_failed`。
+1 回の呼び出しの時間切れ（`EDITOR_AI_TIMEOUT_MS`、既定 120 秒）と出力の上限（`EDITOR_AI_MAX_TOKENS`、既定 12,000 トークン。思考の分を含む）は `deploy.sh` から渡さない（アプリの既定のまま）。Cloud Run の要求の時間切れはそれに合わせて 300 秒。自動の再試行はしない。チャットは上流の失敗（401・429・529・5xx・時間切れ）を `failed`（`ai_auth`・`ai_rate_limit` などの短い code）で終える。
 
 ### 有効にする
 
@@ -171,18 +169,18 @@ $2／100 万トークンで **1 回あたり $0.04〜0.06**）。フォルダが
 2. Anthropic の Console で、この用途だけの API キーを作る（workspace を分けて使用上限も付けておくと、アプリの上限とは別の歯止めになる）。
 3. `scripts/editor-deploy/set-ai-key.sh` — 端末で実行すると、入力を画面に出さずに鍵を求める（貼り付けて Enter）。パスワード管理の CLI から渡すときは `<鍵を出すコマンド> | scripts/editor-deploy/set-ai-key.sh`。空の入力は何もしない。
 4. `scripts/editor-deploy/deploy.sh --no-build` — `ANTHROPIC_API_KEY`（Secret の `latest`）と `EDITOR_AI_MODE=anthropic`・`EDITOR_AI_MODEL`・`EDITOR_AI_MONTHLY_LIMIT_USD` が付く。`DATABASE_URL` の Secret はそのまま。
-5. 画面で 1 回だけ提案を頼み、設定の使用量が増えることを確かめる。
+5. 画面の AI チャットで 1 回だけ頼み、設定の使用量が増えることを確かめる。
 
 ### 無効にする
 
 1. 有効な版をすべて無効にする: `gcloud secrets versions list niho-editor-anthropic-key --filter='state:ENABLED'` で版を見て、それぞれ `gcloud secrets versions disable <版> --secret niho-editor-anthropic-key`。
 2. `scripts/editor-deploy/deploy.sh --no-build` — 最新の版が無効なので、AI の Secret と環境変数を付けずに配備する（`--set-secrets`・`--set-env-vars` は毎回の全量なので、前の revision の分は残らない）。ログに `AI: off`。
-3. 1 と 2 の間も、動いているインスタンスは起動の時に読んだ鍵を持っている。すぐ止めたいときは先に Console で鍵を無効にする（以後の提案は 502 `ai_failed`）。
+3. 1 と 2 の間も、動いているインスタンスは起動の時に読んだ鍵を持っている。すぐ止めたいときは先に Console で鍵を無効にする（以後の呼び出しは失敗する。チャットは `ai_auth` で終わる）。
 
 ### 鍵を回す
 
 1. Console で新しい鍵を作り、`set-ai-key.sh` で新しい版として足す（`latest` が新しい版になる）。
-2. `scripts/editor-deploy/deploy.sh --no-build`（新しい revision が新しい鍵を読む）。提案が通ることを確かめる。
+2. `scripts/editor-deploy/deploy.sh --no-build`（新しい revision が新しい鍵を読む）。チャットが通ることを確かめる。
 3. 古い版を `gcloud secrets versions disable <古い版> --secret niho-editor-anthropic-key` で無効にし、Console で古い鍵を無効にする。
 
 ### 費用の見方
@@ -264,7 +262,7 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 - **段階の失敗の理由**: 帯（`GET /api/pages/{id}/steps` の `errorCode`）。`lease_expired` は実行中に worker が落ちて lease が切れたもの。AI の分は次のとおり（再試行するものは Cloud Tasks が自動で、しないものはその段階で失敗にする）:
   - 再試行しない: `ai_unavailable`（`EDITOR_AI_MODE` が無効・鍵が無い）・`quota_exceeded`（今月の上限に達した。モデルを呼ぶ前に止めた）・`ai_auth`（鍵が通らない。401・402・403）・`ai_bad_request`・`invalid_output`（答えが使える形でなかった）・`output_too_long`（出力の上限で切れ、続きを 8 回頼んでも終わらなかった）・`unknown_step`
   - 再試行する: `ai_rate_limit`（429）・`ai_overloaded`（529）・`ai_server`（5xx）・`ai_timeout`・`ai_network`・`usage_unavailable`（DB に届かず使用量を数えられなかった）
-- **段階の費用**: §10 の使用量（`GET /api/ai/usage`）に提案と一緒に入る（1 人・1 か月の見込みの上限は同じものが効く）。
+- **段階の費用**: §10 の使用量（`GET /api/ai/usage`）にチャットと一緒に入る（1 人・1 か月の見込みの上限は同じものが効く）。
 - **Cloud Scheduler のジョブ**の最後の実行: 成功は 200 `{"requeued": n}`。
 
 ### 制約
