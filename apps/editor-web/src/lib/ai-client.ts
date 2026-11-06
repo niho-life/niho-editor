@@ -49,6 +49,9 @@ export type AiChatMessage = {
   result: "done" | "failed" | "stopped" | null;
   items: AiChatItem[];
   changes: AiChatChange[];
+  /** その turn で開いていたページ（タブ）と、その今の題名（「◯◯ で」）。古い記録・消えたページは null。 */
+  pageId: string | null;
+  pageTitle: string | null;
 };
 
 export type AiChatSummary = { id: string; updatedAt: string; messages: number; lastText: string | null };
@@ -205,6 +208,8 @@ function chatMessageOf(value: unknown): AiChatMessage | null {
     result: chatResultOf(value.result),
     items: chatItemsOf(value.items),
     changes: chatChangesOf(value.changes),
+    pageId: typeof value.pageId === "string" ? value.pageId : null,
+    pageTitle: typeof value.pageTitle === "string" ? value.pageTitle : null,
   };
 }
 

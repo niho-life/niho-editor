@@ -58,6 +58,8 @@ function memoryConversations() {
     route: null,
     engine: null,
     changes: [],
+    pageId: null,
+    pageTitle: null,
     createdAt: NOW.toISOString(),
   });
   const pages = new Map<string, string>();
@@ -68,12 +70,14 @@ function memoryConversations() {
       rows.push(row);
       return row.id;
     },
+    // 会話は利用者のもの（#312）。pageId は開いているページが本人のものかの確認だけ
     async list(owner: string, pageId: string): Promise<AiConversationSummary[] | null> {
       if (pages.get(pageId) !== owner) return null;
-      return rows.filter((row) => row.owner === owner && row.pageId === pageId).map(summary).reverse();
+      return rows.filter((row) => row.owner === owner).map(summary).reverse();
     },
     async get(owner: string, pageId: string, conversationId: string): Promise<AiConversation | null> {
-      const row = rows.find((item) => item.id === conversationId && item.owner === owner && item.pageId === pageId);
+      if (pages.get(pageId) !== owner) return null;
+      const row = rows.find((item) => item.id === conversationId && item.owner === owner);
       return row ? { conversation: summary(row), messages: [...row.messages] } : null;
     },
   } satisfies AiConversationStore & Record<string, unknown>;
@@ -150,19 +154,23 @@ describe("GET /api/ai/usage", () => {
   });
 });
 
-describe("the conversations of a page", () => {
-  it("lists one page's conversations newest first and opens one with its messages", async () => {
+describe("the conversations of the owner (from any page)", () => {
+  it("lists the owner's conversations newest first, from whichever page they were started on, and opens one with its messages", async () => {
     const chats = memoryConversations();
     const pageId = randomUUID();
+    const otherPage = randomUUID();
     chats.pages.set(pageId, "user-a");
+    chats.pages.set(otherPage, "user-a");
     const d = deps("user-a", { conversations: chats });
     expect(((await (await listChats(pageId, d)).json()) as { conversations: AiConversationSummary[] }).conversations).toEqual([]);
     const first = chats.add("user-a", pageId, ["合成の頼み", "合成の返答"]);
-    const second = chats.add("user-a", pageId, ["次の頼み", "次の返答"]);
+    const second = chats.add("user-a", otherPage, ["次の頼み", "次の返答"]);
     const list = ((await (await listChats(pageId, d)).json()) as { conversations: AiConversationSummary[] }).conversations;
     expect(list.map((item) => item.id)).toEqual([second, first]);
-    expect(list[0]).toMatchObject({ pageId, messages: 2, lastText: "次の返答" });
-    const opened = (await (await openChat(pageId, first, d)).json()) as AiConversation;
+    expect(list[0]).toMatchObject({ pageId: otherPage, messages: 2, lastText: "次の返答" });
+    // 別のページを開いていても同じ一覧・同じ会話
+    expect(((await (await listChats(otherPage, d)).json()) as { conversations: AiConversationSummary[] }).conversations.map((item) => item.id)).toEqual([second, first]);
+    const opened = (await (await openChat(otherPage, first, d)).json()) as AiConversation;
     expect(opened.messages.map((message) => [message.role, message.text])).toEqual([
       ["user", "合成の頼み"],
       ["assistant", "合成の返答"],

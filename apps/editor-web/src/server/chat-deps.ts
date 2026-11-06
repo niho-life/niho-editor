@@ -1,6 +1,7 @@
 import "server-only";
 import {
   appendChatTurn,
+  chatContextOf,
   getAiUsage,
   getChatChanges,
   getConversation,
@@ -9,7 +10,6 @@ import {
   getRecording,
   getRunGuide,
   listChatWorkspace,
-  listReferencePages,
   markChangesUndone,
   recordAiUsage,
 } from "@niho/editor-store";
@@ -41,7 +41,7 @@ export const chatDeps: ChatApiDeps = {
     if (!pool) return null;
     return {
       workspace: (owner, pageId) => listChatWorkspace(pool, owner, pageId),
-      references: (owner, pageId) => listReferencePages(pool, owner, pageId),
+      context: (owner, pageId) => chatContextOf(pool, owner, pageId),
       recording: (owner, pageId) => getRecording(pool, owner, pageId),
       fields: (owner, pageId) => getPageFields(pool, owner, pageId),
       guide: (owner, pageId) => getRunGuide(pool, owner, pageId),

@@ -13,7 +13,7 @@ import {
   type ChatTurnInput,
   type ChatWorkspacePage,
   type CreatePageInput,
-  type ReferencePage,
+  type ChatContextOf,
   type EditorSettings,
   type OwnerId,
   type Page,
@@ -60,7 +60,8 @@ import { parseBlocks } from "./page-input";
  * AI チャット（#38）。旧アプリ（NIHO docs）の「修正の会話」と同じ動き: **AI が道具でページを直接書き換える**。
  * 依頼の中でページが変わる。安全のための約束:
  *
- * - 触れるのは「開いているページ・その親・そのサブページ」だけ（`listChatWorkspace`）。
+ * - 触れるのは「開いているページのフォルダの中」だけ（タブ・録音・その段階。フォルダの外のページならそのページだけ。#312。`listChatWorkspace`）。
+ * - 会話は利用者のもので、ページを移っても続く（#312）。指示の文脈（この録音について・文書ガイド）は turn ごとに今のページから組み直す。
  * - 書く前に必ず今の本文を版（`ai`）に残し、その版の番号を会話に書く → 人が「元に戻す」で戻せる。
  * - 書き込み（edit_page・write_page）は AI が読んだ版（`base_revision`）が今の版と同じときだけ（#278）。
  *   Mac CLI の書き戻し（recordDeviceChatTurn）は、CLI が読んだ版（`deviceRevisions`）をその前提に使う。
@@ -85,14 +86,15 @@ export type ChatPagesStore = {
 
 export type ChatConversationStore = {
   workspace: (owner: OwnerId, pageId: string) => Promise<ChatWorkspacePage[] | null>;
-  /** 同じフォルダのほかのページ（読むだけで触らせる。書けるのは作業場のページだけ）。 */
-  references?: (owner: OwnerId, pageId: string) => Promise<ReferencePage[] | null>;
+  /** 開いているページの文脈の手がかり（元の録音・フォルダの手順。#312）。渡さなければ録音ページとその段階だけが録音の文脈を持つ。 */
+  context?: (owner: OwnerId, pageId: string) => Promise<ChatContextOf | null>;
   /** 録音ページの文字起こし（search_transcript。渡さなければ探せない）。他人の・無いページは null。 */
   recording?: (owner: OwnerId, pageId: string) => Promise<Recording | null>;
-  /** 録音ページの「この録音について」（背景・登場人物・固有名詞）。開いているのが録音ページ・録音の下の段階のページのとき、指示の文脈に入れる。 */
+  /** 録音ページの「この録音について」（背景・登場人物・固有名詞）。開いているページが元にしている録音のものを、指示の文脈に入れる。 */
   fields?: (owner: OwnerId, pageId: string) => Promise<PageFields>;
-  /** 最新の run の文書ガイドと手順の固有名詞（録音ページ・録音の下の段階のページで。run が無ければ null）。指示の文脈に入れる。 */
+  /** 最新の run の文書ガイドと手順の固有名詞（録音ページで。run が無ければ null）。フォルダに手順が無いとき、指示の文脈に入れる。 */
   guide?: (owner: OwnerId, pageId: string) => Promise<ChatGuide | null>;
+  /** 本人の会話（どのページで始めたかによらない。pageId は開いているページの確認だけ）。 */
   history: (owner: OwnerId, pageId: string, conversationId: string) => Promise<{ messages: AiMessage[] } | null>;
   append: (owner: OwnerId, input: ChatTurnInput) => Promise<{ conversation: { id: string }; result: AiMessage } | null>;
   changes: (owner: OwnerId, pageId: string, messageId: string) => Promise<AiMessageChange[] | null>;
@@ -661,15 +663,8 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
       if (opened.revision !== selection.revision) return conflictResponse(opened);
       if (selection.endParagraph > opened.blocks.length) return errorResponse("bad_request");
     }
-    // 同じフォルダのほかのページは読むだけで触れる（旧アプリの「フォルダ内の他ページを見る」）
-    const readable = (await chats.references?.(owner, id)) ?? [];
-    const known = new Set(writable.map((page) => page.id));
-    const workspace: WorkspaceEntry[] = [
-      ...writable.map((page) => ({ ...page, writable: true })),
-      ...readable
-        .filter((page) => !known.has(page.id))
-        .map((page) => ({ id: page.id, title: page.title, kind: page.kind, parent: open.parent, open: false, writable: false })),
-    ];
+    // 作業場＝開いているページのフォルダの中（#312）。全部読み書きできる
+    const workspace: WorkspaceEntry[] = writable.map((page) => ({ ...page, writable: true }));
     const conversationId = input.value.conversationId;
     const past = conversationId === null ? null : await chats.history(owner, id, conversationId);
     if (conversationId !== null && !past) return notFoundResponse();
@@ -691,8 +686,8 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
             affordable: async () => limitUsd === null || Math.round(limitUsd * 1e6) - (await usage.get(owner, month)).costMicroUsd >= WEB_SEARCH_COST_MICRO_USD,
           }
         : "off";
-    // 「この録音について」（背景・登場人物・固有名詞）と文書ガイドも指示の文脈に入れる（AI の欄の「読むもの」と同じもの）
-    const context = await loadChatContext(chats, owner, open);
+    // 「この録音について」（背景・登場人物・固有名詞）と文書ガイドも指示の文脈に入れる（turn ごとに今のページから組み直す。#312）
+    const context = await loadChatContext(chats, owner, open, settings);
     const respond = async (onEvent?: (event: ChatEvent) => void): Promise<unknown> => {
       const changes = new Map<string, ChatChangeInput & { title: string }>();
       const run = await runChatTurn({
@@ -764,18 +759,26 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
 }
 
 /**
- * 指示の文脈にする「この録音について」と文書ガイド（サーバー経路の指示と Mac の `context/*.md` が同じものを使う）。
- * 録音ページは自分の欄と最新の run のガイド、録音の下の段階のページ（記事本文など）は親の録音のものを読む。
- * ほかのページには渡さない（執筆だけのページに録音の背景やガイドは出さない）。
+ * 指示の文脈にする「この録音について」と文書ガイド（サーバー経路の指示と Mac の `context/*.md` が同じものを使う）。turn ごとに今のページから組み直す（#312）。
+ * 「この録音について」は、開いているページが元にしている録音（録音そのもの・録音の下の段階・文字起こしや手順から作られたタブの系譜。
+ * `chats.context`）の欄。文書ガイドは、入っているフォルダの手順（`pages.recipe`。設定の手順の guide）、無ければその録音の最新の run のガイド。
+ * 録音に由来しないページには録音の欄もガイドも渡さない（執筆だけのページに録音の背景は出さない）。
  */
 async function loadChatContext(
   chats: ChatConversationStore,
   owner: OwnerId,
   open: ChatWorkspacePage,
+  settings: EditorSettings,
 ): Promise<{ recording?: ChatRecordingInfo; guide?: ChatGuide }> {
-  const recordingId = open.kind === "rec" ? open.id : open.kind === "step" ? open.parent : null;
-  if (!recordingId) return {};
-  const [recording, guide] = await Promise.all([chats.fields ? chats.fields(owner, recordingId) : null, chats.guide ? chats.guide(owner, open.id) : null]);
+  const hint = chats.context ? await chats.context(owner, open.id) : null;
+  const recordingId = hint ? hint.recordingId : open.kind === "rec" ? open.id : open.kind === "step" ? open.parent : null;
+  const recipe = hint?.folderRecipe ? settings.recipes.find((item) => item.id === hint.folderRecipe) : undefined;
+  const folderGuide: ChatGuide | null = recipe && recipe.guide.trim().length > 0 ? { recipeName: recipe.name, guide: recipe.guide, terms: [] } : null;
+  const [recording, runGuide] = await Promise.all([
+    recordingId && chats.fields ? chats.fields(owner, recordingId) : null,
+    folderGuide || !recordingId || !chats.guide ? null : chats.guide(owner, recordingId),
+  ]);
+  const guide = folderGuide ?? runGuide;
   return { ...(recording ? { recording } : {}), ...(guide ? { guide } : {}) };
 }
 
@@ -799,7 +802,7 @@ export function getAiChatContext(request: Request, id: string, deps: ChatApiDeps
     const sections = chatContextSections({
       glossary: settings.glossary,
       about: { name: settings.aboutName, text: settings.about },
-      ...(await loadChatContext(chats, owner, open)),
+      ...(await loadChatContext(chats, owner, open, settings)),
     });
     // `webSearch`: 設定の「Web を検索する」。Mac の CLI の経路では、画面がこれを CLI の依頼に載せる（#283）
     return jsonResponse(200, {
