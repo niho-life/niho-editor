@@ -100,10 +100,8 @@
 /* 左上のアプリ名とアイコン（ShellBrand）。地の色は svg の currentColor（rect）で受ける */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-brand{display:inline-flex;align-items:center;gap:7px;min-width:0;flex:none;font-size:14px;font-weight:600;line-height:1;color:var(--ed-ink);white-space:nowrap}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-brand svg{width:22px;height:22px;flex:none;border-radius:6px;color:var(--ed-sand-2);box-shadow:0 0 0 1px var(--ed-line-2)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-top>.es-brand{padding-left:2px}
 /* ＋のメニューは右端の小さなボタンから左へ開く（一覧の幅からはみ出さない） */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-top .es-menu--narrow{left:auto;right:0;top:36px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt>.es-brand{margin-right:4px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-newwrap{position:relative;display:flex}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-newbtn{width:30px;height:30px;border-radius:50%;background:var(--ed-primary-bg);color:var(--ed-primary-ink);display:grid;place-items:center;flex:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-newbtn:hover{background:var(--ed-primary-bg-hover)}
@@ -155,7 +153,17 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow:hover .es-di-more,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow:focus-within .es-di-more,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di-more[aria-expanded="true"]{opacity:1}
 @media (hover:none){:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di-more{opacity:1}}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-psfolder select{width:100%;border:1px solid var(--ed-line-2);border-radius:10px;padding:6px 8px;background:var(--ed-white);font:inherit;font-size:13px;color:var(--ed-ink)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-foot{position:relative;border-top:1px solid var(--ed-line);padding:8px 10px}
+/* アプリ名はいつでも画面の左上端、「設定」はいつでも左下（パネルの配置に関係なく。#311）。左のドック（一覧の列）があればその幅で地と右の罫線を持ち、
+ * 無ければアプリ名は中央のヘッダーの左に重なる（ヘッダーがその分だけ左を空ける）、設定は小さな丸いボタン */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-brandbar{position:absolute;left:0;top:0;z-index:47;display:flex;align-items:center;height:var(--es-header);padding:0 12px 0 14px;pointer-events:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="dock"] .es-brandbar{box-sizing:border-box;width:var(--es-left-w,272px);background:var(--ed-canvas);border-right:1px solid var(--ed-line)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-dt{padding-left:112px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-setbar{position:absolute;left:0;bottom:0;z-index:47}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="dock"] .es-setbar{box-sizing:border-box;width:var(--es-left-w,272px);height:var(--es-header);display:flex;align-items:center;padding:0 10px;background:var(--ed-canvas);border-top:1px solid var(--ed-line);border-right:1px solid var(--ed-line)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-setbar{padding:0 0 12px 12px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-sb-me{width:auto;height:32px;padding:0 12px 0 10px;border-radius:999px;background:color-mix(in srgb,var(--ed-canvas) 92%,transparent);box-shadow:0 1px 2px rgba(28,28,26,.14),0 0 0 1px var(--ed-line-2)}
+/* 一覧がドックの列でない（dock 無し・900px 未満）ときは、一覧の上下にアプリ名と設定の段の分を空ける */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root:not([data-wide="true"]) .es-sb{padding-top:var(--es-header);padding-bottom:var(--es-header)}
 /* 左下の「設定」（直リンク。今いるときは aria-current で面を付ける） */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:7px 8px;border-radius:10px;font-size:13.5px;color:var(--ed-ink-sub)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me b{font-weight:600}
@@ -216,6 +224,8 @@
 
 /* ===== ヘッダー（1段） ===== */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt{position:relative;z-index:10;flex:none;display:flex;align-items:center;gap:8px;height:var(--es-header);padding:0 14px 0 18px;background:color-mix(in srgb,var(--ed-canvas) 96%,transparent);border-bottom:1px solid var(--ed-line)}
+/* 右上の、閉じているパネルを出すボタンの組（#311） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tg{display:flex;align-items:center;gap:2px;margin-left:2px;padding-left:8px;border-left:1px solid var(--ed-line-2)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ttl{display:none;font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* 場所（パンくず。親のフォルダ › 親の録音。ページ名は出さない）。ヘッダーは 720px より広いときだけ、本文の題名の上は 720px 以下だけ */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc{display:flex;align-items:center;flex-wrap:wrap;gap:2px;min-width:0;font-size:13px;color:var(--ed-ink-mute)}
@@ -943,30 +953,51 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-area--mid{min-height:180px;resize:vertical;line-height:1.7}
 @media (prefers-reduced-motion:reduce){:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-toggle::after{transition:none}}
 
-/* ===== 分割ビューとパネルの配置（設計 §5.5。EditorShell に dock を渡したときだけ。モック editor-split-view-v1.html） =====
- * デスクトップ（data-wide="true"）では、.es-doc と .es-dbody を display:contents にして、ヘッダー・本文・一覧・AI・右のページ・境目を
- * .es-ws の grid に直に並べる（列は 左のドック｜境目｜メイン｜境目｜右のページ｜境目｜右のドック。行は ヘッダー｜上の段｜残り）。
- * 一覧と AI は木の同じ位置のまま、grid の列だけを替えて動かす（作り直さない）。900px 未満は従来どおり（.es-pane は display:contents）。 */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pane{display:contents}
+/* ===== パネルの配置（設計 §5.5・#311。EditorShell に dock を渡したときだけ。モック editor-folder-pages-v1.html） =====
+ * デスクトップ（data-wide="true"）では、.es-doc と .es-dbody を display:contents にして、ヘッダー・本文・右のページ・境目を
+ * .es-ws の grid に直に並べる（列は 左のドック｜境目｜メイン｜境目｜右のページ｜境目｜右のドック。行は ヘッダー｜残り）。
+ * パネル（.es-pn。一覧・AI・ページ・写真）は木の同じ位置のまま、.es-ws の中の絶対配置（左右の端、上下は割合）で置く（作り直さない）。
+ * 左のドックは上にアプリ名、下に設定の段がある（パネルはその間）。900px 未満は 1 枚表示（@media の中）。 */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-ws{position:relative}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-doc,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-dbody{display:contents}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-dt{grid-column:3;grid-row:1;min-width:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-canvas{grid-column:3;grid-row:2/-1}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-corner{grid-column:3;grid-row:2/-1;position:relative;right:auto;bottom:auto;align-self:end;justify-self:end;margin:0 14px 12px 0}
-/* ドックのパネル（一覧・AI）。同じドックに 2 つなら一覧が上の段（高さの半分まで。中でスクロール）、AI が残り */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pane,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence{display:flex;flex-direction:column;min-width:0;min-height:0;position:relative;background:var(--ed-canvas)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pane>.es-sb{flex:1 1 auto;height:auto;min-height:0}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pane[data-dock="right"]>.es-sb{border-right:0;border-left:1px solid var(--ed-line)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence>.es-rail{flex:1 1 auto;min-height:0}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-dock="left"]>.es-rail{border-left:0;border-right:1px solid var(--ed-line)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-stack="below"]>.es-rail{border-top:1px solid var(--ed-line)}
+/* ドックのパネル。位置（width・top・height）は EditorShell が style で書く。同じドックの 2 つ目からは上に罫線 */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pn{position:absolute;z-index:5;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--ed-canvas)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pn[data-dock="left"]{left:0;border-right:1px solid var(--ed-line)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pn[data-dock="right"]{right:0;border-left:1px solid var(--ed-line)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pn[data-index]:not([data-index="0"]){border-top:1px solid var(--ed-line)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pn>.es-sb{flex:1 1 auto;height:auto;min-height:0;border-right:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pn>.es-rail{flex:1 1 auto;min-height:0;border-left:0}
 /* 入りきらないときの細い列（アイコンの列）。押すと、そのドックを本人の幅で上に重ねて開く（Esc・外側の押下で閉じる） */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pane[data-state="strip"],:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-state="strip"]{display:none}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pane[data-state="peek"],:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-state="peek"]{width:var(--es-peek-w);z-index:40;box-shadow:0 16px 48px rgba(0,0,0,.16)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pane[data-state="peek"][data-dock="right"],:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-state="peek"][data-dock="right"]{margin-left:calc(48px - var(--es-peek-w))}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pn[data-state="strip"]{display:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pn[data-state="peek"]{z-index:40;box-shadow:0 16px 48px rgba(0,0,0,.16)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-pn[hidden]{display:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-strip{grid-row:1/-1;display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 0;min-width:0;background:var(--ed-canvas)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-strip[data-dock="left"]{border-right:1px solid var(--ed-line)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-strip[data-dock="left"]{padding-top:calc(var(--es-header) + 10px);border-right:1px solid var(--ed-line)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-strip[data-dock="right"]{border-left:1px solid var(--ed-line)}
+/* パネルの見出しの行（ShellPanelHead。「ページ」「写真」）: [掴む所] 名前 …… [操作] [×]。× は AI の見出し（AiBox）の右上にも重ねる */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-hd{flex:none;display:flex;align-items:center;gap:2px;height:42px;padding:0 8px 0 14px;font-size:13px;font-weight:600;color:var(--ed-ink-sub)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-hd[draggable="true"]{cursor:grab}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-hd[draggable="true"] button{cursor:pointer}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-hd>.es-grip{margin-left:-10px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-hd:hover .es-grip,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-hd:focus-within .es-grip{opacity:1}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-tt{flex:1;min-width:0;margin:0;font-size:13px;font-weight:600;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-x{color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-x:hover{color:var(--ed-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-x--over{position:absolute;top:7px;right:8px;z-index:2}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn>.es-rail{position:relative}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn[data-panel="ai"] .es-ai-head{padding-right:40px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-body{flex:1 1 auto;min-height:0;overflow:auto;padding:4px 14px 14px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-note{margin:0;font-size:13px;line-height:1.6;color:var(--ed-ink-mute)}
+/* 「ページ」のパネルの段階の行（当面。#309 が「流れ」に差し替える） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-rows{display:flex;flex-direction:column;gap:2px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-row{display:flex;align-items:center;gap:8px;min-height:40px;padding:4px 0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-row>div{flex:1;min-width:0;display:flex;flex-direction:column}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-row b{font-size:13.5px;font-weight:600;color:var(--ed-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-row small{font-size:12px;color:var(--ed-ink-mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-row .es-btn[aria-disabled="true"]{color:var(--ed-ink-mute);cursor:default}
 /* 境目。幅 0 の列に 8px のつかみ。触れている・フォーカス・ドラッグ中だけ線を出す */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sash{position:relative;z-index:20;outline:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-ws>.es-sash{grid-row:1/-1;width:0;min-width:0}
@@ -974,6 +1005,11 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sash::after{content:"";position:absolute;top:0;bottom:0;left:-1px;width:2px;background:transparent;pointer-events:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sash:hover::after,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sash[data-dragging]::after{background:var(--ed-leaf)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sash:focus-visible::after{left:-2px;width:4px;background:var(--ed-accent-ink)}
+/* 同じドックの上下の境目（横）。パネルの境に高さ 0 で置き、上下 5px がつかみ */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-ws>.es-sash--split{position:absolute;grid-row:auto;height:0;width:auto;z-index:21}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sash--split::before{left:0;right:0;width:auto;top:-5px;bottom:auto;height:10px;cursor:row-resize}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sash--split::after{left:12px;right:12px;width:auto;top:-1px;bottom:auto;height:2px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sash--split:focus-visible::after{left:12px;width:auto;top:-2px;height:4px}
 /* 右に並べたページ（読むだけ）。題名はメインと同じ大きさ・同じ高さ（帯はヘッダーと同じ高さ、本文の上の余白も同じ） */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-sidecol{grid-column:5;grid-row:1/-1;display:flex;flex-direction:column;min-width:0;min-height:0;border-left:1px solid var(--ed-line);background:var(--ed-shell)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-side{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;min-height:0}
@@ -999,25 +1035,6 @@
 /* 行のメニューの、いまはできない項目（メインのページを右に並べる）。消さずに薄く出す */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-menu--at .es-mi[aria-disabled="true"]{color:var(--ed-ink-mute);cursor:default}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-menu--at .es-mi[aria-disabled="true"]:hover{background:none}
-/* AI をメインの下に浮かせる。本文と同じ幅（最大 680px）で、ふだんは入力欄 1 行。開くと会話を出し、上端の取っ手で高さを変える */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-dock="float"]{grid-column:3;grid-row:2/-1;align-self:end;justify-self:center;width:min(680px,calc(100% - 48px));max-height:calc(100% - 72px);margin-bottom:16px;z-index:15;background:var(--ed-white);border:1px solid var(--ed-line-2);border-radius:14px;box-shadow:0 10px 32px rgba(0,0,0,.12)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-float="open"]{height:var(--es-float-open,360px)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-dock="float"]>.es-rail{border:0;border-radius:14px;background:transparent;overflow:visible}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-dock="float"] .es-cd--fill{min-height:0}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-dock="float"] .es-ai-body{overflow:visible}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-float="bar"] .es-ai-head,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-float="bar"] .es-ai-thread{display:none}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-dock="float"] .es-ai-composer{margin:0 10px 10px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-float="bar"] .es-ai-composer{margin:0;border:0;padding:8px 10px}
-/* 1 行のときは高さを中身（入力欄）に合わせる（flex:1 1 0 のままだと、高さの決まっていない箱の中で 0 に潰れる） */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-float="bar"]>.es-rail,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-float="bar"] .es-cd--fill,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-float="bar"] .es-ai-body{flex:none}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-rail-presence[data-float="bar"] .es-ai-composer textarea{min-height:0;resize:none}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sash--float{position:absolute;left:24px;right:24px;top:-5px;height:10px;z-index:2}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sash--float::before{left:0;right:0;width:auto;cursor:row-resize}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sash--float::after{left:50%;top:3px;bottom:auto;width:36px;height:4px;margin-left:-18px;border-radius:4px;background:var(--ed-line-3)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sash--float:focus-visible::after{left:50%;width:36px}
-/* 本文の下に、浮かべた高さぶんの余白を足す（書いている位置・右下の文字数を箱の裏に隠さない） */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"][data-ai="float"] .es-canvas{padding-bottom:calc(var(--es-float-h,72px) + 40px);scroll-padding-bottom:calc(var(--es-float-h,72px) + 24px)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"][data-ai="float"] .es-corner{margin-bottom:calc(var(--es-float-h,72px) + 28px)}
 /* ドラッグ中の落とし先（ページ用の型のときだけ）。入る所は枠を実線にして色だけに頼らない */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-dzs{grid-row:1/-1;z-index:35;display:flex;gap:10px;padding:10px;min-width:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dz{min-width:0;padding:8px;border:2px dashed var(--ed-line-3);border-radius:14px;display:grid;place-content:center;gap:4px;text-align:center;background:color-mix(in srgb,var(--ed-canvas) 88%,transparent);font-size:15px;font-weight:700;color:var(--ed-ink-sub)}
@@ -1026,10 +1043,12 @@
 /* パネルを掴んだとき、近づけた場所に先に出す「落とすと入る形」 */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ghost{position:absolute;z-index:36;display:grid;place-content:center;gap:2px;text-align:center;border:2px solid var(--ed-accent-ink);border-radius:12px;background:color-mix(in srgb,var(--ed-accent-soft) 85%,transparent);font-size:14px;font-weight:700;color:var(--ed-accent-ink);pointer-events:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ghost small{font-size:12px;font-weight:400;color:var(--ed-ink-sub)}
-/* 「AIと作る」の会話メニューの下の「〜へ移す」と、浮かせたときの ⌃（送るボタンの左） */
+/* 「AIと作る」の会話メニューの下の区切り */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-sep{border:0;border-top:1px solid var(--ed-line);margin:4px 2px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-float-tg{margin-left:auto}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-float-tg+.es-ai-send{margin-left:0}
+/* 「写真」のパネル（PagePhotos の panel）: 折りたたみ無しでパネルいっぱい */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ph--panel{flex:1 1 auto;height:auto;min-height:0;max-height:none;margin:0;padding:0;border-radius:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ph--panel .es-ph-body{padding:2px 12px 6px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ph--panel .es-ph-hint{padding:6px 14px 10px}
 
 /* ===== スマホ（900px 未満）：公開のシートは下から、表はカード、設定は 1 列 ===== */
 
@@ -1042,7 +1061,20 @@
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ttl{display:block;flex:1;min-width:0;padding:0 4px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt .es-sp{display:none}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt .es-tools{display:none}
-  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt .es-brand{display:none}
+  /* アプリ名と設定は一覧の画面にだけ（全幅）。ほかのパネルはヘッダーの下の全画面（一覧は従来どおり一覧そのものが全画面） */
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-brandbar,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-setbar{display:none}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="list"] .es-brandbar{display:flex;width:100%;border-right:0}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="list"] .es-setbar{display:block;width:100%;border-right:0}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-dt{padding-left:6px}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="rail"] .es-mtb{display:none}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"] .es-pn{position:absolute;left:0;right:0;top:var(--es-header);bottom:0;z-index:46;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--ed-canvas)}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"] .es-pn[data-panel="list"]{display:contents}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"] .es-pn[hidden]{display:none}
+  /* 一覧が全画面のあいだは、開いているほかのパネルも隠す（一覧の上に重ねない。一覧を閉じれば戻る） */
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-view="list"] .es-pn:not([data-panel="list"]){display:none}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"] .es-pn>.es-rail{position:static;flex:1 1 auto;min-height:0;border-left:0}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-hd[draggable="true"]{cursor:default}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-hd .es-grip{display:none}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt .es-pubbtn{min-width:0;padding:0 12px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-mtb{flex:none;display:flex;height:50px;border-top:1px solid var(--ed-line);background:var(--ed-canvas);z-index:30}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-mtb .es-tools{margin:0;padding:0 10px;width:100%;height:100%}

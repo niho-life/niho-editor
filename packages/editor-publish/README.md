@@ -25,7 +25,7 @@ editor の公開のシート（#39）と発信先の設定（#41）の裏で動�
 | `StorageModeReader` | アカウントの保存先（`CLOUD`／`LOCAL`／`CLOSING`／`UNSET`）を NIHO から操作のたびに読む（保存しない）。`CLOUD`（`UNSET` を含む）以外では `publish`・`update`・`changeDestination` を `storage_not_cloud` で断り、シートの主ボタンも押せなくする。`stop` は常にできる（設計 §2.1） |
 | `ConnectionSource` | 本人のサイトの接続があるか（#41 の `connectionSource` が実装） |
 | `DeclarationSource` | 発信先の宣言 JSON（検証はこのパッケージ） |
-| `AuthorSource` | 公開した時点の著者 |
+| `AuthorSource` | 公開した時点の著者（名前・handle・url と、任意の著者紹介 `profile`。紹介は公開版の `authorProfile` になる） |
 | `FactsSource` | 関連する体験が掲載中か（`null` は満たさない） |
 | `AssetUrls` | 資産の https URL |
 | `Clock` | 時刻 |

@@ -1,5 +1,4 @@
 import { useRef, useState, type DragEvent as ReactDragEvent, type ReactNode } from "react";
-import { ShellBrand } from "./brand";
 import { SHELL_DND } from "./dock-layout";
 import { Icon } from "./icons";
 import { ShellMenu } from "./menu";
@@ -43,11 +42,6 @@ export type ShellSidebarProps = {
    */
   recent?: { items: ShellListItem[]; open: boolean; onToggle: () => void };
   /**
-   * 一覧（nav）と左下の「設定」のあいだに置くもの（開いているページの「このページの写真」。page/PagePhotos.tsx）。
-   * 渡さなければ出さない（ページを開いていない画面・設定）。
-   */
-  photos?: ReactNode;
-  /**
    * 右に並べる（設計 §5.5。デスクトップだけ渡す）。渡すと、行を本文へドラッグできる（ページ用の型 SHELL_DND.page も載せる）・
    * ⌥クリック・行で ⌥Enter で右に並べる。メニューからは並べない（オーナー決定 2026-11-06。⌥クリックとドラッグに任せる）。
    * id は今右に並べているページ（その行に「右に表示中」と出す）。
@@ -60,14 +54,6 @@ export type ShellSidebarProps = {
   onDeleteRow?: (id: string) => void;
   /** true なら上の 1 行（掴む所 ⋮⋮）を掴んで一覧のパネルをドックへ移せる（設計 §5.5。デスクトップだけ）。移すメニューは無い（ドラッグだけ）。 */
   panel?: boolean;
-  /** 左下の「設定」（押すとすぐ設定の一覧へ。メニューは無い）。 */
-  me: {
-    /** 未処理の招待の数（0 より大きいときだけバッジ）。 */
-    badge?: number;
-    /** 設定の画面を開いているとき（aria-current="page"）。 */
-    current?: boolean;
-    onOpen: () => void;
-  };
 };
 
 /** ドロップの位置。into はその行（フォルダ）の中へ、before / after はその行の前・後（同じ階層）。 */
@@ -297,13 +283,13 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
 }
 
 /**
- * 左の一覧。上は 1 行: [掴む所（panel）] [アプリ名] …… [検索] [＋] [一覧をしまう]（検索を押すとその行が検索欄に変わる）。
+ * 左の一覧（パネル）。上は 1 行: [掴む所（panel）] …… [検索] [＋] [一覧をしまう]（検索を押すとその行が検索欄に変わる）。
+ * アプリ名は枠（EditorShell）が画面の左上端に、「設定」は左下に出す（パネルの配置に関係なく。#311）。
  * 絞り込み（すべて／公開中／録音）は持たない。`onDrop` を渡すと、行をドラッグしてフォルダへ入れる・並べ替える。
  * 1行は題名と時刻。2行目は公開先・録音・作成中のときだけ。行の「…」は「削除」だけ（`onDeleteRow`）。
- * 下は「設定」の直リンクひとつ（発信先・役割とつながり・ログアウトは設定の一覧の中。オーナー決定 2026-11-06）。
  * 一覧は 1 本の木（フォルダ＝`kind = 'folder'` の入れ物。空でも開閉の場所を取る）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
  */
-export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, onDrop, canDrop, listEnd, recent, photos, side, onDeleteRow, panel, me }: ShellSidebarProps) {
+export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, onDrop, canDrop, listEnd, recent, side, onDeleteRow, panel }: ShellSidebarProps) {
   const newButton = useRef<HTMLButtonElement | null>(null);
   const rowMenuTrigger = useRef<HTMLElement | null>(null);
   // 行の「…」・右クリックのメニュー（どの行か・どこに出すか）
@@ -387,7 +373,6 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
                 <Icon name="grip" />
               </span>
             )}
-            <ShellBrand />
             <span className="es-sp" />
             {search && (
               <button type="button" className="es-ib" aria-label="検索（⌘K）" title="検索（⌘K）" onClick={search.onOpen}>
@@ -443,19 +428,6 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
           onClose={() => setRowMenu(null)}
         />
       )}
-      {photos}
-      <div className="es-sb-foot">
-        {/* 左下は「設定」の直リンク。押すとすぐ設定の一覧（メニューは無い。オーナー決定 2026-11-06） */}
-        <button type="button" className="es-sb-me" aria-current={me.current ? "page" : undefined} onClick={me.onOpen}>
-          <Icon name="gear" />
-          <b>設定</b>
-          {me.badge && me.badge > 0 ? (
-            <em className="es-badge" aria-label={`未処理の招待 ${me.badge} 件`}>
-              {me.badge}
-            </em>
-          ) : null}
-        </button>
-      </div>
     </aside>
   );
 }

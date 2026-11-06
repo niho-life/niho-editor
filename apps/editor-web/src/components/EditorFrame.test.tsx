@@ -324,14 +324,16 @@ describe("EditorFrame", () => {
     expect(container!.querySelector('[role="menu"]')).toBeNull();
     expect(nav.push).toHaveBeenLastCalledWith("/settings");
 
-    // 左上はアプリ名。デスクトップ: 一覧をしまうとヘッダーの左に「一覧を出す」と、その右隣にアプリ名
-    expect(container!.querySelector('.es-sb-top [aria-label="Editor"]')).not.toBeNull();
+    // 左上はアプリ名（枠の左上端。一覧の中・ヘッダーには無い）。デスクトップ: 一覧をしまうと右上に「一覧を出す」が出て、押すと戻る
+    expect(container!.querySelector('.es-brandbar [aria-label="Editor"]')).not.toBeNull();
+    expect(container!.querySelector('.es-sb-top [aria-label="Editor"]')).toBeNull();
     expect(container!.querySelector('.es-dt [aria-label="Editor"]')).toBeNull();
     await click('button[aria-label="一覧をしまう"]');
     expect(shell().sidebar).toBe("closed");
-    expect(container!.querySelector('.es-dt button[aria-label="一覧を出す"] + [aria-label="Editor"]')).not.toBeNull();
+    expect(container!.querySelector('.es-dt .es-tg button[aria-label="一覧を出す"]')).not.toBeNull();
     await click('button[aria-label="一覧を出す"]');
     expect(shell().sidebar).toBe("open");
+    expect(container!.querySelector('.es-dt button[aria-label="一覧を出す"]')).toBeNull();
   });
 
   describe("search (#35)", () => {
@@ -688,11 +690,13 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     await act(async () => menuItems().find((item) => item.textContent?.startsWith(label))!.click());
     await tick();
   }
-  // 情報パネル（#34 第 3 段）
-  const railButton = () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="AIと作る"]');
+  // 「AIと作る」のパネル（#34 第 3 段 → #311）。右上のボタンは閉じているときだけ、開いているときはパネルの ×
+  const railButton = () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="AIと作るを出す"]');
+  const railClose = () => container!.querySelector<HTMLButtonElement>('#es-rail button[aria-label="AIと作るを閉じる"]');
   const mountedRail = () => container!.querySelector<HTMLElement>("#es-rail");
+  const railPane = () => container!.querySelector<HTMLElement>('.es-pn[data-panel="ai"]');
   const rail = () => {
-    const presence = container!.querySelector<HTMLElement>(".es-rail-presence");
+    const presence = railPane();
     return presence && !presence.hidden ? presence.querySelector<HTMLElement>("#es-rail") : null;
   };
   /** 端末の日付（YYYY-MM-DD。情報パネルの作成・更新の期待値）。 */
@@ -700,7 +704,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     const date = new Date(iso);
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   };
-  const openRail = () => railButton()?.getAttribute("aria-expanded") === "true" ? Promise.resolve() : act(async () => railButton()!.click());
+  const openRail = () => (railButton() ? act(async () => railButton()!.click()) : Promise.resolve());
 
   beforeEach(() => {
     nav.pathname = `/p/${A}`;
@@ -1620,12 +1624,11 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     const infoPop = () => container!.querySelector<HTMLElement>(".es-count-pop");
     const popRows = () => [...(infoPop()?.querySelectorAll(".es-kv > div") ?? [])].map((row) => [row.querySelector("dt")?.textContent, row.querySelector("dd")?.textContent]);
 
-    it("the rail is AIと作る only (no page settings, no publish items); opens and closes from the header and keeps the AI draft", async () => {
+    it("the rail is AIと作る only (no page settings, no publish items); closes from its ×, comes back from the header button, and keeps the AI draft", async () => {
       await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A)} />);
-      const button = railButton()!;
-      expect(button.getAttribute("aria-expanded")).toBe("true");
-      expect(button.getAttribute("aria-controls")).toBe("es-rail");
-      expect(button.getAttribute("title")).toBe("AIと作る");
+      // 開いているパネルのボタンは右上に出さない（× がある）
+      expect(railButton()).toBeNull();
+      expect(railClose()?.getAttribute("title")).toBe("閉じる");
       expect(rail()?.tagName).toBe("ASIDE");
       expect(rail()?.getAttribute("aria-label")).toBe("AIと作る");
       expect(shell().rail).toBe("open");
@@ -1635,14 +1638,15 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
 
       const draft = rail()!.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')!;
       draft.value = "閉じても残す draft";
-      await act(async () => button.click());
+      await act(async () => railClose()!.click());
       expect(rail()).toBeNull();
       expect(mountedRail()).not.toBeNull();
-      expect(container!.querySelector<HTMLElement>(".es-rail-presence")?.hidden).toBe(true);
-      expect(button.getAttribute("aria-expanded")).toBe("false");
+      expect(railPane()?.hidden).toBe(true);
+      expect(railButton()).not.toBeNull();
       expect(shell().rail).toBe("closed");
       await openRail();
       expect(rail()!.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')?.value).toBe("閉じても残す draft");
+      expect(railButton()).toBeNull();
     });
 
     it("desktop: stays open when another page opens (as the mock v6), is not there on the settings, and is back on a page", async () => {
@@ -1651,7 +1655,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       nav.pathname = `/p/${B}`;
       await rerender(<FakePage page={fakePage(B, { lang: "en" })} />);
       expect(rail()).not.toBeNull();
-      expect(railButton()?.getAttribute("aria-expanded")).toBe("true");
+      expect(railButton()).toBeNull();
 
       nav.pathname = "/settings";
       await rerender(null);
@@ -1665,23 +1669,25 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       expect(rail()).not.toBeNull();
     });
 
-    it("narrow: the rail is the whole screen under the header, the same button closes it, and opening another page closes it", async () => {
+    it("narrow: the rail is the whole screen under the header, its × closes it, and opening another page closes it", async () => {
       narrow = true;
       await mount({ pages: [page(A, "合成の題名"), page(B, "別のページ")], initialNarrow: true }, <FakePage page={fakePage(A)} />);
       expect(shell().view).toBe("page");
+      expect(railButton()).not.toBeNull();
       await openRail();
       expect(shell().view).toBe("rail");
-      expect(railButton()?.getAttribute("aria-expanded")).toBe("true");
-      await act(async () => railButton()!.click());
+      expect(railButton()).toBeNull();
+      await act(async () => railClose()!.click());
       expect(shell().view).toBe("page");
       expect(rail()).toBeNull();
+      expect(railButton()).not.toBeNull();
 
       await openRail();
       nav.pathname = `/p/${B}`;
       await rerender(<FakePage page={fakePage(B)} />);
       expect(rail()).toBeNull();
       expect(shell().view).toBe("page");
-      expect(railButton()?.getAttribute("aria-expanded")).toBe("false");
+      expect(railButton()).not.toBeNull();
     });
 
     it("has no rail button or count on a page not created yet, the recording start, the settings, or a page with no editor; while the drafts are read the count waits", async () => {
@@ -1703,9 +1709,9 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       expect(railButton()).toBeNull();
       expect(countButton()).toBeNull();
 
-      // 端末の下書きを読んでいる間（id はまだ無い）: 右下は出すが、まだ数えない
+      // 端末の下書きを読んでいる間（id はまだ無い）: パネルと右下は出すが、まだ数えない
       await rerender(<FakePage page={fakePage(null, { lang: "en" })} />);
-      expect(railButton()).not.toBeNull();
+      expect(rail()).not.toBeNull();
       expect(countButton()?.textContent).toBe("… 字");
       await act(async () => countButton()!.click());
       expect(popRows().map(([label]) => label)).toEqual(["作成", "更新"]);
@@ -2488,8 +2494,9 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     nav.pathname = `/p/${FOLDER}`;
     await mount({ pages: [{ ...page(FOLDER, "鎌倉の記事"), kind: "folder" }, inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER)} />);
     expect(await moreLabels()).toEqual(["書き出し.zip", "削除中のページも"]);
-    // AI・公開のボタンは出さない
-    expect(container!.querySelector('.es-dt button[aria-label="AIと作る"]')).toBeNull();
+    // AI・ページ・公開は出さない（パネルも、右上のボタンも）
+    expect(container!.querySelector('.es-dt button[aria-label="AIと作るを出す"], .es-dt button[aria-label="ページを出す"]')).toBeNull();
+    expect(container!.querySelector<HTMLElement>('.es-pn[data-panel="ai"]')?.hidden ?? true).toBe(true);
     nav.pathname = `/p/${INSIDE}`;
     await rerender(<FakePage page={fakePage(INSIDE)} />);
     const labels = await moreLabels();
@@ -2674,7 +2681,7 @@ describe("EditorFrame: 左の一覧のドラッグで入れ子・並べ替え", 
   });
 });
 
-describe("EditorFrame: このページの写真（サイドバーの下）と、何も足していない新しいページ", () => {
+describe("EditorFrame: 「写真」のパネルと、何も足していない新しいページ", () => {
   const A = "00000000-0000-4000-8000-0000000000a1";
   const NEW = "00000000-0000-4000-8000-0000000000b2";
   const PHOTO = "00000000-0000-4000-8000-0000000000c3";
@@ -2682,7 +2689,10 @@ describe("EditorFrame: このページの写真（サイドバーの下）と、
   const UPDATED = "2026-10-31T02:00:00.000Z";
   type Call = { url: string; method: string; body: Record<string, unknown> | null; keepalive: boolean };
   const calls: Call[] = [];
-  const photoRow = () => container!.querySelector<HTMLButtonElement>('aside .es-ph-fold[aria-label="このページの写真"]');
+  // 写真のパネルは既定で閉じている（右上の「写真を出す」で元のドック（右）の下に出る）
+  const photosButton = () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="写真を出す"]');
+  const photosPane = () => container!.querySelector<HTMLElement>('.es-pn[data-panel="photos"]');
+  const openPhotos = () => act(async () => photosButton()!.click());
   const tick = () => act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
   const sends = () => calls.filter((call) => call.method !== "GET");
 
@@ -2723,24 +2733,29 @@ describe("EditorFrame: このページの写真（サイドバーの下）と、
   });
   const candidates = () => JSON.parse(window.localStorage.getItem(LEFT_EMPTY_PAGES_KEY) ?? "[]") as string[];
 
-  it("is a closed photo icon row on an open page, reads nothing until opened, and is absent elsewhere", async () => {
+  it("is a closed 写真 panel on an open page (a header button that opens it in the right dock), reads nothing until opened, and is absent elsewhere", async () => {
     server();
     nav.pathname = "/settings";
     await mount({ pages: [page(A, "合成の題名")] });
-    expect(photoRow()).toBeNull();
+    expect(photosButton()).toBeNull();
+    expect(photosPane()).toBeNull();
     nav.pathname = `/p/${A}`;
     await rerender(<PageEditor page={{ id: A, title: "合成の題名", blocks: [], revision: 1, updatedAt: UPDATED }} drafts={null} />);
-    expect(photoRow()?.getAttribute("aria-expanded")).toBe("false");
-    // 一覧（nav）と左下の「設定」のあいだ
-    const sidebar = container!.querySelector('aside[aria-label="ページ"]')!;
-    const order = [...sidebar.children].map((child) => child.className);
-    expect(order.indexOf("es-sb-list")).toBeLessThan(order.findIndex((name) => name.startsWith("es-ph")));
-    expect(order.findIndex((name) => name.startsWith("es-ph"))).toBeLessThan(order.indexOf("es-sb-foot"));
+    expect(photosButton()).not.toBeNull();
+    expect(photosPane()?.hidden).toBe(true);
     expect(calls.filter((call) => call.url.endsWith("/images"))).toEqual([]);
-    await act(async () => photoRow()!.click());
+    await openPhotos();
     await tick();
+    expect(photosPane()?.hidden).toBe(false);
+    expect(photosPane()?.dataset).toMatchObject({ dock: "right", index: "2" });
+    expect(photosPane()!.querySelector(".es-pn-hd h2")?.textContent).toBe("写真");
+    expect(photosButton()).toBeNull();
     expect(calls.filter((call) => call.url.endsWith("/images")).map((call) => call.url)).toEqual([`/api/pages/${A}/images`]);
     expect(container!.querySelector(`.es-ph-tile[data-asset-id="${PHOTO}"]`)).not.toBeNull();
+    // × で閉じると、右上にまたボタン
+    await act(async () => photosPane()!.querySelector<HTMLButtonElement>('button[aria-label="写真を閉じる"]')!.click());
+    expect(photosPane()?.hidden).toBe(true);
+    expect(photosButton()).not.toBeNull();
   });
 
   it("removes a photo on the server first, then from every place in the body and from the cover, through the autosave", async () => {
@@ -2750,7 +2765,7 @@ describe("EditorFrame: このページの写真（サイドバーの下）と、
     const image = (assetId: string) => ({ type: "image", attrs: { assetId, alt: null, caption: null, credit: null, consent: false } });
     const blocks = [image(PHOTO), { type: "paragraph", content: [{ type: "text", text: "本文" }] }, image(PHOTO), image(OTHER_PHOTO), { type: "paragraph" }];
     await mount({ pages: [page(A, "合成の題名")] }, <PageEditor page={{ id: A, title: "合成の題名", blocks, cover: PHOTO, revision: 1, updatedAt: UPDATED }} drafts={null} />);
-    await act(async () => photoRow()!.click());
+    await openPhotos();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
@@ -2774,15 +2789,14 @@ describe("EditorFrame: このページの写真（サイドバーの下）と、
     expect(container!.querySelector(`.es-ph-tile[data-asset-id="${PHOTO}"]`)).toBeNull();
   });
 
-  it("narrow: the list screen shows the panel without dragging; tapping 本文に入れる goes back to the page with the photo in it", async () => {
+  it("narrow: the panel is the whole screen without dragging; tapping 本文に入れる goes back to the page with the photo in it", async () => {
     narrow = true;
     server();
     nav.pathname = `/p/${A}`;
     await mount({ pages: [page(A, "合成の題名")], initialNarrow: true }, <PageEditor page={{ id: A, title: "合成の題名", blocks: [{ type: "paragraph", content: [{ type: "text", text: "本文" }] }], revision: 1, updatedAt: UPDATED }} drafts={null} />);
     expect(shell().view).toBe("page");
-    await click('button[aria-label="一覧を出す"]');
-    expect(shell().view).toBe("list");
-    await act(async () => photoRow()!.click());
+    await openPhotos();
+    expect(shell().view).toBe("rail");
     await tick();
     const tile = container!.querySelector<HTMLButtonElement>(`.es-ph-tile[data-asset-id="${PHOTO}"]`)!;
     expect(tile.getAttribute("draggable")).toBe("false");
@@ -2804,7 +2818,7 @@ describe("EditorFrame: このページの写真（サイドバーの下）と、
     // このタブで作ったページの印（再読み込みのあとも分かる）
     expect(JSON.parse(window.sessionStorage.getItem(TAB_CREATED_PAGES_KEY)!)).toEqual([NEW]);
     // 作ったばかりのページでも、写真をすぐ上げられる（パネルはそのページの id で読む）
-    await act(async () => photoRow()!.click());
+    await openPhotos();
     await tick();
     expect(calls.some((call) => call.url === `/api/pages/${NEW}/images`)).toBe(true);
     expect(rows()).toEqual(["無題"]);
@@ -2930,7 +2944,13 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
   const B = "00000000-0000-4000-8000-0000000000b1";
   const C = "00000000-0000-4000-8000-0000000000c1";
   const UPDATED_AT = "2026-11-05T01:00:00.000Z";
-  const LAYOUT_KEY = "niho-editor:layout:v1";
+  const LAYOUT_KEY = "niho-editor:layout:v2";
+  const LAYOUT_KEY_V1 = "niho-editor:layout:v1";
+  const pane = (id: string) => container!.querySelector<HTMLElement>(`.es-pn[data-panel="${id}"]`)!;
+  const savedDocks = () => {
+    const saved = JSON.parse(window.localStorage.getItem(LAYOUT_KEY)!) as { docks: Record<"left" | "right", { id: string }[]> };
+    return { left: saved.docks.left.map((item) => item.id), right: saved.docks.right.map((item) => item.id) };
+  };
 
   /** ページの中の PageEditor の代わり（枠に登録すると、AI のレールが出る）。 */
   function FakePage({ id }: { id: string }) {
@@ -3007,11 +3027,12 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     expect(side.querySelector('[aria-label="右のページの本文"]')!.getAttribute("contenteditable")).toBe("false");
     expect(sideReads(fetcher)).toBe(1);
     expect(rowButton("右のページ").querySelector(".es-di-side")?.textContent).toBe("右に表示中");
-    // 境目（左のドック｜メイン｜右のページ｜右のドック）
+    // 境目（左のドック｜メイン｜右のページ｜右のドック）と、右のドックの中の上下（ページ｜AI）
     expect([...container!.querySelectorAll('[role="separator"]')].map((node) => node.getAttribute("aria-label"))).toEqual([
       "左のドックの幅",
       "右に並べたページの幅",
       "右のドックの幅",
+      "「ページ」と「AIと作る」の境目",
     ]);
   });
 
@@ -3151,66 +3172,89 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     expect([...container!.querySelectorAll('[role="alert"]')].map((node) => node.textContent)).not.toContain(SWAP_UNSAVED_TEXT);
   });
 
-  it("AI を左のドック・メインの下へ（見出しのドラッグで）移しても、作り直さず書きかけが残る。置き場所は端末に覚える", async () => {
+  it("AI を左のドックへ（見出しのドラッグで）移しても、作り直さず書きかけが残る。置き場所は端末に覚える（v2）", async () => {
     await mount({ pages: pages() }, <FakePage id={A} />);
     await tick();
-    const presence = container!.querySelector<HTMLElement>(".es-rail-presence")!;
-    expect(presence.dataset.dock).toBe("right");
-    const draft = presence.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')!;
+    expect(pane("ai").dataset).toMatchObject({ dock: "right", index: "1" });
+    const draft = pane("ai").querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')!;
     draft.value = "動かしても残す書きかけ";
     expect(aiMock.props?.placement?.at).toBe("right");
     // 会話メニューの「〜へ移す」は無い（ドラッグだけ）
     expect(aiMock.props?.placement).not.toHaveProperty("onMove");
 
+    // 左の端（一覧がいるので、その下）
     await dropPanel(SHELL_DND.ai, 10);
-    expect(presence.dataset.dock).toBe("left");
-    expect(JSON.parse(window.localStorage.getItem(LAYOUT_KEY)!).place).toEqual({ list: "left", ai: "left" });
-    // メインの列の下の帯へ落とすと浮かせる
-    await dropPanel(SHELL_DND.ai, Math.round(window.innerWidth / 2));
-    expect(presence.dataset).toMatchObject({ dock: "float", float: "bar" });
-    expect(shellRoot().dataset.ai).toBe("float");
-    await act(async () => aiMock.props!.placement!.onOpenChange(true));
-    expect(presence.dataset.float).toBe("open");
-    expect(presence.querySelector('[role="separator"][aria-label="AIの高さ"]')).not.toBeNull();
+    expect(pane("ai").dataset).toMatchObject({ dock: "left", index: "1" });
+    expect(savedDocks()).toEqual({ left: ["list", "ai"], right: ["page"] });
+    expect(aiMock.props?.placement?.at).toBe("left");
+    expect(container!.querySelector('[role="separator"][aria-label="「一覧」と「AIと作る」の境目"]')).not.toBeNull();
 
     const after = container!.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')!;
     expect(after).toBe(draft);
     expect(after.value).toBe("動かしても残す書きかけ");
   });
 
-  it("一覧は上の 1 行を掴んで右のドックへ移せる（移すメニューは無い。同じドックに 2 つなら一覧が上・AI が下）", async () => {
+  it("一覧は上の 1 行を掴んで右のドックへ移せる。× で閉じると右上にそのボタンだけ出て、押すと元のドックの下に戻る。全部開いていればボタンは無い", async () => {
     await mount({ pages: pages() }, <FakePage id={A} />);
     await tick();
     expect(container!.querySelector(".es-sb-top")!.getAttribute("draggable")).toBe("true");
     expect(container!.querySelector('button[aria-label="一覧のメニュー"]')).toBeNull();
-    // 右の端の帯（枠の幅は jsdom では測れないので、どの幅でも右端より右になる位置）
+    // 一覧・AI・ページが開いている（写真はこのページに無い）ので、右上のボタンの組は無い
+    expect(container!.querySelector(".es-dt .es-tg")).toBeNull();
+    // 右の端の帯（枠の幅は jsdom では測れないので、どの幅でも右端より右になる位置）。ページと AI の下に入る
     await dropPanel(SHELL_DND.list, 100_000);
-    expect(container!.querySelector<HTMLElement>(".es-pane")!.dataset.dock).toBe("right");
-    expect(container!.querySelector<HTMLElement>(".es-pane")!.style.gridRow).toBe("1 / 3");
-    expect(container!.querySelector<HTMLElement>(".es-rail-presence")!.style.gridRow).toBe("3 / 4");
-    expect(JSON.parse(window.localStorage.getItem(LAYOUT_KEY)!).place.list).toBe("right");
-    // 「一覧をしまう」と「一覧を出す」は、右のドックにいても効く
+    expect(pane("list").dataset).toMatchObject({ dock: "right", index: "2" });
+    expect(savedDocks()).toEqual({ left: [], right: ["page", "ai", "list"] });
+    expect(shellRoot().dataset.left).toBe("none");
+    // 「一覧をしまう」は右のドックにいても効き、右上に「一覧を出す」だけが出る。押すと元のドック（左）へ
     await act(async () => container!.querySelector<HTMLButtonElement>('button[aria-label="一覧をしまう"]')!.click());
-    expect(container!.querySelector<HTMLElement>(".es-pane")!.hidden).toBe(true);
+    expect(pane("list").hidden).toBe(true);
+    expect([...container!.querySelectorAll(".es-dt .es-tg button")].map((button) => button.getAttribute("aria-label"))).toEqual(["一覧を出す"]);
     await act(async () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="一覧を出す"]')!.click());
-    expect(container!.querySelector<HTMLElement>(".es-pane")!.hidden).toBe(false);
+    expect(pane("list").hidden).toBe(false);
+    expect(pane("list").dataset).toMatchObject({ dock: "left", index: "0" });
+    expect(container!.querySelector(".es-dt .es-tg")).toBeNull();
+    // 「ページ」の × も同じ（順は 一覧・AI・ページ・写真）
+    await act(async () => pane("page").querySelector<HTMLButtonElement>('button[aria-label="ページを閉じる"]')!.click());
+    expect(pane("page").hidden).toBe(true);
+    await act(async () => pane("ai").querySelector<HTMLButtonElement>('button[aria-label="AIと作るを閉じる"]')!.click());
+    expect([...container!.querySelectorAll(".es-dt .es-tg button")].map((button) => button.getAttribute("aria-label"))).toEqual(["AIと作るを出す", "ページを出す"]);
+    expect(savedDocks()).toEqual({ left: ["list"], right: [] });
+    await act(async () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="ページを出す"]')!.click());
+    expect(savedDocks()).toEqual({ left: ["list"], right: ["page"] });
+    expect(pane("page").dataset).toMatchObject({ dock: "right", index: "0" });
   });
 
-  it("覚えた配置で始める。壊れた値なら既定", async () => {
-    window.localStorage.setItem(LAYOUT_KEY, JSON.stringify({ v: 1, place: { list: "right", ai: "left" }, widths: { left: 300, right: 320, side: 400 }, float: { open: false, height: 360 } }));
+  it("覚えた配置で始める（v2）。v1 の保存は読み替える。壊れた値なら既定", async () => {
+    window.localStorage.setItem(LAYOUT_KEY, JSON.stringify({ v: 2, docks: { left: [{ id: "ai", size: 1 }], right: [{ id: "list", size: 1 }] }, widths: { left: 300, right: 320, side: 400 } }));
     await mount({ pages: pages() }, <FakePage id={A} />);
     await tick();
-    expect(container!.querySelector<HTMLElement>(".es-pane")!.dataset.dock).toBe("right");
-    expect(container!.querySelector<HTMLElement>(".es-rail-presence")!.dataset.dock).toBe("left");
+    expect(pane("list").dataset.dock).toBe("right");
+    expect(pane("ai").dataset.dock).toBe("left");
+    expect(pane("page").hidden).toBe(true);
+    expect([...container!.querySelectorAll(".es-dt .es-tg button")].map((button) => button.getAttribute("aria-label"))).toEqual(["ページを出す"]);
     await act(async () => root!.unmount());
     root = null;
     container!.remove();
 
+    window.localStorage.clear();
+    window.localStorage.setItem(LAYOUT_KEY_V1, JSON.stringify({ v: 1, place: { list: "right", ai: "left" }, widths: { left: 300, right: 320, side: 400 }, float: { open: false, height: 360 } }));
+    await mount({ pages: pages() }, <FakePage id={A} />);
+    await tick();
+    expect(pane("list").dataset).toMatchObject({ dock: "right", index: "0" });
+    expect(pane("page").dataset).toMatchObject({ dock: "right", index: "1" });
+    expect(pane("ai").dataset.dock).toBe("left");
+    await act(async () => root!.unmount());
+    root = null;
+    container!.remove();
+
+    window.localStorage.clear();
     window.localStorage.setItem(LAYOUT_KEY, "{壊れた");
     await mount({ pages: pages() }, <FakePage id={A} />);
     await tick();
-    expect(container!.querySelector<HTMLElement>(".es-pane")!.dataset.dock).toBe("left");
-    expect(container!.querySelector<HTMLElement>(".es-rail-presence")!.dataset.dock).toBe("right");
+    expect(pane("list").dataset.dock).toBe("left");
+    expect(pane("ai").dataset).toMatchObject({ dock: "right", index: "1" });
+    expect(pane("page").dataset).toMatchObject({ dock: "right", index: "0" });
   });
 
   it("AI が右のページを書き換えたら読み直す（ほかのページなら読まない）", async () => {

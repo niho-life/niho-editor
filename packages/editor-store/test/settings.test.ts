@@ -121,10 +121,12 @@ describe("editor settings without a database", () => {
 describe("editor settings read", () => {
   it("answers the defaults for a missing row, and drops stored values that no longer fit the shape", async () => {
     const rows = (value: unknown) => ({ query: async () => ({ rows: value === undefined ? [] : [value] }) }) as unknown as Queryable;
-    assert.deepEqual(await getEditorSettings(rows(undefined), OWNER), { aiLang: "same", glossary: [], recipes: [], aboutName: "", about: "", webSearch: true });
+    const none = { authorRole: null, authorBio: null };
+    assert.deepEqual(await getEditorSettings(rows(undefined), OWNER), { aiLang: "same", glossary: [], recipes: [], aboutName: "", about: "", webSearch: true, ...none });
     const mixed = await getEditorSettings(rows({ ai_lang: "nope", glossary: [term(), { term: "" }], recipes: [recipe(), { id: "bad" }] }), OWNER);
-    assert.deepEqual(mixed, { aiLang: "same", glossary: [term()], recipes: [recipe()], aboutName: "", about: "", webSearch: true });
-    assert.deepEqual(await getEditorSettings(rows({ ai_lang: "en", glossary: "nope", recipes: null, about_name: 7, about: 7, web_search: "no" }), OWNER), { aiLang: "en", glossary: [], recipes: [], aboutName: "", about: "", webSearch: true });
+    assert.deepEqual(mixed, { aiLang: "same", glossary: [term()], recipes: [recipe()], aboutName: "", about: "", webSearch: true, ...none });
+    assert.deepEqual(await getEditorSettings(rows({ ai_lang: "en", glossary: "nope", recipes: null, about_name: 7, about: 7, web_search: "no", author_role: 7, author_bio: "  " }), OWNER), { aiLang: "en", glossary: [], recipes: [], aboutName: "", about: "", webSearch: true, ...none });
+    assert.deepEqual(await getEditorSettings(rows({ ai_lang: "ja", author_role: "合成の肩書", author_bio: "合成の紹介文" }), OWNER).then((settings) => [settings.authorRole, settings.authorBio]), ["合成の肩書", "合成の紹介文"]);
     assert.equal((await getEditorSettings(rows({ ai_lang: "ja", web_search: false }), OWNER)).webSearch, false);
     assert.equal((await getEditorSettings(rows({ ai_lang: "ja", about: "合成の自己紹介" }), OWNER)).about, "合成の自己紹介");
     assert.equal((await getEditorSettings(rows({ ai_lang: "ja", about_name: "合成の呼び名", about: "保存済み" }), OWNER)).aboutName, "合成の呼び名");
@@ -137,6 +139,21 @@ describe("editor settings read", () => {
     assert.equal(settingsProblem({ about: 7 }), "about");
     assert.equal(settingsProblem({ about: "a\u0000b" }), "about");
     assert.deepEqual(cleanSettingsPatch({ about: "  合成の自己紹介  " }), { about: "合成の自己紹介" });
+  });
+
+  it("keeps the public author introduction within its limits, as one line, with blank meaning none", () => {
+    assert.equal(settingsProblem({ authorRole: "合成の肩書", authorBio: "合成の紹介文" }), null);
+    assert.equal(settingsProblem({ authorRole: null, authorBio: null }), null);
+    assert.equal(settingsProblem({ authorRole: "あ".repeat(SETTINGS_LIMITS.authorRoleChars) }), null);
+    assert.equal(settingsProblem({ authorRole: "あ".repeat(SETTINGS_LIMITS.authorRoleChars + 1) }), "author_role");
+    assert.equal(settingsProblem({ authorBio: "あ".repeat(SETTINGS_LIMITS.authorBioChars) }), null);
+    assert.equal(settingsProblem({ authorBio: "あ".repeat(SETTINGS_LIMITS.authorBioChars + 1) }), "author_bio");
+    assert.equal(settingsProblem({ authorRole: 7 }), "author_role");
+    assert.equal(settingsProblem({ authorBio: "a\u0000b" }), "author_bio");
+    assert.deepEqual(SETTINGS_LIMITS.authorRoleChars, 120);
+    assert.deepEqual(SETTINGS_LIMITS.authorBioChars, 600);
+    assert.deepEqual(cleanSettingsPatch({ authorRole: "  合成の\n肩書  ", authorBio: "一行目\n\n二行目" }), { authorRole: "合成の 肩書", authorBio: "一行目 二行目" });
+    assert.deepEqual(cleanSettingsPatch({ authorRole: "   ", authorBio: null }), { authorRole: null, authorBio: null });
   });
 
   it("takes the Web search switch only as a boolean (#283)", () => {

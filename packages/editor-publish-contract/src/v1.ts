@@ -45,6 +45,10 @@ export const PUBLISHED_LIMITS = {
   minLimit: 1,
   maxLimit: 100,
   defaultLimit: 50,
+  /** Code points of `authorProfile.role` (肩書). */
+  maxAuthorRoleChars: 120,
+  /** Code points of `authorProfile.bio` (紹介文). */
+  maxAuthorBioChars: 600,
 } as const;
 
 /** Recording (audio) assets and SVG are never part of a publication. */
@@ -274,6 +278,16 @@ export interface Author {
   readonly url: string | null;
 }
 
+/**
+ * The author's public introduction (肩書・紹介文), fixed at publish time like `author`. At least one is non-null.
+ * Lives at the top level of an item (`authorProfile`), never inside `author`: `author` is a strict nested object,
+ * and validators that predate this field would reject an unknown key there.
+ */
+export interface AuthorProfile {
+  readonly role: string | null;
+  readonly bio: string | null;
+}
+
 export interface Extras {
   readonly app: boolean;
   readonly news: boolean;
@@ -296,9 +310,17 @@ export interface PublishedListItem {
   readonly title: string;
   readonly lead: string | null;
   readonly cover: PublishedAsset | null;
+  /**
+   * Present (always `true`) only when the author also confirmed the cover may be used as the share image
+   * (OG image, `Article.image`) — not only shown on the page. Absent otherwise; never present without a cover.
+   * Top level on purpose: `PublishedAsset` is strict, and older validators reject unknown nested keys.
+   */
+  readonly coverShareable?: true;
   readonly category: string | null;
   readonly categoryDisplay?: CategoryDisplay;
   readonly author: Author;
+  /** The author's public introduction at publish time. Absent when the author set neither role nor bio. */
+  readonly authorProfile?: AuthorProfile;
   readonly range: PublicationRange;
   readonly version: number;
   readonly publishedAt: string;

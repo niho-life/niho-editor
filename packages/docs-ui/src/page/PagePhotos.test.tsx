@@ -368,6 +368,47 @@ describe("このページの写真（パネル）", () => {
     await click(tiles()[0]!);
     expect(await serious()).toEqual([]);
   });
+  it("as the 写真 panel (#311): the head is ShellPanelHead (grip, 写真, ＋, ×), no fold or separator, fills the panel, and reads only while open", async () => {
+    const { images } = stubImages();
+    const onClose = vi.fn();
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const render = (open: boolean) =>
+      act(async () =>
+        root!.render(
+          <div data-docs-app-root="" data-docs-shared-ui="">
+            <div className="es-root">
+              <PagePhotos pageId={PAGE} images={images} srcOf={srcOf} body={stubBody()} panel={{ onClose, drag: true }} open={open} />
+            </div>
+          </div>,
+        ),
+      );
+    await render(false);
+    await flush();
+    // 閉じている間は読まない
+    expect(images.list).not.toHaveBeenCalled();
+    expect(host.querySelector(".es-ph-body")).toBeNull();
+    await render(true);
+    await flush();
+    expect(images.list).toHaveBeenCalledTimes(1);
+    const section = host.querySelector<HTMLElement>("section.es-ph")!;
+    expect(section.className).toBe("es-ph es-ph--panel");
+    expect(section.getAttribute("style")).toBeNull();
+    expect(section.getAttribute("aria-label")).toBe(PAGE_PHOTOS_LABEL);
+    const head = section.querySelector<HTMLElement>(".es-pn-hd")!;
+    expect(head.getAttribute("draggable")).toBe("true");
+    expect(head.querySelector(".es-grip")).not.toBeNull();
+    expect(head.querySelector("h2.es-pn-tt")?.textContent).toBe("写真");
+    expect([...head.querySelectorAll("button")].map((item) => item.getAttribute("aria-label"))).toEqual([PAGE_PHOTOS_ADD_TEXT, "写真を閉じる"]);
+    expect(host.querySelector(".es-ph-fold")).toBeNull();
+    expect(host.querySelector(".es-ph-split")).toBeNull();
+    expect(tiles().length).toBeGreaterThan(0);
+    await click(button("写真を閉じる"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    const serious = (await axe.run(document.body, { rules: { "color-contrast": { enabled: false } } })).violations.filter((entry) => entry.impact === "serious" || entry.impact === "critical");
+    expect(serious).toEqual([]);
+  });
   it("reads the list again when a photo it does not know shows up in the body (the body's image button, paste or drop)", async () => {
     const { images } = stubImages();
     const uses = new Map<string, number>();

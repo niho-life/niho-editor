@@ -522,6 +522,118 @@
       }
     },
     {
+      "name": "title without max",
+      "base": "exp",
+      "path": [
+        "requires",
+        7,
+        "max"
+      ],
+      "delete": true,
+      "expect": {
+        "path": "$.requires[7].max",
+        "reason": "required"
+      }
+    },
+    {
+      "name": "title max zero",
+      "base": "exp",
+      "path": [
+        "requires",
+        7,
+        "max"
+      ],
+      "value": 0,
+      "expect": {
+        "path": "$.requires[7].max",
+        "reason": "range"
+      }
+    },
+    {
+      "name": "title max over the limit",
+      "base": "exp",
+      "path": [
+        "requires",
+        7,
+        "max"
+      ],
+      "value": 501,
+      "expect": {
+        "path": "$.requires[7].max",
+        "reason": "range"
+      }
+    },
+    {
+      "name": "title max as string",
+      "base": "exp",
+      "path": [
+        "requires",
+        7,
+        "max"
+      ],
+      "value": "110",
+      "expect": {
+        "path": "$.requires[7].max",
+        "reason": "type"
+      }
+    },
+    {
+      "name": "title with an argument of another kind",
+      "base": "exp",
+      "path": [
+        "requires",
+        7,
+        "alt"
+      ],
+      "value": true,
+      "expect": {
+        "path": "$.requires[7].alt",
+        "reason": "unknown-field"
+      }
+    },
+    {
+      "name": "images without alt",
+      "base": "exp",
+      "path": [
+        "requires",
+        8,
+        "alt"
+      ],
+      "delete": true,
+      "expect": {
+        "path": "$.requires[8].alt",
+        "reason": "required"
+      }
+    },
+    {
+      "name": "images alt of wrong type",
+      "base": "exp",
+      "path": [
+        "requires",
+        8,
+        "alt"
+      ],
+      "value": "yes",
+      "expect": {
+        "path": "$.requires[8].alt",
+        "reason": "type"
+      }
+    },
+    {
+      "name": "images with an unknown field",
+      "base": "exp",
+      "path": [
+        "requires",
+        8,
+        "caption"
+      ],
+      "value": true,
+      "expect": {
+        "path": "$.requires[8].caption",
+        "reason": "unknown-field"
+      }
+    },
+    {
       "name": "unknown fix",
       "base": "exp",
       "path": [

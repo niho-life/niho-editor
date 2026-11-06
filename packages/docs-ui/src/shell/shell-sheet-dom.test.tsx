@@ -157,7 +157,7 @@ describe("公開のシート（外を inert にする。#43）", () => {
     expect(veil.parentElement).toBe(root);
     // .es-root の子のうち、幕（veil）以外がすべて inert
     for (const child of root.children) expect(child.hasAttribute("inert"), child.className).toBe(child !== veil);
-    expect(inertOf(host)).toEqual(["es-skip", "es-ws"]);
+    expect(inertOf(host)).toEqual(["es-skip", "es-brandbar", "es-ws"]);
     expect(veil.closest("[inert]")).toBeNull();
     expect(host.querySelector('[role="dialog"]')!.closest("[inert]")).toBeNull();
   });
@@ -318,7 +318,7 @@ describe("レールのシート（900px 未満。#43）", () => {
     const host = mount(<RailOpener />);
     open(host);
     const inert = [...host.querySelectorAll("[inert]")].map((el) => el.className);
-    expect(inert.sort()).toEqual(["es-canvas", "es-dt", "es-sb", "es-skip"]);
+    expect(inert.sort()).toEqual(["es-brandbar", "es-canvas", "es-dt", "es-sb", "es-skip"]);
     expect(host.querySelector('[role="dialog"]')!.closest("[inert]")).toBeNull();
     key(document.activeElement!, "Escape");
     // 閉じたレールは会話 state を保つため mount したまま、専用 wrapper だけが hidden + inert になる。

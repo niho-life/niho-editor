@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   EDITOR_SETTINGS_TEXT,
   EditorSettingsAboutPage,
+  EditorSettingsAuthorPage,
   EditorSettingsHub,
   EditorSettingsRecipePage,
   EditorSettingsTermsPage,
@@ -10,6 +11,7 @@ import {
   stepMenuItems,
   type EditorRecipeSheet,
   type EditorSettingsAboutPageProps,
+  type EditorSettingsAuthorPageProps,
   type EditorSettingsHubProps,
   type EditorSettingsRecipe,
   type EditorSettingsRecipePageProps,
@@ -114,7 +116,12 @@ function aboutProps(patch: Partial<EditorSettingsAboutPageProps> = {}): EditorSe
   return { status: "", busy: false, value: { name: "みか", text: "短い文で書きます。" }, onChange: noop, limits: { aboutChars: 2_000, aboutNameChars: 80 }, onSave: noop, onNavigate: noop, ...patch };
 }
 
+function authorProps(patch: Partial<EditorSettingsAuthorPageProps> = {}): EditorSettingsAuthorPageProps {
+  return { status: "", busy: false, value: { role: "合成の案内人", bio: "海辺の朝を書きます。" }, onChange: noop, limits: { authorRoleChars: 120, authorBioChars: 600 }, onSave: noop, onNavigate: noop, ...patch };
+}
+
 const hub = (patch: Partial<EditorSettingsHubProps> = {}) => renderToStaticMarkup(<EditorSettingsHub {...hubProps(patch)} />);
+const authorPage = (patch: Partial<EditorSettingsAuthorPageProps> = {}) => renderToStaticMarkup(<EditorSettingsAuthorPage {...authorProps(patch)} />);
 const recipePage = (recipe: EditorSettingsRecipe, patch: Partial<EditorSettingsRecipePageProps> = {}) => renderToStaticMarkup(<EditorSettingsRecipePage {...recipeProps(recipe, patch)} />);
 const aboutPage = (patch: Partial<EditorSettingsAboutPageProps> = {}) => renderToStaticMarkup(<EditorSettingsAboutPage {...aboutProps(patch)} />);
 const termsPage = (patch: Partial<Omit<EditorTermRowsProps, "label" | "addRow">> = {}) => renderToStaticMarkup(<EditorSettingsTermsPage status="" rows={termRows(patch)} onNavigate={noop} />);
@@ -284,6 +291,42 @@ describe("EditorSettingsAboutPage（/settings/about）", () => {
     expect(textOf(over)).toContain("説明と書き方の希望が長すぎるので保存できません");
     expect(buttonAttrs(over, "あなたについてを保存")).toContain('aria-disabled="true"');
     expect(buttonAttrs(aboutPage(), "あなたについてを保存")).not.toContain("aria-disabled");
+  });
+});
+
+describe("公開用の著者紹介（/settings/author）", () => {
+  it("adds a row to アカウント only when the host passes the profile, summarising it or saying it is empty", () => {
+    expect(hub()).not.toContain('href="/settings/author"');
+    const markup = hub({ author: { role: "合成の案内人", bio: "海辺の朝を書きます。\n二行目" } });
+    const account = markup.slice(markup.indexOf('id="es-s-account"'), markup.indexOf('id="es-s-ai"'));
+    expect(account).toMatch(/href="\/settings\/author"[^>]*>[\s\S]*?公開用の著者紹介/);
+    expect(textOf(account)).toContain("合成の案内人 · 海辺の朝を書きます。");
+    expect(textOf(account)).not.toContain("二行目");
+    expect(textOf(hub({ author: { role: null, bio: null } }))).toContain(EDITOR_SETTINGS_TEXT.authorEmpty);
+  });
+
+  it("has the back link, two labelled fields with counters, and やめる / 保存", () => {
+    const markup = authorPage();
+    const shown = textOf(markup);
+    expect(markup).toContain('href="/settings"');
+    expect(markup).toContain(">公開用の著者紹介</h1>");
+    expect(shown).toContain(EDITOR_SETTINGS_TEXT.authorSub);
+    expect(markup).toMatch(/<label[^>]*>肩書<\/label>/);
+    expect(markup).toMatch(/<label[^>]*>紹介文<\/label>/);
+    expect(shown).toContain("6 / 120 字");
+    expect(shown).toContain("10 / 600 字");
+    expect(markup).toContain('aria-label="公開用の著者紹介を保存"');
+    expect(unlabeledInputs(markup)).toEqual([]);
+    expect(unlabeledButtons(markup)).toEqual([]);
+  });
+
+  it("does not let a role or bio over the limit be saved, and says why in words", () => {
+    const role = authorPage({ value: { role: "あ".repeat(121), bio: "" } });
+    expect(textOf(role)).toContain("肩書が長すぎるので保存できません");
+    expect(buttonAttrs(role, "公開用の著者紹介を保存")).toContain('aria-disabled="true"');
+    const bio = authorPage({ value: { role: "", bio: "あ".repeat(601) } });
+    expect(textOf(bio)).toContain("紹介文が長すぎるので保存できません");
+    expect(buttonAttrs(authorPage(), "公開用の著者紹介を保存")).not.toContain("aria-disabled");
   });
 });
 

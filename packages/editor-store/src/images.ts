@@ -46,6 +46,8 @@ export type ImageAsset = {
   alt: string | null;
   credit: string | null;
   consent: boolean;
+  /** 共有画像（SNS・検索結果）にも使ってよい。掲載許諾とは別の許諾（migration 20261107010443）。 */
+  share: boolean;
   createdAt: string;
 };
 
@@ -83,7 +85,7 @@ export type StartImageUploadResult = StartedImageUpload | { status: "conflict" }
 export type CompleteImageUploadResult = { status: "ok"; asset: ImageAsset } | { status: "size_mismatch" } | { status: "page_full" } | null;
 
 /** 画像の欄（指定したものだけを変える）。alt・クレジットは空文字を null として入れる。 */
-export type ImageMetaPatch = { alt?: string | null; credit?: string | null; consent?: boolean };
+export type ImageMetaPatch = { alt?: string | null; credit?: string | null; consent?: boolean; share?: boolean };
 
 /** 共有リンクのページの画像（token で絞った読み取り。id・owner・sha256・状態は含めない）。 */
 export type SharedImageAsset = {
@@ -137,6 +139,7 @@ function metaProblem(patch: ImageMetaPatch): string | null {
     if (typeof value !== "string" || !isStorableText(value) || CONTROL_CHARACTERS.test(value) || charCount(value) > max) return key;
   }
   if (patch.consent !== undefined && typeof patch.consent !== "boolean") return "consent";
+  if (patch.share !== undefined && typeof patch.share !== "boolean") return "share";
   return null;
 }
 
@@ -151,11 +154,12 @@ type ImageRow = {
   alt: string | null;
   credit: string | null;
   consent: boolean;
+  share: boolean;
   created_at: Date;
 };
 
 const IMAGE_COLUMNS = `a.id, a.page_id, a.bucket_path, a.upload_status, a.bytes::text AS bytes, a.content_type, a.sha256,
-       a.alt, a.credit, a.consent, a.created_at`;
+       a.alt, a.credit, a.consent, a.share, a.created_at`;
 
 function toAsset(row: ImageRow): ImageAsset {
   return {
@@ -169,6 +173,7 @@ function toAsset(row: ImageRow): ImageAsset {
     alt: row.alt,
     credit: row.credit,
     consent: row.consent,
+    share: row.share,
     createdAt: row.created_at.toISOString(),
   };
 }
@@ -451,20 +456,22 @@ export async function imageAsset(db: Queryable, owner: OwnerId, assetId: string)
   }
 }
 
-// $1 owner / $2 asset id / $3 alt を変えるか / $4 alt / $5 クレジットを変えるか / $6 クレジット / $7 掲載許諾を変えるか / $8 掲載許諾。
+// $1 owner / $2 asset id / $3 alt を変えるか / $4 alt / $5 クレジットを変えるか / $6 クレジット / $7 掲載許諾を変えるか / $8 掲載許諾 /
+// $9 共有画像の許諾を変えるか / $10 共有画像の許諾。
 // ページの更新時刻は進めない（欄は本文（AST）にも入り、その保存が進める）。
 const UPDATE_META_SQL = `
 UPDATE assets AS a
    SET alt = CASE WHEN $3::bool THEN $4::text ELSE a.alt END,
        credit = CASE WHEN $5::bool THEN $6::text ELSE a.credit END,
-       consent = CASE WHEN $7::bool THEN $8::bool ELSE a.consent END
+       consent = CASE WHEN $7::bool THEN $8::bool ELSE a.consent END,
+       share = CASE WHEN $9::bool THEN $10::bool ELSE a.share END
   FROM pages AS p
  WHERE p.owner = a.owner AND p.id = a.page_id AND p.deleted_at IS NULL
    AND a.owner = $1 AND a.id = $2 AND a.kind = 'image'
 RETURNING ${IMAGE_COLUMNS}`;
 
 /**
- * alt・クレジット・掲載許諾を直す（指定したものだけ）。空文字は null として入れる。
+ * alt・クレジット・掲載許諾・共有画像の許諾を直す（指定したものだけ）。空文字は null として入れる。
  * 本人の・ゴミ箱でないページの画像が無ければ null。形が規則に合わなければ InvalidImageError（何も書かない）。
  */
 export async function updateImageMeta(db: Queryable, owner: OwnerId, assetId: string, patch: ImageMetaPatch): Promise<ImageAsset | null> {
@@ -483,6 +490,8 @@ export async function updateImageMeta(db: Queryable, owner: OwnerId, assetId: st
       empty(patch.credit),
       patch.consent !== undefined,
       patch.consent ?? false,
+      patch.share !== undefined,
+      patch.share ?? false,
     ]);
     const row = result.rows[0];
     return row ? toAsset(row) : null;
@@ -549,6 +558,7 @@ export type PageImageEntry = {
   alt: string | null;
   credit: string | null;
   consent: boolean;
+  share: boolean;
   createdAt: string;
 };
 
@@ -559,15 +569,16 @@ type PageImageEntryRow = {
   alt: string | null;
   credit: string | null;
   consent: boolean | null;
+  share: boolean | null;
   created_at: Date | null;
 };
 
 // ページの行を必ず 1 行返し（無ければ 0 行＝null）、画像は LATERAL で新しい順に上限まで。$1 owner / $2 page id / $3 上限。
 const LIST_PAGE_IMAGES_SQL = `
-SELECT a.id, a.bytes, a.content_type, a.alt, a.credit, a.consent, a.created_at
+SELECT a.id, a.bytes, a.content_type, a.alt, a.credit, a.consent, a.share, a.created_at
   FROM pages AS p
   LEFT JOIN LATERAL (
-    SELECT i.id, i.bytes::text AS bytes, i.content_type, i.alt, i.credit, i.consent, i.created_at
+    SELECT i.id, i.bytes::text AS bytes, i.content_type, i.alt, i.credit, i.consent, i.share, i.created_at
       FROM assets AS i
      WHERE i.owner = p.owner AND i.page_id = p.id AND i.kind = 'image' AND i.upload_status = 'ready'
      ORDER BY i.created_at DESC, i.id
@@ -597,6 +608,7 @@ export async function listPageImages(db: Queryable, owner: OwnerId, pageId: stri
               alt: row.alt,
               credit: row.credit,
               consent: row.consent === true,
+              share: row.share === true,
               createdAt: row.created_at.toISOString(),
             },
           ],

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildSnapshot,
   collectFacts,
   evaluateReadiness,
   parseDestinationDeclaration,
@@ -9,6 +10,7 @@ import {
   type FactChoices,
   type ServerFacts,
 } from "../src/index.js";
+import { memoryAssetUrls } from "../test-support/memory-store.js";
 import { AUDIO, COVER, DECLARATIONS, FIGURE, readyContent, readyPage } from "./support/world.js";
 
 function declaration(name: keyof typeof DECLARATIONS): DestinationDeclaration {
@@ -64,6 +66,60 @@ describe("evaluateReadiness: NIHO Experience", () => {
 
   it("accepts a lead of exactly 200 characters", () => {
     expect(evaluate(EXP, { lead: "あ".repeat(200) }).ready).toBe(true);
+  });
+
+  it("counts the title in code points: 110 passes, 111 is the title condition", () => {
+    expect(evaluate(EXP, { title: "𩸽".repeat(110) }).ready).toBe(true);
+    const result = evaluate(EXP, { title: "海".repeat(111) });
+    expect(ids(result)).toEqual(["title"]);
+    expect(result.problems[0]).toEqual({ id: "title", message: "題名を 110 字以内にしてください", fix: "body" });
+  });
+
+  describe("images with alt", () => {
+    const imageWith = (alt: string | null) => ({ type: "image", attrs: { assetId: FIGURE.id, alt, caption: null } });
+    const onlyFigure = (alt: string | null) => ({ type: "doc", content: [{ type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "Getting there" }] }, imageWith(alt)] });
+
+    it("holds when every figure and the cover resolve to an alt", () => {
+      expect(collectFacts(readyPage(), ASSETS, { relatedLive: true }, EXP_CHOICES).imagesWithoutAlt).toBe(0);
+    });
+
+    it("fails when only the cover has no alt (the cover uses the asset's alt)", () => {
+      const result = evaluate(EXP, {}, { assets: [{ ...COVER, alt: null }, FIGURE, AUDIO] });
+      expect(ids(result)).toEqual(["image-alt"]);
+      expect(result.problems[0]).toEqual({ id: "image-alt", message: "写真に代替テキスト（alt）を入れてください", fix: "body" });
+    });
+
+    it("prefers the figure node's alt over the asset's, like the published version", () => {
+      // The node has alt, the asset has none: the published figure gets the node's alt, so the condition holds.
+      expect(evaluate(EXP, { content: onlyFigure("Fishing boats") }, { assets: [COVER, { ...FIGURE, alt: null }, AUDIO] }).ready).toBe(true);
+      // The node has none (blank counts as none): the asset's alt is used.
+      expect(evaluate(EXP, { content: onlyFigure("   ") }, { assets: [COVER, FIGURE, AUDIO] }).ready).toBe(true);
+      // Neither has one.
+      expect(ids(evaluate(EXP, { content: onlyFigure(null) }, { assets: [COVER, { ...FIGURE, alt: "  " }, AUDIO] }))).toEqual(["image-alt"]);
+    });
+
+    it("never says met while the published version would carry an empty alt", async () => {
+      const assets = [COVER, { ...FIGURE, alt: null }, AUDIO];
+      for (const content of [onlyFigure(null), onlyFigure("Boats"), onlyFigure("")]) {
+        const page = readyPage({ content });
+        const facts = collectFacts(page, assets, { relatedLive: true }, EXP_CHOICES);
+        const built = await buildSnapshot({
+          page, assets, dest: "exp", slug: "a-walk", canonicalUrl: "https://exp.example.com/guides/a-walk", range: "live",
+          extras: { app: false, news: false, xp: false }, category: "walks", related: [], author: { name: "Writer", handle: null, url: null },
+          version: 1, publishedAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z", assetUrls: memoryAssetUrls(),
+        });
+        if (!built.ok) throw new Error("snapshot failed");
+        const empty = [...built.snapshot.assets, ...(built.snapshot.cover ? [built.snapshot.cover] : [])].filter((image) => image.alt === "").length;
+        expect(facts.imagesWithoutAlt).toBe(empty);
+      }
+    });
+
+    it("always holds with alt false, and does not count missing photos", () => {
+      const lenient = parseDestinationDeclaration({ ...(DECLARATIONS.site as object), requires: [{ id: "image-alt", kind: "images", alt: false, message: "x", fix: "body" }] });
+      if (!lenient.ok) throw new Error("rejected");
+      expect(ids(evaluate(lenient.value, {}, { assets: [{ ...COVER, alt: null }, { ...FIGURE, alt: null }, AUDIO], choices: { category: null, related: [] } }))).toEqual([]);
+      expect(collectFacts(readyPage(), [FIGURE, AUDIO], { relatedLive: true }).imagesWithoutAlt).toBe(0);
+    });
   });
 
   it("requires consent on the cover", () => {

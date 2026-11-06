@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { ShellSidebar, type ShellListItem } from "../src/shell";
+import { ShellSidebar, type ShellListItem, type ShellSettingsLink } from "../src/shell";
 import { DEST, ME, PAGES, byId, isPublished, type GalleryPage } from "./data";
 
 export const navigate = (route: string) => {
@@ -31,7 +31,7 @@ export function listItems(extraNew: boolean): ShellListItem[] {
 }
 
 /** 発信先・役割とつながり・設定のページで使う左の一覧（ページは選ばれていない。左下の「設定」に現在地を示す）。 */
-export function useSettingsSidebar(forced: boolean | undefined, pendingInvites: number): { sidebar: ReactNode; sidebarOpen: boolean; setSidebarOpen: (open: boolean) => void } {
+export function useSettingsSidebar(forced: boolean | undefined, pendingInvites: number): { sidebar: ReactNode; sidebarOpen: boolean; setSidebarOpen: (open: boolean) => void; settings: ShellSettingsLink } {
   const [sidebarOpen, setSidebarOpen] = useState(forced ?? !isNarrow());
   const [newMenu, setNewMenu] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
@@ -56,8 +56,9 @@ export function useSettingsSidebar(forced: boolean | undefined, pendingInvites: 
         onClose: () => setSearch({ open: false, value: "" }),
         onChange: (value) => setSearch({ open: true, value }),
       }}
-      me={{ badge: pendingInvites || undefined, current: true, onOpen: () => navigate("settings") }}
     />
   );
-  return { sidebar, sidebarOpen, setSidebarOpen };
+  // 左下の「設定」（枠が出す。設定の画面なので現在地）
+  const settings: ShellSettingsLink = { badge: pendingInvites || undefined, current: true, onOpen: () => navigate("settings") };
+  return { sidebar, sidebarOpen, setSidebarOpen, settings };
 }

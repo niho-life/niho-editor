@@ -170,7 +170,6 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
         onClose: () => setSearch({ open: false, value: "" }),
         onChange: (value) => setSearch({ open: true, value }),
       }}
-      me={{ badge: 1, onOpen: () => navigate("settings") }}
     />
   );
 
@@ -373,6 +372,7 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
       toolbar={isStart ? undefined : <ShellMobileToolbar onAction={onTool} blockMenuOpen={blockMenu} />}
       sidebarOpen={sidebarOpen}
       railOpen={railOpen && hasRail}
+      settings={{ badge: 1, onOpen: () => navigate("settings") }}
       overlay={
         sheet && (
           <PublishFlow

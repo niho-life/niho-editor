@@ -69,6 +69,8 @@ export type DraftAssetRow = {
   alt: string | null;
   credit: string | null;
   consent: boolean;
+  /** 共有画像にも使ってよい（migration 20261107010443。公開版の coverShareable）。 */
+  share: boolean;
 };
 
 export type PublishExtras = { app: boolean; news: boolean; xp: boolean };
@@ -228,13 +230,14 @@ type DraftAssetDbRow = {
   alt: string | null;
   credit: string | null;
   consent: boolean;
+  share: boolean;
 };
 
 /** ページの資産（作った順）。 */
 export async function listDraftAssets(db: Queryable, pageId: string): Promise<DraftAssetRow[]> {
   if (!isPageId(pageId)) return [];
   const result = await db.query<DraftAssetDbRow>(
-    `SELECT id, kind, bytes::text AS bytes, sha256, content_type, alt, credit, consent
+    `SELECT id, kind, bytes::text AS bytes, sha256, content_type, alt, credit, consent, share
        FROM assets
       WHERE page_id = $1
       ORDER BY created_at, id`,
@@ -249,6 +252,7 @@ export async function listDraftAssets(db: Queryable, pageId: string): Promise<Dr
     alt: row.alt,
     credit: row.credit,
     consent: row.consent,
+    share: row.share,
   }));
 }
 
