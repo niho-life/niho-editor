@@ -1460,6 +1460,7 @@ const DISCARD_RELATED_ROWS = [
   "page_recordings r WHERE r.page_id = p.id",
   "page_recording_audios ra WHERE ra.page_id = p.id",
   "page_recording_candidates rc WHERE rc.page_id = p.id",
+  "page_transcripts ptx WHERE ptx.page_id = p.id",
   "transcription_runs tr WHERE tr.page_id = p.id",
   // ai_conversations・ai_messages は利用者のもの（#312）。page_id は「始めた・開いていたページ」の印で FK でなく、ページを捨てても会話は残る（trigger が外す）
   "ai_message_changes am WHERE am.page_id = p.id",

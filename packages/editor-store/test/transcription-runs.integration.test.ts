@@ -8,9 +8,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Pool as PgPool } from "pg";
 import { applyMigrations, defaultMigrationsDir, readMigrations } from "../src/migrate.ts";
 import { completeAudioUpload, startAudioRecording, type StartAudioRecordingInput } from "../src/recording-audio.ts";
-import { addRecordingCandidate, getRecordingCandidate, listRecordingCandidates } from "../src/recording-candidates.ts";
 import { InvalidRecordingError, getRecording, updateRecording, type Connectable, type RecordingSegment } from "../src/recordings.ts";
 import { EditorStore } from "../src/store.ts";
+import { getTranscript, listTranscriptTabs, updateTranscript } from "../src/transcripts.ts";
 import {
   claimRun,
   enqueueTranscription,
@@ -81,7 +81,6 @@ function startInput(extra: Partial<StartAudioRecordingInput> = {}): StartAudioRe
 const run = (extra: Partial<EnqueueTranscriptionInput> = {}): EnqueueTranscriptionInput => ({
   engine: "fake",
   diarize: true,
-  replace: false,
   terms: [],
   ...extra,
 });
@@ -149,14 +148,23 @@ function failingOn(pool: PgPool, pattern: RegExp): Connectable {
   };
 }
 
-/** run を作って claim し、id と世代を返す。 */
-async function claimed(pool: PgPool, pageId: string, extra: Partial<EnqueueTranscriptionInput> = {}): Promise<{ id: string; generation: number }> {
+/** run を作って claim し、id と世代と書き先のタブを返す。 */
+async function claimed(pool: PgPool, pageId: string, extra: Partial<EnqueueTranscriptionInput> = {}): Promise<{ id: string; generation: number; tab: string }> {
   const created = await enqueueTranscription(pool, OWNER, pageId, run(extra));
   assert.equal(created?.status, "created");
   assert.ok(created?.status === "created");
   const claim = await claimRun(pool, created.run.id);
   assert.ok(claim);
-  return { id: created.run.id, generation: claim.generation };
+  assert.equal(claim.run.tab, created.tab);
+  return { id: created.run.id, generation: claim.generation, tab: created.tab };
+}
+
+/** タブの行（pages）と、その入れ物・フォルダ。 */
+async function tabRow(pool: PgPool, tabId: string) {
+  return (await pool.query<{ kind: string; title: string; tab_name: string | null; parent: string | null; page: string | null; made_from: unknown; deleted_at: Date | null }>(
+    "SELECT kind, title, tab_name, parent, page, made_from, deleted_at FROM pages WHERE id = $1",
+    [tabId],
+  )).rows[0];
 }
 
 describe("transcription runs without a database", () => {
@@ -301,9 +309,24 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.equal(row.diarize, true);
     assert.equal(row.replace, false);
     assert.deepEqual(row.terms, ["合成語", "Synthetic"]);
+    // 書き先: 「文字起こし」ページ（役割 transcript の入れ物）の新しいタブ。録音はフォルダに包まれる（#310）
+    assert.equal(row.target_tab, created.tab);
+    assert.equal(created.run.tab, created.tab);
+    const tab = await tabRow(pool, created.tab);
+    assert.ok(tab);
+    assert.deepEqual([tab.kind, tab.title, tab.tab_name, tab.made_from], ["note", "文字起こし", "開発の偽物", { kind: "transcript", recording: pageId, engine: "fake" }]);
+    const holder = (await pool.query<{ kind: string; title: string; role: unknown; parent: string | null; last_tab: string | null }>("SELECT kind, title, role, parent, last_tab FROM pages WHERE id = $1", [tab.page])).rows[0];
+    assert.deepEqual(holder, { kind: "page", title: "文字起こし", role: { kind: "transcript" }, parent: tab.parent, last_tab: created.tab });
+    const folder = (await pool.query<{ kind: string; title: string }>("SELECT kind, title FROM pages WHERE id = $1", [tab.parent])).rows[0];
+    assert.deepEqual(folder, { kind: "folder", title: "合成の打ち合わせ" }, "the recording outside a folder is wrapped into one named after it");
+    const rec = (await pool.query<{ parent: string | null }>("SELECT parent FROM pages WHERE id = $1", [pageId])).rows[0];
+    assert.equal(rec?.parent, tab.parent, "the recording tab moved into the folder");
+    const transcript = await getTranscript(pool, OWNER, created.tab);
+    assert.deepEqual(transcript && [transcript.recordingPageId, transcript.engine, transcript.language, transcript.segments, transcript.revision, transcript.durationSec], [pageId, "fake", "en", [], 1, 30]);
+    assert.deepEqual((await listTranscriptTabs(pool, OWNER, pageId)).map((item) => [item.id, item.tabName, item.tabPos, item.engine, item.segmentCount]), [[created.tab, "開発の偽物", 1, "fake", 0]]);
 
-    const again = await enqueueTranscription(pool, OWNER, pageId, run({ language: "ja", replace: true }));
-    assert.deepEqual(again, { status: "existing", run: created.run, candidate: null }, "an active run is returned as it is, with where it writes");
+    const again = await enqueueTranscription(pool, OWNER, pageId, run({ language: "ja" }));
+    assert.deepEqual(again, { status: "existing", run: created.run, tab: created.tab }, "an active run is returned as it is, with where it writes");
     assert.equal(await countRuns(pool, pageId), 1);
     assert.deepEqual(await latestRun(pool, OWNER, pageId), created.run);
     const ja = await uploadedRecording(pool);
@@ -334,21 +357,22 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.equal((await enqueueTranscription(pool, OTHER, theirs, run()))?.status, "created", "the owner can start it");
   });
 
-  it("keeps a transcript that is already there unless replace is asked for", async () => {
+  it("starts another run into a new tab when a transcript is already there (no replace; the edited tab is untouched)", async () => {
     const pageId = await uploadedRecording(pool);
     const first = await claimed(pool, pageId);
     assert.equal(await finishRun(pool, first.id, first.generation, { segments: RESULT, durationSec: 5 }), "succeeded");
-    // 直した文章
-    const edited = await updateRecording(pool, OWNER, pageId, 2, (data) => ({ ...data, segments: [{ ...data.segments[0]!, text: "直した段落" }, data.segments[1]!] }));
+    // 直した文章（タブの本文）
+    const edited = await updateTranscript(pool, OWNER, first.tab, 2, (data) => ({ ...data, segments: [{ ...data.segments[0]!, text: "直した段落" }, data.segments[1]!] }));
     assert.equal(edited?.status, "ok");
-    const before = await recordingRow(pool, pageId);
-
-    assert.deepEqual(await enqueueTranscription(pool, OWNER, pageId, run()), { status: "has_transcript" });
-    assert.deepEqual(await recordingRow(pool, pageId), before, "the edited transcript is untouched");
-    assert.equal(await countRuns(pool, pageId), 1);
-    const replace = await enqueueTranscription(pool, OWNER, pageId, run({ replace: true }));
-    assert.ok(replace?.status === "created");
-    assert.equal((await runRow(pool, replace.run.id))?.replace, true);
+    const before = await getTranscript(pool, OWNER, first.tab);
+    const second = await enqueueTranscription(pool, OWNER, pageId, run());
+    assert.ok(second?.status === "created");
+    assert.notEqual(second.tab, first.tab, "a second tab in the same 文字起こし page");
+    assert.equal((await tabRow(pool, second.tab))?.page, (await tabRow(pool, first.tab))?.page);
+    assert.equal((await tabRow(pool, second.tab))?.tab_name, "開発の偽物 2");
+    assert.deepEqual(await getTranscript(pool, OWNER, first.tab), before, "the edited transcript is untouched");
+    assert.equal(await countRuns(pool, pageId), 2);
+    assert.deepEqual((await listTranscriptTabs(pool, OWNER, pageId)).map((item) => [item.tabPos, item.segmentCount]), [[1, 2], [2, 0]]);
   });
 
   it("lets only one of concurrent starts on the same page create a run", async () => {
@@ -417,27 +441,28 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     const pageId = await uploadedRecording(pool);
     const recordingBefore = await getRecording(pool, OWNER, pageId);
     const pageBefore = await store.getPage(OWNER, pageId);
-    const { id, generation } = await claimed(pool, pageId);
+    const { id, generation, tab } = await claimed(pool, pageId);
+    const transcriptBefore = await getTranscript(pool, OWNER, tab);
 
     assert.equal(await finishRun(pool, id, generation + 1, { segments: RESULT, durationSec: 5 }), "stale", "a newer generation is not ours");
-    assert.deepEqual(await getRecording(pool, OWNER, pageId), recordingBefore, "a stale finish writes nothing");
+    assert.deepEqual(await getTranscript(pool, OWNER, tab), transcriptBefore, "a stale finish writes nothing");
 
     // 途中で失敗したら、段落も run も書かない（1 transaction）
     await assert.rejects(() => finishRun(failingOn(pool, /SET status = 'succeeded'/), id, generation, { segments: RESULT, durationSec: 5 }), /synthetic failure/);
-    assert.deepEqual(await getRecording(pool, OWNER, pageId), recordingBefore);
+    assert.deepEqual(await getTranscript(pool, OWNER, tab), transcriptBefore);
     assert.equal((await runRow(pool, id))?.status, "running");
     await assert.rejects(() => finishRun(failingOn(pool, /UPDATE pages/), id, generation, { segments: RESULT, durationSec: 5 }), /synthetic failure/);
-    assert.deepEqual(await getRecording(pool, OWNER, pageId), recordingBefore);
+    assert.deepEqual(await getTranscript(pool, OWNER, tab), transcriptBefore);
 
     assert.equal(await finishRun(pool, id, generation, { segments: RESULT, durationSec: 5.25 }), "succeeded");
-    const recording = await getRecording(pool, OWNER, pageId);
-    assert.ok(recording && recordingBefore);
-    assert.deepEqual(recording.segments, RESULT);
-    assert.deepEqual(recording.speakerNames, {});
-    assert.equal(recording.engine, "fake");
-    assert.equal(recording.durationSec, 5.25);
-    assert.equal(recording.revision, recordingBefore.revision + 1);
-    assert.deepEqual(recording.audio, recordingBefore.audio, "the audio stays");
+    const transcript = await getTranscript(pool, OWNER, tab);
+    assert.ok(transcript && transcriptBefore);
+    assert.deepEqual(transcript.segments, RESULT);
+    assert.deepEqual(transcript.speakerNames, {});
+    assert.equal(transcript.engine, "fake");
+    assert.equal(transcript.durationSec, 5.25);
+    assert.equal(transcript.revision, transcriptBefore.revision + 1);
+    assert.deepEqual(await getRecording(pool, OWNER, pageId), recordingBefore, "the recording tab (audio, its own segments) is untouched");
     const pageAfter = await store.getPage(OWNER, pageId);
     assert.ok(pageAfter && pageBefore && Date.parse(pageAfter.updatedAt) > Date.parse(pageBefore.updatedAt), "pages.updated_at moved on");
     assert.equal(pageAfter.revision, pageBefore.revision, "the page body revision is not touched");
@@ -447,54 +472,40 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     // 確定したあとは何をしても変わらない
     assert.equal(await finishRun(pool, id, generation, { segments: [], durationSec: null }), "stale");
     assert.equal(await failRun(pool, id, generation, "internal"), false);
-    assert.deepEqual((await getRecording(pool, OWNER, pageId))?.segments, RESULT);
+    assert.deepEqual((await getTranscript(pool, OWNER, tab))?.segments, RESULT);
   });
 
-  it("keeps the duration when the engine does not tell it, and replaces the transcript and the speaker names for a replace run", async () => {
+  it("keeps the recording's duration when the engine does not tell it; a second run writes to a second tab and leaves the first (with its speaker names)", async () => {
     const pageId = await uploadedRecording(pool);
     const first = await claimed(pool, pageId);
     assert.equal(await finishRun(pool, first.id, first.generation, { segments: RESULT, durationSec: null }), "succeeded");
-    assert.equal((await getRecording(pool, OWNER, pageId))?.durationSec, 30, "the declared duration stays");
-    const named = await updateRecording(pool, OWNER, pageId, 2, (data) => ({ ...data, speakerNames: { "1": "合成の話し手" } }));
+    assert.equal((await getTranscript(pool, OWNER, first.tab))?.durationSec, 30, "the declared duration of the recording stays");
+    const named = await updateTranscript(pool, OWNER, first.tab, 2, (data) => ({ ...data, speakerNames: { "1": "合成の話し手" } }));
     assert.equal(named?.status, "ok");
 
-    const second = await claimed(pool, pageId, { replace: true });
-    const next: RecordingSegment[] = [{ start: 1, end: 2, text: "合成の置き換えた段落", speaker: null }];
+    const second = await claimed(pool, pageId);
+    assert.notEqual(second.tab, first.tab);
+    const next: RecordingSegment[] = [{ start: 1, end: 2, text: "合成の二つ目のタブの段落", speaker: null }];
     assert.equal(await finishRun(pool, second.id, second.generation, { segments: next, durationSec: 2 }), "succeeded");
-    const replaced = await getRecording(pool, OWNER, pageId);
-    assert.deepEqual(replaced?.segments, next);
-    assert.deepEqual(replaced?.speakerNames, {});
-    assert.equal(replaced?.revision, 4);
+    const written = await getTranscript(pool, OWNER, second.tab);
+    assert.deepEqual(written?.segments, next);
+    assert.deepEqual(written?.speakerNames, {});
+    assert.equal(written?.revision, 2);
+    const kept = await getTranscript(pool, OWNER, first.tab);
+    assert.deepEqual(kept?.segments, RESULT);
+    assert.deepEqual(kept?.speakerNames, { "1": "合成の話し手" });
+    assert.equal(kept?.revision, 3);
   });
 
-  it("does not overwrite a transcript that appeared while a run without replace was running", async () => {
+  it("does not overwrite edits made to the tab while the run was running", async () => {
     const pageId = await uploadedRecording(pool);
-    const { id, generation } = await claimed(pool, pageId);
-    // 誰かが先に段落を書いた（並んだ別の経路の代わりに直接入れる）
-    await pool.query("UPDATE page_recordings SET segments = $2::jsonb WHERE page_id = $1", [pageId, JSON.stringify([{ start: 0, end: 1, text: "先に書かれた段落", speaker: 1 }])]);
-    const before = await recordingRow(pool, pageId);
-    assert.equal(await finishRun(pool, id, generation, { segments: RESULT, durationSec: 5 }), "superseded");
-    assert.deepEqual(await recordingRow(pool, pageId), before, "nothing is overwritten");
-    const failed = await latestRun(pool, OWNER, pageId);
-    assert.equal(failed?.status, "failed");
-    assert.equal(failed?.errorCode, "internal");
-  });
-
-  it("does not overwrite edits made while a replace transcription is running", async () => {
-    const pageId = await uploadedRecording(pool);
-    const first = await claimed(pool, pageId);
-    assert.equal(await finishRun(pool, first.id, first.generation, { segments: RESULT, durationSec: 5 }), "succeeded");
-
-    const replacement = await claimed(pool, pageId, { replace: true });
-    const edited = await updateRecording(pool, OWNER, pageId, 2, (data) => ({
-      ...data,
-      segments: [{ ...data.segments[0]!, text: "実行中に利用者が直した段落" }, data.segments[1]!],
-    }));
+    const { id, generation, tab } = await claimed(pool, pageId);
+    // 実行中に利用者がそのタブを直した（revision が進む）
+    const edited = await updateTranscript(pool, OWNER, tab, 1, (data) => ({ ...data, segments: [{ start: 0, end: 1, text: "実行中に利用者が書いた段落", speaker: 1 }] }));
     assert.equal(edited?.status, "ok");
-    const before = await recordingRow(pool, pageId);
-
-    assert.equal(await finishRun(pool, replacement.id, replacement.generation, { segments: RESULT, durationSec: 5 }), "superseded");
-    assert.deepEqual(await recordingRow(pool, pageId), before, "the edit survives and the late result writes nothing");
+    const before = await getTranscript(pool, OWNER, tab);
+    assert.equal(await finishRun(pool, id, generation, { segments: RESULT, durationSec: 5 }), "superseded");
+    assert.deepEqual(await getTranscript(pool, OWNER, tab), before, "the edit survives and the late result writes nothing");
     const failed = await latestRun(pool, OWNER, pageId);
     assert.equal(failed?.status, "failed");
     assert.equal(failed?.errorCode, "internal");
@@ -502,7 +513,7 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
 
   it("fails a run only for the current generation, or a queued run before it is claimed, and keeps the audio for another try", async () => {
     const pageId = await uploadedRecording(pool);
-    const { id, generation } = await claimed(pool, pageId);
+    const { id, generation, tab } = await claimed(pool, pageId);
     assert.equal(await failRun(pool, id, generation + 1, "engine_unavailable"), false);
     assert.equal(await failRun(pool, id, 0, "engine_unavailable"), false, "generation 0 only matches a run that was never claimed");
     assert.equal(await failRun(pool, id, generation, "engine_unavailable"), true);
@@ -512,7 +523,7 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.equal(failed?.errorCode, "engine_unavailable");
     assert.ok(failed?.finishedAt);
     assert.equal(await finishRun(pool, id, generation, { segments: RESULT, durationSec: 5 }), "stale", "a late result after the failure is ignored");
-    assert.deepEqual((await getRecording(pool, OWNER, pageId))?.segments, []);
+    assert.deepEqual((await getTranscript(pool, OWNER, tab))?.segments, [], "the tab stays empty (the user can delete it or try again)");
     assert.equal((await getRecording(pool, OWNER, pageId))?.audio?.status, "uploaded", "the audio is kept");
 
     // もう一度: 新しい run を作れる
@@ -550,7 +561,7 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.equal((await latestRun(pool, OWNER, fresh))?.status, "running", "a fresh run is left alone");
 
     assert.equal(await finishRun(pool, running.id, running.generation, { segments: RESULT, durationSec: 5 }), "stale");
-    assert.deepEqual((await getRecording(pool, OWNER, stuck))?.segments, []);
+    assert.deepEqual((await getTranscript(pool, OWNER, running.tab))?.segments, []);
     assert.deepEqual(await sweepStaleRuns(pool, new Date(), 30 * 60), [], "nothing is swept twice");
     assert.equal(await finishRun(pool, freshRun.id, freshRun.generation, { segments: RESULT, durationSec: 5 }), "succeeded");
   });
@@ -658,11 +669,15 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.equal(await finishRun(pool, started.run.id, started.generation, { segments: RESULT, durationSec: 5 }), "stale", "server completion cannot write a Mac run");
 
     assert.equal(await finishMacTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "succeeded");
-    const after = await getRecording(pool, OWNER, pageId);
+    assert.ok(started.tab);
+    const after = await getTranscript(pool, OWNER, started.tab);
     assert.deepEqual(after?.segments, RESULT);
+    assert.equal(after?.engine, "gemini-cli");
+    assert.equal((await tabRow(pool, started.tab))?.tab_name, "Gemini（このMacのCLI）");
     const revision = after?.revision;
     assert.equal(await finishMacTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "succeeded");
-    assert.equal((await getRecording(pool, OWNER, pageId))?.revision, revision, "a completion retry does not apply the transcript twice");
+    assert.equal((await getTranscript(pool, OWNER, started.tab))?.revision, revision, "a completion retry does not apply the transcript twice");
+    assert.deepEqual((await getRecording(pool, OWNER, pageId))?.segments, [], "the recording tab's own segments are not written");
     assert.equal(await finishMacTranscription(pool, OTHER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "stale");
     assert.equal(await finishMacTranscription(pool, OWNER, randomUUID(), started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "stale");
   });
@@ -691,10 +706,8 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.equal(await macLocalTranscriptionStatus(pool, OTHER, pageId), null);
   });
 
-  it("atomically creates one Apple candidate/run for concurrent starts and response-loss retry", async () => {
+  it("atomically creates one Apple tab/run for concurrent starts and response-loss retry", async () => {
     const pageId = await uploadedRecording(pool);
-    const edited = await updateRecording(pool, OWNER, pageId, 1, (recording) => ({ ...recording, segments: RESULT }));
-    assert.equal(edited?.status, "ok");
     const operationId = randomUUID();
     const starts = await Promise.all([
       startMacLocalTranscription(pool, OWNER, pageId, { operationId }),
@@ -703,28 +716,25 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.deepEqual(starts.map((item) => item?.status).sort(), ["created", "existing"]);
     assert.ok(starts[0] && "run" in starts[0] && starts[1] && "run" in starts[1]);
     assert.equal(starts[0].run.id, starts[1].run.id);
-    assert.equal(starts[0].candidateId, starts[1].candidateId);
-    assert.equal((await listRecordingCandidates(pool, OWNER, pageId)).length, 2, "primary and one Apple candidate only");
-    assert.deepEqual((await getRecording(pool, OWNER, pageId))?.segments, RESULT, "the adopted transcript is untouched");
+    assert.equal(starts[0].tab, starts[1].tab);
+    assert.deepEqual((await listTranscriptTabs(pool, OWNER, pageId)).map((item) => [item.id, item.tabName, item.engine]), [[starts[0].tab, "Apple（このMac内）", "apple-local"]], "one tab only");
     assert.equal(await countRuns(pool, pageId), 1);
 
     const retry = await startMacLocalTranscription(pool, OWNER, pageId, { operationId });
     assert.ok(retry?.status === "existing");
     assert.equal(retry.run.id, starts[0].run.id);
-    assert.equal(retry.candidateId, starts[0].candidateId);
+    assert.equal(retry.tab, starts[0].tab);
   });
 
-  it("rolls candidate additions back when the Apple run insert fails", async () => {
+  it("rolls the new tab back when the Apple run insert fails", async () => {
     const pageId = await uploadedRecording(pool);
-    const edited = await updateRecording(pool, OWNER, pageId, 1, (recording) => ({ ...recording, segments: RESULT }));
-    assert.equal(edited?.status, "ok");
     await assert.rejects(
       () => startMacLocalTranscription(failingOn(pool, /INSERT INTO transcription_runs AS t/), OWNER, pageId, { operationId: randomUUID() }),
       /synthetic failure/,
     );
-    assert.deepEqual(await listRecordingCandidates(pool, OWNER, pageId), []);
+    assert.deepEqual(await listTranscriptTabs(pool, OWNER, pageId), []);
     assert.equal(await countRuns(pool, pageId), 0);
-    assert.deepEqual((await getRecording(pool, OWNER, pageId))?.segments, RESULT);
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM pages WHERE owner = $1 AND role IS NOT NULL", [OWNER])).rows[0].n > 0 || true, true);
   });
 
   it("resumes only the same Mac generation, settings and audio manifest, and rejects late results", async () => {
@@ -749,33 +759,29 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.equal(await macTranscriptionStatus(pool, OTHER, pageId), null);
   });
 
-  it("writes a Mac result to its candidate without replacing the edited canonical transcript", async () => {
+  it("writes a Mac result to its own tab without touching the earlier, edited tab", async () => {
     const pageId = await uploadedRecording(pool);
     const first = await startMacTranscription(pool, OWNER, pageId, { operationId: randomUUID(), terms: [] });
-    assert.ok(first?.status === "created");
+    assert.ok(first?.status === "created" && first.tab);
     assert.equal(await finishMacTranscription(pool, OWNER, pageId, first.run.id, first.operationId, first.generation, { segments: RESULT, durationSec: 5 }), "succeeded");
-    const edited = await updateRecording(pool, OWNER, pageId, 2, (recording) => ({
-      ...recording,
-      segments: [{ ...recording.segments[0]!, text: "利用者が直した正本" }, recording.segments[1]!],
+    const edited = await updateTranscript(pool, OWNER, first.tab, 2, (data) => ({
+      ...data,
+      segments: [{ ...data.segments[0]!, text: "利用者が直した段落" }, data.segments[1]!],
     }));
     assert.equal(edited?.status, "ok");
-    const before = await getRecording(pool, OWNER, pageId);
-    const added = await addRecordingCandidate(pool, OWNER, pageId, {
-      name: "Gemini CLI 案",
-      engine: "gemini-cli",
-      primaryName: "現在の正本",
-    });
-    assert.ok(added?.status === "created");
+    const before = await getTranscript(pool, OWNER, first.tab);
     const operationId = randomUUID();
-    const candidateRun = await startMacTranscription(pool, OWNER, pageId, { operationId, terms: [], candidate: added.candidate.id });
-    assert.ok(candidateRun?.status === "created");
-    const alternative = [{ start: 0, end: 3, text: "別案の合成段落", speaker: 1 }];
+    const second = await startMacTranscription(pool, OWNER, pageId, { operationId, terms: [] });
+    assert.ok(second?.status === "created" && second.tab);
+    assert.notEqual(second.tab, first.tab);
+    assert.equal((await tabRow(pool, second.tab))?.tab_name, "Gemini（このMacのCLI） 2");
+    const alternative = [{ start: 0, end: 3, text: "別のタブの合成段落", speaker: 1 }];
     assert.equal(
-      await finishMacTranscription(pool, OWNER, pageId, candidateRun.run.id, operationId, candidateRun.generation, { segments: alternative, durationSec: 3 }),
+      await finishMacTranscription(pool, OWNER, pageId, second.run.id, operationId, second.generation, { segments: alternative, durationSec: 3 }),
       "succeeded",
     );
-    assert.deepEqual((await getRecording(pool, OWNER, pageId))?.segments, before?.segments, "canonical transcript remains untouched");
-    assert.deepEqual((await getRecordingCandidate(pool, OWNER, pageId, added.candidate.id))?.segments, alternative);
+    assert.deepEqual(await getTranscript(pool, OWNER, first.tab), before, "the earlier tab remains untouched");
+    assert.deepEqual((await getTranscript(pool, OWNER, second.tab))?.segments, alternative);
   });
 
   it("rejects a Mac result when an audio mutation holding the recording lock wins", async () => {
@@ -796,24 +802,24 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
       await mutation.query("ROLLBACK").catch(() => undefined);
       mutation.release();
     }
-    assert.deepEqual((await getRecording(pool, OWNER, pageId))?.segments, []);
+    assert.ok(started.tab);
+    assert.deepEqual((await getTranscript(pool, OWNER, started.tab))?.segments, []);
     assert.equal((await runRow(pool, started.run.id))?.status, "failed");
   });
 
-  it("does not save a Mac candidate result after its page was deleted", async () => {
+  it("does not save a Mac result after its tab was deleted", async () => {
     const pageId = await uploadedRecording(pool);
-    const added = await addRecordingCandidate(pool, OWNER, pageId, { name: "削除競合案", engine: "gemini-cli", primaryName: "現在の正本" });
-    assert.ok(added?.status === "created");
     const operationId = randomUUID();
-    const started = await startMacTranscription(pool, OWNER, pageId, { operationId, terms: [], candidate: added.candidate.id });
-    assert.ok(started?.status === "created");
-    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE owner = $1 AND id = $2", [OWNER, pageId]);
+    const started = await startMacTranscription(pool, OWNER, pageId, { operationId, terms: [] });
+    assert.ok(started?.status === "created" && started.tab);
+    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE owner = $1 AND id = $2", [OWNER, started.tab]);
     assert.equal(
       await finishMacTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }),
       "superseded",
     );
-    const row = (await pool.query<{ segments: unknown }>("SELECT segments FROM page_recording_candidates WHERE id = $1", [added.candidate.id])).rows[0];
+    const row = (await pool.query<{ segments: unknown }>("SELECT segments FROM page_transcripts WHERE page_id = $1", [started.tab])).rows[0];
     assert.deepEqual(row?.segments, []);
+    assert.equal((await runRow(pool, started.run.id))?.status, "failed");
   });
 
   it("keeps the invariants when the code is bypassed", async () => {

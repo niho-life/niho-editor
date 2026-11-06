@@ -218,6 +218,12 @@ describe("migration files", () => {
         assert.match(statements, holders, `${file.name} must make a role holder from existing step pages`);
         statements = statements.replace(holders, "");
       }
+      if (file.name.endsWith("_page_transcripts.sql")) {
+        // 文字起こしをタブに（#310）: 既存の録音・案から、フォルダ・入れ物・タブ・本文・版を写す（一時表と既存の表から。固定レコードではない）
+        const moved = /\bINSERT\s+INTO\s+(?:pages|page_transcripts|page_transcript_versions)\s*\([^)]*\)\s*SELECT\b[^;]*?\bFROM\s+(?:tx_\w+|page_recording_candidate_versions)\b[^;]*;/gi;
+        assert.match(statements, moved, `${file.name} must move existing transcripts into tabs`);
+        statements = statements.replace(moved, "");
+      }
       assert.doesNotMatch(statements, /\bINSERT\s+INTO\b|\bCOPY\s/i, `${file.name} must not embed records`);
       assert.doesNotMatch(sql, /-----BEGIN [A-Z ]*PRIVATE KEY-----/);
       assert.doesNotMatch(sql, /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i, "credential URL");

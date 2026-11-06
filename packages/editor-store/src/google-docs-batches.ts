@@ -281,7 +281,20 @@ async function sourceRow(
             CASE WHEN sized.raw_bytes <= $3 AND $5::boolean THEN COALESCE(r.speaker_names, '{}'::jsonb) ELSE NULL END AS speaker_names
        FROM pages p
        LEFT JOIN page_fields f ON f.owner = p.owner AND f.page_id = p.id
-       LEFT JOIN page_recordings r ON r.owner = p.owner AND r.page_id = p.id
+       -- 録音の文字起こし: 最新の文字起こしのタブ（#310）。無ければ正本（移行前の録音）
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(tx.segments, pr.segments) AS segments, COALESCE(tx.speaker_names, pr.speaker_names) AS speaker_names, pr.page_id
+           FROM page_recordings pr
+           LEFT JOIN LATERAL (
+             SELECT tt.segments, tt.speaker_names
+               FROM page_transcripts tt
+               JOIN pages tp ON tp.owner = tt.owner AND tp.id = tt.page_id AND tp.deleted_at IS NULL
+              WHERE tt.owner = pr.owner AND tt.recording_page_id = pr.page_id AND jsonb_array_length(tt.segments) > 0
+              ORDER BY tp.updated_at DESC, tp.id DESC
+              LIMIT 1
+           ) tx ON true
+          WHERE pr.owner = p.owner AND pr.page_id = p.id
+       ) r ON true
        CROSS JOIN LATERAL (
          SELECT octet_length(p.title)::bigint + octet_length(p.blocks::text)::bigint${backgroundBytes}${transcriptBytes} AS raw_bytes
        ) sized
