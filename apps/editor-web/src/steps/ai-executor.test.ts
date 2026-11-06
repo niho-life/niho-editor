@@ -495,6 +495,25 @@ describe("the real step executor with chunks (#277)", () => {
     expect(user).not.toContain("前の区切りの出力の末尾");
   });
 
+  it("never cuts the chunk to the shared budget, and reports a cut only when the other sources were cut", async () => {
+    const client = okClient();
+    const long = (text: string): Block[] => [{ type: "paragraph", content: [{ type: "text", text }] }];
+    const longInput = {
+      ...input,
+      stepIndex: 5,
+      recipe: { ...input.recipe, steps: Array.from({ length: 6 }, (_, index) => ({ ...input.recipe.steps[0]!, id: `step${index}0001`, name: `段階 ${index + 1}` })) },
+      parentBlocks: long("Ψ".repeat(40_000)),
+      previousBlocks: long("Θ".repeat(40_000)),
+      materials: undefined,
+    };
+    const output = await setup({ client: client.client }).run({ ...longInput, chunk: { index: 0, count: 3, text: "Ω".repeat(16_000), previousTail: "" } });
+    const user = client.calls[0]!.user;
+    expect(Array.from(user).filter((ch) => ch === "Ω")).toHaveLength(16_000);
+    expect(user).not.toContain("（区切り 1/3）（長いので先頭だけ）");
+    // 原文（40,000 字）は残りの予算に収まっていれば切られず、通知は出ない
+    expect(output.inputUsedChars).toBeUndefined();
+  });
+
   it("checks this month's limit before each chunk and records the usage of each chunk", async () => {
     const usage = memoryUsage();
     const client = okClient();

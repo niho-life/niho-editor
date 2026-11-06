@@ -10,6 +10,7 @@ import {
   parseComposeOutput,
   partialComposeBlocks,
   type ComposeInput,
+  type ComposeSource,
 } from "./compose";
 
 // 合成のデータだけを使う
@@ -252,6 +253,31 @@ describe("partialComposeBlocks（出力の上限で切れた答えから、書�
     expect(partialComposeBlocks("これは JSON ではありません")).toEqual([]);
     // 閉じていても、知らない種類は人に出さない
     expect(partialComposeBlocks('{"blocks":[{"kind":"image","text":"x"}')).toEqual([]);
+  });
+});
+
+describe("the budget of a chunked source (#277)", () => {
+  it("reserves the whole chunk first and shares only the rest among the other sources", () => {
+    // 原文と上流 5 件が各 40,000 字、区切りは 16,000 字。均等配分なら区切りが 14,285 字に切られる（Codex P2）
+    const others: ComposeSource[] = Array.from({ length: 6 }, (_, index) => ({ label: `資料 ${index + 1}`, text: "Ψ".repeat(40_000) }));
+    const chunk: ComposeSource = { label: "工程 5 の結果（区切り 2/3）", text: "Ω".repeat(16_000), keepWhole: true };
+    const sources = [...others.slice(0, 3), chunk, ...others.slice(3)];
+    const prompt = buildComposePrompt({ ...base, sources, chunk: { number: 2, count: 3, target: chunk.label, previousTail: "" } });
+    expect(prompt.user).toContain(`### ${chunk.label}\n`);
+    expect(prompt.user).not.toContain(`### ${chunk.label}（長いので先頭だけ）`);
+    expect(Array.from(prompt.user).filter((ch) => ch === "Ω")).toHaveLength(16_000);
+    // ほかの資料は残りの 84,000 字を均等に分ける（各 14,000 字）
+    expect(Array.from(prompt.user).filter((ch) => ch === "Ψ")).toHaveLength(84_000);
+    // 切られた資料があることは、区切りの対象を除いて数える
+    expect(composeSourceUsedChars(others)).toBe(MAX_COMPOSE_SOURCE_CHARS);
+    expect(composeSourceUsedChars(sources.filter((source) => source.keepWhole !== true))).toBe(MAX_COMPOSE_SOURCE_CHARS);
+  });
+
+  it("does not reserve more than the total limit", () => {
+    const sources = [{ label: "区切り", text: "Ω".repeat(MAX_COMPOSE_SOURCE_CHARS + 10), keepWhole: true }, { label: "他", text: "Ψ".repeat(100) }];
+    const prompt = buildComposePrompt({ ...base, sources });
+    expect(Array.from(prompt.user).filter((ch) => ch === "Ω")).toHaveLength(MAX_COMPOSE_SOURCE_CHARS);
+    expect(prompt.user).not.toContain("Ψ".repeat(10));
   });
 });
 

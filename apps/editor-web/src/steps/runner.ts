@@ -139,8 +139,8 @@ export async function runAttempt(deps: RunnerDeps, task: { runId: string; stepIn
         ...(chunk ? { chunk } : {}),
       });
       blocks = parseBlocks(output.blocks);
-      // 区切ったときは対象の全文を使っている（ほかの資料の切りは区切りごとに違うので記録しない）
-      inputUsedChars = chunk ? undefined : output.inputUsedChars;
+      // 区切ったときは、区切った対象を除くほかの資料が切られた字数（区切りが違っても同じ資料なので最後の区切りのものを使う）
+      inputUsedChars = output.inputUsedChars;
     } catch (error) {
       return await recordFailure(deps, ref, asStepError(error));
     }

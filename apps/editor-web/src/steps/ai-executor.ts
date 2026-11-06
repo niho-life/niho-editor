@@ -101,7 +101,7 @@ function sourcesOf(input: StepExecutorInput): ComposeSource[] {
   ];
   if (input.chunk) {
     const target = sources[input.stepIndex]!;
-    sources[input.stepIndex] = { label: `${target.label}（区切り ${input.chunk.index + 1}/${input.chunk.count}）`, text: input.chunk.text };
+    sources[input.stepIndex] = { label: `${target.label}（区切り ${input.chunk.index + 1}/${input.chunk.count}）`, text: input.chunk.text, keepWhole: true };
   }
   return sources;
 }
@@ -218,7 +218,8 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
         console.error("editor-web: step output rejected", { reason: blocks.reason });
         throw new StepError("invalid_output", false);
       }
-      const inputUsedChars = composeSourceUsedChars(composeInput.sources);
+      // 区切ったときは、区切った対象（全文を使う）を除いたほかの資料が上限で切られたときだけ知らせる
+      const inputUsedChars = composeSourceUsedChars(input.chunk ? composeInput.sources.filter((source) => source.keepWhole !== true) : composeInput.sources);
       return { blocks: blocks.blocks, usage: { inputTokens, outputTokens, model: report.model }, ...(inputUsedChars === null ? {} : { inputUsedChars }) };
     },
   };

@@ -44,7 +44,12 @@ export type ComposeBlock =
   | { kind: "bullets"; items: string[] };
 
 /** 資料 1 つ（`label` は何の資料かを示す短い名前。本文は untrusted の枠に入る）。 */
-export type ComposeSource = { label: string; text: string };
+export type ComposeSource = {
+  label: string;
+  text: string;
+  /** 区切って処理している対象の今の区切り（#277）。予算を先に全文分確保し、残りをほかの資料に配る（切らない）。 */
+  keepWhole?: boolean;
+};
 
 export type ComposeInput = {
   /** 手順の名前（例「記事制作」）。 */
@@ -119,9 +124,15 @@ function sourceSection(source: ComposeSource, budget: number): string {
 function sourceBudgets(sources: readonly ComposeSource[]): number[] {
   const lengths = sources.map((source) => countChars(source.text.trim()));
   const budgets = lengths.map(() => 0);
-  const ordered = lengths.map((length, index) => ({ length, index })).filter(({ length }) => length > 0)
-    .sort((a, b) => a.length - b.length || a.index - b.index);
   let remaining = MAX_COMPOSE_SOURCE_CHARS;
+  // 区切った対象の今の区切りは、全文分を先に確保する（ほかの資料との均等配分で切らない）
+  for (const [index, source] of sources.entries()) {
+    if (source.keepWhole !== true) continue;
+    budgets[index] = Math.min(lengths[index]!, remaining);
+    remaining -= budgets[index]!;
+  }
+  const ordered = lengths.map((length, index) => ({ length, index })).filter(({ length, index }) => length > 0 && sources[index]!.keepWhole !== true)
+    .sort((a, b) => a.length - b.length || a.index - b.index);
   let cursor = 0;
   while (cursor < ordered.length && remaining > 0) {
     const fair = Math.floor(remaining / (ordered.length - cursor));
