@@ -1,6 +1,6 @@
 # NIHO editorの署名前Mac配布候補
 
-公開製品のMac buildと、別のfresh MacによるDATA検証は、このrepo自身の標準GitHub-hosted runnerで行う。公式updaterの署名鍵と配布権限はconsumer側に残す。追跡: #273、niho-coliving/niho-app#19890。
+公開製品のMac buildと、別のfresh MacによるDATA検証は、このrepo自身の標準GitHub-hosted runnerで行う。署名と公式公開はオーナーのMacで行い（`scripts/editor-candidate/sign-and-publish.sh`）、更新の署名鍵はGitHubに置かない（[editor-release-boundary.md](../architecture/editor-release-boundary.md)、オーナー決定 2026-11-06）。追跡: #273、#286、niho-coliving/niho-app#19890。
 
 ## 開始条件
 
@@ -25,7 +25,20 @@ PR/push/merge-groupでは合成データを使うLinuxテストだけを実行�
 4. Linuxのpublish jobがfile集合・manifest・receiptのhashを再確認し、manifestへGitHubの実行証明を付ける。write/OIDC権限はこのjobだけが持つ。
 5. `editor-candidate-v<VERSION>-<SOURCE_SHA>-run-<RUN_ID>-attempt-<ATTEMPT>`のprereleaseへ候補を置く。official updater/latestにはしない。
 
-配布先は、レビュー済みcontroller SHA、製品source、run/attempt、repo/workflow/ref、実行証明、全file hash、公開client設定のhashを確認する。版・source・実行元・内容が一致しなければ採用しない。公式署名と配布はその後にconsumerが行う。
+## 採用（オーナーのMac）
+
+```sh
+scripts/editor-candidate/sign-and-publish.sh editor-candidate-v<VERSION>-<SOURCE_SHA>-run-<RUN_ID>-attempt-<ATTEMPT> [--dry-run]
+```
+
+1. tagから版・source・run/attemptを読み、Releaseのtarget（controller SHA）とともにorigin/mainに含まれることを確かめる。
+2. 5つのassetを取り、実行証明を`gh attestation verify`で確かめる（このrepoの`editor-mac-candidate.yml`が`refs/heads/main`のcontroller SHAで、GitHub-hosted runnerで作ったmanifest）。
+3. `candidate.py recheck`: manifest/receipt/file hashの照合に加え、tarを展開してinventoryを作り直し、bundle識別子・版・codesign・dmgの中身をこのMacのcodesign/hdiutilで見る。CIのreceiptを信用しない。候補内のbinaryは実行しない。
+4. 製品sourceの`tauri.conf.json`の公開鍵のSHA-256がmanifestと同じこと、版が更新フィードの今の版と公開済みの`docs-v*`より大きいことを確かめる。
+5. `~/.niho/docs-updater.key`で`.app.tar.gz`にminisignの署名を付け、`updater-key.mjs verify`で公開鍵との組を確かめる。
+6. このrepoの公開Release `docs-v<VERSION>-<sha12>`（targetは製品source）に`NIHO-docs-<VERSION>-<sha12>.dmg` / `.dmg.sha256` / `.app.tar.gz` / `.app.tar.gz.sig`と候補のmanifest・実行証明を上げる。tagとasset名はniho-appのReleaseと同じ形。
+
+版・source・実行元・内容が一致しなければ、どの段でも止まって公開しない。`--dry-run`は5まで行い、Releaseを作らない。
 
 ## 成果物
 
@@ -40,4 +53,4 @@ PR/push/merge-groupでは合成データを使うLinuxテストだけを実行�
 
 ## 失敗と撤退
 
-設定不足・古い版・main外source・検査失敗は公開前に停止する。consumer側の証明不一致でも停止し、privateでの自動full buildへ切り替えない。既存の公式署名鍵・配布feedを変更する必要はない。workflowの成功やprereleaseの存在だけで公式配布済みとは扱わない。
+設定不足・古い版・main外source・検査失敗は公開前に停止する。手元の採用で証明・hash・再確認が合わなくても停止し、privateでの自動full buildへ切り替えない。更新の署名鍵は作り直さない（配った版が更新を受け取れなくなる）。更新フィードの参照先をこのrepoの公開Releaseへ切り替えるのはniho-appのPR 1回（#286）。workflowの成功やprereleaseの存在だけで公式配布済みとは扱わない。
