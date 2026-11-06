@@ -476,7 +476,7 @@ function createToolRunner(deps: {
       }
       const body = { id: page.id, title: page.title, revision: page.revision, total, from: Math.min(from, total), to, paragraphs };
       // 録音のページと文字起こしのタブ（#310）は文字起こしも添える（読み取り専用。本文の paragraphs とは別のキーで、書き込みの道具は触らない）
-      const recording = (target.kind === "rec" || target.transcript) && deps.recording ? await deps.recording(owner, target.id) : null;
+      const recording = (target.kind === "rec" || target.transcriptOf !== null) && deps.recording ? await deps.recording(owner, target.id) : null;
       if (!recording || recording.segments.length === 0) return { ok: true, result: toolJson(body), page: page.title };
       const segments = recording.segments.length;
       const transcriptFrom = isRevision(input.transcript_from) ? input.transcript_from : 1;
@@ -556,12 +556,12 @@ function createToolRunner(deps: {
       const query = typeof input.query === "string" ? input.query.trim() : "";
       const length = Array.from(query).length;
       if (length === 0 || length > MAX_TRANSCRIPT_QUERY_CHARS) return { ok: false, result: `query に探す語句（1〜${MAX_TRANSCRIPT_QUERY_CHARS} 字）を渡してください。` };
-      // 探すのは文字起こしのタブ（#310）。タブの無い録音のページ（移行前の正本）も探す
-      const hasTranscript = (page: WorkspaceEntry) => page.transcript || (page.kind === "rec" && !deps.workspace.some((tab) => tab.transcript && tab.parent === page.parent));
+      // 探すのは文字起こしのタブ（#310）。タブの無い録音のページ（移行前の正本）も探す（タブのある録音は、タブと二重に探さない）
+      const hasTranscript = (page: WorkspaceEntry) => page.transcriptOf !== null || (page.kind === "rec" && !deps.workspace.some((tab) => tab.transcriptOf === page.id));
       let candidates = deps.workspace.filter(hasTranscript);
       if (input.page_id !== undefined) {
         const target = find(input.page_id);
-        if (!target || !(target.transcript || target.kind === "rec")) return { ok: false, result: "そのページは、この会話で探せる文字起こしではありません。list_pages の文字起こしのタブか、kind が rec のページの id を使ってください。" };
+        if (!target || !(target.transcriptOf !== null || target.kind === "rec")) return { ok: false, result: "そのページは、この会話で探せる文字起こしではありません。list_pages の文字起こしのタブか、kind が rec のページの id を使ってください。" };
         candidates = [target];
       }
       if (candidates.length === 0 || !deps.recording) return { ok: false, result: "このフォルダには録音のページが無いので、文字起こしを探せません。" };
@@ -598,7 +598,7 @@ function createToolRunner(deps: {
     const chars = Array.from(input.markdown).length;
     deps.changes.set(created.id, { pageId: created.id, title: created.title, change: "created", version: null, revision: created.revision, chars, delta: chars });
     // 作ったページも、その依頼の中では読み書きできる
-    deps.workspace.push({ id: created.id, title: created.title, kind: created.kind, parent: created.parent, open: false, transcript: false, writable: true });
+    deps.workspace.push({ id: created.id, title: created.title, kind: created.kind, parent: created.parent, open: false, transcriptOf: null, writable: true });
     return { ok: true, result: toolJson({ id: created.id, title: created.title, revision: created.revision, chars }), page: created.title };
   };
 }

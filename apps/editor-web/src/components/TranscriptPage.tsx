@@ -238,8 +238,8 @@ export function TranscriptPage({ tabId, recording }: { tabId: string; recording:
       await startTranscription(recording, { engine: retryEngine, tab: tabId });
       notifyTranscriptionStarted(tabId);
       setNotice(null);
-    } catch (error) {
-      setNotice(recordingErrorMessage(error, "load") === "このページには文字起こしがありません。" ? "文字起こしを始められませんでした。" : "文字起こしを始められませんでした。しばらくしてからもう一度。");
+    } catch {
+      setNotice("文字起こしを始められませんでした。しばらくしてからもう一度。");
     } finally {
       setRetrying(false);
     }

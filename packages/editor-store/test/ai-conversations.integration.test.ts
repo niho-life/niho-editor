@@ -387,7 +387,7 @@ describe("AI conversations", { skip: databaseUrl ? false : "TEST_DATABASE_URL is
       const farInFolder = (await store.createPage(owner, { title: "別のフォルダの中", parent: otherFolder.id }))!;
 
       const workspace = await listChatWorkspace(pool, owner, note.id);
-      assert.deepEqual(workspace?.[0], { id: note.id, title: "記事本文", kind: "note", parent: folder.id, open: true, transcript: false });
+      assert.deepEqual(workspace?.[0], { id: note.id, title: "記事本文", kind: "note", parent: folder.id, open: true, transcriptOf: null });
       assert.deepEqual(
         workspace?.map((item) => item.title).sort(),
         // 題名はページの名前で、入れ物と全てのタブで同じ（#308）。2 つ目のタブも「記事本文」（タブの名前「英語版」は tab_name）
