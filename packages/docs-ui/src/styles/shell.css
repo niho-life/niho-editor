@@ -522,6 +522,17 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-send:disabled{opacity:.4;cursor:not-allowed}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-send .es-ico{width:16px;height:16px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-send--stop{background:var(--ed-primary-bg);color:var(--ed-primary-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-send--queue{margin-left:auto;background:transparent;color:var(--ed-ink);border:1px solid var(--ed-line-2)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-send--queue+.es-ai-send{margin-left:6px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-queue{margin:0 1px 7px;min-width:0;font-size:12px;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-queue-head{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-queue-toggle{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:0 8px;border-radius:999px;background:var(--ed-sand);font-size:12px;font-weight:500;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-queue-toggle .es-ico{width:12px;height:12px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-queue-note{font-size:12px;line-height:1.55}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-queue-list{display:grid;gap:4px;margin:6px 0 0;padding:0;list-style:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-queue-list li{display:flex;align-items:center;gap:6px;min-width:0;padding:3px 6px;border:1px solid var(--ed-line-2);border-radius:6px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-queue-list li span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ed-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-queue-list li button{flex:none;padding:0 4px;font-size:16px;line-height:1}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-stop-mark{width:10px;height:10px;border-radius:2px;background:currentColor}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip{display:flex;align-items:center;gap:5px;margin:0 1px 7px;padding:4px 6px;border:1px solid var(--ed-line-2);border-radius:6px;color:var(--ed-accent-ink);font-size:12px;min-width:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip .es-ico{width:14px;height:14px}

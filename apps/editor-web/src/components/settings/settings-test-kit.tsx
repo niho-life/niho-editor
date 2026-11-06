@@ -39,6 +39,7 @@ export function dto(patch: Partial<SettingsDto> = {}): SettingsDto {
     glossary: [],
     aboutName: "",
     about: "",
+    webSearch: true,
     recipes: DEFAULT_RECIPE_IDS.map((id) => ({
       id,
       ...structuredClone(DEFAULTS[id]!),
