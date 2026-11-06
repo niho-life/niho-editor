@@ -17,6 +17,7 @@ import {
   markTabCreatedPage,
   returnLeftEmptyCandidates,
   takeLeftEmptyCandidates,
+  unmarkTabCreatedPage,
 } from "./left-empty-pages";
 import { PageRequestError, discardPageRequest } from "./pages-client";
 
@@ -73,6 +74,21 @@ describe("the pages made in this tab (sessionStorage)", () => {
     expect(isTabCreatedPage(id(1))).toBe(true);
     expect(isTabCreatedPage(id(2))).toBe(false);
     expect(isTabCreatedPage("not-a-page")).toBe(false);
+  });
+
+  it("unmarks a page the user added a tab to: no longer thrown away when left blank, and not a candidate either", () => {
+    markTabCreatedPage(id(1));
+    markTabCreatedPage(id(2));
+    addLeftEmptyCandidate(id(1));
+    unmarkTabCreatedPage(id(1));
+    expect(isTabCreatedPage(id(1))).toBe(false);
+    expect(isTabCreatedPage(id(2))).toBe(true);
+    expect(JSON.parse(window.sessionStorage.getItem(TAB_CREATED_PAGES_KEY)!)).toEqual([id(2)]);
+    expect(takeLeftEmptyCandidates()).toEqual([]);
+    // 最後の 1 つを外すと控えごと消える。印の無いページを外しても何も起きない
+    unmarkTabCreatedPage(id(2));
+    expect(window.sessionStorage.getItem(TAB_CREATED_PAGES_KEY)).toBeNull();
+    expect(() => unmarkTabCreatedPage(id(3))).not.toThrow();
   });
 });
 

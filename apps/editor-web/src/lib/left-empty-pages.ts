@@ -92,6 +92,18 @@ export function markTabCreatedPage(id: string): void {
   add("session", TAB_CREATED_PAGES_KEY, TAB_CREATED_PAGES_MAX, [id]);
 }
 
+/**
+ * 「新しいページ」で作ったページの印を外す（何も足していない新しいページを捨てる対象から外す）。
+ * 利用者がそのページに自分で何かを足した（タブの ＋）ときに使う。捨てる候補にも残さない。
+ */
+export function unmarkTabCreatedPage(id: string): void {
+  const key = id.toLowerCase();
+  const ids = read("session", TAB_CREATED_PAGES_KEY);
+  const next = ids.filter((item) => item !== key);
+  if (next.length !== ids.length) write("session", TAB_CREATED_PAGES_KEY, next);
+  dropLeftEmptyCandidate(id);
+}
+
 /** このタブの「新しいページ」で作ったページか（再読み込みのあとも分かる）。 */
 export function isTabCreatedPage(id: string): boolean {
   return UUID.test(id) && read("session", TAB_CREATED_PAGES_KEY).includes(id.toLowerCase());
