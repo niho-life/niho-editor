@@ -3,7 +3,9 @@ import type { Block, OwnerId, Page, PageKind, PageLang, Queryable, StepStatus } 
 
 /**
  * ページの複製（#34）。本人の・ゴミ箱でないページだけを、1 つの文（INSERT … SELECT）で写す。
- * 写すのは kind・lang・blocks・lead と題名（「〜のコピー」）。parent・cover・recipe・step_status・共有・公開・版は写さない。
+ * 写すのは kind・lang・blocks・lead と題名（「〜のコピー」）。cover・recipe・step_status・共有・公開・版は写さない。
+ * タブ（#307。`page` が入れ物を指す行）の複製は**同じ入れ物の新しいタブ**（同じフォルダに並び、並びは末尾、`made_from` は `{kind:'dup', from}`）。
+ * 入れ物の無い行（手順のサブページ・移行前の行）の複製は、今までどおり上の段の 1 枚（parent は付けない）。
  * 録音ページ（#36。page_recordings の行がある）は、文字起こし（段落・話者名・原本の名前と SHA-256）も同じ文の中で写す。
  * 録音の revision は 1 から数え直す（別の録音になるので、元の録音の編集とは競合しない）。
  * 音声（#36 段 2a。資産は 1 つのページに属する）は写さない: コピーは文字起こしだけで、audio_* は既定の none。
@@ -17,10 +19,10 @@ export const DUPLICATE_TITLE_SUFFIX = "のコピー";
 /** 題名の上限（0001 の CHECK と同じ。PostgreSQL の length は code point の数）。 */
 export const PAGE_TITLE_MAX_CHARS = 500;
 
-/** 複製したページ（createPage の戻りと同じ列）。 */
+/** 複製したページ（createPage の戻りと同じ列）。`page` は同じ入れ物（タブの複製）か null。 */
 export type DuplicatedPage = Pick<
   Page,
-  "id" | "kind" | "title" | "lang" | "blocks" | "cover" | "lead" | "parent" | "recipe" | "stepStatus" | "createdAt" | "updatedAt"
+  "id" | "kind" | "title" | "lang" | "blocks" | "cover" | "lead" | "parent" | "recipe" | "stepStatus" | "page" | "createdAt" | "updatedAt"
 >;
 
 /**
@@ -44,24 +46,36 @@ type PageRow = {
   parent: string | null;
   recipe: string | null;
   step_status: StepStatus | null;
+  page: string | null;
   created_at: Date;
   updated_at: Date;
 };
 
-/** store.ts の PAGE_COLUMNS と同じ列（#33 と並行して触らないよう、ここに持つ）。 */
-const DUPLICATE_COLUMNS = "id, kind, title, lang, blocks, cover, lead, parent, recipe, step_status, created_at, updated_at";
+/** store.ts の PAGE_COLUMNS の一部（#33 と並行して触らないよう、ここに持つ）。 */
+const DUPLICATE_COLUMNS = "id, kind, title, lang, blocks, cover, lead, parent, recipe, step_status, page, created_at, updated_at";
 
 // $1 owner / $2 元のページの id / $3 題名に足す言葉 / $4 題名の上限。left・char_length は code point で数える。
 // 録音の行は、写したページの行と同じ文の中で入れる（片方だけが入ることはない。外部キーは文の終わりに確かめられる）。
+// タブ（page が入れ物を指す）なら同じ入れ物・同じフォルダに、並びは末尾。入れ物の無い行は上の段の 1 枚（parent なし）。
 const DUPLICATE_SQL = `
 WITH copied AS (
-  INSERT INTO pages (owner, kind, title, lang, blocks, lead)
-  SELECT owner, kind,
-         CASE WHEN title = '' THEN '' ELSE left(title, $4::int - char_length($3::text)) || $3::text END,
-         lang, blocks, lead
-    FROM pages
-   WHERE owner = $1 AND id = $2 AND deleted_at IS NULL AND kind <> 'folder'
+  INSERT INTO pages (owner, kind, title, lang, blocks, lead, parent, page, made_from, sort_order)
+  SELECT s.owner, s.kind,
+         CASE WHEN s.title = '' THEN '' ELSE left(s.title, $4::int - char_length($3::text)) || $3::text END,
+         s.lang, s.blocks, s.lead,
+         CASE WHEN s.page IS NULL THEN NULL ELSE s.parent END,
+         s.page,
+         CASE WHEN s.page IS NULL THEN NULL ELSE jsonb_build_object('kind', 'dup', 'from', s.id) END,
+         CASE WHEN s.page IS NULL THEN 0
+              ELSE COALESCE((SELECT max(t.sort_order) FROM pages t WHERE t.owner = s.owner AND t.page = s.page AND t.deleted_at IS NULL), 0) + 1 END
+    FROM pages s
+   WHERE s.owner = $1 AND s.id = $2 AND s.deleted_at IS NULL AND s.kind <> 'folder' AND s.kind <> 'page'
   RETURNING ${DUPLICATE_COLUMNS}
+),
+touched AS (
+  UPDATE pages h SET updated_at = GREATEST(clock_timestamp(), h.updated_at), last_tab = c.id
+    FROM copied c WHERE h.owner = $1 AND h.id = c.page
+  RETURNING h.id
 ),
 recording AS (
   INSERT INTO page_recordings
@@ -104,6 +118,7 @@ export async function duplicatePage(db: Queryable, owner: OwnerId, pageId: strin
       parent: row.parent,
       recipe: row.recipe,
       stepStatus: row.step_status,
+      page: row.page,
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
     };

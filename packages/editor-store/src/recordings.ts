@@ -82,7 +82,7 @@ export type CreateRecordingInput = {
 };
 
 /** 作った録音ページ（本文は空）。 */
-export type RecordingPage = { id: string; kind: "rec"; title: string; lang: PageLang; createdAt: string; updatedAt: string };
+export type RecordingPage = { id: string; kind: "rec"; title: string; lang: PageLang; page: string | null; createdAt: string; updatedAt: string };
 
 /** 録音の書き換え（純粋な関数）。新しい RecordingData か、断るときは `{ rejected: 理由 }` を返す。 */
 export type RecordingMutation<R extends string = string> = (data: RecordingData) => RecordingData | { rejected: R };
@@ -311,10 +311,18 @@ SELECT ${RECORDING_COLUMNS}
 const LOCK_SQL = `${GET_SQL}
    FOR UPDATE OF r`;
 
-export const INSERT_PAGE_SQL = `
+// 録音ページ＝入れ物（kind='page'。#307）＋ 1 つ目のタブ（kind='rec'）。返すのはタブの行（/p/<id> も録音もタブの id）
+export const INSERT_HOLDER_SQL = `
 INSERT INTO pages (owner, kind, title, lang, blocks)
-VALUES ($1, 'rec', $2, $3, '[]'::jsonb)
-RETURNING id, kind, title, lang, created_at, updated_at`;
+VALUES ($1, 'page', $2, $3, '[]'::jsonb)
+RETURNING id`;
+
+export const INSERT_PAGE_SQL = `
+INSERT INTO pages (owner, kind, title, lang, blocks, page)
+VALUES ($1, 'rec', $2, $3, '[]'::jsonb, $4::uuid)
+RETURNING id, kind, title, lang, page, created_at, updated_at`;
+
+const SET_LAST_TAB_SQL = "UPDATE pages SET last_tab = $3 WHERE owner = $1 AND id = $2";
 
 // 録音の作成時刻はページと同じにする（同じ transaction で入れたページの行から取る。JS の Date を経由しない）
 const INSERT_RECORDING_SQL = `
@@ -366,12 +374,16 @@ export async function createRecordingPage(
   try {
     await client.query("BEGIN");
     try {
-      const pageResult = await client.query<{ id: string; kind: "rec"; title: string; lang: PageLang; created_at: Date; updated_at: Date }>(
+      const holderResult = await client.query<{ id: string }>(INSERT_HOLDER_SQL, [owner, input.title ?? "", input.lang]);
+      const holder = holderResult.rows[0];
+      if (!holder) throw new Error("editor-store: insert returned no holder");
+      const pageResult = await client.query<{ id: string; kind: "rec"; title: string; lang: PageLang; page: string; created_at: Date; updated_at: Date }>(
         INSERT_PAGE_SQL,
-        [owner, input.title ?? "", input.lang],
+        [owner, input.title ?? "", input.lang, holder.id],
       );
       const page = pageResult.rows[0];
       if (!page) throw new Error("editor-store: insert returned no page");
+      await client.query(SET_LAST_TAB_SQL, [owner, holder.id, page.id]);
       const recordingResult = await client.query<RecordingRow>(INSERT_RECORDING_SQL, [
         page.id,
         owner,
@@ -393,6 +405,7 @@ export async function createRecordingPage(
           kind: "rec",
           title: page.title,
           lang: page.lang,
+          page: page.page,
           createdAt: page.created_at.toISOString(),
           updatedAt: page.updated_at.toISOString(),
         },

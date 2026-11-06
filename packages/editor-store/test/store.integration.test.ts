@@ -208,8 +208,9 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
     assert.equal(await store.deletePage(owner, removed.id), "deleted");
     await pool.query("UPDATE pages SET parent = $2, step_status = 'run' WHERE id = $1", [ids[1], ids[0]]);
 
+    // 一覧の行は本文を持つ行（タブ）。タブの入れ物（kind='page'。#307）は出ない
     const expected = await pool.query<{ id: string }>(
-      "SELECT id FROM pages WHERE owner = $1 AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC",
+      "SELECT id FROM pages WHERE owner = $1 AND deleted_at IS NULL AND kind <> 'page' ORDER BY updated_at DESC, id DESC",
       [owner],
     );
     const seen: string[] = [];

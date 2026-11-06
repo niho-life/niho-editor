@@ -4,8 +4,10 @@ import {
   InvalidPageCursorError,
   type Block,
   type CreatePageInput,
+  type CreateTabInput,
   type DeleteResult,
   type MovePageResult,
+  type MoveTabResult,
   type Page,
   type PageChunk,
   type PageChunkOptions,
@@ -13,6 +15,7 @@ import {
   type PageSummary,
   type PageVersion,
   type PageVersionSummary,
+  type ResolvedPage,
   type RestoreOptions,
   type RestoreResult,
   type SaveOptions,
@@ -23,7 +26,7 @@ import {
 import { stubAuthProvider } from "../auth/stub";
 import { AuthTemporarilyUnavailable, type AuthProvider } from "../auth/types";
 import { PAGE_BODY_MAX_BYTES } from "./http";
-import { createPage, deletePage, discardPage, getPage, listPages, movePage, patchPage, type PagesApiDeps, type PagesStore } from "./pages-api";
+import { createPage, createTab, deletePage, discardPage, getPage, getTabs, listPages, movePage, moveTab, patchPage, reorderTabs, type PagesApiDeps, type PagesStore } from "./pages-api";
 import { listTrash, restoreFromTrash } from "./trash-api";
 import { getVersion, listVersions, restoreVersion } from "./versions-api";
 
@@ -74,7 +77,7 @@ function memoryStore() {
       if (input.kind === "folder" && (parent !== null || (input.blocks?.length ?? 0) > 0)) throw new TypeError("editor-store: folder has no body");
       // 型は EditorStore の重ね書き（親なし＝Page）に合わせ、親があって入れられないときだけ null を返す
       if (parent !== null && visible(owner, parent)?.kind !== "folder") return null as unknown as Page;
-      const page: Page = { id: randomUUID(), kind: input.kind ?? "note", title: input.title ?? "", lang: input.lang ?? "ja", blocks: input.blocks ?? [], cover: null, lead: null, parent, recipe: null, stepStatus: null, sortOrder: 0, revision: 1, createdAt: now, updatedAt: now };
+      const page: Page = { id: randomUUID(), kind: input.kind ?? "note", title: input.title ?? "", lang: input.lang ?? "ja", blocks: input.blocks ?? [], cover: null, lead: null, parent, recipe: null, stepStatus: null, sortOrder: 0, revision: 1, page: null, role: null, madeFrom: null, lastTab: null, createdAt: now, updatedAt: now };
       rows.set(page.id, { ...page, owner, deleted: false, deletedAt: null });
       return page;
     },
@@ -182,6 +185,71 @@ function memoryStore() {
       if (!row || row.owner !== owner || !row.deleted) return false;
       Object.assign(row, { deleted: false, deletedAt: null });
       return true;
+    },
+    /** タブ（#307）: 入れ物は `kind='page'` の行、タブは `page` で入れ物を指す。EditorStore と同じ約束（自分の生きている行だけ）。 */
+    async createTab(owner: string, id: string, input: CreateTabInput = {}): Promise<Page | null> {
+      if (!UUID.test(id)) return null;
+      const target = visible(owner, id);
+      if (!target) return null;
+      if (target.kind === "folder") throw new TypeError("editor-store: a folder has no tabs");
+      const now = new Date().toISOString();
+      let holder: Row | null = target.kind === "page" ? target : target.page ? visible(owner, target.page) : null;
+      if (!holder) {
+        // 入れ物の無い 1 枚だけのページ: その場で入れ物を作って結ぶ（EditorStore と同じ）
+        holder = { ...target, id: randomUUID(), kind: "page", blocks: [], page: null, lastTab: target.id, createdAt: now, updatedAt: now };
+        rows.set(holder.id, holder);
+        target.page = holder.id;
+      }
+      const tab: Row = { ...holder, id: randomUUID(), kind: "note", title: input.title ?? "", lang: input.lang ?? holder.lang, blocks: [], page: holder.id, lastTab: null, createdAt: now, updatedAt: now };
+      rows.set(tab.id, tab);
+      holder.lastTab = tab.id;
+      return strip(tab);
+    },
+    async resolvePage(owner: string, id: string): Promise<ResolvedPage | null> {
+      if (!UUID.test(id)) return null;
+      const row = visible(owner, id);
+      if (!row) return null;
+      const tabsOf = (holder: string): PageSummary[] =>
+        [...rows.values()]
+          .filter((r) => r.owner === owner && !r.deleted && r.page === holder)
+          .map(({ id, kind, title, lang, parent, stepStatus, sortOrder, page, role, createdAt, updatedAt }) => ({ id, kind, title, lang, parent, stepStatus, sortOrder, page, role, createdAt, updatedAt, publication: null }));
+      if (row.kind === "page") {
+        const tabs = tabsOf(row.id);
+        const chosen = tabs.find((t) => t.id === row.lastTab) ?? tabs[0];
+        const tab = chosen ? visible(owner, chosen.id) : null;
+        return tab ? { page: strip(row), tab: strip(tab), tabs } : null;
+      }
+      const holder = row.page ? visible(owner, row.page) : null;
+      if (holder && holder.kind === "page") return { page: strip(holder), tab: strip(row), tabs: tabsOf(holder.id) };
+      return { page: null, tab: strip(row), tabs: [] };
+    },
+    async touchLastTab(owner: string, id: string): Promise<boolean> {
+      const row = visible(owner, id);
+      const holder = row?.page ? visible(owner, row.page) : null;
+      if (!row || !holder) return false;
+      Object.assign(rows.get(holder.id)!, { lastTab: row.id });
+      return true;
+    },
+    async reorderTabs(owner: string, id: string, ids: readonly string[]): Promise<boolean | null> {
+      const row = visible(owner, id);
+      if (!row) return null;
+      const holder = row.kind === "page" ? row : row.page ? visible(owner, row.page) : null;
+      if (!holder) return false;
+      const tabs = [...rows.values()].filter((r) => r.owner === owner && !r.deleted && r.page === holder.id).map((r) => r.id);
+      if (tabs.length !== ids.length || !tabs.every((t) => ids.includes(t))) return false;
+      ids.forEach((tabId, index) => Object.assign(rows.get(tabId)!, { sortOrder: index + 1 }));
+      return true;
+    },
+    async moveTab(owner: string, id: string, to: string): Promise<MoveTabResult | null> {
+      const row = visible(owner, id);
+      if (!row) return null;
+      if (!row.page || row.kind === "page" || row.kind === "folder") return "not_page";
+      const target = visible(owner, to);
+      if (!target) return null;
+      const holder = target.kind === "page" ? target : target.page ? visible(owner, target.page) : null;
+      if (!holder) return "not_page";
+      Object.assign(rows.get(row.id)!, { page: holder.id, parent: holder.parent });
+      return "moved";
     },
   };
   return store satisfies PagesStore;
@@ -838,5 +906,56 @@ describe("trash", () => {
     for (const result of results) expect(result).toEqual(results[0]);
     expect(results[0]).toMatchObject({ status: 404, body: '{"error":"not_found"}' });
     expect(store.rows.get(theirs.id)?.deleted).toBe(true);
+  });
+});
+
+describe("/api/pages/{id}/tabs and /tab (#307)", () => {
+  const make = async (store: MemoryStore, body: unknown, user = "user-a") =>
+    ((await (await createPage(request("POST", "/api/pages", body), deps(user, store))).json()) as { page: Page }).page;
+
+  it("adds a blank tab to the page's holder, lists the tabs, remembers the last opened tab, reorders and moves tabs", async () => {
+    const store = memoryStore();
+    const first = await make(store, { title: "記事本文" });
+    const added = await createTab(request("POST", `/api/pages/${first.id}/tabs`, { title: "2" }), first.id, deps("user-a", store));
+    expect(added.status).toBe(201);
+    const { page: tab } = (await added.json()) as { page: Page };
+    expect(tab).toMatchObject({ kind: "note", title: "2", blocks: [] });
+    expect(tab.page).toBeTruthy();
+
+    const listed = await getTabs(request("GET", `/api/pages/${first.id}/tabs`), first.id, deps("user-a", store));
+    expect(listed.status).toBe(200);
+    const resolved = (await listed.json()) as ResolvedPage;
+    expect(resolved.page?.id).toBe(tab.page);
+    expect(resolved.tabs.map((t) => t.id)).toEqual([first.id, tab.id]);
+    // 入れ物の id で聞くと最後に開いたタブ（足したタブ）
+    const byHolder = await getTabs(request("GET", `/api/pages/${tab.page}/tabs`), tab.page!, deps("user-a", store));
+    expect(((await byHolder.json()) as ResolvedPage).tab.id).toBe(tab.id);
+
+    // 並び: 入れ物の生きているタブ全部を望む順に。足りなければ 409 order
+    expect((await reorderTabs(request("PATCH", `/api/pages/${first.id}/tabs`, { ids: [tab.id, first.id] }), first.id, deps("user-a", store))).status).toBe(200);
+    expect((await reorderTabs(request("PATCH", `/api/pages/${first.id}/tabs`, { ids: [first.id] }), first.id, deps("user-a", store))).status).toBe(409);
+    expect((await reorderTabs(request("PATCH", `/api/pages/${first.id}/tabs`, { ids: [] }), first.id, deps("user-a", store))).status).toBe(400);
+
+    // 別の入れ物へ移す。入れ物でない・タブでないものは 409 not_page
+    const other = await make(store, { title: "別" });
+    await createTab(request("POST", `/api/pages/${other.id}/tabs`, {}), other.id, deps("user-a", store));
+    const moved = await moveTab(request("PATCH", `/api/pages/${tab.id}/tab`, { page: other.id }), tab.id, deps("user-a", store));
+    expect(moved.status).toBe(200);
+    const lone = await make(store, { title: "入れ物なし" });
+    expect((await moveTab(request("PATCH", `/api/pages/${lone.id}/tab`, { page: first.id }), lone.id, deps("user-a", store))).status).toBe(409);
+    expect((await moveTab(request("PATCH", `/api/pages/${tab.id}/tab`, { page: "x" }), tab.id, deps("user-a", store))).status).toBe(400);
+  });
+
+  it("answers 400 to unknown keys, a folder or kind 'page', 403 across origins, and the same 404 to others' pages", async () => {
+    const store = memoryStore();
+    const page = await make(store, {});
+    expect((await createTab(request("POST", `/api/pages/${page.id}/tabs`, { blocks: [] }), page.id, deps("user-a", store))).status).toBe(400);
+    const folder = await make(store, { kind: "folder" });
+    expect((await createTab(request("POST", `/api/pages/${folder.id}/tabs`, {}), folder.id, deps("user-a", store))).status).toBe(400);
+    expect((await createTab(request("POST", `/api/pages/${page.id}/tabs`, {}, { origin: "http://evil.test" }), page.id, deps("user-a", store))).status).toBe(403);
+    expect((await createTab(request("POST", `/api/pages/${page.id}/tabs`, {}), page.id, deps("user-b", store))).status).toBe(404);
+    expect((await getTabs(request("GET", `/api/pages/${page.id}/tabs`), page.id, deps("user-b", store))).status).toBe(404);
+    expect((await getTabs(request("GET", "/api/pages/not-a-uuid/tabs"), "not-a-uuid", deps("user-a", store))).status).toBe(404);
+    expect((await createPage(request("POST", "/api/pages", { kind: "page" }), deps("user-a", store))).status).toBe(400);
   });
 });

@@ -130,9 +130,10 @@ describe("manual order, folder fields and 最近 (20261101013000)", { skip: data
       const before = await store.getPage(OWNER, a!);
       assert.equal(await store.movePageOrder(OWNER, a!, "up"), "moved");
       const after = await store.getPage(OWNER, a!);
-      // 変わるのは並びだけ
-      assert.deepEqual({ ...after, sortOrder: 0 }, { ...before, sortOrder: 0 });
-      assert.equal(after?.sortOrder, 1);
+      // 変わるのは並びだけ。並びは入れ物（kind='page'）の sort_order に書く（タブの行は変わらない。#307）
+      assert.deepEqual(after, before);
+      assert.equal((await store.getPage(OWNER, after!.page!))?.sortOrder, 1);
+      assert.equal((await store.listPageChildren(OWNER, null)).find((row) => row.id === a)?.sortOrder, 1, "一覧の行は入れ物の並びを持つ");
       assert.ok(b);
     });
 

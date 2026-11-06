@@ -73,6 +73,10 @@ function memoryStore() {
       stepStatus: null,
       sortOrder: 0,
       revision: 1,
+      page: null,
+      role: null,
+      madeFrom: null,
+      lastTab: null,
       createdAt: now,
       updatedAt: now,
     };

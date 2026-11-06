@@ -106,6 +106,28 @@ recipes (owner, id)   -- 主キー。人ごとに 1 行ずつ
 - **文字起こしはページにしない。** 録音ページの本文で、見出し「文字起こし」の下に出る（音声と時刻で結びつき、複数案・やり直しの対象なので、工程の成果物とは別もの）。一覧の 2 行目は「録音 · 文字起こし済み」。
 - 文字起こしの前は、本文に「文字起こしを始める」だけが出て、手順の帯は押せない（「文字起こしのあとで」）。
 
+### 3.4 ページ › タブ（`kind = 'page'` の入れ物。#307。オーナー決定 2026-11-06、#288）
+
+状態: **データ（migration `20261106234701_pages_tabs`）**。画面（帯・一覧の行・ルート）は #308、手順の出力先は #309、文字起こしのタブは #310。モックは [docs/mockups/editor-folder-pages-v1.html](../mockups/editor-folder-pages-v1.html)。
+
+- 本文を持つ行（`note`・`rec`・`article`）はそのまま**タブ**。その上に**入れ物**（`kind = 'page'`。題名・役割 `role`・並び・最後に開いたタブ `last_tab`。本文は持たない）が 1 行。タブは `page` で入れ物を指し、入れ物と**同じフォルダ**（`parent`）に並ぶ（親子にしない: 段の規則と `parent` の使い方は変えない）。
+- `createPage` は入れ物と 1 つ目のタブを一緒に作り、**タブの行**を返す。`/p/<id>`・公開・共有・資産・録音・欄・会話はすべてタブの id（既存の id は migration で変わらない）。`kind: 'page'` を直に作ることはできない。
+- 一覧（`listPages`／`listPageChunk`／`listPageChildren`）は既定でタブの行（入れ物は出さない。今までと同じ）。`view: 'pages'` で入れ物の行（`tabsCount` つき）。タブの行の `sortOrder` は入れ物の並び（並べ替えは入れ物に書く）。`listPageTree`（書き出し）は入れ物を出さない。
+- タブの操作: `createTab`（まっさら。本文なし）、複製（`duplicatePage`。同じ入れ物の末尾に `made_from: { kind: 'dup', from }`）、`listTabs`、`reorderTabs`、`moveTab`（別の入れ物へ。空になった入れ物は消す）、`resolvePage`（タブ → 入れ物と自分、入れ物 → 最後に開いたタブ）、`touchLastTab`。
+- 役割 `role`（入れ物だけ）: `{ kind: 'transcript' }`／`{ kind: 'step', recipe, stepId }`。系譜 `made_from`（タブだけ）: 文字起こし・段階・複製の出どころ。手順がこれを使う（#309）。
+- ゴミ箱: 入れ物を消すとタブも、最後のタブを消すと入れ物も（同じ `deleted_at`）。戻すと一緒に戻る。`discardEmptyPage` は空のタブを捨て、最後なら入れ物も。完全に消すときは `page` を先に外し（複合キーの `SET NULL` は使わない）、タブを持たない入れ物はついでに消す。
+- 入れ物の無い 1 枚だけのページ（移行前の行・入れ物が完全に消えた行・手順のサブページ）はそのまま 1 枚として扱い、タブを足すときに入れ物を作って結ぶ。
+- API: `GET /api/pages/{id}/tabs`（`{ page, tab, tabs }`）、`POST …/tabs`（足す）、`PATCH …/tabs`（並び）、`PATCH …/tab`（移す）。`/p/<入れ物の id>` は最後に開いたタブへ redirect。
+
+```
+フォルダ（0 の段。kind = 'folder'）
+├ 入れ物 A（kind = 'page'。題名・役割・並び。本文なし）
+├ タブ A-1（note／rec／article。page = A）   ← 本文・版・公開・共有
+├ タブ A-2（page = A）
+├ 入れ物 B …
+└ （録音のタブの下の工程のサブページは 2 の段のまま。#309 でフォルダ直下の役割ページのタブへ）
+```
+
 ## 4. 一覧の並びと「最近」と書き出し（`20261101013000_folder_order_fields_opens`）
 
 旧 NIHO docs で editor に受け皿が無かった 3 つ（[editor-migration-map.md](editor-migration-map.md) §5）。
