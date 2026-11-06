@@ -885,6 +885,9 @@ function openSplit(a, b) {
   $("#loc").innerHTML = crumbsHtml(A.page);
   $("#ins").hidden = true; $("#pubbtn").hidden = true; $("#count").hidden = true;
   $("#aitoggle").hidden = false; $("#infotoggle").hidden = false;
+  /* 右のパネルは閉じるが、AI・ⓘ で開ける。前に開いていたタブの中身が残らないよう、左のタブ（今のタブ）のものに作り直す */
+  $("#ctx").innerHTML = ctxHtml(A.page, A);
+  $("#info-body").innerHTML = infoHtml(A.page, A);
   setRail(null);
   $("#url").textContent = `/p/${a}?with=${b}`;
   renderList();
@@ -963,9 +966,24 @@ function rolePage(f, role, title) {
   return p;
 }
 function addTab(p, tab) { p.tabs.push(tab); index(); open(tab.id); return tab; }
+/* 文字起こしの元の録音タブ。録音のタブならそれ自身、文字起こしのタブなら作った元（from）→ 複製元（dupOf）の順にたどる。
+   空のタブ・複製には from が無いので、たどれなければフォルダの録音ページの最初のタブ。それも無ければ null */
+function recTabOf(n) {
+  if (n.page.role === "rec") return n;
+  for (let t = n, hops = 0; t && hops < 8; hops++) {
+    const up = madeFrom(t) || (t.dupOf ? BY.get(t.dupOf) : null);
+    if (!up) break;
+    if (up.page.role === "rec") return up;
+    t = up;
+  }
+  const f = folderOf(n);
+  const rec = f ? findRole(f, "rec") : null;
+  return rec ? tabsOf(rec)[0] ?? null : null;
+}
 function makeTranscript(engine) {
   const n = BY.get(curTab);
-  const recTab = n.page.role === "rec" ? n : madeFrom(n);
+  const recTab = recTabOf(n);
+  if (!recTab) { toast("元の録音が見つからないので、文字起こしできません（モック）"); return; }
   const f = wrapFolder(recTab.page);
   const p = rolePage(f, "transcript", "文字起こし");
   addTab(p, { id: "t" + (seq++), t: engine, engine, from: recTab.id, when: "今", st: "run" });
