@@ -38,6 +38,11 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-btn:disabled{opacity:.4;cursor:not-allowed}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pubbtn{min-width:72px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ib{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;color:var(--ed-ink-sub);flex:none}
+/* ヘッダー左端の「‹ 行き先」（900px 未満。#320 A1）。右の操作（公開・パネル・…）が先に場所を取り、残りの幅に合わせて名前を省略する（縮む。320px で右がはみ出さない。Codex P1）。‹ だけは残る */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-back{display:inline-flex;align-items:center;gap:2px;flex:0 1 auto;min-width:40px;max-width:46vw;height:34px;margin-left:-4px;padding:0 10px 0 4px;border-radius:9px;font-size:14px;font-weight:600;color:var(--ed-ink-sub)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-back:hover{background:var(--ed-sand-2);color:var(--ed-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-back .es-ico{width:20px;height:20px;flex:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-back span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ib:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ib--on{background:var(--ed-sand-2);color:var(--ed-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ib--sm{width:28px;height:28px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ib--accent{color:var(--ed-accent-ink)}
@@ -1082,7 +1087,8 @@
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"] .es-pn>.es-rail{position:static;flex:1 1 auto;min-height:0;border-left:0}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-hd[draggable="true"]{cursor:default}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-hd .es-grip{display:none}
-  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt .es-pubbtn{min-width:0;padding:0 12px}
+  /* 公開・パネル・… は縮めない（縮むのは左の「‹ 行き先」だけ） */
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt .es-pubbtn{flex:none;min-width:0;padding:0 12px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-mtb{flex:none;display:flex;height:50px;border-top:1px solid var(--ed-line);background:var(--ed-canvas);z-index:30}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-mtb .es-tools{margin:0;padding:0 10px;width:100%;height:100%}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-rail="open"] .es-mtb{display:none}

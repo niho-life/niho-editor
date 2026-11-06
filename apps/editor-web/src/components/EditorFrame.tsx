@@ -431,7 +431,9 @@ type FrameSheet = { kind: "move" | "capacity"; id: string };
 /**
  * editor の枠（一覧＋ヘッダー＋ページ）。見た目は niho-docs-ui の shell（#48）。ここは状態と移動だけを持つ。
  * - 一覧は最初の区切りをサーバーから受け、末尾が近づいたら続きを読む。
- * - 900px 以下では `/` が一覧の画面。ページと設定は全画面で、ヘッダーの左のボタンで一覧を出す。
+ * - 900px 以下では `/` が一覧の画面。ページと設定は全画面で、ヘッダーの左の「‹ 一覧」（親があればその名前）で戻る。戻るは URL へ移る
+ *   （`/` か親のページ。状態の切り替えでなく履歴に乗せるので、OS の戻る・端のスワイプでアプリを抜けない。#320 A1・A2）。
+ *   一覧を今のページの上に重ねて出すのは ⌘K（検索）だけ（`listFor`）。
  * - ヘッダーの右上は、開いているページ（`attachPage` で登録されたもの）の状態の丸（いつも「自分だけ」＋保存の状態。保存の失敗だけ
  *   見える文字を添える）と、「…」（リンクで共有・書き出し・Google ドキュメント・[フォルダを書き出し]・履歴・複製・[移動…]・
  *   [フォルダの背景…]・ページの情報・削除。src/lib/use-page-menu.ts・use-page-share.ts・use-page-history.ts）。
@@ -756,6 +758,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // ヘッダーの場所（親のフォルダ › 親の録音）。上の段のページでは空。
   // frame の useMemo より前で計算する（React Compiler は、memo のあとに list.pages を外の関数へ渡す呼び出しがあると memo を保てない）
   const location = locationOf(openedForFolder(list), currentId ?? null);
+  // 狭い画面のヘッダー左の「‹ 行き先」: 親（場所の末尾。親の録音か親のフォルダ）、新しいページならその入れ先のフォルダ、無ければ一覧（`/`）
+  const newInside = pathname === "/p/new" ? searchParams.get("in") : null;
+  const backTo = location.length > 0 ? location[location.length - 1]! : (newInside ? listPages.find((page) => page.id === newInside) : undefined) ?? null;
   const frame = useMemo<EditorFrameApi>(
     () => ({ narrow, ...api, pages: listPages, now, openPage: openFromLocation, flow }),
     [narrow, api, listPages, now, openFromLocation, flow],
@@ -1273,13 +1278,13 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           header={
             <ShellHeader
               title={title}
-              location={location}
+              // 場所（パンくず）はデスクトップだけ。狭い画面は左の「‹ 行き先」が親を示す
+              location={narrow ? undefined : location}
               onOpenLocation={openFromLocation}
               plain={settings !== undefined}
               tools={editorBar && !narrow && !railIsFolder ? <ShellTools {...editorBar} compact /> : undefined}
-              // 狭い画面のページの画面で一覧へ戻る。デスクトップの一覧は右上の「一覧を出す」（閉じているパネルの組）
-              showListButton={narrow && !sidebarOpen}
-              onToggleList={() => setListFor(pathname)}
+              // 狭い画面のページ・設定の画面で戻る（URL へ。`/` か親のページ）。デスクトップの一覧は右上の「一覧を出す」（閉じているパネルの組）
+              back={narrow && !sidebarOpen ? { label: backTo ? backTo.title || "無題" : "一覧", onClick: () => router.push(backTo ? `/p/${backTo.id}` : "/") } : undefined}
               status={attached ? headerStatus(attached.status, publishing.status) : publishing.status}
               trailing={
                 <>

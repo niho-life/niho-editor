@@ -440,11 +440,19 @@ describe("EditorFrame", () => {
     nav.pathname = "/p/00000000-0000-4000-8000-000000000001";
     await mount({ pages: [page("00000000-0000-4000-8000-000000000001", "合成の題名")], initialNarrow: true });
     expect(shell().view).toBe("page");
-    await click('button[aria-label="一覧を出す"]');
+    // ヘッダーの左は「‹ 一覧」（上の段のページ）。押すと `/` へ移る（状態の切り替えでなく URL。OS の戻るで戻れる。#320 A1・A2）
+    expect(container!.querySelector('button[aria-label="一覧を出す"]')).toBeNull();
+    expect(container!.querySelector('button[aria-label="一覧へ戻る"]')?.textContent).toBe("一覧");
+    expect(container!.querySelector('.es-dt nav[aria-label="場所"]')).toBeNull();
+    await click('button[aria-label="一覧へ戻る"]');
+    expect(nav.push).toHaveBeenLastCalledWith("/");
+    // ⌘K は一覧を今のページの上に重ねて出す。今の行を押すと一覧が閉じてページに戻る（移動はしない）
+    const pushes = nav.push.mock.calls.length;
+    await shortcut("k");
     expect(shell().view).toBe("list");
     await click('[aria-current="page"]');
     expect(shell().view).toBe("page");
-    expect(nav.push).not.toHaveBeenCalled();
+    expect(nav.push.mock.calls.length).toBe(pushes);
 
     nav.pathname = "/settings";
     await act(async () => root!.render(<EditorFrame initial={{ pages: [], next: null, recent: [], now: NOW, me: { name: "x", caption: "", initial: "x" }, initialNarrow: true }}>{null}</EditorFrame>));
@@ -552,11 +560,32 @@ describe("EditorFrame", () => {
     expect(dialog()).toBeNull();
   });
 
+  it("narrow: a page inside a folder goes back to the folder (the header's left is the folder's name; no breadcrumb). A new page in a folder too", async () => {
+    narrow = true;
+    const folderId = "00000000-0000-4000-8000-00000000f01d";
+    nav.pathname = `/p/${PAGE_ID}`;
+    await mount({ pages: [{ ...page(folderId, "鎌倉の取材"), kind: "folder" }, { ...page(PAGE_ID, "合成の題名"), parent: folderId }], initialNarrow: true });
+    expect(shell().view).toBe("page");
+    expect(container!.querySelector('button[aria-label="鎌倉の取材へ戻る"]')?.textContent).toBe("鎌倉の取材");
+    expect(container!.querySelector('button[aria-label="一覧へ戻る"]')).toBeNull();
+    expect(container!.querySelector('nav[aria-label="場所"]')).toBeNull();
+    await click('button[aria-label="鎌倉の取材へ戻る"]');
+    expect(nav.push).toHaveBeenLastCalledWith(`/p/${folderId}`);
+    // フォルダの中に作る新しいページ（/p/new?in=）も、そのフォルダへ戻る
+    await moveTo("/p/new", `in=${folderId}`);
+    expect(container!.querySelector('button[aria-label="鎌倉の取材へ戻る"]')).not.toBeNull();
+    // 設定は「‹ 一覧」
+    await moveTo("/settings");
+    expect(container!.querySelector('button[aria-label="一覧へ戻る"]')).not.toBeNull();
+    await click('button[aria-label="一覧へ戻る"]');
+    expect(nav.push).toHaveBeenLastCalledWith("/");
+  });
+
   it("narrow: ⌘⇧P does nothing while the list is shown over the page", async () => {
     narrow = true;
     nav.pathname = `/p/${PAGE_ID}`;
     await mount({ pages: [page(PAGE_ID, "合成の題名")], initialNarrow: true });
-    await click('button[aria-label="一覧を出す"]');
+    await shortcut("k");
     expect(shell().view).toBe("list");
     expect((await shortcut("P", { shiftKey: true })).defaultPrevented).toBe(false);
     expect(dialog()).toBeNull();
