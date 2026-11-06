@@ -1,6 +1,6 @@
 import type { Session } from "../auth/types";
 
-/** 一覧の下の本人の行。名前が無ければ「NIHO アカウント」、補足はメール（stub では「stub」）。 */
+/** 本人（設定の一覧の「アカウント」の行）。名前が無ければ「NIHO アカウント」、補足はメール（stub では「stub」）。 */
 export function frameMe(session: Session): { name: string; caption: string; initial: string } {
   const name = session.profile?.name || "NIHO アカウント";
   const caption = session.profile?.email ?? (session.mode === "stub" ? "stub" : "");

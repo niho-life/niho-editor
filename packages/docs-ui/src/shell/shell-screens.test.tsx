@@ -10,7 +10,6 @@ import {
   SettingsPage,
   ShellHeader,
   SitePage,
-  shellAccountItems,
   type DestinationRow,
   type PublishDestOption,
   type PublishFormProps,
@@ -363,10 +362,7 @@ describe("SettingsPage", () => {
 });
 
 describe("設定系ページの枠（EditorShell に入れる）", () => {
-  it("本人の行のメニューは現在地（aria-current）を示せる。ヘッダーは plain（罫線なし）にできる", () => {
-    const items = shellAccountItems(1, "settings");
-    expect(items.filter((item) => item.current).map((item) => item.id)).toEqual(["settings"]);
-    expect(shellAccountItems(1).some((item) => item.current)).toBe(false);
+  it("ヘッダーは plain（罫線なし）にできる", () => {
     expect(renderToStaticMarkup(<ShellHeader plain title="設定" />)).toContain('<header class="es-dt es-dt--plain">');
     expect(renderToStaticMarkup(<ShellHeader title="設定" />)).toContain('<header class="es-dt">');
   });

@@ -1,6 +1,8 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { EDITOR_SETTINGS_HREF, Icon, linkTo } from "niho-docs-ui/shell";
 import type { ArticleLinkDto, NihoEditorRoles } from "@/auth/niho-experience-api";
 import styles from "./AccountConnections.module.css";
 
@@ -13,6 +15,7 @@ const STATE_LABEL: Record<ArticleLinkDto["state"], string> = {
 };
 
 export function AccountConnections({ initial }: { initial: { roles: NihoEditorRoles; links: readonly ArticleLinkDto[] } | null }) {
+  const router = useRouter();
   const [data, setData] = useState(initial);
   const [busy, setBusy] = useState<string | null>(null);
   const busyRef = useRef(false);
@@ -48,6 +51,11 @@ export function AccountConnections({ initial }: { initial: { roles: NihoEditorRo
   const writer = data?.roles.version === 1 && data.roles.roles.includes("writer") && data.roles.destinations.includes("exp");
   return (
     <div className="es-page">
+      {/* 設定の一覧の「アカウント」から入るページ。戻るのは設定（オーナー決定 2026-11-06） */}
+      <a className="es-back" {...linkTo(EDITOR_SETTINGS_HREF.hub, (href) => router.push(href))}>
+        <Icon name="back" />
+        設定
+      </a>
       <h1>役割とつながり</h1>
       <div className={styles.root}>
         <section className={styles.card} aria-labelledby="account-role-title">

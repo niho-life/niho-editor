@@ -1,4 +1,5 @@
 import { useRef, type ReactNode } from "react";
+import { ShellBrand } from "./brand";
 import { Icon } from "./icons";
 import { ShellMenu } from "./menu";
 import { StatusDot } from "./status-dot";
@@ -7,7 +8,7 @@ import type { ShellButtonTone, ShellMenuItem, ShellStatusState } from "./types";
 export type ShellHeaderProps = {
   /** 狭い幅でヘッダーに出る題名。 */
   title: string;
-  /** 一覧がしまわれているときの「一覧を出す」ボタン。 */
+  /** 一覧がしまわれているときの「一覧を出す」ボタン（右隣にアプリ名 ShellBrand も出す）。 */
   showListButton?: boolean;
   onToggleList?: () => void;
   /** 道具の帯（ShellTools）。 */
@@ -49,6 +50,8 @@ export function ShellHeader(props: ShellHeaderProps) {
           <Icon name="side" />
         </button>
       )}
+      {/* 一覧をしまったときも左上にアプリ名が残るように（900px 以下では題名の場所を空けるため CSS で隠す） */}
+      {props.showListButton && <ShellBrand />}
       <span className="es-ttl">{props.title || "無題"}</span>
       {props.tools}
       <span className="es-sp" />

@@ -14,7 +14,6 @@ import {
   ShellSidebar,
   computeShellDock,
   dockPanels,
-  shellAccountItems,
   type EditorShellDock,
   type ShellDockPlace,
 } from "./index";
@@ -418,16 +417,16 @@ describe("右に並べたページの枠（ShellSidePane）", () => {
   });
 });
 
-describe("一覧の右に並べる操作とパネルの移動（ShellSidebar）", () => {
+describe("一覧の右に並べる操作・行の削除・パネルの移動（ShellSidebar）", () => {
   const items = [
     { id: "a", title: "鎌倉の朝さんぽ", when: "5分前" },
     { id: "b", title: "取材メモ", when: "昨日" },
     { id: "c", title: "写真の候補", when: "10/29" },
   ];
-  const me = { name: "M", initial: "M", open: false, items: shellAccountItems(), onToggle: vi.fn(), onClose: vi.fn(), onSelect: vi.fn() };
+  const me = { onOpen: vi.fn() };
   const row = (host: HTMLElement, title: string) => [...host.querySelectorAll<HTMLElement>(".es-dirow")].find((node) => node.querySelector(".es-di-t")?.textContent === title)!;
 
-  it("side を渡さなければ、右クリックはブラウザのまま・行はドラッグしない（従来どおり）", () => {
+  it("side も onDeleteRow も渡さなければ、右クリックはブラウザのまま・行はドラッグしない・「…」も無い", () => {
     const { host } = mount(<ShellSidebar items={items} currentId="a" me={me} />);
     const target = row(host, "取材メモ");
     expect(target.hasAttribute("draggable")).toBe(false);
@@ -438,47 +437,34 @@ describe("一覧の右に並べる操作とパネルの移動（ShellSidebar）"
     expect(event.defaultPrevented).toBe(false);
     expect(host.querySelector('[role="menu"]')).toBeNull();
     expect(host.querySelector(".es-di-side")).toBeNull();
+    expect(host.querySelector(".es-di-more")).toBeNull();
   });
 
-  it("右クリックのメニューで「右に並べて開く」。⌥クリック・⌥Enter でも並べる。右に出しているページには印", () => {
-    const side = { id: "c", onOpen: vi.fn(), onClose: vi.fn() };
+  it("⌥クリック・⌥Enter で右に並べる。右に出しているページには印。side だけではメニューを出さない", () => {
+    const side = { id: "c", onOpen: vi.fn() };
     const onSelect = vi.fn();
     const { host } = mount(<ShellSidebar items={items} currentId="a" onSelect={onSelect} side={side} me={me} />);
     expect(row(host, "写真の候補").querySelector(".es-di-side")!.textContent).toBe("右に表示中");
 
-    act(() => {
-      row(host, "取材メモ").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 80 }));
-    });
-    const menu = host.querySelector<HTMLElement>('[role="menu"][aria-label="ページのメニュー"]')!;
-    expect([...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["開く", "右に並べて開く⌥クリック"]);
-    act(() => [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')][1]!.click());
-    expect(side.onOpen).toHaveBeenLastCalledWith("b");
-    expect(host.querySelector('[role="menu"]')).toBeNull();
-
     act(() => row(host, "取材メモ").querySelector<HTMLButtonElement>(".es-di")!.dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true })));
-    expect(side.onOpen).toHaveBeenCalledTimes(2);
+    expect(side.onOpen).toHaveBeenLastCalledWith("b");
     expect(onSelect).not.toHaveBeenCalled();
     key(row(host, "取材メモ").querySelector(".es-di")!, "Enter", { altKey: true });
-    expect(side.onOpen).toHaveBeenCalledTimes(3);
+    expect(side.onOpen).toHaveBeenCalledTimes(2);
 
-    // メインのページは右に置けない（理由を添えて無効で出す）。右のページは「右を閉じる」
-    key(row(host, "鎌倉の朝さんぽ").querySelector(".es-di")!, "F10", { shiftKey: true });
-    const mainItems = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
-    expect(mainItems.map((item) => item.textContent)).toEqual(["メインで開いています", "右に並べて開く"]);
-    expect(mainItems.map((item) => item.getAttribute("aria-disabled"))).toEqual(["true", "true"]);
-    act(() => mainItems[1]!.click());
-    expect(side.onOpen).toHaveBeenCalledTimes(3);
-    expect(onSelect).not.toHaveBeenCalled();
-    key(document.activeElement!, "Escape");
-    key(row(host, "写真の候補").querySelector(".es-di")!, "ContextMenu");
-    expect([...host.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["開く", "右を閉じる"]);
-    act(() => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')][1]!.click());
-    expect(side.onClose).toHaveBeenCalledTimes(1);
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    act(() => {
+      row(host, "取材メモ").dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(false);
+    expect(host.querySelector('[role="menu"]')).toBeNull();
+    expect(host.querySelector(".es-di-more")).toBeNull();
   });
 
-  it("行の「…」でも同じメニュー（右クリック・⌥クリックを知らない人の入り口）。もう一度押すと閉じる", () => {
-    const side = { onOpen: vi.fn(), onClose: vi.fn() };
-    const { host, render } = mount(<ShellSidebar items={items} currentId="a" side={side} me={me} />);
+  it("onDeleteRow を渡すと、行の「…」・右クリック・Shift+F10 のメニューは「削除」だけ。選ぶと閉じて「…」へフォーカスを戻し onDeleteRow", () => {
+    const onDeleteRow = vi.fn();
+    const onSelect = vi.fn();
+    const { host, render } = mount(<ShellSidebar items={items} currentId="a" onSelect={onSelect} onDeleteRow={onDeleteRow} me={me} />);
     const more = row(host, "取材メモ").querySelector<HTMLButtonElement>(".es-di-more")!;
     expect(more.getAttribute("aria-label")).toBe("取材メモ のメニュー");
     expect(more.getAttribute("aria-haspopup")).toBe("menu");
@@ -486,37 +472,41 @@ describe("一覧の右に並べる操作とパネルの移動（ShellSidebar）"
 
     act(() => more.click());
     const menu = host.querySelector<HTMLElement>('[role="menu"][aria-label="ページのメニュー"]')!;
-    expect([...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["開く", "右に並べて開く⌥クリック"]);
+    expect([...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["削除"]);
     expect(more.getAttribute("aria-expanded")).toBe("true");
+    // もう一度押すと閉じる
     act(() => more.click());
     expect(host.querySelector('[role="menu"]')).toBeNull();
-    expect(more.getAttribute("aria-expanded")).toBe("false");
 
     act(() => more.click());
-    act(() => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')][1]!.click());
-    expect(side.onOpen).toHaveBeenLastCalledWith("b");
-    // 選んだあとは「…」へフォーカスを戻す
+    act(() => host.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
+    expect(onDeleteRow).toHaveBeenLastCalledWith("b");
+    expect(host.querySelector('[role="menu"]')).toBeNull();
     expect(document.activeElement).toBe(more);
+    expect(onSelect).not.toHaveBeenCalled();
 
-    // メインのページの行にも出し（並びをそろえる）、項目は理由つきの無効。右に出しているページの行は「右を閉じる」
-    act(() => row(host, "鎌倉の朝さんぽ").querySelector<HTMLButtonElement>(".es-di-more")!.click());
-    expect([...host.querySelectorAll('[role="menuitem"]')].map((item) => item.getAttribute("aria-disabled"))).toEqual(["true", "true"]);
+    // メインで開いている行も同じ「削除」だけ
+    key(row(host, "鎌倉の朝さんぽ").querySelector(".es-di")!, "F10", { shiftKey: true });
+    expect([...host.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["削除"]);
     key(document.activeElement!, "Escape");
-    render(<ShellSidebar items={items} currentId="a" side={{ ...side, id: "c" }} me={me} />);
-    act(() => row(host, "写真の候補").querySelector<HTMLButtonElement>(".es-di-more")!.click());
-    expect([...host.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["開く", "右を閉じる"]);
-    act(() => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')][1]!.click());
-    expect(side.onClose).toHaveBeenCalledTimes(1);
+    act(() => {
+      row(host, "写真の候補").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 80 }));
+    });
+    act(() => host.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
+    expect(onDeleteRow).toHaveBeenLastCalledWith("c");
 
-    // 題名のない行は「無題 のメニュー」。side を渡さない（スマホ）なら「…」は出さない
-    render(<ShellSidebar items={[{ id: "d", title: "", when: "今" }]} side={side} me={me} />);
+    // side が無い（狭い幅）ときは ⌥クリックで並べず、ふつうに開く。ドラッグも載せない
+    act(() => row(host, "取材メモ").querySelector<HTMLButtonElement>(".es-di")!.dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true })));
+    expect(onSelect).toHaveBeenLastCalledWith("b");
+    expect(row(host, "取材メモ").hasAttribute("draggable")).toBe(false);
+
+    // 題名のない行は「無題 のメニュー」
+    render(<ShellSidebar items={[{ id: "d", title: "", when: "今" }]} onDeleteRow={onDeleteRow} me={me} />);
     expect(host.querySelector(".es-di-more")!.getAttribute("aria-label")).toBe("無題 のメニュー");
-    render(<ShellSidebar items={items} currentId="a" me={me} />);
-    expect(host.querySelector(".es-di-more")).toBeNull();
   });
 
   it("行のドラッグはページ用の型を載せる（検索の結果のように並べ替えない行でも）", () => {
-    const { host } = mount(<ShellSidebar items={items} currentId="a" side={{ onOpen: vi.fn(), onClose: vi.fn() }} me={me} />);
+    const { host } = mount(<ShellSidebar items={items} currentId="a" side={{ onOpen: vi.fn() }} me={me} />);
     const target = row(host, "取材メモ");
     expect(target.getAttribute("draggable")).toBe("true");
     const data = transfer();
@@ -526,26 +516,24 @@ describe("一覧の右に並べる操作とパネルの移動（ShellSidebar）"
   });
 
   it("並べ替えもできる一覧では、並べ替えの値（text/plain）とページ用の型の両方を載せる", () => {
-    const { host } = mount(<ShellSidebar items={items} currentId="a" onDrop={vi.fn()} side={{ onOpen: vi.fn(), onClose: vi.fn() }} me={me} />);
+    const { host } = mount(<ShellSidebar items={items} currentId="a" onDrop={vi.fn()} side={{ onOpen: vi.fn() }} me={me} />);
     const data = transfer();
     drag(row(host, "取材メモ"), "dragstart", data);
     expect(data.store).toEqual({ "text/plain": "b", [SHELL_DND.page]: "b" });
   });
 
-  it("panel を渡すと、上段を掴んで動かせ、「一覧のメニュー」から反対のドックへ移せる", () => {
-    const onMove = vi.fn();
-    const { host } = mount(<ShellSidebar items={items} panel={{ at: "left", onMove }} me={me} />);
+  it("panel を渡すと、上段を掴んで動かせる（移すメニューは無い。ドラッグだけ）", () => {
+    const { host } = mount(<ShellSidebar items={items} panel me={me} />);
     const top = host.querySelector<HTMLElement>(".es-sb-top")!;
     expect(top.getAttribute("draggable")).toBe("true");
+    expect(top.querySelector(".es-grip")).not.toBeNull();
     const data = transfer();
     drag(top, "dragstart", data);
     expect(data.store[SHELL_DND.list]).toBe("list");
-    const button = host.querySelector<HTMLButtonElement>('button[aria-label="一覧のメニュー"]')!;
-    act(() => button.click());
-    const menu = host.querySelector('[role="menu"][aria-label="一覧のメニュー"]')!;
-    expect([...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["右のドックへ移す"]);
-    act(() => menu.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
-    expect(onMove).toHaveBeenCalledWith("right");
+    expect(host.querySelector('button[aria-label="一覧のメニュー"]')).toBeNull();
+    const plain = mount(<ShellSidebar items={items} me={me} />).host.querySelector<HTMLElement>(".es-sb-top")!;
+    expect(plain.hasAttribute("draggable")).toBe(false);
+    expect(plain.querySelector(".es-grip")).toBeNull();
   });
 });
 

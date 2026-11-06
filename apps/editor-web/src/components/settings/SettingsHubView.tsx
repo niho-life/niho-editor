@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { uniqueFlowName } from "@niho/docs-core";
 import { EDITOR_SETTINGS_HREF, EditorSettingsHub, type EditorSettingsAudioFacts } from "niho-docs-ui/shell";
+import { logoutAndLeave } from "@/lib/logout";
 import { loadAiUsage, loadStorageUsage, type MediaStorageUsage, type SettingsDto, type SettingsRecipeInput, type UsageSummary } from "@/lib/settings-client";
 import { effectiveRecipes, newSettingsId, useSettingsState } from "./settings-state";
 
@@ -11,7 +12,7 @@ import { effectiveRecipes, newSettingsId, useSettingsState } from "./settings-st
  * 設定の一覧（`/settings`。オーナー決定 2026-11-05）。変えられる物だけを行にし、行から詳細のページへ進む。
  * 提案の言語はその場で保存する。AI とメディアの使用量はここで各 API を読む（読めなければその一言を出す）。
  */
-export function SettingsHubView({ initial, audio }: { initial: SettingsDto; audio: EditorSettingsAudioFacts }) {
+export function SettingsHubView({ initial, audio, account }: { initial: SettingsDto; audio: EditorSettingsAudioFacts; account: { name: string; initial: string } }) {
   const router = useRouter();
   const { settings, status, busy, apply } = useSettingsState(initial);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
@@ -58,6 +59,8 @@ export function SettingsHubView({ initial, audio }: { initial: SettingsDto; audi
       storageUsage={storageUsage}
       storageUsageNote={storageUsageNote}
       audio={audio}
+      account={account}
+      onLogout={logoutAndLeave}
       onNavigate={(href) => router.push(href)}
     />
   );

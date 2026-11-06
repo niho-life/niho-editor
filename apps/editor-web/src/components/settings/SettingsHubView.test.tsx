@@ -10,8 +10,10 @@ const push = vi.fn();
 const save = vi.fn<(patch: SettingsPatchInput) => Promise<{ ok: true; settings: SettingsDto } | SettingsFailure>>();
 const usage = vi.fn<() => Promise<{ ok: true; usage: UsageSummary } | SettingsFailure>>();
 const storageUsage = vi.fn<() => Promise<{ ok: true; usage: MediaStorageUsage } | SettingsFailure>>();
+const logout = vi.fn();
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
+vi.mock("@/lib/logout", () => ({ logoutAndLeave: () => logout() }));
 vi.mock("@/lib/settings-client", () => ({
   saveSettings: (patch: SettingsPatchInput) => save(patch),
   loadAiUsage: () => usage(),
@@ -24,10 +26,10 @@ const AUDIO = { maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays
 const USAGE: UsageSummary = { month: "2026-10", inputTokens: 1234, outputTokens: 56, costUsd: 0.42, limitUsd: 5, nearLimit: false };
 const STORAGE_USAGE: MediaStorageUsage = { imageBytes: "1073741824", audioBytes: "4096", totalBytes: "1073745920" };
 
-const open = (initial: SettingsDto = dto()) => mount(<SettingsHubView initial={initial} audio={AUDIO} />);
+const open = (initial: SettingsDto = dto()) => mount(<SettingsHubView initial={initial} audio={AUDIO} account={{ name: "合成の名前", initial: "合" }} />);
 
 beforeEach(() => {
-  for (const mock of [push, save, usage, storageUsage]) mock.mockReset();
+  for (const mock of [push, save, usage, storageUsage, logout]) mock.mockReset();
   usage.mockResolvedValue({ ok: true, usage: USAGE });
   storageUsage.mockResolvedValue({ ok: true, usage: STORAGE_USAGE });
 });
@@ -48,6 +50,17 @@ describe("SettingsHubView（/settings）", () => {
     expect(text).toContain("2 GiB・6 時間まで");
     for (const gone of ["Deepgram", "時間切れ", "受け付ける形式", "保存先"]) expect(text).not.toContain(gone);
     expect(buttons().map((item) => item.textContent?.trim())).not.toContain("編集");
+  });
+
+  it("puts 役割とつながり and 発信先 under アカウント, and ログアウト at the bottom", async () => {
+    await open();
+    const me = document.querySelector<HTMLAnchorElement>("a.es-row--me")!;
+    expect(me.getAttribute("href")).toBe("/account");
+    expect(me.textContent).toContain("合成の名前");
+    await act(async () => link("発信先")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })));
+    expect(push).toHaveBeenCalledWith("/destinations");
+    await click("ログアウト");
+    expect(logout).toHaveBeenCalledTimes(1);
   });
 
   it("goes to the detail pages through the router (the rows are links)", async () => {

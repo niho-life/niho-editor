@@ -2,6 +2,10 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const push = vi.fn();
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
+
 import { AccountConnections } from "./AccountConnections";
 
 const ID = "00000000-0000-4000-8000-000000000042";
@@ -37,6 +41,16 @@ afterEach(async () => {
 });
 
 describe("AccountConnections", () => {
+  it("has 「← 設定」 above the heading, going back through the router", async () => {
+    push.mockReset();
+    await act(async () => root!.render(<AccountConnections initial={{ roles, links: [] }} />));
+    const back = container!.querySelector<HTMLAnchorElement>("a.es-back")!;
+    expect(back.getAttribute("href")).toBe("/settings");
+    expect(back.nextElementSibling?.textContent).toBe("役割とつながり");
+    await act(async () => void back.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })));
+    expect(push).toHaveBeenCalledWith("/settings");
+  });
+
   it("shows Japanese state labels and suppresses duplicate decisions while refreshing canonical state", async () => {
     let finishPost!: (response: Response) => void;
     const post = new Promise<Response>((resolve) => { finishPost = resolve; });

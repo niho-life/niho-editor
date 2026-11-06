@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./icons";
 import { ShellMenu } from "./menu";
+import { linkTo } from "./settings-parts";
 import { ShellSheet } from "./sheet";
 import type { EditorSettingsTermDraft } from "./terms-editor";
 import type { ShellMenuItem } from "./types";
@@ -79,6 +80,9 @@ export const EDITOR_SETTINGS_HREF = {
   about: "/settings/about",
   terms: "/settings/terms",
   recipe: (id: string) => `/settings/recipes/${encodeURIComponent(id)}`,
+  /** 「アカウント」の群から入る 2 つ（URL は設定の下ではなく今のまま）。 */
+  destinations: "/destinations",
+  account: "/account",
 } as const;
 
 export const EDITOR_SETTINGS_TEXT = {
@@ -175,18 +179,6 @@ export function moveStep(steps: readonly EditorSettingsStep[], from: number, to:
 /** 新しい段階（指示は空。空のままでは保存しない）。 */
 export function blankStep(id: string, steps: readonly EditorSettingsStep[]): EditorSettingsStep {
   return { id, name: uniqueStepName("新しい段階", steps), instruction: "", profile: "standard" };
-}
-
-/** `<a href>` のまま、普通のクリックだけを onNavigate へ回す（修飾キー・中クリックはブラウザに任せる）。 */
-function linkTo(href: string, onNavigate: (href: string) => void) {
-  return {
-    href,
-    onClick: (event: MouseEvent<HTMLAnchorElement>) => {
-      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      event.preventDefault();
-      onNavigate(href);
-    },
-  };
 }
 
 /** ⓘ を押すと、すぐ下に説明を開く（aria-expanded / aria-controls）。 */
@@ -326,6 +318,10 @@ export type EditorSettingsHubProps = {
   storageUsage: EditorSettingsStorageUsage | null;
   storageUsageNote: string | null;
   audio: EditorSettingsAudioFacts;
+  /** 「アカウント」の群の先頭の行に出す本人（名前が空なら「役割とつながり」とだけ出す）。initial はアバターの 1 文字。 */
+  account: { name: string; initial: string };
+  /** いちばん下の「ログアウト」。 */
+  onLogout: () => void;
   onNavigate: (href: string) => void;
 };
 
@@ -341,12 +337,38 @@ export function EditorSettingsHub(props: EditorSettingsHubProps) {
   const storageInfo = useDisclosure("保存とデータについて");
   const shown = glossary.slice(0, 4).map((entry) => entry.term);
   const ratio = usage && usage.limitUsd !== null && usage.limitUsd > 0 ? Math.min(1, usage.costUsd / usage.limitUsd) : null;
+  const who = props.account.name.trim();
   return (
     <div className="es-page es-page--set">
       <h1>設定</h1>
       <p role="status" className="es-set-status">
         {props.status}
       </p>
+
+      {/* 左下の「設定」から来る人のための入り口（発信先・役割とつながり・ログアウトは左下のメニューをやめてここへ。オーナー決定 2026-11-06） */}
+      <Group id="es-s-account" title="アカウント">
+        <div className="es-grp">
+          <a className="es-row es-row--link es-row--me" {...linkTo(EDITOR_SETTINGS_HREF.account, onNavigate)}>
+            <span className="es-av" aria-hidden="true">
+              {props.account.initial}
+            </span>
+            <span className="es-row-k">
+              <b>{who || "役割とつながり"}</b>
+              {who && <small>役割とつながり</small>}
+            </span>
+            <span className="es-row-e">
+              <Icon name="chev" />
+            </span>
+          </a>
+          <a className="es-row es-row--link" {...linkTo(EDITOR_SETTINGS_HREF.destinations, onNavigate)}>
+            <span className="es-row-k">発信先</span>
+            <span className="es-row-v" />
+            <span className="es-row-e">
+              <Icon name="chev" />
+            </span>
+          </a>
+        </div>
+      </Group>
 
       <Group id="es-s-ai" title="AI">
         <div className="es-grp">
@@ -485,6 +507,11 @@ export function EditorSettingsHub(props: EditorSettingsHubProps) {
           )}
         </div>
       </Group>
+
+      <button type="button" className="es-logout" onClick={props.onLogout}>
+        <Icon name="back" />
+        ログアウト
+      </button>
     </div>
   );
 }

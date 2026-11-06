@@ -29,7 +29,8 @@ describe("shell の境界（既存の画面・Mac アプリを止めない）", 
   });
 
   it("shell の TS/TSX に色の生 hex（特に緑）を書かない", () => {
-    for (const file of shellSources) {
+    // brand.tsx はアプリのアイコン（apps/docs/src-tauri/icons/icon.svg のグリフ）をそのまま描くので、アイコン自身の固定色だけを例外にする
+    for (const file of shellSources.filter((name) => path.basename(name) !== "brand.tsx")) {
       expect(code(file), path.basename(file)).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     }
   });
