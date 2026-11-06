@@ -710,91 +710,119 @@ describe("editor-web e2e (stub, next dev)", () => {
     "",
   ].join("\n");
 
-  it("imports a VTT into a recording page, edits a paragraph, renames and merges speakers, and refuses a stale revision (#36)", async () => {
+  it("imports a VTT into a recording page and a transcript tab, edits a paragraph, renames and merges speakers, and refuses a stale revision (#36 → #310)", async () => {
     const created = await write("POST", "/api/recordings/import-vtt", { name: "合成の録音 e2e.vtt", vtt: SYNTHETIC_VTT });
     assert.equal(created.status, 201);
     assert.equal(created.headers.get("cache-control"), "private, no-store");
     assert.equal(created.headers.get("x-robots-tag"), "noindex, nofollow");
-    const { page, recording } = await created.json();
-    createdIds.push(page.id);
+    const { page, recording, transcript: tabId } = await created.json();
+    createdIds.push(page.id, tabId);
     assert.equal(page.kind, "rec");
     assert.equal(page.title, "合成の録音 e2e");
     assert.equal(recording.revision, 1);
     assert.equal(recording.engine, "vtt-import");
     assert.equal(recording.durationSec, 6);
     assert.match(recording.sourceSha256, /^[0-9a-f]{64}$/);
-    assert.deepEqual(recording.speakerNames, { 1: "司会役", 2: "記録役" });
+    // 段落と話者名は文字起こしのタブ（#310）。録音の行は持たない
+    assert.deepEqual(recording.segments, []);
+    assert.deepEqual(recording.speakerNames, {});
+    assert.match(tabId, /^[0-9a-f-]{36}$/);
 
     const read = await fetch(`${base}/api/pages/${page.id}/recording`);
     assert.equal(read.status, 200);
     const first = await read.json();
     assert.deepEqual(first.recording, recording);
-    assert.deepEqual(first.speakers, [
+    assert.deepEqual(first.transcripts.map((tab) => [tab.id, tab.label, tab.engine, tab.engineLabel, tab.segmentCount, tab.durationSec]), [[tabId, "取り込んだ字幕", "vtt-import", "取り込んだ字幕", 3, 6]]);
+    // 録音はフォルダに包まれ、文字起こしのタブは同じフォルダの「文字起こし」ページのタブ
+    const placed = await pool.query("SELECT kind, parent, page, made_from FROM pages WHERE id = ANY($1::uuid[]) ORDER BY kind", [[page.id, tabId]]);
+    assert.deepEqual(placed.rows.map((row) => row.kind), ["note", "rec"]);
+    assert.ok(placed.rows[0].parent && placed.rows[0].parent === placed.rows[1].parent);
+    assert.deepEqual(placed.rows[0].made_from, { kind: "transcript", recording: page.id, engine: "vtt-import" });
+    const folder = await pool.query("SELECT kind, title FROM pages WHERE id = $1", [placed.rows[1].parent]);
+    assert.deepEqual(folder.rows[0], { kind: "folder", title: "合成の録音 e2e" });
+
+    const tabRead = await fetch(`${base}/api/pages/${tabId}/transcript`);
+    assert.equal(tabRead.status, 200);
+    assert.equal(tabRead.headers.get("cache-control"), "private, no-store");
+    const tab = await tabRead.json();
+    assert.deepEqual(Object.keys(tab).sort(), ["run", "speakers", "transcript"]);
+    assert.equal(tab.transcript.revision, 1);
+    assert.equal(tab.transcript.recording, page.id);
+    assert.equal(tab.transcript.engine, "vtt-import");
+    assert.equal(tab.transcript.durationSec, 6);
+    assert.deepEqual(tab.transcript.speakerNames, { 1: "司会役", 2: "記録役" });
+    assert.deepEqual(tab.speakers, [
       { speaker: 1, name: "司会役", count: 2 },
       { speaker: 2, name: "記録役", count: 1 },
     ]);
+    assert.equal(tab.run, null);
 
-    // 段落をその場で直す
-    const edited = await write("PATCH", `/api/pages/${page.id}/recording`, { baseRevision: 1, edits: [{ index: 1, text: "合成の記録です。\r\n直しました" }] });
+    // 段落をその場で直す（文字起こしのタブの PATCH）
+    const edited = await write("PATCH", `/api/pages/${tabId}/transcript`, { baseRevision: 1, edits: [{ index: 1, text: "合成の記録です。\r\n直しました" }] });
     assert.equal(edited.status, 200);
-    const afterEdit = (await edited.json()).recording;
+    const afterEdit = (await edited.json()).transcript;
     assert.equal(afterEdit.revision, 2);
     assert.deepEqual(afterEdit.segments[1], { start: 2.5, end: 4, text: "合成の記録です。\n直しました", speaker: 2 });
 
     // 話者の名前を変える: 名前の表が 1 つなので、話者 1 の全ての段落に反映される
-    const renamed = await write("PATCH", `/api/pages/${page.id}/recording`, { baseRevision: 2, renameSpeaker: { speaker: 1, name: "進行役" } });
+    const renamed = await write("PATCH", `/api/pages/${tabId}/transcript`, { baseRevision: 2, renameSpeaker: { speaker: 1, name: "進行役" } });
     assert.equal(renamed.status, 200);
     const afterRename = await renamed.json();
-    assert.equal(afterRename.recording.revision, 3);
-    assert.deepEqual(afterRename.recording.speakerNames, { 1: "進行役", 2: "記録役" });
-    assert.deepEqual(afterRename.recording.segments.map((segment) => afterRename.recording.speakerNames[segment.speaker]), ["進行役", "記録役", "進行役"]);
+    assert.equal(afterRename.transcript.revision, 3);
+    assert.deepEqual(afterRename.transcript.speakerNames, { 1: "進行役", 2: "記録役" });
+    assert.deepEqual(afterRename.transcript.segments.map((segment) => afterRename.transcript.speakerNames[segment.speaker]), ["進行役", "記録役", "進行役"]);
     assert.deepEqual(afterRename.speakers, [
       { speaker: 1, name: "進行役", count: 2 },
       { speaker: 2, name: "記録役", count: 1 },
     ]);
-    const clash = await write("PATCH", `/api/pages/${page.id}/recording`, { baseRevision: 3, renameSpeaker: { speaker: 1, name: "記録役" } });
+    const clash = await write("PATCH", `/api/pages/${tabId}/transcript`, { baseRevision: 3, renameSpeaker: { speaker: 1, name: "記録役" } });
     assert.equal(clash.status, 400);
     assert.deepEqual(await clash.json(), { error: "bad_request", reason: "name" });
 
     // 同じ話者をまとめる
-    const merged = await write("PATCH", `/api/pages/${page.id}/recording`, { baseRevision: 3, mergeSpeakers: { from: 2, into: 1 } });
+    const merged = await write("PATCH", `/api/pages/${tabId}/transcript`, { baseRevision: 3, mergeSpeakers: { from: 2, into: 1 } });
     assert.equal(merged.status, 200);
     const afterMerge = await merged.json();
-    assert.equal(afterMerge.recording.revision, 4);
-    assert.deepEqual(afterMerge.recording.segments.map((segment) => segment.speaker), [1, 1, 1]);
-    assert.deepEqual(afterMerge.recording.speakerNames, { 1: "進行役" });
+    assert.equal(afterMerge.transcript.revision, 4);
+    assert.deepEqual(afterMerge.transcript.segments.map((segment) => segment.speaker), [1, 1, 1]);
+    assert.deepEqual(afterMerge.transcript.speakerNames, { 1: "進行役" });
     assert.deepEqual(afterMerge.speakers, [{ speaker: 1, name: "進行役", count: 3 }]);
-    assert.equal(afterMerge.recording.segments[1].text, "合成の記録です。\n直しました", "the earlier edit is kept");
+    assert.equal(afterMerge.transcript.segments[1].text, "合成の記録です。\n直しました", "the earlier edit is kept");
 
     // 古い revision の書き込みは上書きせず、409 で最新を返す
-    const stale = await write("PATCH", `/api/pages/${page.id}/recording`, { baseRevision: 2, edits: [{ index: 0, text: "古い画面の文" }] });
+    const stale = await write("PATCH", `/api/pages/${tabId}/transcript`, { baseRevision: 2, edits: [{ index: 0, text: "古い画面の文" }] });
     assert.equal(stale.status, 409);
     const conflict = await stale.json();
     assert.equal(conflict.error, "conflict");
-    assert.deepEqual(conflict.recording, afterMerge.recording);
+    assert.deepEqual(conflict.transcript, afterMerge.transcript);
     assert.deepEqual(conflict.speakers, afterMerge.speakers);
-    const stored = await pool.query("SELECT revision, segments->0->>'text' AS first FROM page_recordings WHERE page_id = $1", [page.id]);
+    const stored = await pool.query("SELECT revision, segments->0->>'text' AS first FROM page_transcripts WHERE page_id = $1", [tabId]);
     assert.deepEqual(stored.rows[0], { revision: 4, first: "合成の録音をはじめます" });
+    // 直す前の本文は版に残る（新しい順）
+    const versions = (await (await fetch(`${base}/api/pages/${tabId}/transcript/versions`)).json()).versions;
+    assert.deepEqual(versions.map((version) => [version.version, version.reason, version.segmentCount]), [[3, "edit", 3], [2, "edit", 3], [1, "edit", 3]]);
 
-    // 録音ページは普通のページとしても読める（本文は空）
+    // 録音ページ・文字起こしのタブは普通のページとしても読める（本文は空）
     const asPage = (await (await fetch(`${base}/api/pages/${page.id}`)).json()).page;
     assert.equal(asPage.kind, "rec");
     assert.equal(asPage.title, "合成の録音 e2e");
     assert.deepEqual(asPage.blocks, []);
+    const asTab = (await (await fetch(`${base}/api/pages/${tabId}`)).json()).page;
+    assert.deepEqual([asTab.kind, asTab.title, asTab.tabName, asTab.blocks], ["note", "文字起こし", "取り込んだ字幕", []]);
 
     // 別の origin・壊れた VTT・形の違う要求は断る（何も作らない・書かない）
     const count = async () => (await pool.query("SELECT count(*)::int AS n FROM page_recordings")).rows[0].n;
     const before = await count();
     assert.equal((await write("POST", "/api/recordings/import-vtt", { name: "a.vtt", vtt: SYNTHETIC_VTT }, { origin: "https://evil.example" })).status, 403);
-    assert.equal((await write("PATCH", `/api/pages/${page.id}/recording`, { baseRevision: 4, edits: [{ index: 0, text: "x" }] }, { origin: "https://evil.example" })).status, 403);
+    assert.equal((await write("PATCH", `/api/pages/${tabId}/transcript`, { baseRevision: 4, edits: [{ index: 0, text: "x" }] }, { origin: "https://evil.example" })).status, 403);
     const invalid = await write("POST", "/api/recordings/import-vtt", { name: "a.vtt", vtt: "合成のただの文字" });
     assert.equal(invalid.status, 400);
     assert.deepEqual(await invalid.json(), { error: "bad_request", reason: "vtt_invalid" });
-    const twoOps = await write("PATCH", `/api/pages/${page.id}/recording`, { baseRevision: 4, edits: [{ index: 0, text: "x" }], mergeSpeakers: { from: 1, into: 1 } });
+    const twoOps = await write("PATCH", `/api/pages/${tabId}/transcript`, { baseRevision: 4, edits: [{ index: 0, text: "x" }], mergeSpeakers: { from: 1, into: 1 } });
     assert.equal(twoOps.status, 400);
     assert.deepEqual(await twoOps.json(), { error: "bad_request", reason: "body" });
     assert.equal(await count(), before);
-    assert.equal((await pool.query("SELECT revision FROM page_recordings WHERE page_id = $1", [page.id])).rows[0].revision, 4);
+    assert.equal((await pool.query("SELECT revision FROM page_transcripts WHERE page_id = $1", [tabId])).rows[0].revision, 4);
   });
 
   it("answers the same 404 for another owner's recording, an unknown id, a malformed id, and a page without a recording (#36)", async () => {
