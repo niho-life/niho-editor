@@ -18,6 +18,13 @@ export const EXPERIENCE_EDITOR_ID_TOKEN_COOKIE = "__Host-editor-experience-id";
 export const EXPERIENCE_EDITOR_FIREBASE_REFRESH_COOKIE = "__Host-editor-experience-firebase-refresh";
 export const EXPERIENCE_EDITOR_REFRESH_COOKIE = "__Host-editor-experience-refresh";
 export const EXPERIENCE_EDITOR_EXPIRY_COOKIE = "__Host-editor-experience-expiry";
+/**
+ * NIHO's display name from the login exchange, kept for the author of a publication (`sessionAuthors` needs
+ * `session.profile.name`; NIHO's session endpoint returns only the actor id). The value is bound to the user id and
+ * used only while that id is the current NIHO session's actor. The name is the writer's own NIHO display name, which
+ * they can change in NIHO anyway, so editing this cookie gives no further power.
+ */
+export const EXPERIENCE_EDITOR_NAME_COOKIE = "__Host-editor-experience-name";
 
 const COOKIE_FLAGS = "HttpOnly; Secure; SameSite=Lax; Path=/";
 const LOGIN_TTL_SECONDS = 10 * 60;
@@ -34,6 +41,8 @@ const VERIFIER_RE = /^[A-Za-z0-9._~-]{43,128}$/;
 const CODE_RE = /^[A-Za-z0-9_-]{43}$/;
 const TOKEN_RE = /^[A-Za-z0-9._~-]{32,8192}$/;
 const API_KEY_RE = /^[A-Za-z0-9_-]{20,128}$/;
+const MAX_DISPLAY_NAME_CHARS = 200;
+const BASE64URL_RE = /^[A-Za-z0-9_-]{1,1024}$/;
 
 type Env = Readonly<Record<string, string | undefined>>;
 type Pending = { state: string; verifier: string; returnTo: string; expiresAt: number };
@@ -45,6 +54,7 @@ type ConnectionPayload = {
   connectionId: string;
   connectionExpiresAt: string;
   userId: string;
+  displayName: string | null;
 };
 type SessionPayload = { actorId: string; connectionId: string; expiresAt: string };
 
@@ -102,7 +112,30 @@ const ALL_COOKIES = [
   EXPERIENCE_EDITOR_FIREBASE_REFRESH_COOKIE,
   EXPERIENCE_EDITOR_REFRESH_COOKIE,
   EXPERIENCE_EDITOR_EXPIRY_COOKIE,
+  EXPERIENCE_EDITOR_NAME_COOKIE,
 ] as const;
+
+/** A usable display name: trimmed, 1–200 characters, no control characters. Anything else is no name. */
+function displayNameOf(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const name = value.trim();
+  if (name.length === 0 || Array.from(name).length > MAX_DISPLAY_NAME_CHARS || /[\u0000-\u001f\u007f-\u009f]/.test(name)) return null;
+  return name;
+}
+
+function nameCookieValue(userId: string, name: string): string {
+  return `${Buffer.from(userId, "utf8").toString("base64url")}.${Buffer.from(name, "utf8").toString("base64url")}`;
+}
+
+/** The display name of the name cookie when it was written for `userId`; null when absent, malformed or for another user. */
+function nameFromCookie(header: string | null, userId: string): string | null {
+  if (hasDuplicateCookie(header, EXPERIENCE_EDITOR_NAME_COOKIE)) return null;
+  const raw = cookieValue(header, EXPERIENCE_EDITOR_NAME_COOKIE);
+  const [encodedUser, encodedName, extra] = raw?.split(".") ?? [];
+  if (extra !== undefined || !encodedUser || !encodedName || !BASE64URL_RE.test(encodedUser) || !BASE64URL_RE.test(encodedName)) return null;
+  if (Buffer.from(encodedUser, "base64url").toString("utf8") !== userId) return null;
+  return displayNameOf(Buffer.from(encodedName, "base64url").toString("utf8"));
+}
 
 function clearAllCookies(): string[] {
   return ALL_COOKIES.map(clearCookie);
@@ -307,6 +340,7 @@ function parseConnectionPayload(value: unknown, now: number): ConnectionPayload 
     connectionId: record.connectionId,
     connectionExpiresAt: record.connectionExpiresAt as string,
     userId: user.id,
+    displayName: displayNameOf(user.displayName),
   };
 }
 
@@ -499,12 +533,13 @@ export function createNihoExperienceAuthProvider(deps: NihoExperienceAuthDeps = 
     return { payload, firebase, session };
   }
 
-  function sessionFromPayload(payload: SessionPayload): Session {
+  function sessionFromPayload(payload: SessionPayload, name: string | null): Session {
     return {
       userId: payload.actorId,
       mode: "niho",
       sessionId: payload.connectionId,
       expiresAt: payload.expiresAt,
+      ...(name ? { profile: { name } } : {}),
     };
   }
 
@@ -529,7 +564,7 @@ export function createNihoExperienceAuthProvider(deps: NihoExperienceAuthDeps = 
       if (!idToken || !TOKEN_RE.test(idToken)) return null;
       const payload = await readSession(idToken);
       if (!payload) return null;
-      return sessionFromPayload(payload);
+      return sessionFromPayload(payload, nameFromCookie(header, payload.actorId));
     },
 
     async beginLogin({ request, returnTo }): Promise<Response> {
@@ -611,6 +646,10 @@ export function createNihoExperienceAuthProvider(deps: NihoExperienceAuthDeps = 
           setCookie(EXPERIENCE_EDITOR_FIREBASE_REFRESH_COOKIE, result.firebase.refreshToken, maxConnectionAge),
           setCookie(EXPERIENCE_EDITOR_REFRESH_COOKIE, result.payload.refreshToken, maxConnectionAge),
           setCookie(EXPERIENCE_EDITOR_EXPIRY_COOKIE, String(Date.parse(result.session.expiresAt)), maxConnectionAge),
+          // A login without a display name must not keep a previous user's name.
+          result.payload.displayName
+            ? setCookie(EXPERIENCE_EDITOR_NAME_COOKIE, nameCookieValue(result.payload.userId, result.payload.displayName), maxConnectionAge)
+            : clearCookie(EXPERIENCE_EDITOR_NAME_COOKIE),
         ];
         return redirectTo(safeReturnTo(pending.returnTo), headers);
       } catch {
@@ -662,6 +701,9 @@ export function createNihoExperienceAuthProvider(deps: NihoExperienceAuthDeps = 
         if (rotatedConnection) {
           headers.append("Set-Cookie", setCookie(EXPERIENCE_EDITOR_REFRESH_COOKIE, rotatedConnection.refreshToken, maxConnectionAge));
           headers.append("Set-Cookie", setCookie(EXPERIENCE_EDITOR_EXPIRY_COOKIE, String(Date.parse(rotatedConnection.connectionExpiresAt)), maxConnectionAge));
+          // The rotated connection outlives the login's cookies: keep the same user's name for as long.
+          const name = nameFromCookie(header, session.actorId);
+          if (name) headers.append("Set-Cookie", setCookie(EXPERIENCE_EDITOR_NAME_COOKIE, nameCookieValue(session.actorId, name), maxConnectionAge));
         }
         return Response.json({ sessionId: session.connectionId, userId: session.actorId, expiresAt: session.expiresAt }, { headers });
       } catch (error) {
