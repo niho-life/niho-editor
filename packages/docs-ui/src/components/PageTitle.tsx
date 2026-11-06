@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, type KeyboardEvent } from "react";
+import { fitTitleHeight } from "./BlockEditor";
 
 /** タイトルを打ち終えてから保存するまでの間（打つたびには保存しない）。 */
 const TITLE_SAVE_MS = 500;
@@ -64,17 +65,11 @@ export function PageTitle(props: {
     else if (timer.current !== null) window.clearTimeout(timer.current);
   }, []);
 
-  // 書いた分だけ伸ばす（値と窓の幅が変わったとき）
+  // 書いた分だけ伸ばす（値が変わったときと、欄の幅が変わったとき。窓の幅だけでなく、レールの開閉で列の幅が変わっても測り直す）
   useLayoutEffect(() => {
     const element = inputRef.current;
     if (!element) return;
-    const fit = () => {
-      element.style.height = "auto";
-      if (element.scrollHeight > 0) element.style.height = `${element.scrollHeight}px`;
-    };
-    fit();
-    window.addEventListener("resize", fit);
-    return () => window.removeEventListener("resize", fit);
+    return fitTitleHeight(element);
   }, [props.value]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {

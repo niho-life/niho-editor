@@ -1000,6 +1000,8 @@ function EditorScreen(props: ScreenProps) {
   return (
     <div
       ref={setRoot}
+      // 本文の列（.es-canvas-in。最大 680px・中央。フォルダのページと同じ幅）
+      className="es-canvas-in"
       data-docs-app-root=""
       data-docs-shared-ui=""
       // 保存の状態（見える文字は失敗のときだけ、枠のヘッダーに出す。読み上げはヘッダーの状態の丸の live region が持つ）
@@ -1044,7 +1046,8 @@ function EditorScreen(props: ScreenProps) {
         </div>
       )}
       {/* be--flush: 旧 NIHO docs の「＋ ⋮⋮」用の左の余白を使わない（題名と本文の左端を揃える）。be--ai-plain: AI の文を灰色にしない（「…」の切り替え） */}
-      <div className={aiGray ? "be be--flush" : "be be--flush be--ai-plain"}>
+      {/* .es-body: 本文の文字の大きさ（shell.css。見直し 2026-11-07） */}
+      <div className={aiGray ? "be be--flush es-body" : "be be--flush be--ai-plain es-body"}>
         <EditorContent editor={editor} />
         {/* ヘッダーに常設の書式の帯（ShellTools）を出すため、本文の操作を枠へ渡す（#37 T9） */}
         <PageChrome editor={editor} onTools={registerTools} />

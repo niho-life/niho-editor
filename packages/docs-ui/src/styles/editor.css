@@ -497,13 +497,19 @@
   background: transparent;
   padding: 0;
   font: inherit;
-  font-size: 30px;
+  font-size: var(--ed-fs-title, 30px);
   font-weight: 700;
   line-height: 1.35;
   color: var(--niho-text);
 }
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .page-title::placeholder {
   color: var(--niho-text-muted);
+}
+/* 900px 未満（スマホ・タブレット縦）は題名を少し小さく（枠の 900px の区切りと同じ） */
+@media (max-width: 900px) {
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .page-title.page-title {
+    font-size: var(--ed-fs-title-narrow, 26px);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
