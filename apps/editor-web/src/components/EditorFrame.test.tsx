@@ -296,6 +296,29 @@ describe("EditorFrame", () => {
       await act(async () => nav2.querySelector("button")!.click());
       expect(nav.push).toHaveBeenLastCalledWith(`/p/${FOLDER}`);
     });
+
+    it("まだ作っていないページ・録音からは、フォルダの中から開いたときだけ、入れ先のフォルダをヘッダーの場所に出す（上の段から開いたときは空）", async () => {
+      nav.pathname = "/p/new";
+      await mount({ pages: folderPages() });
+      // 上の段から開いた新しいページ・録音からは、他の上の段のページと同じく場所を出さない
+      expect(container!.querySelector('.es-dt nav[aria-label="場所"]')).toBeNull();
+      await moveTo("/p/new", "from=recording");
+      expect(container!.querySelector('.es-dt nav[aria-label="場所"]')).toBeNull();
+      // フォルダの中から開いた録音から（?in=）: 入れ先のフォルダ。押すとそのフォルダへ戻れる
+      await moveTo("/p/new", `from=recording&in=${FOLDER}`);
+      const place = container!.querySelector('.es-dt nav[aria-label="場所"]')!;
+      expect(place.textContent).toBe("鎌倉の取材");
+      await act(async () => place.querySelector("button")!.click());
+      expect(nav.push).toHaveBeenLastCalledWith(`/p/${FOLDER}`);
+      // 空の新しいページ（?in=）も同じ
+      await moveTo("/p/new", `in=${FOLDER}`);
+      expect(container!.querySelector('.es-dt nav[aria-label="場所"]')?.textContent).toBe("鎌倉の取材");
+      // フォルダでないページの id や、一覧に無い id を渡されても場所は出さない
+      await moveTo("/p/new", `in=${INSIDE}`);
+      expect(container!.querySelector('.es-dt nav[aria-label="場所"]')).toBeNull();
+      await moveTo("/p/new", "in=00000000-0000-4000-8000-0000000000ff");
+      expect(container!.querySelector('.es-dt nav[aria-label="場所"]')).toBeNull();
+    });
   });
 
   it("moves to a page, a new page, the recording start, and the settings from the sidebar", async () => {
