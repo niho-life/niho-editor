@@ -40,9 +40,14 @@ export type ShellHeaderProps = {
   /** 場所（親のフォルダ › 親の録音）。720px より広いときにヘッダーの左に出す。 */
   location?: readonly ShellLocationItem[];
   onOpenLocation?: (id: string) => void;
-  /** 一覧がしまわれているときの、左端の「一覧を出す」ボタン（900px 未満でページの画面から一覧へ戻る。アプリ名は枠が左上端に出す）。 */
+  /** 一覧がしまわれているときの、左端の「一覧を出す」ボタン（デスクトップで dock を使わない画面・Mac・gallery。アプリ名は枠が左上端に出す）。 */
   showListButton?: boolean;
   onToggleList?: () => void;
+  /**
+   * 左端の「‹ 行き先」（900px 未満のページ・設定の画面。#320 A1）。行き先は上の段なら「一覧」、親があればその名前（親のフォルダ・親の録音）。
+   * 押す先は呼ぶ側が URL へ移す（状態の切り替えでなく履歴に乗せ、OS の戻るでアプリを抜けないように）。showListButton と同時には渡さない。
+   */
+  back?: { label: string; onClick: () => void };
   /** 道具の帯（ShellTools）。 */
   tools?: ReactNode;
   status?: { state: ShellStatusState; tip: string };
@@ -82,7 +87,13 @@ export function ShellHeader(props: ShellHeaderProps) {
   const { publish, more } = props;
   return (
     <header className={props.plain ? "es-dt es-dt--plain" : "es-dt"}>
-      {props.showListButton && (
+      {props.back && (
+        <button type="button" className="es-back" aria-label={`${props.back.label}へ戻る`} onClick={props.back.onClick}>
+          <Icon name="back" />
+          <span>{props.back.label}</span>
+        </button>
+      )}
+      {props.showListButton && !props.back && (
         <button type="button" className="es-ib" aria-label="一覧を出す" title="一覧を出す" onClick={props.onToggleList}>
           <Icon name="side" />
         </button>

@@ -38,6 +38,11 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-btn:disabled{opacity:.4;cursor:not-allowed}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pubbtn{min-width:72px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ib{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;color:var(--ed-ink-sub);flex:none}
+/* ヘッダー左端の「‹ 行き先」（900px 未満。#320 A1）。行き先の名前が長ければ省略 */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-back{display:inline-flex;align-items:center;gap:2px;flex:none;min-width:0;max-width:46vw;height:34px;margin-left:-4px;padding:0 10px 0 4px;border-radius:9px;font-size:14px;font-weight:600;color:var(--ed-ink-sub)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-back:hover{background:var(--ed-sand-2);color:var(--ed-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-back .es-ico{width:20px;height:20px;flex:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-back span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ib:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ib--on{background:var(--ed-sand-2);color:var(--ed-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ib--sm{width:28px;height:28px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ib--accent{color:var(--ed-accent-ink)}

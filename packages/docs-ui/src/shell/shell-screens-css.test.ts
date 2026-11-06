@@ -150,6 +150,9 @@ describe("shell.css（フェーズ2）", () => {
     // 本文の文字は包み .es-body が token から決める（editor.css は es- を読まない決まりなので shell.css に置く）
     expect(bodyOf(".es-body")).toContain("font-size:var(--ed-fs-body,16px)");
     expect(bodyOf(".es-body")).toContain("line-height:var(--ed-lh-body,1.9)");
+    // 狭い画面のヘッダー左の「‹ 行き先」（#320 A1）: 34px の高さ、長い名前は省略
+    expect(bodyOf(".es-back")).toContain("height:34px");
+    expect(bodyOf(".es-back span")).toContain("text-overflow:ellipsis");
     // 本文の列（.es-canvas-in）とタブの帯（#315）は同じ幅（680px・中央）
     expect(bodyOf(".es-canvas-in")).toContain("max-width:680px");
     expect(bodyOf(".es-tabbar")).toContain("max-width:680px");

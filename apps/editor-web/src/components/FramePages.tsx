@@ -127,12 +127,13 @@ export function OpenPage({
     pageSaved(id);
   }, [id, pageSaved]);
 
-  // 狭い画面（720px 以下）の場所（親のフォルダ › 親の録音）。題名の上の 1 行（広い画面ではヘッダーに出し、ここは CSS で隠す）
+  // 題名の上の場所（親のフォルダ › 親の録音）。720px 以下でヘッダーに入らないときの置き場だったが、狭い画面（900px 未満）はヘッダー左の
+  // 「‹ 親の名前」が親を示すので出さない（#320 A1）。広い画面はヘッダーに出し、ここは CSS で隠れる（720〜900px の窓では出る）
   const location = useMemo(() => {
     const pages = frame.pages ?? [];
     return locationOf(pages.some((page) => page.id === id) ? pages : [...pages, summary], id);
   }, [frame.pages, id, summary]);
-  const aboveTitle = location.length > 0 ? <ShellLocation items={location} onOpen={frame.openPage} place="body" /> : null;
+  const aboveTitle = !frame.narrow && location.length > 0 ? <ShellLocation items={location} onOpen={frame.openPage} place="body" /> : null;
 
   const fresh = replaced?.id === id ? replaced : null;
   const current = fresh?.page;
