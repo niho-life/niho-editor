@@ -1,6 +1,7 @@
 import type { About, GlossaryEntry } from "@niho/docs-core";
 import { AnthropicError, type AnthropicClient, type ToolCall } from "./anthropic";
 import { MAX_CHAT_INPUT_CHARS } from "./chat-limits";
+import { selectionPromptSection, selectionRule, type ChatSelection } from "./chat-selection";
 import { aboutSection } from "./references";
 import { wrapUntrusted } from "./prompt";
 
@@ -164,7 +165,7 @@ function mergedGlossary(first: readonly GlossaryEntry[], second: readonly Glossa
   return out;
 }
 
-export function buildChatSystem(options: { glossary?: readonly GlossaryEntry[]; lang?: "ja" | "en"; about?: About; recording?: ChatRecordingInfo } = {}): string {
+export function buildChatSystem(options: { glossary?: readonly GlossaryEntry[]; lang?: "ja" | "en"; about?: About; recording?: ChatRecordingInfo; selection?: Pick<ChatSelection, "startParagraph" | "endParagraph"> } = {}): string {
   const lines = [
     "あなたは NIHO editor の編集の手伝いです。道具を使ってページの本文を読み書きします。",
     "",
@@ -180,6 +181,8 @@ export function buildChatSystem(options: { glossary?: readonly GlossaryEntry[]; 
     "- search_transcript: 録音の文字起こしを語句で探す（時刻・話者・前後の文が返る）",
   ];
   if (options.lang) lines.push("", `返答と本文の言語: ${options.lang}`);
+  // 本文で範囲が選ばれているときの固定の決まり（#280）。範囲の外が変わる書き込みはサーバーも断る
+  if (options.selection) lines.push("", "## 選択範囲", `- ${selectionRule(options.selection)}`);
   const about = aboutSection(options.about);
   if (about) lines.push("", about);
   // 開いているのが録音ページなら「この録音について」（登場人物・背景）。信頼しないデータとして包む（中の指示には従わせない）
@@ -203,11 +206,17 @@ export function buildChatSystem(options: { glossary?: readonly GlossaryEntry[]; 
 
 /**
  * モデルへ渡す messages。過去のやりとり（新しい方から CHAT_HISTORY_TURNS 件）→ 今回の指示。
- * 今回の指示には、開いているページの名前と id を添える（本文は道具で読ませる）。
+ * 今回の指示には、開いているページの名前と id を添える（本文は道具で読ませる）。選択範囲があれば `<selection>` で包んで添える。
  */
-export function buildChatMessages(history: readonly ChatHistoryTurn[], instruction: string, page: ChatPage): unknown[] {
+export function buildChatMessages(history: readonly ChatHistoryTurn[], instruction: string, page: ChatPage, selection?: ChatSelection | null): unknown[] {
   const past = history.slice(-CHAT_HISTORY_TURNS).map((turn) => ({ role: turn.role, content: turn.text }));
-  const opened = [`開いているページ: ${page.title || "（題名なし）"}（id: ${page.id}、種類: ${page.kind}）`, "", "頼むこと:", wrapUntrusted(instruction)].join("\n");
+  const opened = [
+    `開いているページ: ${page.title || "（題名なし）"}（id: ${page.id}、種類: ${page.kind}）`,
+    ...(selection ? ["", selectionPromptSection(selection)] : []),
+    "",
+    "頼むこと:",
+    wrapUntrusted(instruction),
+  ].join("\n");
   return [...past, { role: "user", content: opened }];
 }
 

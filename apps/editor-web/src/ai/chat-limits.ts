@@ -5,3 +5,6 @@
 
 /** 人の指示の上限（文字）。 */
 export const MAX_CHAT_INPUT_CHARS = 2_000;
+
+/** 選択範囲の文字として AI に見せる長さの上限（これを超える分は、段落の番号で示して read_page で読ませる。#280）。 */
+export const MAX_SELECTION_TEXT_CHARS = 2_000;
