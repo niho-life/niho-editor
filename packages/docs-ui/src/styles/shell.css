@@ -237,7 +237,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab-add:hover{background:var(--ed-sand);color:var(--ed-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab-add:disabled{opacity:.5}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab-add svg{width:16px;height:16px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tabbar .es-menu--tab{left:0;right:auto;top:38px;width:240px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tabbar .es-menu--tab{left:0;right:auto;top:calc(100% + 2px);width:240px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tabbar-note{margin:-4px 0 10px;font-size:12.5px;line-height:1.5;color:var(--ed-ink-sub)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc-part{display:inline-flex;align-items:center;min-width:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc-sep{flex:none;margin:0 2px;color:var(--ed-line-3);font-style:normal}

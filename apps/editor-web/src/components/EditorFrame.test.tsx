@@ -3226,3 +3226,37 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     expect(sideReads(fetcher)).toBe(2);
   });
 });
+
+describe("EditorFrame: 題名の変更は、一覧の入れ物と兄弟のタブの行にも反映する（#308 レビュー）", () => {
+  const HOLDER = "00000000-0000-4000-8000-0000000000a1";
+  const TAB_A = "00000000-0000-4000-8000-0000000000a2";
+  const TAB_B = "00000000-0000-4000-8000-0000000000a3";
+  const OTHER_HOLDER = "00000000-0000-4000-8000-0000000000b1";
+  const OTHER_TAB = "00000000-0000-4000-8000-0000000000b2";
+  const rows = () => [
+    { ...page(HOLDER, "旧題"), kind: "page" as const },
+    { ...page(TAB_A, "旧題"), page: HOLDER },
+    { ...page(TAB_B, "旧題"), page: HOLDER },
+    { ...page(OTHER_HOLDER, "別のページ"), kind: "page" as const },
+    { ...page(OTHER_TAB, "別のページ"), page: OTHER_HOLDER },
+  ];
+  /** 開いたタブで題名を打った知らせ（PageEditor の題名の欄と同じ呼び方）。 */
+  function Retitle({ id, title }: { id: string; title: string }) {
+    const { pageTitleChanged } = useEditorFrame();
+    useEffect(() => pageTitleChanged(id, title), [pageTitleChanged, id, title]);
+    return <p>合成の本文</p>;
+  }
+  // 入れ物の行は「題名 ＋ タブの数の印」（例: 旧題タブ 2）なので、題名で始まる行があるかで見る
+  const titles = () => [...container!.querySelectorAll(".es-di-t")].map((node) => node.textContent ?? "");
+  const has = (title: string) => titles().some((text) => text.startsWith(title));
+
+  it("タブで題名を変えると、一覧が出す入れ物の行も新しい題名になる（ほかのページは変えない）", async () => {
+    await mount({ pages: rows() });
+    expect(has("旧題")).toBe(true);
+    expect(has("別のページ")).toBe(true);
+    await rerender(<Retitle id={TAB_A} title="新しい題名" />);
+    expect(has("新しい題名")).toBe(true);
+    expect(has("旧題")).toBe(false);
+    expect(has("別のページ")).toBe(true);
+  });
+});

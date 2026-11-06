@@ -268,6 +268,25 @@ describe("pages have a holder (kind='page') and tabs (#307)", { skip: databaseUr
     const tree = await readGoogleDocsBatchTree(pool, OWNER, folder.id);
     assert.deepEqual(tree?.map((row) => row.id), [folder.id, x!.id, y!.id], "フォルダとタブだけ（件数の上限 200 にも入れ物を数えない）");
   });
+
+  it("saving the title of one tab and the body of its sibling at the same time never deadlocks", async () => {
+    // 題名の保存は入れ物と兄弟のタブを書き換える。兄弟の本文の保存（自分のタブ → 入れ物の順）と逆向きに待ち合わないこと
+    const a = await store.createPage(OWNER, { title: "A", blocks });
+    const b = (await store.createTab(OWNER, a.id, { name: "B" }))!;
+    let revisionA = a.revision;
+    let revisionB = b.revision;
+    for (let round = 0; round < 40; round++) {
+      const [titled, written] = await Promise.all([
+        store.savePage(OWNER, a.id, { title: `題名 ${round}` }, { baseRevision: revisionA }),
+        store.savePage(OWNER, b.id, { blocks: [{ type: "paragraph", content: [{ type: "text", text: `本文 ${round}` }] }] }, { baseRevision: revisionB }),
+      ]);
+      assert.equal(titled?.status, "saved", `round ${round}: 題名の保存`);
+      assert.equal(written?.status, "saved", `round ${round}: 兄弟の本文の保存`);
+      if (titled?.status !== "saved" || written?.status !== "saved") return;
+      revisionA = titled.page.revision;
+      revisionB = written.page.revision;
+    }
+  });
 });
 
 /** 既存のデータに migration を当てる: 本文を持つ行ごとに入れ物ができ、id は変わらず、step のサブページは触らない。 */

@@ -108,6 +108,21 @@ describe("TabBar（タブの帯。#308）", () => {
     expect(el.querySelector('[role="menu"]')).toBeNull();
   });
 
+  it("▾ のメニューは、横に送れるタブの並び（overflow で縦も切る）の外、帯の直下に描く（高さ 36px の帯で切れない。#308 レビュー）", () => {
+    const acts = actions({ moveTargets: [{ id: "p2", title: "別のページ" }], onMove: vi.fn() });
+    const el = mount(<TabBar tabs={TABS} currentId="t1" onOpen={vi.fn()} onAdd={vi.fn()} actions={acts} />);
+    click(el.querySelector(".es-tab-menu"));
+    expect(el.querySelector('.es-tabbar-tabs [role="menu"]')).toBeNull();
+    const menu = el.querySelector<HTMLElement>('.es-tabbar > [role="menu"]');
+    expect(menu).not.toBeNull();
+    // 左位置は開くときに測って当てる（jsdom は寸法が 0 なので 0）
+    expect(menu!.style.left).toBe("0px");
+    // 入れ先の一覧も同じ場所
+    click([...el.querySelectorAll<HTMLButtonElement>('[role="menu"] button')].find((button) => button.textContent?.startsWith(TAB_BAR_TEXT.move)));
+    expect(el.querySelector('.es-tabbar-tabs [role="menu"]')).toBeNull();
+    expect(el.querySelector('.es-tabbar > [role="menu"]')).not.toBeNull();
+  });
+
   it("並べて開く・移すは、渡さなければ出さない", () => {
     const el = mount(<TabBar tabs={TABS} currentId="t1" onOpen={vi.fn()} onAdd={vi.fn()} actions={actions({ moveTargets: [] })} />);
     click(el.querySelector(".es-tab-menu"));

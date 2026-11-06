@@ -680,6 +680,19 @@ export class EditorStore {
     const blocksJson = patch.blocks === undefined ? null : JSON.stringify(patch.blocks);
     return this.#orNull(() =>
       this.#transaction(async (client): Promise<SaveResult | null> => {
+        // 題名を変える保存は、入れ物と兄弟のタブへ題名を写す（下）。ほかのタブの保存は「自分のタブ → 入れ物」の順に押さえるので、
+        // 自分のタブを先に押さえてから兄弟を待つと互いを待ち合う（deadlock）。そこで、入れ物のタブを id の順に 1 文で先にまとめて押さえてから、
+        // 対象のタブを押さえる（入れ物はそのあと。#308 レビュー）
+        if (patch.title !== undefined) {
+          await client.query(
+            `SELECT t.id FROM pages t
+              WHERE t.owner = $1 AND t.deleted_at IS NULL
+                AND t.page = (SELECT page FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL)
+              ORDER BY t.id
+              FOR UPDATE OF t`,
+            [owner, id],
+          );
+        }
         const current = await lockPage(client, owner, id);
         if (!current) return null;
         // フォルダ・タブの入れ物は、ほかの種類と行き来せず、本文を持たない（§3.2。API はこれを bad_request にする）

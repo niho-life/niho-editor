@@ -62,9 +62,15 @@ export const TAB_BAR_TEXT = {
 
 const MOVE_PREFIX = "to:";
 
+/** メニューの幅（`.es-tabbar .es-menu--tab` の width と同じ。右端からはみ出さないように左位置を詰める）。 */
+const MENU_WIDTH = 240;
+
 export function TabBar({ tabs, currentId, onOpen, onAdd, busy = false, actions }: TabBarProps) {
   const [menu, setMenu] = useState<"main" | "move" | null>(null);
+  // メニューは横に送れるタブの並び（overflow-x:auto は縦も切る）の外、帯の直下に描く。左位置は開くときに開いているタブの左端へ合わせる
+  const [menuLeft, setMenuLeft] = useState(0);
   const [renaming, setRenaming] = useState(false);
+  const bar = useRef<HTMLDivElement | null>(null);
   const menuButton = useRef<HTMLButtonElement | null>(null);
   // 名前の欄は Enter と欄を離れたときの両方で閉じるので、1 回だけ送る
   const committed = useRef(false);
@@ -84,6 +90,16 @@ export function TabBar({ tabs, currentId, onOpen, onAdd, busy = false, actions }
     ...(actions?.onMove && moveTargets.length > 0 ? [{ id: "move", label: TAB_BAR_TEXT.move, icon: "doc" as const }] : []),
     { id: "delete", label: TAB_BAR_TEXT.remove, icon: "trash", danger: true, hint: TAB_BAR_TEXT.removeHint, separated: true },
   ];
+  const toggleMenu = () => {
+    if (menu !== null) {
+      setMenu(null);
+      return;
+    }
+    const barBox = bar.current?.getBoundingClientRect();
+    const tabBox = menuButton.current?.closest(".es-tab-w")?.getBoundingClientRect();
+    if (barBox && tabBox) setMenuLeft(Math.max(0, Math.min(tabBox.left - barBox.left, barBox.width - MENU_WIDTH)));
+    setMenu("main");
+  };
   const pick = (id: string) => {
     if (id === "move") {
       setMenu("move");
@@ -124,9 +140,9 @@ export function TabBar({ tabs, currentId, onOpen, onAdd, busy = false, actions }
   };
 
   return (
-    <div className="es-tabbar">
+    <div className="es-tabbar" ref={bar}>
       {tabs.length >= 2 && (
-        <div className="es-tabbar-tabs" role="group" aria-label={TAB_BAR_TEXT.list} onKeyDown={onListKey}>
+        <div className="es-tabbar-tabs" role="group" aria-label={TAB_BAR_TEXT.list} onKeyDown={onListKey} onScroll={() => setMenu(null)}>
           {tabs.map((tab) => {
             const on = tab.id === currentId;
             return (
@@ -167,31 +183,35 @@ export function TabBar({ tabs, currentId, onOpen, onAdd, busy = false, actions }
                     aria-label={TAB_BAR_TEXT.menu(tab.label)}
                     aria-haspopup="menu"
                     aria-expanded={menu !== null}
-                    onClick={() => setMenu((open) => (open ? null : "main"))}
+                    onClick={toggleMenu}
                   >
                     <Icon name="down" />
                   </button>
-                )}
-                {on && menu === "main" && <ShellMenu label={TAB_BAR_TEXT.menuLabel} className="es-menu--tab" items={items} trigger={menuButton} onSelect={pick} onClose={() => setMenu(null)} />}
-                {on && menu === "move" && (
-                  <ShellMenu
-                    label={TAB_BAR_TEXT.move}
-                    className="es-menu--tab"
-                    heading={TAB_BAR_TEXT.move}
-                    items={moveTargets.map((target) => ({ id: `${MOVE_PREFIX}${target.id}`, label: target.title || TAB_BAR_TEXT.untitled, icon: "doc" as const }))}
-                    trigger={menuButton}
-                    onSelect={(id) => {
-                      setMenu(null);
-                      menuButton.current?.focus();
-                      actions?.onMove?.(id.slice(MOVE_PREFIX.length));
-                    }}
-                    onClose={() => setMenu(null)}
-                  />
                 )}
               </span>
             );
           })}
         </div>
+      )}
+      {/* メニューは帯の直下（タブの並びの外）に描く: 並びは overflow-x:auto で縦も切るので、中に置くと高さ 36px の帯でメニューが切れる */}
+      {menu === "main" && (
+        <ShellMenu label={TAB_BAR_TEXT.menuLabel} className="es-menu--tab" style={{ left: menuLeft }} items={items} trigger={menuButton} onSelect={pick} onClose={() => setMenu(null)} />
+      )}
+      {menu === "move" && (
+        <ShellMenu
+          label={TAB_BAR_TEXT.move}
+          className="es-menu--tab"
+          style={{ left: menuLeft }}
+          heading={TAB_BAR_TEXT.move}
+          items={moveTargets.map((target) => ({ id: `${MOVE_PREFIX}${target.id}`, label: target.title || TAB_BAR_TEXT.untitled, icon: "doc" as const }))}
+          trigger={menuButton}
+          onSelect={(id) => {
+            setMenu(null);
+            menuButton.current?.focus();
+            actions?.onMove?.(id.slice(MOVE_PREFIX.length));
+          }}
+          onClose={() => setMenu(null)}
+        />
       )}
       <button type="button" className="es-tab-add" aria-label={TAB_BAR_TEXT.add} title={TAB_BAR_TEXT.add} disabled={busy || undefined} onClick={onAdd}>
         <Icon name="plus" />

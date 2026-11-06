@@ -566,12 +566,19 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         // 最後に開いたページをサーバーに記録する。届かなくても画面は止めない
         void recordPageOpenRequest(page.id).catch(() => undefined);
       },
+      // 題名はページの名前で、入れ物と全てのタブで同じ（サーバーの savePage が入れ物と兄弟のタブへ写す。#308）。
+      // 一覧の行は入れ物の題名を出すので、編集したタブの行だけでなく、入れ物と兄弟のタブの行も同じに揃える
       pageTitleChanged: (id, title) =>
-        setList((current) => ({
-          ...current,
-          pages: current.pages.map((page) => (page.id === id ? { ...page, title } : page)),
-          opened: current.opened?.id === id ? { ...current.opened, title } : current.opened,
-        })),
+        setList((current) => {
+          const edited = current.pages.find((page) => page.id === id) ?? (current.opened?.id === id ? current.opened : undefined);
+          const holder = edited?.page ?? null;
+          const same = (page: PageSummary) => page.id === id || (holder !== null && (page.id === holder || page.page === holder));
+          return {
+            ...current,
+            pages: current.pages.map((page) => (same(page) ? { ...page, title } : page)),
+            opened: current.opened && same(current.opened) ? { ...current.opened, title } : current.opened,
+          };
+        }),
       pageLangChanged: (id, lang) =>
         setList((current) => ({
           ...current,
