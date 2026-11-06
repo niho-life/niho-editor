@@ -8,7 +8,11 @@ BEGIN;
 --
 -- 守ること（利用者が手で変えたものを上書きしない）:
 -- - origin = 'builtin' の行だけ。段階の id と名前がともに既定のままのものだけ。
--- - すでに `chunked` の印がある段階（利用者が設定で ON／OFF にしたもの）は触らない。
+-- - すでに `chunked` の印がある段階は触らない。
+-- - **#277 の配備（migrate ジョブの開始 2026-11-06 14:20 UTC = 23:20 JST）より前に最後に保存された行だけ**を対象にする。
+--   配備のあとは、設定で OFF にして保存すると `chunked: false` は保存の経路が省くので、キーが無い行は
+--   「旧い既定」と「利用者が OFF にした」を区別できない。配備のあとに触られた行は、利用者の選択かもしれないので変えない
+--   （その人は、設定のスイッチで自分で入れられる）。配備より前の行には、そもそも OFF を選ぶ画面が無かった。
 -- - revision を 1 つ進める。run が写した設計と食い違うので、帯に「設計が変わりました」が出て、利用者が「今の設計に更新」できる
 --   （設定を保存したときと同じ道。進行中の run の写しは変わらない）。
 -- 何度流しても同じ結果（印があれば何もしない）。run の写し（step_runs.recipe_snapshot）には触らない。
@@ -35,6 +39,7 @@ UPDATE recipes AS r
        updated_at = GREATEST(clock_timestamp(), r.updated_at)
  WHERE r.origin = 'builtin'
    AND r.id IN ('tpl-1', 'tpl-4')
+   AND r.updated_at < TIMESTAMPTZ '2026-11-06 14:20:00+00'
    AND EXISTS (
          SELECT 1
            FROM jsonb_array_elements(r.steps) AS s(step)

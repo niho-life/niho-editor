@@ -43,11 +43,17 @@ describe("migration recipes_chunked_default on PostgreSQL", { skip: databaseUrl 
     await pool.end();
   });
 
-  async function put(owner: string, id: string, steps: Step[], origin = "builtin", revision = 3): Promise<void> {
+  // #277 の配備（migrate ジョブの開始）の前と後。migration は、前に最後に保存された行だけを対象にする
+  const BEFORE_DEPLOY = "2026-11-06T10:00:00Z";
+  const AFTER_DEPLOY = "2026-11-06T15:00:00Z";
+
+  async function put(owner: string, id: string, steps: Step[], origin = "builtin", revision = 3, savedAt = BEFORE_DEPLOY): Promise<void> {
     await pool.query(
-      `INSERT INTO recipes (owner, id, name, steps, origin, revision) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
-       ON CONFLICT (owner, id) DO UPDATE SET steps = EXCLUDED.steps, origin = EXCLUDED.origin, revision = EXCLUDED.revision`,
-      [owner, id, `合成の ${id}`, JSON.stringify(steps), origin, revision],
+      `INSERT INTO recipes (owner, id, name, steps, origin, revision, created_at, updated_at) VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $7)
+       ON CONFLICT (owner, id) DO UPDATE
+         SET steps = EXCLUDED.steps, origin = EXCLUDED.origin, revision = EXCLUDED.revision,
+             created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at`,
+      [owner, id, `合成の ${id}`, JSON.stringify(steps), origin, revision, savedAt],
     );
   }
 
@@ -106,6 +112,17 @@ describe("migration recipes_chunked_default on PostgreSQL", { skip: databaseUrl 
     await migrate();
     assert.deepEqual(await read(OWNER, "tpl-1"), { steps: own, revision: 3 });
     assert.deepEqual(await read(OWNER, "r-mine"), { steps: own, revision: 3 });
+  });
+
+  it("leaves a row saved after the #277 deploy alone: a missing chunked key may be the person's own OFF (the save path drops false)", async () => {
+    const saved = [step("k7m2q9xa", "文字起こし修正"), step("r4t8wz3c", "記事方針")];
+    await put(OWNER, "tpl-1", saved, "builtin", 3, AFTER_DEPLOY);
+    await migrate();
+    assert.deepEqual(await read(OWNER, "tpl-1"), { steps: saved, revision: 3 });
+    // 同じ行が配備の前に最後に保存されていれば、ON になる
+    await put(OWNER, "tpl-1", saved, "builtin", 3, BEFORE_DEPLOY);
+    await migrate();
+    assert.equal((await read(OWNER, "tpl-1")).steps[0]?.chunked, true);
   });
 
   it("does not touch the other default recipes, and treats each owner on its own", async () => {
