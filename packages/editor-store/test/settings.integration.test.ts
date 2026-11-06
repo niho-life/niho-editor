@@ -41,4 +41,15 @@ describe("editor settings persistence (Issue #220)", { skip: databaseUrl === und
       (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "23514",
     );
   });
+
+  it("keeps the Web search switch on by default and saves it apart from the other fields (#283)", async () => {
+    const owner = "synthetic-web-search-" + randomUUID();
+    assert.equal((await getEditorSettings(pool, owner)).webSearch, true);
+    assert.equal((await saveEditorSettings(pool, owner, { aboutName: "合成" })).webSearch, true);
+    const off = await saveEditorSettings(pool, owner, { webSearch: false });
+    assert.equal(off.webSearch, false);
+    assert.equal(off.aboutName, "合成");
+    assert.equal((await saveEditorSettings(pool, owner, { aiLang: "ja" })).webSearch, false);
+    assert.equal((await getEditorSettings(pool, owner)).webSearch, false);
+  });
 });

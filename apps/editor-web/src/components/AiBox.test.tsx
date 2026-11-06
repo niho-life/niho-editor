@@ -286,7 +286,7 @@ describe("AiPanel", () => {
     setValue("前置き /事実");
     expect(container!.querySelector('[aria-label="工程とスキル"]')?.textContent).toContain("事実確認");
     await press("Enter");
-    expect(field().value).toContain("前置き\n本文の固有名詞・数値・日付・引用を、文字起こしと資料に照らし確認してください。本文は直さず、確認箇所と理由を一覧にしてください。");
+    expect(field().value).toContain("前置き\n本文の主張（数字・固有名詞・日付・引用）を列挙し、文字起こし（search_transcript）と Web の検索で確かめてください。本文は直さず、返答に「確かめた／食い違い／確かめられない」の一覧と根拠を書いてください。直すのは、一覧を見て私が頼んだときだけです。");
     setValue("/要約");
     await press("Escape");
     expect(container!.querySelector('[aria-label="工程とスキル"]')).toBeNull();

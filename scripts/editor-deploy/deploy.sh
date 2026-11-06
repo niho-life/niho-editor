@@ -63,7 +63,7 @@ fi
 ai=0
 if ai_key_ready; then
   ai=1
-  log "AI: on ($AI_MODEL, monthly limit $AI_MONTHLY_LIMIT_USD USD per person)"
+  log "AI: on ($AI_MODEL, monthly limit $AI_MONTHLY_LIMIT_USD USD per person, max output $AI_MAX_TOKENS tokens)"
 else
   log "AI: off (the newest version of $SECRET_ANTHROPIC_KEY is missing or not enabled)"
 fi

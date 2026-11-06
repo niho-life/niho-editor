@@ -109,6 +109,11 @@ export type ConverseInput = {
    * 結果（Turn）は streaming でないときと同じ形。
    */
   onText?: (delta: string) => void;
+  /**
+   * サーバー側の道具のブロック（`server_tool_use`・`web_search_tool_result`）が揃ったときに呼ぶ（streaming のときだけ。#283）。
+   * 作業の行（「Web を検索: …」）を出すため。ブロックは応答のまま渡す（中身をログに出さない）。
+   */
+  onServerBlock?: (block: Record<string, unknown>) => void;
 };
 
 /** モデルが呼んだ道具 1 回（`input` はモデルが作った値なので信用しない）。 */
@@ -116,9 +121,12 @@ export type ToolCall = { id: string; name: string; input: unknown };
 
 /**
  * 道具つきの 1 往復の答え。`text` はこの往復で書いた文（実況・返答）、`toolCalls` は呼ばれた道具、
- * `stopReason` は `tool_use`（道具の結果を返すと続く）・`end_turn`（終わり）・`max_tokens`（出力の上限で切れた）など。
+ * `stopReason` は `tool_use`（道具の結果を返すと続く）・`end_turn`（終わり）・`max_tokens`（出力の上限で切れた）・
+ * `pause_turn`（サーバー側の道具の途中で止まった。content をそのまま返すと続く）など。
+ * `content` は応答の content ブロック（次の往復の assistant にそのまま返す。サーバー側の検索の呼び出し・結果・引用つきの文を含む。#283）。
+ * 本物は必ず持ち、テストの偽物は省ける（省くと text と toolCalls から組み直す）。
  */
-export type Turn = { text: string; toolCalls: ToolCall[]; stopReason: string | null; usage: AiUsageReport };
+export type Turn = { text: string; toolCalls: ToolCall[]; stopReason: string | null; usage: AiUsageReport; content?: unknown[] };
 
 export type AnthropicClient = {
   complete(input: CompleteInput): Promise<Completion>;
@@ -166,10 +174,17 @@ function tokens(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
+/** `usage.server_tool_use.web_search_requests`（サーバー側の Web 検索の回数。無ければ 0）。 */
+function webSearchRequestsOf(usage: Record<string, unknown>): number {
+  const server = isPlainObject(usage.server_tool_use) ? usage.server_tool_use : {};
+  return tokens(server.web_search_requests);
+}
+
 function readUsage(message: Record<string, unknown>, requested: string): AiUsageReport {
   const usage = isPlainObject(message.usage) ? message.usage : {};
   const model = typeof message.model === "string" && message.model.length > 0 ? message.model : requested;
-  return { model, inputTokens: tokens(usage.input_tokens), outputTokens: tokens(usage.output_tokens) };
+  const searches = webSearchRequestsOf(usage);
+  return { model, inputTokens: tokens(usage.input_tokens), outputTokens: tokens(usage.output_tokens), ...(searches > 0 ? { webSearchRequests: searches } : {}) };
 }
 
 /** 応答の最初の text ブロック。途中で切れた（max_tokens）・断られた（refusal）・無い・空は invalid_output（使用量は持たせる）。 */
@@ -197,19 +212,27 @@ type MessagesBody = {
 
 /**
  * 道具つきの往復の答えを読む。文（text）は連ねて 1 つにし、道具（tool_use）は呼ばれた順に並べる。
+ * 隣り合う text ブロック（Web 検索の引用で 1 つの文が分かれたもの）は区切らずにつなぎ、ほかのブロックを挟んだ text は改行でつなぐ。
  * 断られた（refusal）ときだけ invalid_output（使用量は持たせる）。出力の上限で切れたのは `stopReason` で返し、
  * 会話の側が「途中で止まりました」として扱う（書いた分の道具の結果は残っている）。
+ * `content` は応答のブロックをそのまま持つ（サーバー側の道具のブロックは、次の往復へ手を加えずに返す必要がある）。
  */
 function readTurn(message: Record<string, unknown>, requested: string): Turn {
   const usage = readUsage(message, requested);
   if (message.stop_reason === "refusal") throw failure("invalid_output", { reason: "refusal", usage });
-  const content = Array.isArray(message.content) ? message.content : [];
+  const content = (Array.isArray(message.content) ? message.content : []).filter(isPlainObject);
   const texts: string[] = [];
   const toolCalls: ToolCall[] = [];
+  let adjacent = false;
   for (const item of content) {
-    if (!isPlainObject(item)) continue;
-    if (item.type === "text" && typeof item.text === "string") texts.push(item.text);
-    else if (item.type === "tool_use" && typeof item.id === "string" && typeof item.name === "string") {
+    if (item.type === "text" && typeof item.text === "string") {
+      if (adjacent && texts.length > 0) texts[texts.length - 1] += item.text;
+      else texts.push(item.text);
+      adjacent = true;
+      continue;
+    }
+    adjacent = false;
+    if (item.type === "tool_use" && typeof item.id === "string" && typeof item.name === "string") {
       toolCalls.push({ id: item.id, name: item.name, input: item.input });
     }
   }
@@ -218,6 +241,7 @@ function readTurn(message: Record<string, unknown>, requested: string): Turn {
     toolCalls,
     stopReason: typeof message.stop_reason === "string" ? message.stop_reason : null,
     usage,
+    content,
   };
 }
 
@@ -308,14 +332,37 @@ async function send(
   }
 }
 
-/** streaming の中の 1 ブロック（文か道具）。 */
-type StreamBlock = { type: "text"; text: string } | { type: "tool_use"; id: string; name: string; json: string; input: unknown } | { type: "other" };
+/**
+ * streaming の中の 1 ブロック。文（引用つき）・道具・サーバー側の道具の呼び出し（`server_tool_use`。入力は差分で届く）・
+ * サーバー側の道具の結果（`web_search_tool_result`。content_block_start で全部が届く）。ほかは捨てる（前と同じ）。
+ */
+type StreamBlock =
+  | { type: "text"; text: string; citations: unknown[] }
+  | { type: "tool_use"; id: string; name: string; json: string; input: unknown }
+  | { type: "server_tool_use"; raw: Record<string, unknown>; json: string; input: unknown }
+  | { type: "server_result"; raw: Record<string, unknown> }
+  | { type: "other" };
+
+/** 次の往復へ返すブロックの形（streaming でない応答の content と同じ）。 */
+function streamBlockContent(block: Exclude<StreamBlock, { type: "other" }>): Record<string, unknown> {
+  switch (block.type) {
+    case "text":
+      return block.citations.length > 0 ? { type: "text", text: block.text, citations: block.citations } : { type: "text", text: block.text };
+    case "tool_use":
+      return { type: "tool_use", id: block.id, name: block.name, input: block.input };
+    case "server_tool_use":
+      return { ...block.raw, input: block.input };
+    case "server_result":
+      return block.raw;
+  }
+}
 
 /**
  * streaming（`text/event-stream`）の応答を読み、streaming でない応答と同じ形の message に組み立てる
- * （そのあと readTurn に通す）。文の差分は `onText` に渡す。届いた本文はログ・例外に出さない。
+ * （そのあと readTurn に通す）。文の差分は `onText` に、揃ったサーバー側の道具のブロックは `onServerBlock` に渡す。
+ * 届いた本文はログ・例外に出さない。
  */
-function readStream(onText: (delta: string) => void, requested: string): ReadBody {
+function readStream(onText: (delta: string) => void, requested: string, onServerBlock?: (block: Record<string, unknown>) => void): ReadBody {
   return async (response, { touch, interrupted, onCancel }) => {
     const stream = response.body;
     if (!stream) throw failure("invalid_output", { reason: "bad_body" });
@@ -328,10 +375,11 @@ function readStream(onText: (delta: string) => void, requested: string): ReadBod
     let model = requested;
     let inputTokens = 0;
     let outputTokens = 0;
+    let webSearchRequests = 0;
     let stopReason: string | null = null;
     let stopped = false;
     let buffer = "";
-    const usageNow = (): AiUsageReport => ({ model, inputTokens, outputTokens });
+    const usageNow = (): AiUsageReport => ({ model, inputTokens, outputTokens, ...(webSearchRequests > 0 ? { webSearchRequests } : {}) });
     const badBody = () => failure("invalid_output", { reason: "bad_body", usage: usageNow() });
 
     const handle = (data: Record<string, unknown>) => {
@@ -350,10 +398,16 @@ function readStream(onText: (delta: string) => void, requested: string): ReadBod
           if (index < 0) return;
           if (block.type === "text") {
             const text = typeof block.text === "string" ? block.text : "";
-            blocks[index] = { type: "text", text };
+            blocks[index] = { type: "text", text, citations: Array.isArray(block.citations) ? [...block.citations] : [] };
             if (text) onText(text);
           } else if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
             blocks[index] = { type: "tool_use", id: block.id, name: block.name, json: "", input: {} };
+          } else if (block.type === "server_tool_use" && typeof block.id === "string" && typeof block.name === "string") {
+            blocks[index] = { type: "server_tool_use", raw: block, json: "", input: isPlainObject(block.input) ? block.input : {} };
+          } else if (block.type === "web_search_tool_result" && typeof block.tool_use_id === "string") {
+            // 結果は content_block_start で全部が届く（差分は来ない）。手を加えずに持つ（encrypted_content は次の往復に要る）
+            blocks[index] = { type: "server_result", raw: block };
+            onServerBlock?.(block);
           } else blocks[index] = { type: "other" };
           return;
         }
@@ -364,19 +418,23 @@ function readStream(onText: (delta: string) => void, requested: string): ReadBod
           if (delta.type === "text_delta" && block.type === "text" && typeof delta.text === "string") {
             block.text += delta.text;
             if (delta.text) onText(delta.text);
-          } else if (delta.type === "input_json_delta" && block.type === "tool_use" && typeof delta.partial_json === "string") {
+          } else if (delta.type === "citations_delta" && block.type === "text" && isPlainObject(delta.citation)) {
+            block.citations.push(delta.citation);
+          } else if (delta.type === "input_json_delta" && (block.type === "tool_use" || block.type === "server_tool_use") && typeof delta.partial_json === "string") {
             block.json += delta.partial_json;
           }
           return;
         }
         case "content_block_stop": {
           const block = blocks[index];
-          if (block?.type !== "tool_use") return;
+          if (block?.type !== "tool_use" && block?.type !== "server_tool_use") return;
           try {
-            block.input = block.json.trim() === "" ? {} : JSON.parse(block.json);
+            if (block.json.trim() !== "") block.input = JSON.parse(block.json);
+            else if (block.type === "tool_use") block.input = {};
           } catch {
             throw badBody();
           }
+          if (block.type === "server_tool_use") onServerBlock?.(streamBlockContent(block));
           return;
         }
         case "message_delta": {
@@ -385,6 +443,8 @@ function readStream(onText: (delta: string) => void, requested: string): ReadBod
           const usage = isPlainObject(data.usage) ? data.usage : {};
           if (usage.output_tokens !== undefined) outputTokens = tokens(usage.output_tokens);
           if (usage.input_tokens !== undefined) inputTokens = Math.max(inputTokens, tokens(usage.input_tokens));
+          // message_delta の usage は累計（Web 検索の回数も）
+          if (usage.server_tool_use !== undefined) webSearchRequests = webSearchRequestsOf(usage);
           return;
         }
         case "message_stop":
@@ -446,8 +506,13 @@ function readStream(onText: (delta: string) => void, requested: string): ReadBod
     if (!stopped) throw interrupted("invalid_output", { reason: "bad_body", usage: usageNow() });
     const content = blocks
       .filter((block): block is Exclude<StreamBlock, { type: "other" }> => block !== undefined && block.type !== "other")
-      .map((block) => (block.type === "text" ? { type: "text", text: block.text } : { type: "tool_use", id: block.id, name: block.name, input: block.input }));
-    return { model, content, stop_reason: stopReason, usage: { input_tokens: inputTokens, output_tokens: outputTokens } };
+      .map(streamBlockContent);
+    return {
+      model,
+      content,
+      stop_reason: stopReason,
+      usage: { input_tokens: inputTokens, output_tokens: outputTokens, ...(webSearchRequests > 0 ? { server_tool_use: { web_search_requests: webSearchRequests } } : {}) },
+    };
   };
 }
 
@@ -475,7 +540,7 @@ export function createAnthropicClient(options: AnthropicOptions): AnthropicClien
       };
       const maxTokens = boundedMaxTokens(options, input.maxTokens);
       const message = input.onText
-        ? await send(options, { ...body, stream: true }, maxTokens, input.signal, readStream(input.onText, options.model))
+        ? await send(options, { ...body, stream: true }, maxTokens, input.signal, readStream(input.onText, options.model, input.onServerBlock))
         : await send(options, body, maxTokens, input.signal);
       return readTurn(message, options.model);
     },

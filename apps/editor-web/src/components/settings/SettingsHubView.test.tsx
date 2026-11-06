@@ -108,6 +108,17 @@ describe("SettingsHubView（/settings）", () => {
     expect(button("English")?.getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("turns 「Web を検索する」 off and on in place (on by default, #283)", async () => {
+    await open();
+    expect(shown()).toContain("Web を検索する");
+    expect(button("する")?.getAttribute("aria-pressed")).toBe("true");
+    save.mockResolvedValue({ ok: true, settings: dto({ webSearch: false }) });
+    await click("しない");
+    expect(save).toHaveBeenCalledWith({ webSearch: false });
+    expect(status()).toBe(SETTINGS_MESSAGES.saved);
+    expect(button("しない")?.getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("keeps the old value and says so when the save fails", async () => {
     await open();
     save.mockResolvedValue({ ok: false, status: 503, error: "unavailable", message: SETTINGS_MESSAGES.unavailable });

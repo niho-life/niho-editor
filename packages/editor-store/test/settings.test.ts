@@ -121,10 +121,11 @@ describe("editor settings without a database", () => {
 describe("editor settings read", () => {
   it("answers the defaults for a missing row, and drops stored values that no longer fit the shape", async () => {
     const rows = (value: unknown) => ({ query: async () => ({ rows: value === undefined ? [] : [value] }) }) as unknown as Queryable;
-    assert.deepEqual(await getEditorSettings(rows(undefined), OWNER), { aiLang: "same", glossary: [], recipes: [], aboutName: "", about: "" });
+    assert.deepEqual(await getEditorSettings(rows(undefined), OWNER), { aiLang: "same", glossary: [], recipes: [], aboutName: "", about: "", webSearch: true });
     const mixed = await getEditorSettings(rows({ ai_lang: "nope", glossary: [term(), { term: "" }], recipes: [recipe(), { id: "bad" }] }), OWNER);
-    assert.deepEqual(mixed, { aiLang: "same", glossary: [term()], recipes: [recipe()], aboutName: "", about: "" });
-    assert.deepEqual(await getEditorSettings(rows({ ai_lang: "en", glossary: "nope", recipes: null, about_name: 7, about: 7 }), OWNER), { aiLang: "en", glossary: [], recipes: [], aboutName: "", about: "" });
+    assert.deepEqual(mixed, { aiLang: "same", glossary: [term()], recipes: [recipe()], aboutName: "", about: "", webSearch: true });
+    assert.deepEqual(await getEditorSettings(rows({ ai_lang: "en", glossary: "nope", recipes: null, about_name: 7, about: 7, web_search: "no" }), OWNER), { aiLang: "en", glossary: [], recipes: [], aboutName: "", about: "", webSearch: true });
+    assert.equal((await getEditorSettings(rows({ ai_lang: "ja", web_search: false }), OWNER)).webSearch, false);
     assert.equal((await getEditorSettings(rows({ ai_lang: "ja", about: "合成の自己紹介" }), OWNER)).about, "合成の自己紹介");
     assert.equal((await getEditorSettings(rows({ ai_lang: "ja", about_name: "合成の呼び名", about: "保存済み" }), OWNER)).aboutName, "合成の呼び名");
   });
@@ -136,5 +137,13 @@ describe("editor settings read", () => {
     assert.equal(settingsProblem({ about: 7 }), "about");
     assert.equal(settingsProblem({ about: "a\u0000b" }), "about");
     assert.deepEqual(cleanSettingsPatch({ about: "  合成の自己紹介  " }), { about: "合成の自己紹介" });
+  });
+
+  it("takes the Web search switch only as a boolean (#283)", () => {
+    assert.equal(settingsProblem({ webSearch: false }), null);
+    assert.equal(settingsProblem({ webSearch: true }), null);
+    assert.equal(settingsProblem({ webSearch: "off" }), "web_search");
+    assert.equal(settingsProblem({ webSearch: null }), "web_search");
+    assert.deepEqual(cleanSettingsPatch({ webSearch: false }), { webSearch: false });
   });
 });

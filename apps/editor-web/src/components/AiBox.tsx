@@ -116,6 +116,7 @@ export const AI_TOOL_TEXT: Record<string, string> = {
   write_page: "書き換えました",
   create_page: "作りました",
   search_transcript: "文字起こしを探しました",
+  web_search: "Web を検索しました",
 };
 
 /** 作業中の薄い 1 行（道具の実行の前に出し、次の出来事まで残す）。サーバーが `detail` を付けたときはそちらを出す。 */
@@ -126,6 +127,7 @@ export const AI_WORK_TEXT: Record<string, string> = {
   write_page: "書いています…",
   create_page: "ページを作っています…",
   search_transcript: "文字起こしを探しています…",
+  web_search: "Web を検索しています…",
 };
 
 const AI_WORK_FALLBACK = "作業しています…";
@@ -158,8 +160,9 @@ export function addLiveEvent(turn: AiLiveTurn, event: AiChatEvent): AiLiveTurn {
   return { ...turn, paragraphs, split: false, ...(turn.workEnded ? { work: null, workEnded: false } : {}) };
 }
 
-export function aiItemText(item: { kind: "narration"; text: string } | { kind: "tool"; tool: string; page: string | null; ok: boolean; paragraphs?: number[] }): string {
+export function aiItemText(item: { kind: "narration"; text: string } | { kind: "tool"; tool: string; page: string | null; ok: boolean; paragraphs?: number[]; results?: number }): string {
   if (item.kind === "narration") return item.text;
+  if (item.tool === "web_search") return item.ok ? `${AI_TOOL_TEXT.web_search}${item.results === undefined ? "" : `（${item.results} 件）`}` : `${AI_TOOL_TEXT.web_search}（できませんでした）`;
   const paragraphs = item.paragraphs ?? [];
   const target = paragraphs.length === 0 ? "" : paragraphs.length <= 3 ? `第 ${paragraphs.join("・")} 段落を` : `第 ${paragraphs[0]}〜${paragraphs.at(-1)} 段落を`;
   const what = `${target}${AI_TOOL_TEXT[item.tool] ?? item.tool}`;
@@ -180,7 +183,7 @@ type MenuItem =
   | { id: SkillId; kind: "skill"; label: string; hint: string; search: string; disabledReason: string | null }
   | { id: string; kind: "step"; label: string; hint: string; search: string; disabledReason: string | null };
 
-const FACTCHECK_TEXT = "本文の固有名詞・数値・日付・引用を、文字起こしと資料に照らし確認してください。本文は直さず、確認箇所と理由を一覧にしてください。";
+const FACTCHECK_TEXT = "本文の主張（数字・固有名詞・日付・引用）を列挙し、文字起こし（search_transcript）と Web の検索で確かめてください。本文は直さず、返答に「確かめた／食い違い／確かめられない」の一覧と根拠を書いてください。直すのは、一覧を見て私が頼んだときだけです。";
 const POLISH_TEXT = "文体をそろえ、繰り返しと冗長な言い回しを削って読みやすくしてください。意味・固有名詞・数字・引用は変えないでください。";
 const EXPAND_TEXT = "本文の各段落を章の書き出しとして一字も変えずに残し、その前後を参照（録音の文字起こし・同じフォルダの資料）から補ってください。各章の前に見出し案（##）を足してください。資料に無い事実は書かず、確かめられないことは本文に印を置かず、返答で知らせてください。引用の時刻は返答にだけ書き、本文には入れないでください。";
 /** 入力欄へ文を入れるだけのスキル。 */

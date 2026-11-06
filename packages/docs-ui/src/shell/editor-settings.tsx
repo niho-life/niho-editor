@@ -87,6 +87,7 @@ export const EDITOR_SETTINGS_HREF = {
 
 export const EDITOR_SETTINGS_TEXT = {
   aiLang: { same: "書いた言語のまま", ja: "日本語", en: "English" },
+  webSearch: { label: "Web を検索する", on: "する", off: "しない" },
   profile: { light: "軽量", standard: "標準", advanced: "高性能" } as Record<string, string>,
   empty: "まだありません",
   aboutEmpty: "まだ書いていません",
@@ -304,6 +305,9 @@ export type EditorSettingsHubProps = {
   busy: boolean;
   aiLang: EditorSettingsAiLang;
   onAiLang: (lang: EditorSettingsAiLang) => void;
+  /** AI チャットが Web を検索してよいか（#283）。`onWebSearch` を渡したときだけ行を出す。 */
+  webSearch?: boolean;
+  onWebSearch?: (on: boolean) => void;
   aboutName: string;
   about: string;
   glossary: EditorSettingsTerm[];
@@ -388,6 +392,23 @@ export function EditorSettingsHub(props: EditorSettingsHubProps) {
               />
             </span>
           </div>
+          {props.onWebSearch && (
+            <div className="es-row es-row--lang">
+              <span className="es-row-k">{EDITOR_SETTINGS_TEXT.webSearch.label}</span>
+              <span className="es-row-e">
+                <Choice
+                  label={EDITOR_SETTINGS_TEXT.webSearch.label}
+                  value={props.webSearch === false ? "off" : "on"}
+                  onChange={(id) => props.onWebSearch?.(id === "on")}
+                  busy={busy}
+                  options={[
+                    { id: "on" as const, label: EDITOR_SETTINGS_TEXT.webSearch.on },
+                    { id: "off" as const, label: EDITOR_SETTINGS_TEXT.webSearch.off },
+                  ]}
+                />
+              </span>
+            </div>
+          )}
           <a className="es-row es-row--link" {...linkTo(EDITOR_SETTINGS_HREF.about, onNavigate)}>
             <span className="es-row-k">あなたについて</span>
             <span className={about ? "es-row-v" : "es-row-v es-row-v--none"}>
