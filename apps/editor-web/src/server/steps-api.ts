@@ -25,6 +25,8 @@ export type RunView = {
   id: string;
   recipe: string;
   recipeName: string;
+  /** run の写しに文書ガイドがあるか（AI の欄の「読むもの」の札。チャットの指示に入るかどうかと同じ判定）。 */
+  hasGuide: boolean;
   recipeRevision: number;
   currentRevision: number | null;
   designChanges: string[];
@@ -104,6 +106,7 @@ function toRunView(run: StepRunView, recipes: readonly RecipeDef[], reasons: Rec
     id: run.id,
     recipe: run.recipe,
     recipeName: run.recipeSnapshot.name,
+    hasGuide: run.recipeSnapshot.guide.trim().length > 0,
     recipeRevision: run.recipeRevision,
     currentRevision: recipe?.revision ?? null,
     designChanges: designChanges(run, recipe),

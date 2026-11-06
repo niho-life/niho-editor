@@ -527,6 +527,35 @@ export async function listRun(db: Queryable, owner: OwnerId, parentId: string): 
   return { run: row.run_id ? await loadRunView(db, owner, row.run_id) : null };
 }
 
+/** AI チャットの文脈になる、最新の run の文書ガイドと手順の固有名詞（run の写し。今の設定ではない）。 */
+export type RunGuide = { recipeName: string; guide: string; terms: RecipeSnapshot["terms"] };
+
+/**
+ * 開いているのが録音ページ、または録音の下の段階のページ（`kind = 'step'`）のとき、その録音の最新の run の
+ * 文書ガイドと手順の固有名詞を返す。run が無い・写しが読めない・ほかの種類のページ・他人のページは null。
+ * 手順の段階と同じ「run の写し」を読むので、設定でガイドを書き換えても、作ったときのガイドで直せる。
+ */
+export async function getRunGuide(db: Queryable, owner: OwnerId, pageId: string): Promise<RunGuide | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId)) return null;
+  const result = await db.query<{ recipe_snapshot: unknown }>(
+    `SELECT r.recipe_snapshot
+       FROM pages p
+       JOIN pages rec ON rec.owner = p.owner AND rec.deleted_at IS NULL
+                     AND ((p.kind = 'rec' AND rec.id = p.id) OR (p.kind = 'step' AND rec.id = p.parent))
+       JOIN LATERAL (
+         SELECT recipe_snapshot FROM step_runs
+          WHERE owner = rec.owner AND parent = rec.id
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+       ) r ON true
+      WHERE p.owner = $1 AND p.id = $2 AND p.deleted_at IS NULL`,
+    [owner, pageId],
+  );
+  const snapshot = parseRecipeSnapshot(result.rows[0]?.recipe_snapshot);
+  return snapshot ? { recipeName: snapshot.name, guide: snapshot.guide, terms: snapshot.terms } : null;
+}
+
 /**
  * 失敗した最新 run の途中出力だけを owner・親ページ・run・段階で絞って読む。
  * 新しい run が始まった後、retry 中、成功・取消後、親/成果物ページ削除後は返さない。

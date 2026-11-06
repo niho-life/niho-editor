@@ -363,7 +363,9 @@ export const CHAT_WORKSPACE_LIMIT = 50;
 /**
  * AI チャットが読み書きできるページ（開いているページ・その親・そのサブページ）。
  * 旧アプリが会話ごとに作った「隔離した作業場」にあたるもので、ここに無いページは道具から触れない。
- * ページが本人のものでない・無い・ゴミ箱の中なら null。
+ * **フォルダ（`kind = 'folder'`）は入れない**: 本文を持たず書けない入れ物なので、親がフォルダでも一覧に出さない
+ * （同じフォルダの直下のページは `listReferencePages` が読むだけで出す。#278・#285）。
+ * ページが本人のものでない・無い・ゴミ箱の中・フォルダなら null。
  */
 export async function listChatWorkspace(db: Queryable, owner: OwnerId, pageId: string): Promise<ChatWorkspacePage[] | null> {
   assertOwner(owner);
@@ -371,7 +373,7 @@ export async function listChatWorkspace(db: Queryable, owner: OwnerId, pageId: s
   const result = await db.query<{ id: string; title: string; kind: string; parent: string | null }>(
     `SELECT id, title, kind, parent
        FROM pages
-      WHERE owner = $1 AND deleted_at IS NULL
+      WHERE owner = $1 AND deleted_at IS NULL AND kind <> 'folder'
         AND (id = $2 OR parent = $2 OR id = (SELECT parent FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL))
       ORDER BY (id = $2) DESC, created_at
       LIMIT $3`,

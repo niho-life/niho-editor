@@ -44,6 +44,8 @@ export type StepRun = {
   id: string;
   recipe: string;
   recipeName?: string;
+  /** 文書ガイドがある（AI の欄の「読むもの」に札を出す）。古い応答には無い。 */
+  hasGuide?: boolean;
   recipeRevision?: number;
   currentRevision?: number | null;
   designChanges?: string[];
@@ -132,7 +134,7 @@ function toChunk(value: unknown): { chunk: { index: number; count: number } } | 
 
 function toRun(value: unknown): StepRun | null {
   if (!isPlainObject(value)) return null;
-  const { id, recipe, recipeName, recipeRevision, currentRevision, designChanges, state, fromStep, steps } = value;
+  const { id, recipe, recipeName, hasGuide, recipeRevision, currentRevision, designChanges, state, fromStep, steps } = value;
   if (typeof id !== "string" || typeof recipe !== "string") return null;
   if (typeof state !== "string" || !(RUN_STATES as readonly string[]).includes(state)) return null;
   if (typeof fromStep !== "number" || !Number.isInteger(fromStep) || fromStep < 0) return null;
@@ -140,10 +142,11 @@ function toRun(value: unknown): StepRun | null {
   const parsed = steps.map(toStep);
   if (parsed.some((step) => step === null)) return null;
   if (recipeName !== undefined && typeof recipeName !== "string") return null;
+  if (hasGuide !== undefined && typeof hasGuide !== "boolean") return null;
   if (recipeRevision !== undefined && (!Number.isInteger(recipeRevision) || (recipeRevision as number) < 1)) return null;
   if (currentRevision !== undefined && currentRevision !== null && (!Number.isInteger(currentRevision) || (currentRevision as number) < 1)) return null;
   if (designChanges !== undefined && (!Array.isArray(designChanges) || !designChanges.every((change) => typeof change === "string"))) return null;
-  return { id, recipe, recipeName: recipeName as string | undefined, recipeRevision: recipeRevision as number | undefined, currentRevision: currentRevision as number | null | undefined, designChanges: designChanges as string[] | undefined, state: state as StepRunState, fromStep, steps: parsed as StepRunStep[] };
+  return { id, recipe, recipeName: recipeName as string | undefined, ...(hasGuide === undefined ? {} : { hasGuide }), recipeRevision: recipeRevision as number | undefined, currentRevision: currentRevision as number | null | undefined, designChanges: designChanges as string[] | undefined, state: state as StepRunState, fromStep, steps: parsed as StepRunStep[] };
 }
 
 function toChoice(value: unknown): StepRecipeChoice | null {

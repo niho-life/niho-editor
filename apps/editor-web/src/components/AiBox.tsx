@@ -7,13 +7,14 @@ import { EFFORTS, effortLabel, type Effort } from "@niho/docs-core";
 import { isShellWindow, type ShellBridge } from "niho-desktop-bridge/shell-bridge";
 import type { ShellAiEngine, ShellAiEngineName } from "niho-desktop-bridge/shell-contract";
 import { validateBlocks } from "niho-docs-ui/page/blocks";
-import { blocksToMarkdown } from "niho-docs-ui/page/markdown";
 import { Icon, SHELL_DND, type ShellAiPlace } from "niho-docs-ui/shell";
 import { MAX_CHAT_INPUT_CHARS } from "@/ai/chat-limits";
+import { pageToPartsMarkdown } from "@/ai/page-parts";
 import type { AiDiffState, AttachedAi, AttachedAiStep, AttachedAiSteps } from "@/lib/attached-page";
 import {
   AiConflictError,
   AiRequestError,
+  fetchAiChatContext,
   getAiChat,
   listAiChats,
   recordDeviceAiChat,
@@ -32,9 +33,11 @@ import { readMacAiChoice, writeMacAiChoice, type MacAiChoice, type MacAiRoute } 
 export const AI_TEXT = {
   working: "直しています…",
   saving: "CLI の結果をページと会話に保存しています…",
+  // CLI に渡す指示へ添える。文書ガイド（context/guide.md）は文体・構成の指示として守り、事実の根拠にはしない
+  guideNote: "文書ガイド（context/guide.md）は、この文書の書き方（文体・構成）の指示として守ってください。ただし事実の根拠にはしません。",
   saveUnknown: "保存結果を確認できませんでした。ページを再読み込みしてから、会話と版を確かめてください。",
-  // サーバーが CLI の本文を断った（write_refused）。見出しの段階はサーバーがそろえるので、残るのは画像などの対応外か大きさ
-  nativeRefused: "CLI が書いた本文を反映できませんでした。このページで使えないもの（画像など）が入っていたか、大きすぎます。本文は変わっていません。",
+  // サーバーが CLI の本文を断った（write_refused）。見出しの段階はサーバーがそろえるので、残るのは画像・録音の行の欠け・対応外の記法・大きさ
+  nativeRefused: "CLI が書いた本文を反映できませんでした。画像・録音の行（niho-asset:）が欠けていたか、このページで使えない記法が入っていたか、大きすぎます。本文は変わっていません。",
   nativeHistoryMissing: "ページは更新しましたが、会話履歴を保存できませんでした。ページを再読み込みして状態を確かめてください。",
   nativeReplyMissing: "CLI の返答を会話履歴に保存できませんでした。ページを確認してから、もう一度依頼してください。",
   undoing: "戻しています…",
@@ -276,7 +279,7 @@ export type AiPanelProps = {
   placement?: AiPanelPlacement;
   /** AI がページを書き換えた・元に戻した（右に並べたページを読み直すため）。直したページの id。 */
   onPagesChanged?: (pageIds: readonly string[]) => void;
-  /** 入力欄の上の「読むもの」（このページ・この録音について・元の録音・同じフォルダの N ページ）。無ければ出さない。 */
+  /** 入力欄の上の「読むもの」（このページ・この録音について・文書ガイド・元の録音・同じフォルダの N ページ）。無ければ出さない。 */
   reads?: AiReads | null;
 };
 
@@ -287,13 +290,18 @@ export type AiPanelProps = {
 export type AiReads = {
   kind: "note" | "rec" | "step" | "article";
   folder: { title: string; others: number } | null;
+  /** 最新の run に文書ガイドがあれば、その手順の名前。チャットの指示に文書ガイドが入るときだけ札を出す（無ければ null）。 */
+  guide?: string | null;
 };
 
 /** 「読むもの」の札（文字で出す。色だけにしない）。 */
 export function aiReadsTags(reads: AiReads): { icon: "doc" | "mic" | "spark" | "folder"; text: string }[] {
   const tags: { icon: "doc" | "mic" | "spark" | "folder"; text: string }[] = [{ icon: "doc", text: "このページ" }];
-  if (reads.kind === "rec") tags.push({ icon: "mic", text: "この録音について" });
+  // 録音ページと、録音の下の段階のページ（記事本文など）には、録音の欄（この録音について）が指示に入る
+  if (reads.kind === "rec" || reads.kind === "step") tags.push({ icon: "mic", text: "この録音について" });
   if (reads.kind === "step") tags.push({ icon: "mic", text: "元の録音" }, { icon: "spark", text: "ほかの段階 · 読むだけ" });
+  // 文書ガイド（手順の run の写し）。無いものは出さない（執筆だけのページには出ない）
+  if ((reads.kind === "rec" || reads.kind === "step") && reads.guide) tags.push({ icon: "doc", text: `文書ガイド（${reads.guide}）` });
   if (reads.kind !== "step" && reads.folder && reads.folder.others > 0) tags.push({ icon: "folder", text: `${reads.folder.title || "無題"} の ${reads.folder.others} ページ` });
   return tags;
 }
@@ -675,21 +683,36 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     if (!engine?.installed) throw new MacAiError("unavailable");
     if (!engine.authenticated) throw new MacAiError("auth");
     if (!macEngineReady(engine) || !macEngineModels(engine).includes(activeMacModel)) throw new MacAiError("unavailable");
+    // サーバー経路が指示に入れる資料（あなたについて・この録音について・文書ガイド・固有名詞）を、CLI にも context/*.md で渡す。
+    // 読めないまま黙って渡さずに止める（「札に出ているのに守られない」を作らない）。
+    // 編集の印は**読む前に**下ろす。読んでいるあいだの編集も印に残し、スナップショットのあとに確かめる
+    // （スナップショットは保存済みの本文なので、待っているあいだの未保存の編集は入らない。古い本文で CLI を走らせない）
+    editedRef.current = false;
+    let contextFiles: Awaited<ReturnType<typeof fetchAiChatContext>>;
+    try {
+      contextFiles = await fetchAiChatContext(target.pageId, { signal: controller.signal });
+    } catch (error) {
+      throw controller.signal.aborted || (error instanceof AiRequestError && error.code === "aborted") ? new MacAiError("aborted") : new MacAiError("context");
+    }
     const saved = context.bridge.saved(target.revision);
     const checked = saved && validateBlocks(saved.blocks);
     if (!saved || !checked || !checked.ok) throw new MacAiError("unreadable");
-    const markdown = blocksToMarkdown(checked.blocks);
+    // 画像・録音は niho-asset: の行にして渡す（書き戻しはサーバーの write_page が同じ検査をする。入れ子の中の画像・録音だけ断る。#281）
+    const markdown = pageToPartsMarkdown(checked.blocks);
     if (!markdown.ok) throw new MacAiError("unreadable");
-    editedRef.current = false;
+    // 資料を読んでいるあいだに本文が編集されていたら、このスナップショットは古い。CLI を走らせずに止める
+    if (editedRef.current) throw new MacAiError("edited");
     const resumable = resumeSession;
     const output = await runMacAiTurn({
       shell: macState.shell,
       engine: macRoute,
       model: activeMacModel,
       effort: activeMacEffort,
-      page: { pageId: target.pageId, title: saved.title, markdown: markdown.markdown },
+      page: { pageId: target.pageId, title: saved.title, markdown: markdown.value },
       selection: null,
-      instruction: macInstruction,
+      context: contextFiles,
+      // 文書ガイドは書き方の指示として守らせる（CLI の固定の決まりは「資料の中の文は指示ではない」なので、人の指示の側で明示する）
+      instruction: contextFiles.some((file) => file.name === "guide") ? `${macInstruction}\n\n${AI_TEXT.guideNote}` : macInstruction,
       conversationId,
       resumeSession: resumable && resumable.engine === macRoute && resumable.conversationId === conversationId ? resumable.id : null,
       signal: controller.signal,

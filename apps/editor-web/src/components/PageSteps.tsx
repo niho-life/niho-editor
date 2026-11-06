@@ -275,6 +275,7 @@ export function PageSteps({
     }));
     return {
       ownerId: pageId,
+      guide: run?.hasGuide ? (run.recipeName ?? stepRecipeName(recipes, run.recipe)) : null,
       options,
       start: async (id) => {
         const option = options.find((item) => item.id === id);

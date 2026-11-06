@@ -12,7 +12,7 @@ import { Plugin, PluginKey, type EditorState, type Transaction } from "@tiptap/p
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Block } from "@niho/editor-store";
 import { PRESERVE_AI_MARKS_META } from "niho-docs-ui/page/ai-mark";
-import { alignBlocks, blockText, diffBlocks, type BlockHunk } from "@/ai/block-diff";
+import { alignBlocks, blockText, diffBlocks, partLabel, type BlockHunk } from "@/ai/block-diff";
 
 /** 表示中の差分（閉じているときは null）。`reverted` は開いてから戻した変更の数。 */
 export type AiDiffViewState = { before: Block[]; hunks: BlockHunk[]; reverted: number } | null;
@@ -121,7 +121,7 @@ function decorations(editor: Editor, state: EditorState, diff: NonNullable<AiDif
       const text = blockText(hunk.block);
       decos.push(Decoration.widget(pos, () => {
         const box = element("span", "es-diff-deleted");
-        box.append(element("del", "es-diff-del-block", text || "（消したブロック）"), controls(editor, index));
+        box.append(element("del", "es-diff-del-block", text || partLabel(hunk.block) || "（消したブロック）"), controls(editor, index));
         return box;
       }, { ...WIDGET, side: -1, key: `deleted-${index}-${text}` }));
       return;
@@ -156,7 +156,7 @@ function decorations(editor: Editor, state: EditorState, diff: NonNullable<AiDif
       // 文が同じで構造・書式だけ違う（入れ子の段落を見出しにした等）ときは、同じ文を打ち消し線で重ねず、ブロックを塗るだけにする
       const same = text !== "" && text === blockText(node.toJSON() as Block);
       decos.push(Decoration.node(start, end, same ? { class: "es-diff-changed", title: "書式が変わりました" } : { class: "es-diff-changed" }));
-      if (!same) decos.push(Decoration.widget(start, () => element("del", "es-diff-del-block", text || "（前のブロック）"), { ...WIDGET, side: -1, key: `was-${index}-${text}` }));
+      if (!same) decos.push(Decoration.widget(start, () => element("del", "es-diff-del-block", text || partLabel(diff.before[hunk.beforeIndex] ?? {}) || "（前のブロック）"), { ...WIDGET, side: -1, key: `was-${index}-${text}` }));
     }
     decos.push(Decoration.widget(ctlPos, () => controls(editor, index), { ...WIDGET, side: ctlSide, key: `ctl-${index}` }));
   });
