@@ -1049,6 +1049,8 @@
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"] .es-pn{position:absolute;left:0;right:0;top:var(--es-header);bottom:0;z-index:46;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--ed-canvas)}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"] .es-pn[data-panel="list"]{display:contents}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"] .es-pn[hidden]{display:none}
+  /* 一覧が全画面のあいだは、開いているほかのパネルも隠す（一覧の上に重ねない。一覧を閉じれば戻る） */
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-view="list"] .es-pn:not([data-panel="list"]){display:none}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"] .es-pn>.es-rail{position:static;flex:1 1 auto;min-height:0;border-left:0}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-hd[draggable="true"]{cursor:default}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-hd .es-grip{display:none}

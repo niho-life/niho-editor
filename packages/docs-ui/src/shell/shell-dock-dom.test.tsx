@@ -713,6 +713,8 @@ describe("shell.css のパネルの配置", () => {
     const narrow = css.slice(css.indexOf("@media (max-width:900px)"));
     expect(narrow).toContain(`${P}.es-root[data-layout="dock"] .es-pn[data-panel="list"]{display:contents}`);
     expect(narrow).toMatch(/\[data-layout="dock"\] \.es-pn\{position:absolute;left:0;right:0;top:var\(--es-header\);bottom:0;/);
+    // 一覧が全画面のあいだ（view=list）は、開いているほかのパネルを一覧の上に重ねない
+    expect(narrow).toContain(`${P}.es-root[data-layout="dock"][data-view="list"] .es-pn:not([data-panel="list"]){display:none}`);
   });
 
   it("アプリ名の帯は左上端、設定の帯は左下。左のドックが無いときは中央のヘッダーの左を空ける（900px 未満は空けない）", () => {
