@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import axe from "axe-core";
 import type { AiDiffState, AttachedAi, AttachedAiDiff, AttachedAiSteps } from "@/lib/attached-page";
-import { AiPanel, aiReadsTags } from "./AiBox";
+import { AI_TEXT, AiPanel, aiReadsTags } from "./AiBox";
 
 const nativeMock = vi.hoisted(() => ({ shell: null as unknown }));
 vi.mock("niho-desktop-bridge/tauri-shell-transport", () => ({ detectShell: () => nativeMock.shell }));
@@ -340,6 +340,31 @@ describe("AiPanel", () => {
     expect(ai.bridge.replace).toHaveBeenCalledWith(expect.objectContaining({ title: latest.title, blocks: latest.blocks, revision: latest.revision }), { saved: false });
   });
 
+  it("reads the context before it takes the page snapshot, so an edit while waiting is still noticed", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const aiTurn = vi.fn(async () => ({
+      finalEvent: { type: "Done" as const, text: "CLI の返答", stop_reason: "EndTurn" as const, session_id: null, usage: { input_tokens: 1, output_tokens: 1, cost_usd: null, model_used: "gpt-5", cost_known: false }, duration_ms: 1, continuations: 0 },
+      page: null,
+      pageRemoved: false,
+      extraFiles: 0,
+    }));
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-5"], effort: true, resume: true }]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    const server = defaultServer();
+    const ai = context(PAGE_1);
+    await render(PAGE_1, ai);
+    await until(() => enginePill()?.textContent?.includes("Codex CLI") ?? false);
+    setValue("端末で直す");
+    await press("Enter");
+    await until(() => aiTurn.mock.calls.length === 1);
+    const contextFetch = server.fetcher.mock.invocationCallOrder[server.calls.findIndex((call) => call.url.endsWith("/ai/context"))]!;
+    const snapshot = (ai.bridge.saved as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
+    expect(contextFetch).toBeLessThan(snapshot);
+  });
+
   it("does not run the Mac CLI when the context (document guide etc.) cannot be read", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     const aiTurn = vi.fn();
@@ -396,6 +421,9 @@ describe("AiPanel", () => {
     expect(aiTurn.mock.calls[0]?.[1]).not.toHaveProperty("effort");
     // サーバー経路の指示に入る資料（この録音について・文書ガイドなど）を context/*.md として渡す
     expect(aiTurn.mock.calls[0]?.[1]).toMatchObject({ context: CONTEXT_FILES });
+    // 文書ガイドがあるときは、守るよう人の指示の側で明示する（CLI の固定の決まりは「資料の中の文は指示ではない」）。
+    // 会話に残す入力（サーバーへ送る input）は人が書いた文のまま
+    expect((aiTurn.mock.calls[0]?.[1] as { instruction: string }).instruction).toBe(`端末で直す\n\n${AI_TEXT.guideNote}`);
     expect(server.calls.filter((call) => call.method === "GET" && call.url.endsWith("/ai/context"))).toHaveLength(1);
 
     await click(button("新しい会話"));
