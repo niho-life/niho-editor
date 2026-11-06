@@ -163,7 +163,8 @@
 @media (hover:none){:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di-more{opacity:1}}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-psfolder select{width:100%;border:1px solid var(--ed-line-2);border-radius:10px;padding:6px 8px;background:var(--ed-white);font:inherit;font-size:13px;color:var(--ed-ink)}
 /* アプリ名はいつでも画面の左上端、「設定」はいつでも左下（パネルの配置に関係なく。#311）。左のドック（一覧の列）があればその幅で地と右の罫線を持ち、
- * 無ければアプリ名は中央のヘッダーの左に重なる（ヘッダーがその分だけ左を空ける）、設定は小さな丸いボタン */
+ * 無ければアプリ名は中央のヘッダーの左に重なる（ヘッダーがその分だけ左を空ける）、設定は小さな丸いボタン。
+ * 一覧が枠の左上にあるときは、枠はこの帯を出さず、一覧が上の 1 行の左にアプリ名を出す（下の .es-sb[data-brand]） */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-brandbar{position:absolute;left:0;top:0;z-index:47;display:flex;align-items:center;height:var(--es-header);padding:0 12px 0 14px;pointer-events:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="dock"] .es-brandbar{box-sizing:border-box;width:var(--es-left-w,272px);background:var(--ed-canvas);border-right:1px solid var(--ed-line)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-dt{padding-left:112px}
@@ -173,6 +174,11 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-sb-me{width:auto;height:32px;padding:0 12px 0 10px;border-radius:999px;background:color-mix(in srgb,var(--ed-canvas) 92%,transparent);box-shadow:0 1px 2px rgba(28,28,26,.14),0 0 0 1px var(--ed-line-2)}
 /* 一覧がドックの列でない（dock 無し・900px 未満）ときは、一覧の上下にアプリ名と設定の段の分を空ける */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root:not([data-wide="true"]) .es-sb{padding-top:var(--es-header);padding-bottom:var(--es-header)}
+/* 一覧が枠の左上にあるとき：上の 1 行が「アプリ名 …… 検索 ＋ しまう」。高さは枠のヘッダーと同じで、アプリ名は帯と同じ左 14px（一覧を動かしても左上で跳ねない）。
+ * 一覧はアプリ名の段も使う（上を空けない）。掴む所（⋮⋮）はアプリ名の右 */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root:not([data-wide="true"]) .es-sb[data-brand]{padding-top:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb[data-brand]>.es-sb-top{min-height:0;height:var(--es-header);padding:0 8px 0 14px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb[data-brand]>.es-sb-top>.es-grip{margin-left:4px}
 /* 左下の「設定」（直リンク。今いるときは aria-current で面を付ける） */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:7px 8px;border-radius:10px;font-size:13.5px;color:var(--ed-ink-sub)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me b{font-weight:600}
@@ -940,7 +946,8 @@
  * デスクトップ（data-wide="true"）では、.es-doc と .es-dbody を display:contents にして、ヘッダー・本文・右のページ・境目を
  * .es-ws の grid に直に並べる（列は 左のドック｜境目｜メイン｜境目｜右のページ｜境目｜右のドック。行は ヘッダー｜残り）。
  * パネル（.es-pn。一覧・AI・ページ・写真）は木の同じ位置のまま、.es-ws の中の絶対配置（左右の端、上下は割合）で置く（作り直さない）。
- * 左のドックは上にアプリ名、下に設定の段がある（パネルはその間）。900px 未満は 1 枚表示（@media の中）。 */
+ * 左のドックは上にアプリ名、下に設定の段がある（パネルはその間。一番上が一覧なら、一覧がアプリ名の段も使って上の 1 行の左にアプリ名を出す）。
+ * 900px 未満は 1 枚表示（@media の中）。 */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-ws{position:relative}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-doc,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-dbody{display:contents}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-dt{grid-column:3;grid-row:1;min-width:0}

@@ -3,7 +3,7 @@ import { ShellBrand } from "./brand";
 import { SHELL_PANELS, clampDockWidth, dockPanels, panelShares, type ShellDockSide, type ShellPanelId } from "./dock-layout";
 import { ShellDockExtras, panelHeight, panelTop, useBoxHeight, useDockPeekDismiss, type EditorShellDock } from "./dock";
 import { Icon } from "./icons";
-import { ShellViewContext, type ShellView } from "./view";
+import { ShellListBrandContext, ShellViewContext, type ShellView } from "./view";
 
 /** 本文（main）の id。skip link の移動先。 */
 const SHELL_MAIN_ID = "es-main";
@@ -81,6 +81,8 @@ function SettingsBar({ settings }: { settings: ShellSettingsLink }) {
 
 /**
  * editor の枠。アプリ名はいつも画面の左上端、設定はいつも左下（どちらもパネルの配置に関係なく）。
+ * 一覧が枠の左上にあるとき（左のドックの一番上・900px 未満の一覧の画面・dock なしで一覧を出しているとき）は、アプリ名を一覧の上の 1 行の左に出し
+ * （「Editor …… 検索 ＋ しまう」の 1 行）、枠のアプリ名の帯は出さない。それ以外は枠が左上端にアプリ名の帯を重ねる。
  * <900px では、一覧・ページ・ほかのパネルのどれかひとつを全画面で出す。
  * 状態はすべて props（呼ぶ側が持つ）。DocsHost・通信・保存は持たない。
  * 祖先に data-docs-app-root と data-docs-shared-ui が要る（shell.css は共通 UI の root の中だけに効く）。
@@ -115,6 +117,8 @@ export function EditorShell({ sidebar, header, rail, page, photos, toolbar, side
   );
 
   if (!dock) {
+    // 一覧を出しているあいだ、一覧は枠の左上（デスクトップでは左の列、900px 未満では全画面）
+    const brandInList = shown.list;
     return (
       <div
         className="es-root"
@@ -128,9 +132,9 @@ export function EditorShell({ sidebar, header, rail, page, photos, toolbar, side
           <a className="es-skip" href={`#${SHELL_MAIN_ID}`} onClick={skip}>
             本文へ移動
           </a>
-          {brand}
+          {brandInList ? null : brand}
           <div className="es-ws">
-            {sidebar}
+            <ShellListBrandContext.Provider value={brandInList}>{sidebar}</ShellListBrandContext.Provider>
             <div className="es-doc">
               {header}
               <div className="es-dbody">
@@ -167,6 +171,8 @@ export function EditorShell({ sidebar, header, rail, page, photos, toolbar, side
   const peekWidth = (side: ShellDockSide) => `${clampDockWidth(side, dock.widths[side])}px`;
   // 左のドックにパネルがある（細い列でない）とき、アプリ名と設定の段はその幅。無ければ中央のヘッダーの左を空ける
   const leftDock = wide && panels.left.length > 0 && !dock.fit.strip.left;
+  // 一覧が枠の左上にある（デスクトップでは左のドックの一番上、900px 未満では一覧の画面）。一覧が上の 1 行の左にアプリ名を出し、アプリ名の段も使う
+  const brandInList = wide ? leftDock && panels.left[0]?.id === "list" : shown.list;
   const wsStyle: CSSProperties | undefined = wide ? { gridTemplateColumns: dockColumns(dock), gridTemplateRows: "var(--es-header) minmax(0,1fr)" } : undefined;
   const rootStyle = wide ? ({ "--es-left-w": `${dock.fit.left}px` } as CSSProperties) : undefined;
   const content: Record<ShellPanelId, ReactNode> = { list: sidebar, ai: rail, page, photos };
@@ -181,8 +187,8 @@ export function EditorShell({ sidebar, header, rail, page, photos, toolbar, side
         ? ({
             // 細い列から上に重ねて開いているときは本人の幅
             width: stateOf(side) === "peek" ? peekWidth(side) : `${dock.fit[side]}px`,
-            top: panelTop(side, share.start),
-            height: panelHeight(side, share.share),
+            top: panelTop(side, share.start, id === "list" && brandInList),
+            height: panelHeight(side, share.share, id === "list" && brandInList),
             "--es-peek-w": peekWidth(side),
           } as CSSProperties)
         : undefined;
@@ -202,7 +208,7 @@ export function EditorShell({ sidebar, header, rail, page, photos, toolbar, side
         data-index={wide && side ? index : undefined}
         style={style}
       >
-        {content[id]}
+        {id === "list" ? <ShellListBrandContext.Provider value={brandInList}>{content[id]}</ShellListBrandContext.Provider> : content[id]}
       </div>
     );
   };
@@ -224,7 +230,7 @@ export function EditorShell({ sidebar, header, rail, page, photos, toolbar, side
         <a className="es-skip" href={`#${SHELL_MAIN_ID}`} onClick={skip}>
           本文へ移動
         </a>
-        {brand}
+        {brandInList ? null : brand}
         <div ref={ws} className="es-ws" style={wsStyle}>
           {SHELL_PANELS.map(pane)}
           <div className="es-doc">

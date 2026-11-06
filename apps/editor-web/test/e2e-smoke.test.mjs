@@ -178,7 +178,8 @@ describe("editor-web e2e (stub, next dev)", () => {
     const html = await response.text();
     assert.match(html, /aria-label="ページの一覧"/);
     // 左の一覧の上は 1 行: アプリ名 Editor と、アイコンだけの「検索（⌘K）」「新しいページ（⌘N）」（言葉は aria-label）。左下は「設定」の直リンク
-    assert.match(html, /class="es-brand" role="img" aria-label="Editor"/);
+    assert.match(html, /class="es-sb-top"[^>]*><span class="es-brand" role="img" aria-label="Editor"/, "the app name sits at the left of the list's top row");
+    assert.doesNotMatch(html, /class="es-brandbar"/, "no separate app-name band above the list");
     assert.match(html, /aria-label="検索（⌘K）"/);
     assert.match(html, /aria-label="新しいページ（⌘N）"/);
     assert.doesNotMatch(html, /es-sb-acts/, "the two-row search / new-page block is gone");

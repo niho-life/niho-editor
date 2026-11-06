@@ -87,8 +87,20 @@ describe("EditorShell", () => {
     expect(html).toMatch(/^<div class="es-root" data-editor-shell="true" data-sidebar="open" data-rail="closed" data-view="list" data-left="dock">/);
   });
 
-  it("アプリ名は枠の左上端（skip link の次）、「設定」は左下（settings を渡したときだけ。招待の数つき・メニューは無い・aria-current）", () => {
-    expect(html).toMatch(/本文へ移動<\/a><div class="es-brandbar"><span class="es-brand" role="img" aria-label="Editor">/);
+  it("アプリ名は左上端: 一覧を出していれば一覧の上の 1 行の左（枠の帯は無い）、しまえば枠の帯（skip link の次）。「設定」は左下（settings を渡したときだけ。招待の数つき・メニューは無い・aria-current）", () => {
+    // 一覧を出している: 「Editor …… 検索 ＋ しまう」の 1 行（アプリ名は 1 つだけ）
+    expect(html).not.toContain("es-brandbar");
+    expect(html).toMatch(/<aside class="es-sb" aria-label="ページ" data-brand="true"><div class="es-sb-top"><span class="es-brand" role="img" aria-label="Editor">/);
+    expect([...html.matchAll(/class="es-brand"/g)]).toHaveLength(1);
+    // 一覧をしまっている: 枠の帯（skip link の次）。一覧はアプリ名を出さない
+    const closed = renderToStaticMarkup(
+      <EditorShell sidebar={sidebar()} header={header()} sidebarOpen={false} railOpen={false}>
+        x
+      </EditorShell>,
+    );
+    expect(closed).toMatch(/本文へ移動<\/a><div class="es-brandbar"><span class="es-brand" role="img" aria-label="Editor">/);
+    expect(closed).toContain('<aside class="es-sb" aria-label="ページ">');
+    expect([...closed.matchAll(/class="es-brand"/g)]).toHaveLength(1);
     expect(html).not.toContain("es-setbar");
     const withSettings = renderToStaticMarkup(
       <EditorShell sidebar={sidebar()} header={header()} sidebarOpen railOpen={false} settings={{ badge: 1, current: true, onOpen: noop }}>
@@ -124,7 +136,7 @@ describe("EditorShell", () => {
   });
 
   it("主な部品の landmark: aside・nav>ul・header・main（main は skip link の移動先なので id と tabindex=-1 を持つ）", () => {
-    expect(html).toContain('<aside class="es-sb" aria-label="ページ">');
+    expect(html).toContain('<aside class="es-sb" aria-label="ページ" data-brand="true">');
     expect(html).toMatch(/<nav class="es-sb-list" aria-label="ページの一覧"><ul>/);
     expect(html).toContain('<header class="es-dt">');
     expect(html).toContain('<main id="es-main" class="es-canvas" tabindex="-1">');

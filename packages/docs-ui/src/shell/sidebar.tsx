@@ -1,9 +1,11 @@
-import { useRef, useState, type DragEvent as ReactDragEvent, type ReactNode } from "react";
+import { useContext, useRef, useState, type DragEvent as ReactDragEvent, type ReactNode } from "react";
+import { ShellBrand } from "./brand";
 import { SHELL_DND } from "./dock-layout";
 import { Icon } from "./icons";
 import { ShellMenu } from "./menu";
 import { NewPageMenu, type NewPageKind } from "./new-page-menu";
 import type { ShellListItem, ShellMenuItem } from "./types";
+import { ShellListBrandContext } from "./view";
 
 export type ShellSidebarProps = {
   items: ShellListItem[];
@@ -283,13 +285,15 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
 }
 
 /**
- * 左の一覧（パネル）。上は 1 行: [掴む所（panel）] …… [検索] [＋] [一覧をしまう]（検索を押すとその行が検索欄に変わる）。
- * アプリ名は枠（EditorShell）が画面の左上端に、「設定」は左下に出す（パネルの配置に関係なく。#311）。
+ * 左の一覧（パネル）。上は 1 行: [アプリ名] [掴む所（panel）] …… [検索] [＋] [一覧をしまう]（検索を押すとその行が検索欄に変わる）。
+ * アプリ名は、一覧が枠の左上にあるとき（EditorShell が ShellListBrandContext に true を入れる）だけこの行の左に出し、高さは枠のヘッダーにそろえる。
+ * それ以外（一覧が右のドック・枠の外）は枠が画面の左上端に出す。「設定」はいつも枠が左下に出す（パネルの配置に関係なく。#311）。
  * 絞り込み（すべて／公開中／録音）は持たない。`onDrop` を渡すと、行をドラッグしてフォルダへ入れる・並べ替える。
  * 1行は題名と時刻。2行目は公開先・録音・作成中のときだけ。行の「…」は「削除」だけ（`onDeleteRow`）。
  * 一覧は 1 本の木（フォルダ＝`kind = 'folder'` の入れ物。空でも開閉の場所を取る）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
  */
 export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, onDrop, canDrop, listEnd, recent, side, onDeleteRow, panel }: ShellSidebarProps) {
+  const withBrand = useContext(ShellListBrandContext);
   const newButton = useRef<HTMLButtonElement | null>(null);
   const rowMenuTrigger = useRef<HTMLElement | null>(null);
   // 行の「…」・右クリックのメニュー（どの行か・どこに出すか）
@@ -334,7 +338,7 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
       }
     : undefined;
   return (
-    <aside className="es-sb" aria-label="ページ">
+    <aside className="es-sb" aria-label="ページ" data-brand={withBrand ? "true" : undefined}>
       <div
         className="es-sb-top"
         draggable={panel && !search?.open ? true : undefined}
@@ -368,6 +372,7 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
           </div>
         ) : (
           <>
+            {withBrand && <ShellBrand />}
             {panel && (
               <span className="es-grip" aria-hidden="true" title="ドラッグでドックを移す">
                 <Icon name="grip" />

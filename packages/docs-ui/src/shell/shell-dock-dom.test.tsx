@@ -153,11 +153,11 @@ function Shell({ dock, sidebarOpen = true, railOpen = true, pageOpen = true, pho
 const pane = (host: HTMLElement, id: ShellPanelId) => host.querySelector<HTMLElement>(`.es-pn[data-panel="${id}"]`)!;
 
 describe("EditorShell のパネルの配置（dock）", () => {
-  it("dock を渡さなければ従来の DOM のまま（アプリ名の帯｜一覧｜ヘッダー＋ページ＋レール。パネルの要素・style は無い）", () => {
-    const { host } = mount(<Shell />);
+  it("dock を渡さなければ従来の DOM のまま（一覧｜ヘッダー＋ページ＋レール。一覧を出しているのでアプリ名は一覧の上の行で、枠の帯は無い。パネルの要素・style は無い）", () => {
+    const { host, render } = mount(<Shell />);
     const root = host.querySelector<HTMLElement>(".es-root")!;
     expect([...root.attributes].map((attr) => attr.name).sort()).toEqual(["class", "data-editor-shell", "data-left", "data-rail", "data-sidebar", "data-view"]);
-    expect([...root.children].map((node) => node.className)).toEqual(["es-skip", "es-brandbar", "es-ws"]);
+    expect([...root.children].map((node) => node.className)).toEqual(["es-skip", "es-ws"]);
     const ws = root.querySelector<HTMLElement>(".es-ws")!;
     expect(ws.getAttribute("style")).toBeNull();
     expect([...ws.children].map((node) => node.className)).toEqual(["es-sb", "es-doc"]);
@@ -167,6 +167,9 @@ describe("EditorShell のパネルの配置（dock）", () => {
     expect(root.querySelector(".es-pn, .es-sash, .es-strip, .es-sidecol, .es-dzs, .es-ghost")).toBeNull();
     // 「ページ」「写真」のパネルは dock のときだけ
     expect(root.textContent).not.toContain("ページのパネル");
+    // 一覧をしまうと、アプリ名は枠の帯（skip link の次）
+    render(<Shell sidebarOpen={false} />);
+    expect([...root.children].map((node) => node.className)).toEqual(["es-skip", "es-brandbar", "es-ws"]);
   });
 
   it("既定の配置: 左＝一覧、右＝ページ（上）＋AI（下）。パネルは絶対配置で、位置は割合", () => {
@@ -180,8 +183,9 @@ describe("EditorShell のパネルの配置（dock）", () => {
     const list = pane(host, "list");
     expect(list.dataset).toMatchObject({ dock: "left", state: "open", index: "0" });
     expect(list.style.width).toBe("272px");
-    expect(list.style.top).toBe("calc(var(--es-header) + (100% - 2 * var(--es-header)) * 0)");
-    expect(list.style.height).toBe("calc((100% - 2 * var(--es-header)) * 1)");
+    // 左のドックの一番上の一覧は、アプリ名の段も使う（上端 0。上の 1 行の左にアプリ名を出す）
+    expect(list.style.top).toBe("0px");
+    expect(list.style.height).toBe("calc(var(--es-header) + (100% - 2 * var(--es-header)) * 1)");
     const page = pane(host, "page");
     expect(page.dataset).toMatchObject({ dock: "right", index: "0" });
     expect(page.style.top).toBe("0%");
@@ -268,16 +272,48 @@ describe("EditorShell のパネルの配置（dock）", () => {
     expect(host.querySelector<HTMLElement>(".es-ws")!.style.gridTemplateColumns).toBe("0px 0px minmax(0,1fr) 0px 0px 0px 0px");
   });
 
-  it("アプリ名は左上端（skip link の次）、設定は左下（settings を渡したとき）。左のドックが細い列なら中央のヘッダーの左を空ける（data-left=none）", () => {
-    const { host, render } = mount(<Shell dock={dockOf()} settings />);
+  it("アプリ名は左上端、設定は左下（settings を渡したとき）。左上が一覧なら一覧の上の 1 行の左、それ以外は枠の帯（skip link の次）。左のドックが細い列なら中央のヘッダーの左を空ける（data-left=none）", () => {
+    const real = (dock: EditorShellDock) => (
+      <EditorShell sidebar={<ShellSidebar items={[]} search={{ open: false, value: "", onOpen: vi.fn(), onClose: vi.fn(), onChange: vi.fn() }} panel />} header={<header className="es-dt">ヘッダー</header>} rail={<ShellRail>AI</ShellRail>} sidebarOpen railOpen settings={{ onOpen: () => undefined }} dock={dock}>
+        <p>本文</p>
+      </EditorShell>
+    );
+    const brands = (root: HTMLElement) => [...root.querySelectorAll(".es-brand")].map((node) => node.parentElement!.className);
+    const { host, render } = mount(real(dockOf()));
     const root = host.querySelector<HTMLElement>(".es-root")!;
-    expect([...root.children].map((node) => node.className)).toEqual(["es-skip", "es-brandbar", "es-ws", "es-setbar"]);
-    expect(root.querySelector(".es-brandbar .es-brand")).not.toBeNull();
+    // 既定（左の一番上が一覧）: 「Editor ⋮⋮ …… 検索」の 1 行。枠の帯は出さない
+    expect([...root.children].map((node) => node.className)).toEqual(["es-skip", "es-ws", "es-setbar"]);
+    expect(brands(root)).toEqual(["es-sb-top"]);
+    expect([...root.querySelector(".es-sb-top")!.children].map((node) => node.className)).toEqual(["es-brand", "es-grip", "es-sp", "es-ib"]);
+    expect(root.querySelector(".es-sb")!.getAttribute("data-brand")).toBe("true");
     expect(root.querySelector(".es-setbar .es-sb-me")?.textContent).toBe("設定");
     expect(root.dataset.left).toBe("dock");
-    render(<Shell dock={dockOf({ width: 1024 })} settings />);
+    // 検索を開いたら行は検索欄だけ（アプリ名も隠す）
+    render(
+      <EditorShell sidebar={<ShellSidebar items={[]} search={{ open: true, value: "", onOpen: vi.fn(), onClose: vi.fn(), onChange: vi.fn() }} />} header={null} sidebarOpen railOpen={false} dock={dockOf()}>
+        x
+      </EditorShell>,
+    );
+    expect(brands(root)).toEqual([]);
+    expect(root.querySelector(".es-sb-top .es-sb-find")).not.toBeNull();
+    // 一覧を右のドックへ移した・左の一番上が AI: アプリ名は枠の帯。一覧は上の行にアプリ名を出さない
+    for (const docks of [
+      { left: [], right: [{ id: "list", size: 1 }, { id: "ai", size: 1 }] },
+      { left: [{ id: "ai", size: 1 }, { id: "list", size: 1 }], right: [] },
+    ] satisfies ShellDocks[]) {
+      render(real(dockOf({ docks })));
+      expect(brands(root)).toEqual(["es-brandbar"]);
+      expect(root.querySelector(".es-sb")!.hasAttribute("data-brand")).toBe(false);
+      expect(pane(host, "list").style.top).not.toBe("0px");
+    }
+    // 左のドックが細い列: 枠の帯が中央のヘッダーの左に重なる
+    render(real(dockOf({ width: 1024 })));
     expect(pane(host, "list").dataset.state).toBe("strip");
     expect(root.dataset.left).toBe("none");
+    expect(brands(root)).toEqual(["es-brandbar"]);
+    // 900px 未満（wide でない）: 一覧の画面なら一覧の上の行、ページの画面なら枠の帯（CSS が隠す）
+    render(real({ ...dockOf(), wide: false }));
+    expect(brands(root)).toEqual(["es-sb-top"]);
   });
 
   it("境目: separator（縦）で aria の値を持ち、← →（Shift で大きく）・Home / End・Enter・ダブルクリックで幅を変える", () => {
