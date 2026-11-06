@@ -21,6 +21,8 @@ export function normalizeSearchInput(query: string): string {
 function isHit(value: unknown): value is SearchHit {
   if (typeof value !== "object" || value === null) return false;
   const hit = value as Record<string, unknown>;
+  // `tab`（タブの札。#308）は無い・null でもよい（古いサーバーの応答も読める）
+  if (hit.tab !== undefined && hit.tab !== null && typeof hit.tab !== "string") return false;
   return ["id", "kind", "title", "snippet", "updatedAt"].every((key) => typeof hit[key] === "string");
 }
 
@@ -37,5 +39,5 @@ export async function searchRequest(query: string, options: { limit?: number; si
   if (!response.ok) throw new SearchRequestError(response.status);
   const data = (await response.json()) as { results?: unknown };
   if (!Array.isArray(data.results) || !data.results.every(isHit)) throw new SearchRequestError(500);
-  return data.results.map(({ id, kind, title, snippet, updatedAt }) => ({ id, kind, title, snippet, updatedAt }));
+  return data.results.map(({ id, kind, title, snippet, updatedAt, tab }) => ({ id, kind, title, snippet, updatedAt, tab: typeof tab === "string" ? tab : null }));
 }

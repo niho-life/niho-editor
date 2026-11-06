@@ -22,7 +22,7 @@ export const PAGE_TITLE_MAX_CHARS = 500;
 /** 複製したページ（createPage の戻りと同じ列）。`page` は同じ入れ物（タブの複製）か null。 */
 export type DuplicatedPage = Pick<
   Page,
-  "id" | "kind" | "title" | "lang" | "blocks" | "cover" | "lead" | "parent" | "recipe" | "stepStatus" | "page" | "createdAt" | "updatedAt"
+  "id" | "kind" | "title" | "lang" | "blocks" | "cover" | "lead" | "parent" | "recipe" | "stepStatus" | "page" | "tabName" | "createdAt" | "updatedAt"
 >;
 
 /**
@@ -47,27 +47,37 @@ type PageRow = {
   recipe: string | null;
   step_status: StepStatus | null;
   page: string | null;
+  tab_name: string | null;
   created_at: Date;
   updated_at: Date;
 };
 
 /** store.ts の PAGE_COLUMNS の一部（#33 と並行して触らないよう、ここに持つ）。 */
-const DUPLICATE_COLUMNS = "id, kind, title, lang, blocks, cover, lead, parent, recipe, step_status, page, created_at, updated_at";
+const DUPLICATE_COLUMNS = "id, kind, title, lang, blocks, cover, lead, parent, recipe, step_status, page, tab_name, created_at, updated_at";
 
-// $1 owner / $2 元のページの id / $3 題名に足す言葉 / $4 題名の上限。left・char_length は code point で数える。
+/** タブの名前の上限（migration 20261107003531 の CHECK と同じ）。 */
+const TAB_NAME_MAX_CHARS = 100;
+
+// $1 owner / $2 元のページの id / $3 題名に足す言葉 / $4 題名の上限 / $5 タブの名前の上限。left・char_length は code point で数える。
 // 録音の行は、写したページの行と同じ文の中で入れる（片方だけが入ることはない。外部キーは文の終わりに確かめられる）。
-// タブ（page が入れ物を指す）なら同じ入れ物・同じフォルダに、並びは末尾。入れ物の無い行は上の段の 1 枚（parent なし）。
+// タブ（page が入れ物を指す）なら同じ入れ物・同じフォルダに、並びは末尾。題名はページの名前のまま（入れ物と同じ。#308）で、
+// タブの名前（付けた名前か位置の番号）に「のコピー」を足す。入れ物の無い行は上の段の 1 枚（parent なし）で、題名に「のコピー」。
 const DUPLICATE_SQL = `
 WITH copied AS (
-  INSERT INTO pages (owner, kind, title, lang, blocks, lead, parent, page, made_from, sort_order)
+  INSERT INTO pages (owner, kind, title, lang, blocks, lead, parent, page, made_from, sort_order, tab_name)
   SELECT s.owner, s.kind,
-         CASE WHEN s.title = '' THEN '' ELSE left(s.title, $4::int - char_length($3::text)) || $3::text END,
+         CASE WHEN s.title = '' OR s.page IS NOT NULL THEN s.title ELSE left(s.title, $4::int - char_length($3::text)) || $3::text END,
          s.lang, s.blocks, s.lead,
          CASE WHEN s.page IS NULL THEN NULL ELSE s.parent END,
          s.page,
          CASE WHEN s.page IS NULL THEN NULL ELSE jsonb_build_object('kind', 'dup', 'from', s.id) END,
          CASE WHEN s.page IS NULL THEN 0
-              ELSE COALESCE((SELECT max(t.sort_order) FROM pages t WHERE t.owner = s.owner AND t.page = s.page AND t.deleted_at IS NULL), 0) + 1 END
+              ELSE COALESCE((SELECT max(t.sort_order) FROM pages t WHERE t.owner = s.owner AND t.page = s.page AND t.deleted_at IS NULL), 0) + 1 END,
+         CASE WHEN s.page IS NULL THEN NULL
+              ELSE left(COALESCE(s.tab_name, (SELECT count(*) FROM pages t
+                                                WHERE t.owner = s.owner AND t.page = s.page AND t.deleted_at IS NULL
+                                                  AND (t.sort_order, t.created_at, t.id) <= (s.sort_order, s.created_at, s.id))::text),
+                        $5::int - char_length($3::text)) || $3::text END
     FROM pages s
    WHERE s.owner = $1 AND s.id = $2 AND s.deleted_at IS NULL AND s.kind <> 'folder' AND s.kind <> 'page'
   RETURNING ${DUPLICATE_COLUMNS}
@@ -104,7 +114,7 @@ export async function duplicatePage(db: Queryable, owner: OwnerId, pageId: strin
   assertOwner(owner);
   if (!isPageId(pageId)) return null;
   try {
-    const result = await db.query<PageRow>(DUPLICATE_SQL, [owner, pageId, DUPLICATE_TITLE_SUFFIX, PAGE_TITLE_MAX_CHARS]);
+    const result = await db.query<PageRow>(DUPLICATE_SQL, [owner, pageId, DUPLICATE_TITLE_SUFFIX, PAGE_TITLE_MAX_CHARS, TAB_NAME_MAX_CHARS]);
     const row = result.rows[0];
     if (!row) return null;
     return {
@@ -119,6 +129,7 @@ export async function duplicatePage(db: Queryable, owner: OwnerId, pageId: strin
       recipe: row.recipe,
       stepStatus: row.step_status,
       page: row.page,
+      tabName: row.tab_name,
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
     };

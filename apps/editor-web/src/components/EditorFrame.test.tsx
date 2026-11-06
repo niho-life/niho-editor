@@ -209,12 +209,12 @@ describe("EditorFrame", () => {
       await intersect();
       await intersect();
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/pages?limit=100&cursor=cursor-1");
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/pages?limit=100&view=all&cursor=cursor-1");
       await act(async () => release(chunkResponse([page("b"), page("c")], "cursor-2")));
       expect(rows()).toEqual(["a", "b", "c"]);
 
       await intersect();
-      expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/pages?limit=100&cursor=cursor-2");
+      expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/pages?limit=100&view=all&cursor=cursor-2");
       await act(async () => release(chunkResponse([page("d")], null)));
       expect(rows()).toEqual(["a", "b", "c", "d"]);
       expect(observers.every((entry) => entry.disconnected)).toBe(true);
@@ -601,8 +601,8 @@ describe("EditorFrame", () => {
         ]),
       );
       expect(rows()).toEqual(["録音", "文字起こし修正", "記事方針"]);
-      // 済みの段階は 2 行目を出さず、作成中の段階は言葉（と回るマーク）を出す
-      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["録音", "作成中…"]);
+      // 済みの段階は 2 行目を出さず、作成中の段階は言葉（と回るマーク）を出す（録音の行に「録音」の 2 行目は無い。#308）
+      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["作成中…"]);
       expect(container!.querySelectorAll(".es-sb-list .es-busy")).toHaveLength(1);
     });
 
@@ -624,10 +624,10 @@ describe("EditorFrame", () => {
       await act(async () => send(REC, run));
       await act(async () => send(REC, run));
       expect(rows()).toEqual(["録音", "文字起こし修正"]);
-      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["録音", "作成中…"]);
+      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["作成中…"]);
       await act(async () => send(REC, [{ id: STEP_1, title: "文字起こし修正", stepStatus: "done" }]));
       expect(rows()).toEqual(["録音", "文字起こし修正"]);
-      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["録音"]);
+      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual([]);
     });
   });
 });
@@ -3268,5 +3268,39 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     await act(async () => aiMock.props!.onPagesChanged!([A, B]));
     await tick();
     expect(sideReads(fetcher)).toBe(2);
+  });
+});
+
+describe("EditorFrame: 題名の変更は、一覧の入れ物と兄弟のタブの行にも反映する（#308 レビュー）", () => {
+  const HOLDER = "00000000-0000-4000-8000-0000000000a1";
+  const TAB_A = "00000000-0000-4000-8000-0000000000a2";
+  const TAB_B = "00000000-0000-4000-8000-0000000000a3";
+  const OTHER_HOLDER = "00000000-0000-4000-8000-0000000000b1";
+  const OTHER_TAB = "00000000-0000-4000-8000-0000000000b2";
+  const rows = () => [
+    { ...page(HOLDER, "旧題"), kind: "page" as const },
+    { ...page(TAB_A, "旧題"), page: HOLDER },
+    { ...page(TAB_B, "旧題"), page: HOLDER },
+    { ...page(OTHER_HOLDER, "別のページ"), kind: "page" as const },
+    { ...page(OTHER_TAB, "別のページ"), page: OTHER_HOLDER },
+  ];
+  /** 開いたタブで題名を打った知らせ（PageEditor の題名の欄と同じ呼び方）。 */
+  function Retitle({ id, title }: { id: string; title: string }) {
+    const { pageTitleChanged } = useEditorFrame();
+    useEffect(() => pageTitleChanged(id, title), [pageTitleChanged, id, title]);
+    return <p>合成の本文</p>;
+  }
+  // 入れ物の行は「題名 ＋ タブの数の印」（例: 旧題タブ 2）なので、題名で始まる行があるかで見る
+  const titles = () => [...container!.querySelectorAll(".es-di-t")].map((node) => node.textContent ?? "");
+  const has = (title: string) => titles().some((text) => text.startsWith(title));
+
+  it("タブで題名を変えると、一覧が出す入れ物の行も新しい題名になる（ほかのページは変えない）", async () => {
+    await mount({ pages: rows() });
+    expect(has("旧題")).toBe(true);
+    expect(has("別のページ")).toBe(true);
+    await rerender(<Retitle id={TAB_A} title="新しい題名" />);
+    expect(has("新しい題名")).toBe(true);
+    expect(has("旧題")).toBe(false);
+    expect(has("別のページ")).toBe(true);
   });
 });

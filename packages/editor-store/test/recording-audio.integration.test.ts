@@ -496,7 +496,7 @@ describe("recording audio on PostgreSQL", { skip: databaseUrl === undefined }, (
   });
 
   it("duplicates an audio recording page with its transcript but without its audio, and a VTT recording page with audio: null", async () => {
-    const started = (await startAudioRecording(pool, OWNER, startInput())) as { page: { id: string } };
+    const started = (await startAudioRecording(pool, OWNER, startInput())) as { page: { id: string; page: string | null } };
     // 段 2b の文字起こしの代わりに、段落と話者名を直接入れる
     await pool.query(
       `UPDATE page_recordings SET segments = $2::jsonb, speaker_names = $3::jsonb WHERE page_id = $1`,
@@ -506,7 +506,8 @@ describe("recording audio on PostgreSQL", { skip: databaseUrl === undefined }, (
     const copy = await duplicatePage(pool, OWNER, started.page.id);
     assert.ok(copy);
     assert.equal(copy.kind, "rec");
-    assert.equal(copy.title, "合成の打ち合わせのコピー");
+    // 録音ページのタブの複製は同じ入れ物の新しいタブ: 題名はページの名前のまま、タブの名前が「のコピー」（#307 #308）
+    assert.deepEqual([copy.title, copy.page, copy.tabName], ["合成の打ち合わせ", started.page.page, "1のコピー"]);
     const copiedAudioRecording = await getRecording(pool, OWNER, copy.id);
     assert.ok(copiedAudioRecording, "the recording page is copied with its transcript (it is not left without a recording)");
     assert.equal(copiedAudioRecording.source, "audio");

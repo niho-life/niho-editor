@@ -109,8 +109,8 @@ export type EditorFrameApi = {
   pageLangChanged: (id: string, lang: PageLang) => void;
   /** 保存した。一覧の上へ動かし、時刻を今にする。 */
   pageSaved: (id: string) => void;
-  /** 新しいページを作った（複製を含む）。一覧の上に足す。種類は既定で note、親（入れたフォルダ）は既定で無し。 */
-  pageCreated: (id: string, title: string, kind?: PageKind, parent?: string | null) => void;
+  /** 新しいページを作った（複製・タブを含む）。一覧の上に足す。種類は既定で note、親（入れたフォルダ）と入れ物（タブのとき。#308）は既定で無し。 */
+  pageCreated: (id: string, title: string, kind?: PageKind, parent?: string | null, page?: string | null) => void;
   /** ページをゴミ箱へ入れた。一覧から、そのページと子孫（読み込んである分）を外す。 */
   pageRemoved: (id: string) => void;
   /**
@@ -289,6 +289,8 @@ const MAX_ORDER_STEPS = 50;
 /** その行が、別の行（ancestor）の中（子孫）にあるか。 */
 function isInside(pages: readonly PageSummary[], id: string, ancestor: string): boolean {
   const byId = new Map(pages.map((page) => [page.id, page]));
+  // 入れ物のタブは入れ物の中（#308。入れ物を消すとタブも消える）
+  if (byId.get(id)?.page === ancestor) return true;
   for (let at = byId.get(id)?.parent ?? null, guard = 0; at !== null && guard < 10; at = byId.get(at)?.parent ?? null, guard++) {
     if (at === ancestor) return true;
   }
@@ -299,7 +301,7 @@ function isInside(pages: readonly PageSummary[], id: string, ancestor: string): 
 function inPageTree(pages: readonly PageSummary[], id: string, root: string): boolean {
   const [at, top] = [id.toLowerCase(), root.toLowerCase()];
   if (at === top) return true;
-  const lowered = pages.map((page) => ({ ...page, id: page.id.toLowerCase(), parent: page.parent?.toLowerCase() ?? null }));
+  const lowered = pages.map((page) => ({ ...page, id: page.id.toLowerCase(), parent: page.parent?.toLowerCase() ?? null, page: page.page?.toLowerCase() ?? null }));
   return isInside(lowered, at, top);
 }
 
@@ -606,12 +608,19 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         // 最後に開いたページをサーバーに記録する。届かなくても画面は止めない
         void recordPageOpenRequest(page.id).catch(() => undefined);
       },
+      // 題名はページの名前で、入れ物と全てのタブで同じ（サーバーの savePage が入れ物と兄弟のタブへ写す。#308）。
+      // 一覧の行は入れ物の題名を出すので、編集したタブの行だけでなく、入れ物と兄弟のタブの行も同じに揃える
       pageTitleChanged: (id, title) =>
-        setList((current) => ({
-          ...current,
-          pages: current.pages.map((page) => (page.id === id ? { ...page, title } : page)),
-          opened: current.opened?.id === id ? { ...current.opened, title } : current.opened,
-        })),
+        setList((current) => {
+          const edited = current.pages.find((page) => page.id === id) ?? (current.opened?.id === id ? current.opened : undefined);
+          const holder = edited?.page ?? null;
+          const same = (page: PageSummary) => page.id === id || (holder !== null && (page.id === holder || page.page === holder));
+          return {
+            ...current,
+            pages: current.pages.map((page) => (same(page) ? { ...page, title } : page)),
+            opened: current.opened && same(current.opened) ? { ...current.opened, title } : current.opened,
+          };
+        }),
       pageLangChanged: (id, lang) =>
         setList((current) => ({
           ...current,
@@ -626,10 +635,10 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         // 公開中なら「更新あり」を確かめ直す
         publishSaved.current(id);
       },
-      pageCreated: (id, title, kind = "note", parent = null) => {
+      pageCreated: (id, title, kind = "note", parent = null, holder = null) => {
         const at = new Date().toISOString();
         // 作ったばかりのページは公開していない
-        const page: PageSummary = { id, kind, title, lang: "ja", parent, stepStatus: null, sortOrder: 0, createdAt: at, updatedAt: at, publication: null };
+        const page: PageSummary = { id, kind, title, lang: "ja", parent, stepStatus: null, sortOrder: 0, page: holder, createdAt: at, updatedAt: at, publication: null };
         setList((current) => ({ ...current, pages: toTop(current.pages, page) }));
       },
       registerPageSaver: (saveNow) => {
@@ -1097,7 +1106,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     page: attached,
     current: () => attachedRef.current,
     onDuplicated: (copy, stillOpen) => {
-      api.pageCreated(copy.id, copy.title, copy.kind);
+      api.pageCreated(copy.id, copy.title, copy.kind, copy.parent, copy.page);
       if (stillOpen) router.push(`/p/${copy.id}`);
     },
     onDeleted: (id, stillOpen) => {

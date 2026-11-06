@@ -19,13 +19,13 @@ function memorySearch(rows: Row[]) {
     return rows
       .filter((row) => row.owner === owner && !row.deleted && `${row.title}\n${row.body}`.toLowerCase().includes(term))
       .slice(0, options.limit ?? 30)
-      .map(({ id, kind, title, snippet, updatedAt }) => ({ id, kind, title, snippet, updatedAt }));
+      .map(({ id, kind, title, snippet, updatedAt, tab }) => ({ id, kind, title, snippet, updatedAt, tab }));
   };
   return { search, calls };
 }
 
 function row(owner: string, title: string, body: string, extra: Partial<Row> = {}): Row {
-  return { id: randomUUID(), kind: "note", title, snippet: body.slice(0, 80), updatedAt: new Date().toISOString(), owner, deleted: false, body, ...extra };
+  return { id: randomUUID(), kind: "note", title, snippet: body.slice(0, 80), updatedAt: new Date().toISOString(), tab: null, owner, deleted: false, body, ...extra };
 }
 
 /** 検索の API が呼ぶのは getSession だけ。ログインの経路（AuthProvider の残り）は使わない。 */
@@ -62,13 +62,13 @@ describe("GET /api/search", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { results: SearchHit[] };
     expect(body.results.map((hit) => hit.id)).toEqual([mine.id]);
-    expect(Object.keys(body.results[0]!).sort()).toEqual(["id", "kind", "snippet", "title", "updatedAt"]);
+    expect(Object.keys(body.results[0]!).sort()).toEqual(["id", "kind", "snippet", "tab", "title", "updatedAt"]);
     expect(calls).toEqual([{ owner: "user-a", query: "quokka", options: {} }]);
   });
 
-  it("does not pass through anything the store adds beyond the five fields", async () => {
+  it("does not pass through anything the store adds beyond the six fields", async () => {
     const leaky: SearchFn = async () => [
-      { id: randomUUID(), kind: "note", title: "t", snippet: "s", updatedAt: new Date(0).toISOString(), owner: "user-b", search_text: "他人の本文", blocks: [] } as unknown as SearchHit,
+      { id: randomUUID(), kind: "note", title: "t", snippet: "s", updatedAt: new Date(0).toISOString(), tab: "英語版", owner: "user-b", search_text: "他人の本文", blocks: [] } as unknown as SearchHit,
     ];
     const response = await searchPagesRoute(get("?q=x"), deps("user-a", leaky));
     const text = await response.text();

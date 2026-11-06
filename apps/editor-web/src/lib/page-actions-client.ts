@@ -37,9 +37,14 @@ function isShareState(value: unknown): value is DocsPageShareState {
   return state.status === "PUBLIC" || (state.publicId === null && state.url === null);
 }
 
-async function send(path: string, method: "GET" | "PUT" | "POST" | "DELETE"): Promise<unknown> {
-  const response = await fetch(path, { method, credentials: "same-origin", cache: "no-store" });
-  if (!response.ok) throw new PageActionError(response.status);
+async function send(path: string, method: "GET" | "PUT" | "POST" | "DELETE" | "PATCH", body?: unknown): Promise<unknown> {
+  const response = await fetch(path, {
+    method,
+    credentials: "same-origin",
+    cache: "no-store",
+    ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+  });
+  if (!response.ok) throw await refusal(response);
   return response.json();
 }
 
@@ -70,21 +75,69 @@ export function stopPageShare(id: string): Promise<DocsPageShareState> {
   return shareRequest(id, "DELETE");
 }
 
-/** 複製してできたページ（一覧の上に足すのに要る分）。 */
-export type DuplicatedPage = { id: string; title: string; kind: PageKind };
+/**
+ * 複製してできたページ（一覧の上に足すのに要る分）。`parent` はフォルダ、`page` は同じ入れ物（タブの複製。#307）、
+ * `tabName` はタブの名前（「〜のコピー」。#308）。読めなければ null。
+ */
+export type DuplicatedPage = { id: string; title: string; kind: PageKind; parent: string | null; page: string | null; tabName: string | null };
 
 function isPageKind(value: unknown): value is PageKind {
   return typeof value === "string" && (PAGE_KINDS as readonly string[]).includes(value);
 }
 
-/** ページを複製し、新しいページの id・題名（「〜のコピー」）・種類を返す。種類が読めなければ note として扱う。 */
+const pageIdOrNull = (value: unknown): string | null => (typeof value === "string" && UUID_PATTERN.test(value) ? value : null);
+
+/** ページを複製し、新しいページの id・題名・種類（と、フォルダ・入れ物・タブの名前）を返す。種類が読めなければ note として扱う。 */
 export async function duplicatePageRequest(id: string): Promise<DuplicatedPage> {
-  const data = (await send(pagePath(id, "/duplicate"), "POST")) as { page?: { id?: unknown; title?: unknown; kind?: unknown } };
+  const data = (await send(pagePath(id, "/duplicate"), "POST")) as { page?: { id?: unknown; title?: unknown; kind?: unknown; parent?: unknown; page?: unknown; tabName?: unknown } };
   const newId = data.page?.id;
   const title = data.page?.title;
   if (typeof newId !== "string" || !UUID_PATTERN.test(newId) || typeof title !== "string") throw new PageActionError(500);
   const kind = data.page?.kind;
-  return { id: newId, title, kind: isPageKind(kind) ? kind : "note" };
+  const tabName = data.page?.tabName;
+  return { id: newId, title, kind: isPageKind(kind) ? kind : "note", parent: pageIdOrNull(data.page?.parent), page: pageIdOrNull(data.page?.page), tabName: typeof tabName === "string" ? tabName : null };
+}
+
+/** タブの帯の 1 つ（`GET /api/pages/{id}/tabs` の tabs の行から要る分。#308）。 */
+export type PageTabRow = { id: string; kind: PageKind; title: string; tabName: string | null; tabPos: number; stepStatus: string | null };
+
+function tabRowOf(value: unknown): PageTabRow | null {
+  if (typeof value !== "object" || value === null) return null;
+  const row = value as Record<string, unknown>;
+  if (typeof row.id !== "string" || !UUID_PATTERN.test(row.id) || typeof row.title !== "string") return null;
+  return {
+    id: row.id,
+    kind: isPageKind(row.kind) ? row.kind : "note",
+    title: row.title,
+    tabName: typeof row.tabName === "string" ? row.tabName : null,
+    tabPos: typeof row.tabPos === "number" ? row.tabPos : 0,
+    stepStatus: typeof row.stepStatus === "string" ? row.stepStatus : null,
+  };
+}
+
+/** 入れ物にまっさらなタブを足す（`POST /api/pages/{id}/tabs`。帯の右端の ＋。#308）。新しいタブの id と入れ物（読めなければ null）を返す。 */
+export async function createTabRequest(id: string, name?: string): Promise<{ id: string; page: string | null }> {
+  const data = (await send(pagePath(id, "/tabs"), "POST", name === undefined ? {} : { name })) as { page?: { id?: unknown; page?: unknown } };
+  const newId = data.page?.id;
+  if (typeof newId !== "string" || !UUID_PATTERN.test(newId)) throw new PageActionError(500);
+  return { id: newId, page: pageIdOrNull(data.page?.page) };
+}
+
+/** 入れ物のタブ（`GET /api/pages/{id}/tabs`。並びの順）。読めない行は飛ばす。 */
+export async function listTabsRequest(id: string): Promise<PageTabRow[]> {
+  const data = (await send(pagePath(id, "/tabs"), "GET")) as { tabs?: unknown };
+  if (!Array.isArray(data.tabs)) throw new PageActionError(500);
+  return data.tabs.map(tabRowOf).filter((row): row is PageTabRow => row !== null);
+}
+
+/** タブの名前を変える（`PATCH /api/pages/{id}/tab { name }`。空は「名前なし」＝位置の番号。#308）。 */
+export async function renameTabRequest(id: string, name: string | null): Promise<void> {
+  await send(pagePath(id, "/tab"), "PATCH", { name });
+}
+
+/** タブを別のページ（入れ物。タブの id でもよい）へ移す（`PATCH /api/pages/{id}/tab { page }`。#307）。 */
+export async function moveTabRequest(id: string, page: string): Promise<void> {
+  await send(pagePath(id, "/tab"), "PATCH", { page });
 }
 
 /** Markdown の書き出しの URL（`<a href download>` か location に渡す。応答は attachment）。 */

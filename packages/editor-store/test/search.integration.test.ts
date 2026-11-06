@@ -123,6 +123,8 @@ describe("search_text on a database that only has 0001", { skip: databaseUrl ===
 
       const index = await pool.query<{ indexdef: string }>("SELECT indexdef FROM pg_indexes WHERE indexname = 'pages_search_text_trgm_idx' AND schemaname = current_schema()");
       assert.match(index.rows[0]?.indexdef ?? "", /USING gin \(search_text \S*gin_trgm_ops\) WHERE \(deleted_at IS NULL\)/);
+      // 検索の SQL は今の schema（タブの列。#307 #308）を読むので、残りの migration を当ててから探す
+      await applyMigrations(client);
       assert.deepEqual(ids(await searchPages(pool, OWNER, "新しい")), [page]);
     } finally {
       client.release();
@@ -184,7 +186,8 @@ describe("searchPages on PostgreSQL", { skip: databaseUrl === undefined }, () =>
     for (const query of ["QUOKKA", "Quokka", "qUoKkA"]) assert.deepEqual(ids(await searchPages(pool, OWNER, query)), ids(hits), query);
     const both = hits[0];
     assert.ok(both);
-    assert.deepEqual(Object.keys(both).sort(), ["id", "kind", "snippet", "title", "updatedAt"], "no search_text or owner in the result");
+    assert.deepEqual(Object.keys(both).sort(), ["id", "kind", "snippet", "tab", "title", "updatedAt"], "no search_text or owner in the result");
+    assert.equal(both.tab, null, "タブが 1 つだけのページに札は無い（#308）");
     assert.equal(both.kind, "article");
     assert.equal(both.title, "QUOKKA 両方");
     assert.equal(both.updatedAt, new Date(BASE_TIME + 12_000).toISOString());

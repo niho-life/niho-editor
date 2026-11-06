@@ -6,6 +6,7 @@ import {
   createNihoExperienceAuthProvider,
   EXPERIENCE_EDITOR_FIREBASE_REFRESH_COOKIE,
   EXPERIENCE_EDITOR_ID_TOKEN_COOKIE,
+  EXPERIENCE_EDITOR_NAME_COOKIE,
   EXPERIENCE_EDITOR_PENDING_COOKIE,
   EXPERIENCE_EDITOR_REFRESH_COOKIE,
 } from "./niho-experience";
@@ -61,14 +62,30 @@ function pendingCookie(response: Response): string {
   return cookie!.split(";", 1)[0]!;
 }
 
-function connectionResponse() {
+function connectionResponse(displayName: string | null = null) {
   return {
     customToken: "synthetic-custom-token-value-1234567890",
     refreshToken: NIHO_REFRESH,
     connectionId: CONNECTION_ID,
     connectionExpiresAt: CONNECTION_EXPIRY,
-    user: { id: USER_ID, displayName: null, handle: null, iconImage: null },
+    user: { id: USER_ID, displayName, handle: null, iconImage: null },
   };
+}
+
+function exchangeFetch(displayName: string | null): typeof globalThis.fetch {
+  return async (input) => {
+    const url = String(input);
+    if (url.endsWith("/api/auth/experience-editor-connect/exchange")) return json(connectionResponse(displayName));
+    if (url.includes("identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken")) {
+      return json({ idToken: ID_TOKEN, refreshToken: FIREBASE_REFRESH, expiresIn: "3600", localId: "firebase-user" });
+    }
+    if (url.endsWith("/api/auth/experience-editor-connect/session")) return json(sessionResponse());
+    throw new Error("unexpected upstream URL");
+  };
+}
+
+function cookiePair(cookies: readonly string[], name: string): string | undefined {
+  return cookies.find((cookie) => cookie.startsWith(`${name}=`))?.split(";", 1)[0];
 }
 
 function sessionResponse() {
@@ -129,6 +146,50 @@ describe("NIHO Experience editor auth", () => {
     expect(cookies.some((cookie) => cookie.startsWith(`${EXPERIENCE_EDITOR_REFRESH_COOKIE}=${NIHO_REFRESH};`))).toBe(true);
     expect(cookies.every((cookie) => cookie.includes("HttpOnly; Secure; SameSite=Lax; Path=/"))).toBe(true);
     expect(JSON.stringify(response.headers)).not.toContain(ID_TOKEN);
+  });
+
+  it("keeps NIHO's display name from the login as the session's author name, only for the same user", async () => {
+    const auth = provider(exchangeFetch("  Takuya  "), loginRandomValues());
+    const started = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start`), returnTo: "/" });
+    const cookies = (await auth.completeLogin(formPost(EDITOR, pendingCookie(started)))).headers.getSetCookie();
+    const name = cookiePair(cookies, EXPERIENCE_EDITOR_NAME_COOKIE);
+    expect(name).toBeDefined();
+    expect(cookies.find((cookie) => cookie.startsWith(`${EXPERIENCE_EDITOR_NAME_COOKIE}=`))).toContain("HttpOnly; Secure; SameSite=Lax; Path=/");
+    expect(name).not.toContain("Takuya");
+
+    const session = await auth.getSession({ headers: new Headers({ cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}; ${name}` }) });
+    expect(session).toEqual({ userId: USER_ID, mode: "niho", sessionId: CONNECTION_ID, expiresAt: CONNECTION_EXPIRY, profile: { name: "Takuya" } });
+
+    // Written for another user, malformed or repeated: no name (the publication then fails closed, as before).
+    const otherUser = `${EXPERIENCE_EDITOR_NAME_COOKIE}=${Buffer.from("other-user").toString("base64url")}.${Buffer.from("Mallory").toString("base64url")}`;
+    for (const cookie of [otherUser, `${EXPERIENCE_EDITOR_NAME_COOKIE}=not.a.value`, `${name}; ${name}`]) {
+      const read = await auth.getSession({ headers: new Headers({ cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}; ${cookie}` }) });
+      expect(read?.profile).toBeUndefined();
+    }
+  });
+
+  it("reads back the longest display name the login accepts (200 four-byte characters)", async () => {
+    // 200 絵文字 = UTF-8 で 800 バイト = base64url で 1067 文字（読み取り側が 1024 までだと、保存した名前を読めなかった）
+    const longest = "😀".repeat(200);
+    const auth = provider(exchangeFetch(longest), loginRandomValues());
+    const started = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start`), returnTo: "/" });
+    const cookies = (await auth.completeLogin(formPost(EDITOR, pendingCookie(started)))).headers.getSetCookie();
+    const name = cookiePair(cookies, EXPERIENCE_EDITOR_NAME_COOKIE);
+    expect(name).toBeDefined();
+    const session = await auth.getSession({ headers: new Headers({ cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}; ${name}` }) });
+    expect(session?.profile).toEqual({ name: longest });
+    // 201 文字は、保存の側が名前なしにする（クッキーを書かない）
+    const tooLong = provider(exchangeFetch("😀".repeat(201)), loginRandomValues());
+    const again = await tooLong.beginLogin({ request: new Request(`${EDITOR}/auth/login/start`), returnTo: "/" });
+    const clearing = (await tooLong.completeLogin(formPost(EDITOR, pendingCookie(again)))).headers.getSetCookie();
+    expect(clearing).toContain(`${EXPERIENCE_EDITOR_NAME_COOKIE}=; Max-Age=0; HttpOnly; Secure; SameSite=Lax; Path=/`);
+  });
+
+  it("clears a previous name when NIHO returns no display name", async () => {
+    const auth = provider(exchangeFetch(null), loginRandomValues());
+    const started = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start`), returnTo: "/" });
+    const cookies = (await auth.completeLogin(formPost(EDITOR, pendingCookie(started)))).headers.getSetCookie();
+    expect(cookies).toContain(`${EXPERIENCE_EDITOR_NAME_COOKIE}=; Max-Age=0; HttpOnly; Secure; SameSite=Lax; Path=/`);
   });
 
   it("revalidates the same NIHO session before using its server-only token for the fixed account purposes", async () => {

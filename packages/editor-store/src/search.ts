@@ -16,9 +16,12 @@ const SNIPPET_MIN_BEFORE = 10;
 export type SearchHit = {
   id: string;
   kind: PageKind;
+  /** ページの名前（タブなら入れ物と同じ題名）。 */
   title: string;
   snippet: string;
   updatedAt: string;
+  /** タブの札（入れ物にタブが 2 つ以上あるときだけ。「ページ名 › タブ名」と出す。#308）。それ以外は null。 */
+  tab: string | null;
 };
 
 export type SearchOptions = { limit?: number };
@@ -114,6 +117,7 @@ type SearchRow = {
   id: string;
   kind: PageKind;
   title: string;
+  tab: string | null;
   updated_at: Date;
   body_chars: number;
   hit_pos: number | null;
@@ -130,13 +134,19 @@ type SearchRow = {
  */
 const SEARCH_SQL = String.raw`
 SELECT p.id, p.kind, p.title, p.updated_at,
+       CASE WHEN p.page IS NOT NULL
+             AND (SELECT count(*) FROM pages t WHERE t.owner = $1 AND t.page = p.page AND t.deleted_at IS NULL) > 1
+            THEN coalesce(p.tab_name, (SELECT count(*) FROM pages t
+                                        WHERE t.owner = $1 AND t.page = p.page AND t.deleted_at IS NULL
+                                          AND (t.sort_order, t.created_at, t.id) <= (p.sort_order, p.created_at, p.id))::text)
+       END AS tab,
        char_length(b.body) AS body_chars,
        h.pos AS hit_pos,
        h.chars AS hit_chars,
        greatest(coalesce(h.pos, 1) - $3::int, 1) AS excerpt_from,
        substr(b.body, greatest(coalesce(h.pos, 1) - $3::int, 1), $3::int * 2 + coalesce(h.chars, 0)) AS excerpt
   FROM (
-        SELECT id, kind, title, updated_at, search_text
+        SELECT id, kind, title, updated_at, search_text, page, tab_name, sort_order, created_at
           FROM pages
          WHERE owner = $1
            AND deleted_at IS NULL
@@ -194,6 +204,7 @@ export async function searchPages(db: Queryable, owner: OwnerId, query: string, 
     id: row.id,
     kind: row.kind,
     title: row.title,
+    tab: row.tab,
     snippet: buildSnippet({
       bodyChars: row.body_chars,
       hitPos: row.hit_pos,
