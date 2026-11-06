@@ -481,6 +481,22 @@ describe("server-side Web search (#283)", () => {
     expect((calls[1]!.messages.at(-2) as { content: unknown[] }).content).toEqual(pending.content);
   });
 
+  it("counts a search once when its call and its result arrive in different responses (parallel with a client tool)", async () => {
+    const read = { id: "t1", name: "read_page", input: { page_id: page.id } };
+    const first = turn({ toolCalls: [read], stopReason: "tool_use", usage: { ...usage, webSearchRequests: 0 }, content: [search("s1", "合成"), { type: "tool_use", ...read }] });
+    // 検索は次の応答で走る: 結果（呼び出しは再送されない）と usage が届く
+    const second = turn({
+      toolCalls: [{ ...read, id: "t2" }],
+      stopReason: "tool_use",
+      usage: { ...usage, webSearchRequests: 1 },
+      content: [result("s1", [{ url: "https://example.com/a", title: "合成の店" }]), { type: "tool_use", ...read, id: "t2" }],
+    });
+    const { client, calls } = stubClient([first, second, turn({ text: "読みました。" })]);
+    await runChatTurn({ client, system: "s", messages: [], run: recordingRunner(), webSearch: { tool: TOOL, maxSearches: 2 } });
+    // 実際に走った検索は 1 回。呼び出しと usage を二重に数えると 2 になり、3 回目の呼び出しで道具が外れる
+    expect(webTools(calls[2]!)).toHaveLength(1);
+  });
+
   it("does not offer the tool when it is switched off or the month is nearly used up, and says why", async () => {
     const off: ChatEvent[] = [];
     const first = stubClient([turn({ text: "はい。" })]);

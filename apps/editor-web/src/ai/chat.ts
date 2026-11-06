@@ -463,6 +463,8 @@ export async function runChatTurn(options: ChatRunner): Promise<ChatRun> {
   const webSearch = options.webSearch;
   const maxSearches = webSearch && webSearch !== "off" ? Math.max(0, Math.min(MAX_CHAT_WEB_SEARCHES, webSearch.maxSearches ?? MAX_CHAT_WEB_SEARCHES)) : 0;
   let searches = 0;
+  const searchIds = new Set<string>();
+  let untrackedSearches = 0;
   let budgetNoticed = false;
   let lastAssistant: readonly unknown[] | null = null;
   // pause_turn のあいだに書いた文（続きの往復の文とつなぐ）
@@ -523,8 +525,19 @@ export async function runChatTurn(options: ChatRunner): Promise<ChatRun> {
       ...(turn.text ? [{ type: "text", text: turn.text }] : []),
       ...turn.toolCalls.map((call) => ({ type: "tool_use", id: call.id, name: call.name, input: call.input })),
     ];
-    const searchCalls = content.filter((block) => isRecordInput(block) && block.type === "server_tool_use" && block.name === "web_search").length;
-    searches += Math.max(turn.usage.webSearchRequests ?? 0, searchCalls);
+    // 検索の回数は呼び出し ID ごとに 1 回だけ数える（クライアントの道具と並列に呼ばれた検索は、最初の応答では呼び出しだけが届き、
+    // 結果と usage は次の応答で届く。両方を足すと二重になる）。ID で追えない分（usage にだけある検索）は usage から足す
+    let resultsHere = 0;
+    for (const block of content) {
+      if (!isRecordInput(block)) continue;
+      if (block.type === "server_tool_use" && block.name === "web_search" && typeof block.id === "string") searchIds.add(block.id);
+      else if (block.type === "web_search_tool_result" && typeof block.tool_use_id === "string") {
+        searchIds.add(block.tool_use_id);
+        resultsHere += 1;
+      }
+    }
+    untrackedSearches += Math.max(0, (turn.usage.webSearchRequests ?? 0) - resultsHere);
+    searches = searchIds.size + untrackedSearches;
     collectSources(content, cited, found);
     // 会話に残すのは成否と件数だけ（検索語・題名・本文は残さない）
     for (const block of content) {
