@@ -1,16 +1,12 @@
 name: editor-web CI
 
 # editor.niho.life の Web と、その正本（packages/editor-store）。secret なし・合成データ・GitHub-hosted runner。
+# 3 つの job は main の必須チェック（docs/architecture/editor-release-boundary.md §3）。必須チェックは workflow ごと走らないと
+# pending のまま queue に入れないので、PR では paths で止めず、`changes` job の結果を jobs の `if` で見て skip する（skip は成功と数える）。
 on:
   pull_request:
-    paths:
-      - ".github/workflows/editor-web-ci.yml"
-      - "scripts/editor-deploy/**"
-      - "apps/editor-web/**"
-      - "packages/editor-store/**"
-      - "packages/docs-ui/**"
-      - "packages/docs-core/**"
-      - "packages/ui/**"
+  # merge queue が「PR + 先に並んだ変更 + 最新の main」を検証するときに必須チェックを報告する
+  merge_group:
   push:
     branches: [main]
     paths:
@@ -38,7 +34,45 @@ env:
   PGDATABASE: editor_ci
 
 jobs:
+  # Web が見るもの（apps/editor-web・配備の道具・packages/ の共有コード・このワークフロー自身）に触れていない変更では、
+  # 3 つの job を走らせない。見分けられないとき・main への push では走らせる。
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      editor: ${{ steps.filter.outputs.editor }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          # image は packages/ を丸ごと COPY する（apps/editor-web/Dockerfile）ので、packages/ のどこを変えても Web の検査に入れる
+          editor_paths='^(apps/editor-web/|packages/|scripts/editor-deploy/|\.github/workflows/editor-web-ci\.yml$)'
+          result=true
+          base=""
+          case "$EVENT" in
+            # チェックアウトは PR と base の merge commit。第一親が base
+            pull_request) base=$(git rev-parse --verify -q HEAD^1) || base="" ;;
+            # チェックアウトは queue の先頭（PR + 先に並んだ変更）。main は base_sha
+            merge_group) git fetch --no-tags --depth=1 origin "$MERGE_GROUP_BASE" && base="$MERGE_GROUP_BASE" || base="" ;;
+          esac
+          # --no-renames: 改名は移動先だけが出るので、見るディレクトリの外へ移したとき（移動元が消えたとき）を見落とす
+          if [ -n "$base" ] && files=$(git diff --name-only --no-renames "$base" HEAD); then
+            echo "changed files:"; printf '%s\n' "$files" | sed 's/^/  /'
+            if ! printf '%s\n' "$files" | grep -Eq "$editor_paths"; then result=false; fi
+          else
+            echo "cannot tell what changed (event: $EVENT); running the editor jobs"
+          fi
+          echo "editor=$result" | tee -a "$GITHUB_OUTPUT"
+
   editor-store:
+    needs: changes
+    if: needs.changes.outputs.editor == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -74,6 +108,8 @@ jobs:
           npm -C packages/editor-store test
 
   editor-web:
+    needs: changes
+    if: needs.changes.outputs.editor == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -123,6 +159,8 @@ jobs:
 
   # 配備の道具（docs/ops/editor-deploy.md）。本番には触れない: 構文・Secret と env の組み立て・image の build だけを確かめる。
   editor-deploy:
+    needs: changes
+    if: needs.changes.outputs.editor == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
