@@ -1150,7 +1150,9 @@ export class EditorStore {
              SELECT c.id FROM pages c JOIN tree t ON c.parent = t.id OR c.page = t.id OR (c.kind = 'page' AND c.id = (SELECT page FROM pages x WHERE x.id = t.id))
               WHERE c.owner = $1 AND c.deleted_at = (SELECT deleted_at FROM root)
            )
-           SELECT p.id FROM pages p JOIN tree t ON t.id = p.id
+           SELECT p.id FROM pages p
+             -- 戻すタブの入れ物は、ゴミ箱に入った時刻が違っても一緒に押さえて戻す（タブが消えた入れ物を指したままにしない）
+             JOIN (SELECT id FROM tree UNION SELECT x.page FROM pages x JOIN tree t ON t.id = x.id WHERE x.page IS NOT NULL) t ON t.id = p.id
             WHERE p.owner = $1 AND p.deleted_at IS NOT NULL
             ORDER BY p.id
             FOR UPDATE OF p`,
@@ -1162,7 +1164,7 @@ export class EditorStore {
           `UPDATE pages
               SET deleted_at = NULL
             WHERE owner = $1 AND id = ANY($3::uuid[])
-              AND deleted_at = (SELECT deleted_at FROM pages WHERE owner = $1 AND id = $2)`,
+              AND (deleted_at = (SELECT deleted_at FROM pages WHERE owner = $1 AND id = $2) OR kind = 'page')`,
           [owner, id, ids],
         );
         return true;

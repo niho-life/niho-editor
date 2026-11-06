@@ -7,7 +7,9 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
 import type { Pool as PgPool } from "pg";
 import { duplicatePage } from "../src/duplicate.ts";
+import { readGoogleDocsBatchTree } from "../src/google-docs-batches.ts";
 import { MIGRATION_FILE_PATTERN, applyMigrations, defaultMigrationsDir } from "../src/migrate.ts";
+import { searchPages } from "../src/search.ts";
 import { EditorStore } from "../src/store.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -200,6 +202,39 @@ describe("pages have a holder (kind='page') and tabs (#307)", { skip: databaseUr
     // 入れ物に本文は書けない
     const holder = await store.getPage(OWNER, a.page!);
     await assert.rejects(store.savePage(OWNER, holder!.id, { blocks }, { baseRevision: holder!.revision }), TypeError);
+  });
+
+  it("restoring a tab also restores its holder, even when the holder went to the trash at another time", async () => {
+    const a = await store.createPage(OWNER, { title: "A", blocks });
+    const a2 = await store.createTab(OWNER, a.id, { title: "A2" });
+    assert.equal(await store.deletePage(OWNER, a.id), "deleted"); // 入れ物は A2 が残るので生きている
+    assert.equal(await store.deletePage(OWNER, a2!.id), "deleted"); // 最後のタブ A2 と一緒に入れ物が、A とは別の時刻で入る
+    assert.equal((await rowOf(a.page!)).deleted, true);
+    // A だけ戻す → 入れ物も戻る（戻さないと A は消えた入れ物を指したまま、一覧にも入れ物の URL にも現れない）
+    assert.equal(await store.restoreFromTrash(OWNER, a.id), true);
+    assert.deepEqual([(await rowOf(a.id)).deleted, (await rowOf(a.page!)).deleted, (await rowOf(a2!.id)).deleted], [false, false, true]);
+    assert.deepEqual((await store.listPages(OWNER, { view: "pages" })).map((p) => p.id), [a.page]);
+    assert.equal((await store.resolvePage(OWNER, a.page!))?.tab.id, a.id);
+    assert.deepEqual((await store.listTrash(OWNER)).map((t) => t.id), [a2!.id]);
+    // 残った A2 も戻せる（入れ物は生きたまま、2 つのタブが揃う）
+    assert.equal(await store.restoreFromTrash(OWNER, a2!.id), true);
+    assert.deepEqual((await store.listTabs(OWNER, a.page!))?.map((t) => t.id), [a.id, a2!.id]);
+  });
+
+  it("search returns a page once: the holder is not a hit", async () => {
+    const a = await store.createPage(OWNER, { title: "合成の検索題名", blocks });
+    await store.createTab(OWNER, a.id, { title: "合成の検索題名の二枚目" });
+    const hits = await searchPages(pool, OWNER, "合成の検索題名");
+    assert.equal(hits.length, 2, "入れ物は数えない（タブ 2 つだけ）");
+    assert.ok(hits.every((hit) => hit.kind !== "page"));
+  });
+
+  it("the Google Docs batch tree counts the tabs, not the holders", async () => {
+    const folder = await store.createPage(OWNER, { kind: "folder", title: "F" });
+    const x = await store.createPage(OWNER, { title: "X", blocks, parent: folder.id });
+    const y = await store.createPage(OWNER, { title: "Y", blocks, parent: folder.id });
+    const tree = await readGoogleDocsBatchTree(pool, OWNER, folder.id);
+    assert.deepEqual(tree?.map((row) => row.id), [folder.id, x!.id, y!.id], "フォルダとタブだけ（件数の上限 200 にも入れ物を数えない）");
   });
 });
 
