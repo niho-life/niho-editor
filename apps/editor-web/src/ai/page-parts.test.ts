@@ -133,6 +133,23 @@ describe("書き込みの検査（checkParts）", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("同じ画像を 2 か所に置いたページは、1 か所を黙って消す書き込みも、両方残す書き込みも断る（出現数が失われないように）", () => {
+    const twice = [p("本文"), image(A), p("途中"), image(A)];
+    // remove_images なしで 1 か所だけ消す書き込み（以前はすり抜けた）
+    expect(checkParts(twice, [p("本文"), image(A), p("途中")], [])).toEqual({ ok: false, reason: PARTS_TEXT.repeatedPart });
+    // 両方残す書き込みも、複数配置のページは断る
+    expect(checkParts(twice, twice, [])).toEqual({ ok: false, reason: PARTS_TEXT.repeatedPart });
+    // 録音の複数配置と、入れ子の中の複数配置も同じ
+    expect(checkParts([recording, p("本文"), recording], [recording, p("直した")], [])).toEqual({ ok: false, reason: PARTS_TEXT.repeatedPart });
+    const nested: Block = { type: "bulletList", content: [{ type: "listItem", content: [image(A)] }, { type: "listItem", content: [image(A)] }] };
+    expect(checkParts([nested], [nested], [])).toEqual({ ok: false, reason: PARTS_TEXT.repeatedPart });
+  });
+
+  it("書き戻し（finishParts 経由）も、複数配置のページは最初に同じ理由で断る", () => {
+    const twice = [p("本文"), image(A), image(A)];
+    expect(partsMarkdownToBlocks(`本文を直した\n\n![](niho-asset:${A})`, twice)).toEqual({ ok: false, reason: PARTS_TEXT.repeatedPart });
+  });
+
   it("parseRemoveImages は uuid の配列だけ受ける", () => {
     expect(parseRemoveImages(undefined)).toEqual([]);
     expect(parseRemoveImages([A])).toEqual([A]);
