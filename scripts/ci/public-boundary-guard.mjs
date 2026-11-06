@@ -33,7 +33,7 @@ const fixturePiiPatterns = [
 ];
 const workflowPatterns = [
   ["privileged-pull-request", /^\s*pull_request_target\s*:/m],
-  ["workflow-secret-reference", /\bsecrets\.[A-Z0-9_]+/i],
+  ["workflow-secret-reference", /\bsecrets\s*(?:\.[A-Z0-9_]+|\[)/i],
   ["write-all-permissions", /^\s*permissions\s*:\s*write-all\s*$/m],
 ];
 
@@ -58,8 +58,28 @@ export function trackedFixturePaths(paths) {
 
 export function findFindings(relativePath, content) {
   return patternsForFile(relativePath)
-    .filter(([, pattern]) => pattern.test(content))
+    .filter(([rule, pattern]) => pattern.test(rule === "workflow-secret-reference" ? withoutMaskedPublicClientConfig(relativePath, content) : content))
     .map(([rule]) => rule);
+}
+
+function withoutMaskedPublicClientConfig(relativePath, content) {
+  if (relativePath !== ".github/workflows/editor-mac-candidate.yml") return content;
+  const jobs = [...content.matchAll(/^  ([a-z_]+):\n([\s\S]*?)(?=^  [a-z_]+:|$(?![\s\S]))/gm)];
+  const plan = jobs.find((match) => match[1] === "plan")?.[2] ?? "";
+  const gate = "    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.repository == 'niho-life/niho-editor'";
+  if (!plan.split("\n").includes(gate) || /continue-on-error:\s*true/.test(content)) return content;
+  let checked = content;
+  for (const match of jobs) {
+    const [block, name, body] = match;
+    const setting = name === "plan" ? "CLIENT_CONFIG" : name === "build" ? "NIHO_FIREBASE_API_KEY" : null;
+    if (!setting || (name === "build" && (!/^    needs: plan$/m.test(body) || /^    if:/m.test(body)))) continue;
+    // This client setting is already embedded in the public app. Secret storage
+    // supplies log masking; it grants no signing, cloud or private-repo authority.
+    const reference = "          " + setting + ": ${{ secrets.NIHO_DESKTOP_FIREBASE_API_KEY_PROD }}";
+    const sanitized = block.split("\n").map((line) => line === reference ? `          ${setting}: masked-public-client-config` : line).join("\n");
+    checked = checked.replace(block, sanitized);
+  }
+  return checked;
 }
 
 async function filesUnder(relativePath) {
