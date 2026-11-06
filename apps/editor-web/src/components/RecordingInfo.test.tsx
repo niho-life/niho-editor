@@ -67,6 +67,25 @@ describe("RecordingInfo", () => {
     expect(host.textContent).toContain("北鎌倉");
   });
 
+  it("空のページで背景を入力しても、見出しを押すまで畳まない（開閉の初期値は読み終えたときに 1 回だけ決める）", async () => {
+    loadPageFields.mockResolvedValueOnce(EMPTY);
+    act(() => root.render(<RecordingInfo pageId={REC} />));
+    await settle();
+    expect(head().getAttribute("aria-expanded")).toBe("true");
+    const area = host.querySelector("textarea")!;
+    await act(async () => {
+      area.focus();
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+      setter.call(area, "取");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    // 入力で「空でない」に変わっても、欄は開いたまま（入力中の textarea が消えない）
+    expect(head().getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelector("textarea")).not.toBeNull();
+    act(() => head().click());
+    expect(head().getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("背景は欄を離れたときに録音ページの欄へ保存する", async () => {
     loadPageFields.mockResolvedValueOnce(EMPTY);
     savePageFieldsRequest.mockResolvedValueOnce({ ...EMPTY, background: "取材の目的" });

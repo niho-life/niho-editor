@@ -26,8 +26,12 @@ export function RecordingInfo({ pageId, fields: given }: { pageId: string; field
   const [shared, setShared] = useState<number | null>(null);
 
   const filled = fields.entities.length > 0 || fields.terms.length > 0 || fields.background.trim() !== "";
-  // 開閉の初期値は読み終えたときに決める（空なら開く・入っていれば畳む）。そのあとは人が決める
+  // 開閉の初期値は読み終えたときの値（空なら開く・入っていれば畳む）。人が欄に触れた（フォーカス・「追加」）ときに
+  // そのときの開閉を固定し、入力で「空でない」に変わっても勝手に畳まない。そのあとは見出しを押したときだけ替わる
   const shownOpen = open ?? (fields.loaded === "ready" ? !filled : false);
+  const keepOpen = () => {
+    if (open === null) setOpen(shownOpen);
+  };
   useEffect(() => {
     let alive = true;
     void loadSettings().then(
@@ -82,7 +86,15 @@ export function RecordingInfo({ pageId, fields: given }: { pageId: string; field
                     {entity.role && <small>{entity.role}</small>}
                   </span>
                 ))}
-                <button type="button" className={styles.add} aria-label="登場人物を追加・編集" onClick={fields.onOpen}>
+                <button
+                  type="button"
+                  className={styles.add}
+                  aria-label="登場人物を追加・編集"
+                  onClick={() => {
+                    keepOpen();
+                    fields.onOpen();
+                  }}
+                >
                   ＋ 追加
                 </button>
               </div>
@@ -95,7 +107,15 @@ export function RecordingInfo({ pageId, fields: given }: { pageId: string; field
                     <span>{term.term}</span>
                   </span>
                 ))}
-                <button type="button" className={styles.add} aria-label="固有名詞を追加・編集" onClick={fields.onOpen}>
+                <button
+                  type="button"
+                  className={styles.add}
+                  aria-label="固有名詞を追加・編集"
+                  onClick={() => {
+                    keepOpen();
+                    fields.onOpen();
+                  }}
+                >
                   ＋ 追加
                 </button>
                 {shared !== null && shared > 0 && (
@@ -117,6 +137,7 @@ export function RecordingInfo({ pageId, fields: given }: { pageId: string; field
                 placeholder="取材の目的、相手、場所など"
                 value={fields.background}
                 readOnly={fields.loaded !== "ready"}
+                onFocus={keepOpen}
                 onChange={(event) => fields.onBackground(event.target.value)}
                 onBlur={fields.onSaveBackground}
               />
