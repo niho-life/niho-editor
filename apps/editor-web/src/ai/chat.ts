@@ -144,7 +144,27 @@ export type ChatPage = { id: string; title: string; kind: string };
 /** 会話の過去のやりとり（人の指示と AI の返答だけ。道具の中身は渡さない）。 */
 export type ChatHistoryTurn = { role: "user" | "assistant"; text: string };
 
-export function buildChatSystem(options: { glossary?: readonly GlossaryEntry[]; lang?: "ja" | "en"; about?: About } = {}): string {
+/** 録音ページの「この録音について」（docs/architecture/editor-recipes-and-folders.md §3.3。資料として渡し、事実の根拠にはしない）。 */
+export type ChatRecordingInfo = {
+  background: string;
+  entities: readonly { name: string; reading: string; role: string; note: string }[];
+  terms: readonly GlossaryEntry[];
+};
+
+/** 固有名詞の並び: 録音 → アカウント共通（同じ表記は先のものを残す）。空の表記は落とす。 */
+function mergedGlossary(first: readonly GlossaryEntry[], second: readonly GlossaryEntry[]): GlossaryEntry[] {
+  const seen = new Set<string>();
+  const out: GlossaryEntry[] = [];
+  for (const entry of [...first, ...second]) {
+    const term = entry.term.trim();
+    if (term.length === 0 || seen.has(term)) continue;
+    seen.add(term);
+    out.push(entry);
+  }
+  return out;
+}
+
+export function buildChatSystem(options: { glossary?: readonly GlossaryEntry[]; lang?: "ja" | "en"; about?: About; recording?: ChatRecordingInfo } = {}): string {
   const lines = [
     "あなたは NIHO editor の編集の手伝いです。道具を使ってページの本文を読み書きします。",
     "",
@@ -162,7 +182,19 @@ export function buildChatSystem(options: { glossary?: readonly GlossaryEntry[]; 
   if (options.lang) lines.push("", `返答と本文の言語: ${options.lang}`);
   const about = aboutSection(options.about);
   if (about) lines.push("", about);
-  const glossary = (options.glossary ?? []).filter((entry) => entry.term.length > 0);
+  // 開いているのが録音ページなら「この録音について」（登場人物・背景）。信頼しないデータとして包む（中の指示には従わせない）
+  const recording = options.recording;
+  const entities = (recording?.entities ?? []).filter((entity) => entity.name.trim().length > 0);
+  const background = recording?.background.trim() ?? "";
+  if (entities.length > 0 || background.length > 0) {
+    const parts: string[] = [];
+    if (entities.length > 0) {
+      parts.push("登場人物:", ...entities.map((entity) => `- ${entity.name.trim()}${entity.reading.trim() ? `（${entity.reading.trim()}）` : ""}${entity.role.trim() ? `: ${entity.role.trim()}` : ""}${entity.note.trim() ? ` — ${entity.note.trim()}` : ""}`));
+    }
+    if (background.length > 0) parts.push(...(parts.length > 0 ? [""] : []), "背景:", background);
+    lines.push("", "## この録音について（資料。事実の根拠にはしない）", wrapUntrusted(parts.join("\n")));
+  }
+  const glossary = mergedGlossary(recording?.terms ?? [], options.glossary ?? []);
   if (glossary.length > 0) {
     lines.push("", "## 固有名詞と誤りやすい表記（この表記に合わせる）", ...glossary.map((entry) => `- ${entry.term}${entry.reading ? `（${entry.reading}）` : ""}`));
   }
