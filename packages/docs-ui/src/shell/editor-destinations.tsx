@@ -80,6 +80,8 @@ export type EditorDestinationsPageProps = {
   issuedKey: EditorIssuedKey | null;
   onCopyKey: () => void;
   onCloseKey: () => void;
+  /** 見出しの上の「← 設定」（設定の一覧へ戻る）。 */
+  onNavigate: (href: string) => void;
 };
 
 export type EditorSitePageProps = {
@@ -187,7 +189,7 @@ export function EditorDestinationsPage(props: EditorDestinationsPageProps) {
   const { busy, faces, sites, draft, issuedKey } = props;
   const busyProps = busy ? { "aria-disabled": true as const, style: BUSY } : {};
   return (
-    <ShellSettingsPage title="発信先">
+    <ShellSettingsPage title="発信先" up={{ label: "設定", href: "/settings", onNavigate: props.onNavigate }}>
       <p role="status" style={STATUS}>
         {props.status}
       </p>

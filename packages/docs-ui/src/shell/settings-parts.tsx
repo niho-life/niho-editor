@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useId, type MouseEvent, type ReactNode } from "react";
 import { Icon } from "./icons";
 import type { ShellDest } from "./types";
 
@@ -7,15 +7,30 @@ import type { ShellDest } from "./types";
 export const SHELL_DEST_PILL: Record<ShellDest, string> = { exp: "experience.niho.life", niho: "niho.life", site: "自分のサイト" };
 
 /** 設定系ページの枠。EditorShell の children に入れる。h1 と、あれば戻るボタン・小さな印（pill）。 */
+/** `<a href>` のまま、普通のクリックだけを onNavigate へ回す（修飾キー・中クリックはブラウザに任せる）。 */
+export function linkTo(href: string, onNavigate: (href: string) => void) {
+  return {
+    href,
+    onClick: (event: MouseEvent<HTMLAnchorElement>) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      onNavigate(href);
+    },
+  };
+}
+
 export function ShellSettingsPage({
   title,
   back,
+  up,
   pill,
   nav,
   children,
 }: {
   title: string;
   back?: { label: string; onClick: () => void };
+  /** 見出しの上の「← 設定」のような戻るリンク（設定の一覧から入るページ。href 付きで、普通のクリックは onNavigate）。 */
+  up?: { label: string; href: string; onNavigate: (href: string) => void };
   pill?: ReactNode;
   /** ページ内の節へ飛ぶ帯（設定）。 */
   nav?: { id: string; label: string }[];
@@ -23,6 +38,12 @@ export function ShellSettingsPage({
 }) {
   return (
     <div className="es-page">
+      {up && (
+        <a className="es-back" {...linkTo(up.href, up.onNavigate)}>
+          <Icon name="back" />
+          {up.label}
+        </a>
+      )}
       {back || pill ? (
         <div className="es-page-hd">
           {back && (

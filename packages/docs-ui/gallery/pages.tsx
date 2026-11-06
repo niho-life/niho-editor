@@ -77,8 +77,8 @@ export function PreviewDemo({ id }: { id: string }) {
 }
 
 /** 設定系ページの枠（左の一覧＋ヘッダー＋ページ）。ページは選ばれていない。 */
-function SettingsFrame({ current, title, sidebar: forcedSidebar, pendingInvites = 0, overlay, children }: { current: "dest" | "account" | "settings"; title: string; sidebar?: boolean; pendingInvites?: number; overlay?: ReactNode; children: ReactNode }) {
-  const { sidebar, sidebarOpen, setSidebarOpen } = useSettingsSidebar(current, forcedSidebar, pendingInvites);
+function SettingsFrame({ title, sidebar: forcedSidebar, pendingInvites = 0, overlay, children }: { title: string; sidebar?: boolean; pendingInvites?: number; overlay?: ReactNode; children: ReactNode }) {
+  const { sidebar, sidebarOpen, setSidebarOpen } = useSettingsSidebar(forcedSidebar, pendingInvites);
   return (
     <EditorShell
       sidebar={sidebar}
@@ -108,7 +108,6 @@ export function DestDemo({ forced, addDest }: { forced: PagesForced & { conn?: b
   }));
   return (
     <SettingsFrame
-      current="dest"
       title="発信先"
       sidebar={forced.sidebar}
       pendingInvites={1}
@@ -122,7 +121,7 @@ export function DestDemo({ forced, addDest }: { forced: PagesForced & { conn?: b
 export function SiteDemo({ forced }: { forced: PagesForced }) {
   const [wordpress, setWordpress] = useState(false);
   return (
-    <SettingsFrame current="dest" title={ME.site} sidebar={forced.sidebar} pendingInvites={1}>
+    <SettingsFrame title={ME.site} sidebar={forced.sidebar} pendingInvites={1}>
       <SitePage
         host={ME.site}
         apiUrl="https://api.editor.niho.life/v1/mika/published.json"
@@ -144,7 +143,7 @@ export function AccountDemo({ forced }: { forced: PagesForced }) {
     ...(pending ? [] : [{ id: "niho-kamakura", provider: "NIHO kamakura", initial: "N", experience: EXPERIENCES.dinner!.title, pages: 1 }]),
   ];
   return (
-    <SettingsFrame current="account" title="役割とつながり" sidebar={forced.sidebar} pendingInvites={pending ? 1 : 0}>
+    <SettingsFrame title="役割とつながり" sidebar={forced.sidebar} pendingInvites={pending ? 1 : 0}>
       <AccountPage
         account={{ name: ME.name, initial: ME.initial, email: ME.email }}
         roles={[
@@ -258,7 +257,7 @@ export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: bo
     setNameDraft(copy.name);
   };
   return (
-    <SettingsFrame current="settings" title="設定" sidebar={forced.sidebar} pendingInvites={1}>
+    <SettingsFrame title="設定" sidebar={forced.sidebar} pendingInvites={1}>
       {view.page === "hub" && (
         <EditorSettingsHub
           status={status}
@@ -280,6 +279,8 @@ export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: bo
           storageUsage={{ totalBytes: "105472", imageBytes: "0", audioBytes: "105472" }}
           storageUsageNote={null}
           audio={{ maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30 }}
+          account={{ name: ME.name, initial: ME.initial }}
+          onLogout={() => navigate("login")}
           onNavigate={go}
         />
       )}
@@ -356,7 +357,7 @@ export function WebDestDemo({ forced }: { forced: PagesForced & { add?: boolean;
   const [draft, setDraft] = useState<EditorAddSiteDraft | null>(forced.add ? { mode: "api", handle: "mika-note", siteUrl: "https://note.mika-sato.example", path: "posts" } : null);
   const [issued, setIssued] = useState(Boolean(forced.issuedKey));
   return (
-    <SettingsFrame current="dest" title="発信先" sidebar={forced.sidebar} pendingInvites={1}>
+    <SettingsFrame title="発信先" sidebar={forced.sidebar} pendingInvites={1}>
       <EditorDestinationsPage
         status={issued ? "新しい鍵はこの 1 回だけ出ます" : ""}
         busy={false}
@@ -369,6 +370,7 @@ export function WebDestDemo({ forced }: { forced: PagesForced & { add?: boolean;
           { id: "site-2", handle: "mika-note", host: `note.${ME.site}`, path: "", mode: "wordpress", published: 0 },
         ]}
         onOpenSite={() => navigate("site-web")}
+        onNavigate={(href) => navigate(href === "/settings" ? "settings-web" : "dest-web")}
         draft={draft}
         onAdd={() => setDraft({ mode: "api", handle: "", siteUrl: "https://", path: "" })}
         onDraft={setDraft}
@@ -393,7 +395,7 @@ export function WebSiteDemo({ forced }: { forced: PagesForced & { url?: boolean;
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(forced.confirm === "disconnect");
   const [issued, setIssued] = useState(Boolean(forced.issuedKey));
   return (
-    <SettingsFrame current="dest" title={ME.site} sidebar={forced.sidebar} pendingInvites={1}>
+    <SettingsFrame title={ME.site} sidebar={forced.sidebar} pendingInvites={1}>
       <EditorSitePage
         status=""
         busy={false}
@@ -443,7 +445,7 @@ export function SettingsDemo({ forced }: { forced: PagesForced }) {
   const [speakers, setSpeakers] = useState(true);
   const [saveTo, setSaveTo] = useState<SettingsSaveTo>("cloud");
   return (
-    <SettingsFrame current="settings" title="設定" sidebar={forced.sidebar} pendingInvites={1}>
+    <SettingsFrame title="設定" sidebar={forced.sidebar} pendingInvites={1}>
       <SettingsPage
         profile={{ initial: ME.initial, ...profile }}
         onProfile={(field, value) => setProfile((current) => ({ ...current, [field]: value }))}

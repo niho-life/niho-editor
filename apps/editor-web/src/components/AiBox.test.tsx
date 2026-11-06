@@ -792,10 +792,10 @@ describe("AiPanel: 分割ビューの置き場所（設計 §5.5）", () => {
       root!.render(<div className="es-root"><AiPanel pageId={PAGE_1} context={ai} steps={null} placement={placement} onPagesChanged={onPagesChanged} /></div>);
     });
   }
-  const placed = (over: Partial<Placement> = {}): Placement => ({ at: "right", onMove: vi.fn(), open: false, onOpenChange: vi.fn(), ...over });
+  const placed = (over: Partial<Placement> = {}): Placement => ({ at: "right", open: false, onOpenChange: vi.fn(), ...over });
   const moveItems = () => [...container!.querySelectorAll<HTMLButtonElement>(".es-ai-history .es-ai-menu-row")].filter((item) => /移す|浮かせる/.test(item.textContent ?? "")).map((item) => item.textContent);
 
-  it("置き場所を渡さなければ、見出しは掴めず、会話メニューに移す項目を出さない（従来どおり）", async () => {
+  it("置き場所を渡さなければ、見出しは掴めない。会話メニューに移す項目は無い", async () => {
     defaultServer();
     await renderPlaced(undefined);
     await until(() => !button("会話履歴と切り替え").disabled);
@@ -805,7 +805,7 @@ describe("AiPanel: 分割ビューの置き場所（設計 §5.5）", () => {
     expect(container!.querySelector(".es-ai-sep")).toBeNull();
   });
 
-  it("見出しを掴める（AI 用の型を載せる）。会話メニューの下の区切りのあとに、今いない場所だけ「〜へ移す」", async () => {
+  it("見出しを掴める（AI 用の型を載せる）。会話メニューは履歴だけで「〜へ移す」は無い（ドラッグだけ）", async () => {
     defaultServer();
     const placement = placed({ at: "right" });
     await renderPlaced(placement);
@@ -819,11 +819,9 @@ describe("AiPanel: 分割ビューの置き場所（設計 §5.5）", () => {
     expect(types).toEqual({ "application/x-niho-panel-ai": "ai" });
 
     await click(button("会話履歴と切り替え"));
-    expect(container!.querySelector(".es-ai-history .es-ai-sep")).not.toBeNull();
-    expect(moveItems()).toEqual(["左のドックへ移す", "メインの下に浮かせる"]);
-    await click([...container!.querySelectorAll<HTMLButtonElement>(".es-ai-menu-row")].find((item) => item.textContent === "メインの下に浮かせる")!);
-    expect(placement.onMove).toHaveBeenCalledWith("float");
-    expect(container!.querySelector(".es-ai-history")).toBeNull();
+    expect(container!.querySelector(".es-ai-history")).not.toBeNull();
+    expect(container!.querySelector(".es-ai-history .es-ai-sep")).toBeNull();
+    expect(moveItems()).toEqual([]);
   });
 
   it("置き場所を変えても作り直さない（書きかけ・会話が残る）", async () => {

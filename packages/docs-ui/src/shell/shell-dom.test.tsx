@@ -15,7 +15,6 @@ import {
   ShellSidebar,
   ShellTools,
   StatusDot,
-  shellAccountItems,
   shellMoreItems,
 } from "./index";
 
@@ -53,22 +52,15 @@ const tabStops = (root: ParentNode = document) =>
 const nameOf = (el: Element | null | undefined) => el?.getAttribute("aria-label") ?? el?.textContent?.trim() ?? "";
 
 describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
-  function Sidebar({ onPick = vi.fn() }: { onPick?: (kind: string) => void }) {
+  function Sidebar({ onPick = vi.fn(), onSettings = vi.fn() }: { onPick?: (kind: string) => void; onSettings?: () => void }) {
     const [open, setOpen] = useState(false);
-    const [account, setAccount] = useState(false);
-    return (
-      <ShellSidebar
-        items={[]}
-        newMenu={{ open, onToggle: () => setOpen((v) => !v), onClose: () => setOpen(false), onPick }}
-        me={{ name: "Mika Sato", initial: "M", open: account, items: shellAccountItems(), onToggle: () => setAccount((v) => !v), onClose: () => setAccount(false), onSelect: () => setAccount(false) }}
-      />
-    );
+    return <ShellSidebar items={[]} newMenu={{ open, onToggle: () => setOpen((v) => !v), onClose: () => setOpen(false), onPick }} me={{ onOpen: onSettings }} />;
   }
 
   it("＋で新しいページのメニュー（空のページ／録音から）が開き、先頭にフォーカス。Esc で閉じて＋へ戻る", () => {
     const onPick = vi.fn();
     const host = mount(<Sidebar onPick={onPick} />);
-    const plus = [...host.querySelectorAll<HTMLButtonElement>("button.es-sb-act")].find((button) => button.textContent?.includes("新しいページ"))!;
+    const plus = host.querySelector<HTMLButtonElement>('button[aria-label="新しいページ（⌘N）"]')!;
     expect(host.querySelector('[role="menu"]')).toBeNull();
     act(() => plus.click());
     const menu = host.querySelector('[role="menu"]')!;
@@ -86,18 +78,19 @@ describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
   it("メニューの項目を選ぶと onPick（recording）が呼ばれる", () => {
     const onPick = vi.fn();
     const host = mount(<Sidebar onPick={onPick} />);
-    act(() => [...host.querySelectorAll<HTMLButtonElement>("button.es-sb-act")].find((button) => button.textContent?.includes("新しいページ"))!.click());
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="新しいページ（⌘N）"]')!.click());
     act(() => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent === "録音から")!.click());
     expect(onPick).toHaveBeenCalledWith("recording");
   });
 
-  it("本人の行を押すと 発信先／役割とつながり／設定／ログアウト。外を押しても閉じる", () => {
-    const host = mount(<Sidebar />);
-    act(() => host.querySelector<HTMLButtonElement>(".es-sb-me")!.click());
-    expect([...host.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["発信先", "役割とつながり", "設定", "ログアウト"]);
-    act(() => {
-      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
-    });
+  it("左下の「設定」はメニューを出さず、押すとすぐ onOpen（設定の一覧へ）", () => {
+    const onSettings = vi.fn();
+    const host = mount(<Sidebar onSettings={onSettings} />);
+    const settings = host.querySelector<HTMLButtonElement>(".es-sb-me")!;
+    expect(settings.textContent).toBe("設定");
+    expect(settings.hasAttribute("aria-haspopup")).toBe(false);
+    act(() => settings.click());
+    expect(onSettings).toHaveBeenCalledTimes(1);
     expect(host.querySelector('[role="menu"]')).toBeNull();
   });
 

@@ -15,7 +15,6 @@ import {
   ShellSidebar,
   ShellTermsEditor,
   ShellTools,
-  shellAccountItems,
   type NewPageKind,
   type ShellDropTarget,
   type ShellToolAction,
@@ -41,6 +40,7 @@ import { useFolderFields, type FolderFieldsState } from "@/lib/use-folder-fields
 import { usePageShare } from "@/lib/use-page-share";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
 import { useShellLayout } from "@/lib/use-shell-layout";
+import { useRowDelete } from "@/lib/use-row-delete";
 import { HistorySheet } from "./HistorySheet";
 import { InfoPanel } from "./InfoPanel";
 import { SidePage } from "./SidePage";
@@ -58,11 +58,11 @@ const PAGE_PATH = /^\/p\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 /** 右に並べたページ（`?side=`）の id の形。 */
 const SIDE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** 設定系のページ（本人の行のメニューの項目と、ヘッダーの題名）。 */
+/** 設定系のページ（ヘッダーの題名と、左下の「設定」の現在地）。 */
 const SETTINGS_ROUTES = [
-  { path: "/destinations", item: "dest", title: "発信先" },
-  { path: "/account", item: "account", title: "役割とつながり" },
-  { path: "/settings", item: "settings", title: "設定" },
+  { path: "/destinations", title: "発信先" },
+  { path: "/account", title: "役割とつながり" },
+  { path: "/settings", title: "設定" },
 ] as const;
 
 export type FrameMe = { name: string; caption: string; initial: string };
@@ -215,12 +215,13 @@ const VISUALLY_HIDDEN_STYLE = {
  * 削除の確認（docs-ui の ShellSheet。外は inert、Esc・外の押下・「やめる」で閉じ、閉じたら「…」へフォーカスが戻る）。
  * 送っている間は閉じず、2 回目を送らない。失敗の理由はダイアログの中に出し、閉じない。
  */
-function DeleteConfirm(props: { busy: boolean; error: string | null; onConfirm: () => void; onCancel: () => void }) {
+function DeleteConfirm(props: { title?: string; busy: boolean; error: string | null; onConfirm: () => void; onCancel: () => void }) {
   const { busy } = props;
   return (
     <ShellSheet label="ページの削除" onClose={props.onCancel}>
       <div className="es-sh-hd">
-        <h2>このページを削除しますか？</h2>
+        {/* 一覧の行から消すときは、どのページかを見出しで言う（無題なら「このページ」） */}
+        <h2>{props.title ? `「${props.title}」を削除しますか？` : "このページを削除しますか？"}</h2>
       </div>
       <div className="es-sh-body">
         <div className="es-sh-sec">
@@ -480,7 +481,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // 並べ替えを送っているあいだ（描画を待たずに読む。ドラッグの次のドロップを受けない）
   const orderingRef = useRef(false);
   const [newMenuOpen, setNewMenuOpen] = useState(false);
-  const [meOpen, setMeOpen] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
   const publishSaved = useRef<(id: string) => void>(() => undefined);
   const publishOpen = useRef<() => void>(() => undefined);
@@ -795,21 +795,18 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     router.push(kind === "recording" ? "/p/new?from=recording" : "/p/new");
   };
 
-  const selectAccount = (item: string) => {
-    setMeOpen(false);
-    const route = SETTINGS_ROUTES.find((candidate) => candidate.item === item);
-    if (route) {
-      router.push(route.path);
-      return;
-    }
-    if (item === "logout") {
-      // 結果に関わらずログインの画面へ。この画面の状態（一覧など）を残さないよう、読み込み直す
-      void fetch("/auth/logout", { method: "POST", credentials: "same-origin" })
-        .catch(() => undefined)
-        // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- 読み込み直すため
-        .finally(() => window.location.assign("/auth/login"));
-    }
-  };
+  // 一覧の行の「…」→「削除」（確認のシートはヘッダーの「…」の削除と同じ）。消したページを開いていればホームへ、右に並べていれば閉じる
+  const rowDelete = useRowDelete({
+    current: () => attachedRef.current,
+    onDeleted: (id) => {
+      api.pageRemoved(id);
+      const gone = id.toLowerCase();
+      if (currentId && gone === currentId.toLowerCase()) router.push("/");
+      else if (sideId && gone === sideId) closeSide();
+    },
+  });
+  const rowTitle = (id: string) =>
+    items.find((item) => item.id === id)?.title ?? list.pages.find((page) => page.id === id)?.title ?? "";
 
   const opened = currentId ? (list.pages.find((page) => page.id === currentId) ?? (list.opened?.id === currentId ? list.opened : undefined)) : undefined;
   const recordingStart = pathname === "/p/new" && searchParams.get("from") === "recording";
@@ -1121,7 +1118,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 page={railPage}
                 aiSteps={aiSteps?.ownerId === railId ? aiSteps : null}
                 placement={
-                  narrow ? undefined : { at: layout.place.ai, onMove: (to) => layout.move("ai", to), open: layout.float.open, onOpenChange: layout.setFloatOpen }
+                  narrow ? undefined : { at: layout.place.ai, open: layout.float.open, onOpenChange: layout.setFloatOpen }
                 }
                 onPagesChanged={onAiPagesChanged}
               />
@@ -1182,17 +1179,10 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 ) : null
               }
               photos={photos}
-              side={!narrow && currentId ? { id: sideId ?? undefined, onOpen: openSide, onClose: closeSide } : undefined}
-              panel={narrow ? undefined : { at: layout.place.list, onMove: (to) => layout.move("list", to) }}
-              me={{
-                ...initial.me,
-                open: meOpen,
-                current: settings !== undefined,
-                items: shellAccountItems(0, settings?.item, initial.me.name),
-                onToggle: () => setMeOpen((open) => !open),
-                onClose: () => setMeOpen(false),
-                onSelect: selectAccount,
-              }}
+              side={!narrow && currentId ? { id: sideId ?? undefined, onOpen: openSide } : undefined}
+              onDeleteRow={(id) => rowDelete.open(id, rowTitle(id))}
+              panel={!narrow}
+              me={{ current: settings !== undefined, onOpen: () => router.push("/settings") }}
             />
           }
           header={
@@ -1247,6 +1237,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
             <>
               {menu.confirm ? (
                 <DeleteConfirm {...menu.confirm} />
+              ) : rowDelete.confirm ? (
+                <DeleteConfirm {...rowDelete.confirm} />
               ) : share.sheet ? (
                 <ShareSheet {...share.sheet} />
               ) : history.sheet ? (

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, useEffect, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { SHELL_DND } from "niho-docs-ui/shell";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PageSummary } from "@niho/editor-store";
 import { IDBFactory } from "fake-indexeddb";
@@ -136,9 +137,9 @@ const buttonByText = (text: string, scope: ParentNode = container!) => [...scope
 const rows = () => [...container!.querySelectorAll(".es-sb-list li .es-di-t")].map((node) => node.textContent);
 const shell = () => container!.querySelector<HTMLElement>("[data-editor-shell]")!.dataset;
 const click = (selector: string) => act(async () => container!.querySelector<HTMLElement>(selector)!.click());
-/** 左の一覧の上の行ボタン（「検索」「新しいページ」。名前は見える文字）。 */
+/** 左の一覧の上の 1 行のアイコン（「検索」「新しいページ」。名前は aria-label の先頭）。 */
 const clickSidebarAct = (label: string) =>
-  act(async () => [...container!.querySelectorAll<HTMLButtonElement>("button.es-sb-act")].find((button) => button.textContent?.includes(label))!.click());
+  act(async () => [...container!.querySelectorAll<HTMLButtonElement>(".es-sb-top button.es-ib")].find((button) => button.getAttribute("aria-label")?.startsWith(label))!.click());
 /** ヘッダーの「⋯」の項目を選ぶ。 */
 const chooseMore = async (label: string) => {
   await act(async () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="その他"]')!.click());
@@ -257,18 +258,19 @@ describe("EditorFrame", () => {
     await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent?.includes("録音から"))!.click());
     expect(nav.push).toHaveBeenLastCalledWith("/p/new?from=recording");
 
+    // 左下は「設定」の直リンク（メニューは無い。本人の名前は設定の一覧の「アカウント」に出る）
+    expect(container!.querySelector(".es-sb-me")?.textContent).toBe("設定");
+    expect(container!.querySelector(".es-sb-me")?.hasAttribute("aria-haspopup")).toBe(false);
     await click(".es-sb-me");
-    const items = [...container!.querySelectorAll<HTMLButtonElement>('[role="menu"] [role="menuitem"]')];
-    // 左下は「設定」。本人の名前は「役割とつながり」の行に出る（#37 T9）
-    expect(container!.querySelector(".es-sb-me")?.textContent).toContain("設定");
-    expect(container!.querySelector(".es-sb-me")?.textContent).not.toContain("開発ユーザー");
-    expect(items.map((item) => item.textContent)).toEqual(["発信先", "開発ユーザー役割とつながり", "設定", "ログアウト"]);
-    await act(async () => items[2]!.click());
+    expect(container!.querySelector('[role="menu"]')).toBeNull();
     expect(nav.push).toHaveBeenLastCalledWith("/settings");
 
-    // デスクトップ: 一覧をしまうとヘッダーの左に「一覧を出す」
+    // 左上はアプリ名。デスクトップ: 一覧をしまうとヘッダーの左に「一覧を出す」と、その右隣にアプリ名
+    expect(container!.querySelector('.es-sb-top [aria-label="Editor"]')).not.toBeNull();
+    expect(container!.querySelector('.es-dt [aria-label="Editor"]')).toBeNull();
     await click('button[aria-label="一覧をしまう"]');
     expect(shell().sidebar).toBe("closed");
+    expect(container!.querySelector('.es-dt button[aria-label="一覧を出す"] + [aria-label="Editor"]')).not.toBeNull();
     await click('button[aria-label="一覧を出す"]');
     expect(shell().sidebar).toBe("open");
   });
@@ -298,7 +300,7 @@ describe("EditorFrame", () => {
       vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
       await mount({ pages: [page("a", "日記"), page("b", "録音")], next: "cursor-1" });
       expect(rows()).toEqual(["日記", "録音"]);
-      expect(container!.querySelector('.es-sb-list [aria-hidden="true"]')).not.toBeNull();
+      expect(container!.querySelector('.es-sb-list > [aria-hidden="true"]')).not.toBeNull();
 
       await clickSidebarAct("検索");
       await type("朝");
@@ -308,12 +310,12 @@ describe("EditorFrame", () => {
       expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["…江ノ電の音で目が覚めた…", "朝の散歩の前に"]);
       expect(note()).toBe("2 件");
       // 検索中は続きを読まない
-      expect(container!.querySelector('.es-sb-list [aria-hidden="true"]')).toBeNull();
+      expect(container!.querySelector('.es-sb-list > [aria-hidden="true"]')).toBeNull();
 
       await type("");
       expect(rows()).toEqual(["日記", "録音"]);
       expect(note()).toBeUndefined();
-      expect(container!.querySelector('.es-sb-list [aria-hidden="true"]')).not.toBeNull();
+      expect(container!.querySelector('.es-sb-list > [aria-hidden="true"]')).not.toBeNull();
     });
 
     it("says so when nothing is found, and when the search fails", async () => {
@@ -831,6 +833,68 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     expect(calls).toEqual(["flush", `DELETE /api/pages/${A}`]);
     expect(dialog()).toBeNull();
     expect(rows()).toEqual(["別のページ"]);
+    expect(nav.push).toHaveBeenCalledWith("/");
+  });
+
+  /** 一覧の行の「…」を押して「削除」を選ぶ。 */
+  const deleteRow = async (title: string) => {
+    const row = [...container!.querySelectorAll<HTMLElement>(".es-sb-list .es-dirow")].find((node) => node.querySelector(".es-di-t")?.textContent === title)!;
+    await act(async () => row.querySelector<HTMLButtonElement>(".es-di-more")!.click());
+    const items = [...container!.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="ページのメニュー"] [role="menuitem"]')];
+    expect(items.map((item) => item.textContent)).toEqual(["削除"]);
+    await act(async () => items[0]!.click());
+  };
+
+  it("row delete: the row's … has only 削除; it asks with the title, DELETEs without touching the open page, and keeps the open page", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push(`${init.method} ${url}`);
+        return new Response(null, { status: 204 });
+      }),
+    );
+    await mount({ pages: [page(A, "合成の題名"), page(D, "別のページ")] }, <FakePage page={fakePage(A, { flush: vi.fn(async () => (calls.push("flush"), true)) })} />);
+    calls.length = 0;
+    await deleteRow("別のページ");
+    expect(calls).toEqual([]);
+    expect(dialog()?.getAttribute("aria-label")).toBe("ページの削除");
+    expect(dialog()?.querySelector("h2")?.textContent).toBe("「別のページ」を削除しますか？");
+    expect(dialog()?.textContent).toContain("ゴミ箱に 30 日残ります。");
+    await act(async () => dialogButton("削除する").click());
+    await tick();
+    // 開いていないページなので、開いているページの保存は待たない
+    expect(calls).toEqual([`DELETE /api/pages/${D}`]);
+    expect(dialog()).toBeNull();
+    expect(rows()).toEqual(["合成の題名"]);
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it("row delete: the open page's row saves first, goes to / after deleting, and a refusal stays in the dialog", async () => {
+    const calls: string[] = [];
+    let answer = json(409, { error: "published" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push(`${init.method} ${url}`);
+        return answer;
+      }),
+    );
+    await mount({ pages: [page(A, "")] }, <FakePage page={fakePage(A, { flush: vi.fn(async () => (calls.push("flush"), true)) })} />);
+    calls.length = 0;
+    await deleteRow("無題");
+    // 無題は「このページ」
+    expect(dialog()?.querySelector("h2")?.textContent).toBe("このページを削除しますか？");
+    await act(async () => dialogButton("削除する").click());
+    await tick();
+    expect(calls).toEqual(["flush", `DELETE /api/pages/${A}`]);
+    expect(dialogAlert()).toBe("公開中のページは、先に公開をやめてください");
+    expect(rows()).toEqual(["無題"]);
+    answer = new Response(null, { status: 204 });
+    await act(async () => dialogButton("削除する").click());
+    await tick();
+    expect(dialog()).toBeNull();
+    expect(rows()).toEqual([]);
     expect(nav.push).toHaveBeenCalledWith("/");
   });
 
@@ -2802,6 +2866,18 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
   const rowButton = (title: string) => [...container!.querySelectorAll<HTMLButtonElement>(".es-sb-list .es-di")].find((button) => button.querySelector(".es-di-t")?.textContent === title)!;
   const tick = () => act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
   const shellRoot = () => container!.querySelector<HTMLElement>("[data-editor-shell]")!;
+  /** パネルの見出しを掴んで、窓の横の位置 x に落とす（ドックを移すのはドラッグだけ。jsdom の枠の箱は 0 なので y は効かない）。 */
+  const dropPanel = async (type: string, clientX: number) => {
+    for (const name of ["dragover", "drop"]) {
+      const event = new Event(name, { bubbles: true, cancelable: true });
+      Object.defineProperties(event, {
+        clientX: { value: clientX },
+        clientY: { value: 10 },
+        dataTransfer: { value: { types: [type], getData: () => "", dropEffect: "none" } },
+      });
+      await act(async () => void shellRoot().dispatchEvent(event));
+    }
+  };
   let fetcher: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -2862,12 +2938,10 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     expect(container!.querySelector(".es-side, .es-sash, [role=\"separator\"]")).toBeNull();
     expect(sideReads(fetcher)).toBe(0);
     expect(nav.replace).not.toHaveBeenCalled();
-    // 狭い画面では、置き場所の操作も出さない（AI の置き場所・一覧のメニュー・行の右クリック）
+    // 狭い画面では、置き場所の操作も出さない（AI の置き場所・一覧の掴む所）。行の「…」は削除だけなので狭くても出す
     expect(aiMock.props?.placement).toBeUndefined();
-    expect(container!.querySelector('button[aria-label="一覧のメニュー"]')).toBeNull();
-    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-    await act(async () => void rowButton("三つ目").dispatchEvent(event));
-    expect(event.defaultPrevented).toBe(false);
+    expect(container!.querySelector(".es-sb-top")!.hasAttribute("draggable")).toBe(false);
+    expect(rowButton("三つ目").closest(".es-dirow")!.querySelector(".es-di-more")).not.toBeNull();
   });
 
   it("一覧でメインを替えても右のページは残す。右のページを一覧で開くとメインと入れ替える", async () => {
@@ -2881,7 +2955,7 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     expect(nav.push).toHaveBeenLastCalledWith(`/p/${B}?side=${A}`);
   });
 
-  it("⇄ は入れ替え（画面の移動）、× と「右に並べて開く」は履歴に積まずに ?side= を付け外す", async () => {
+  it("⇄ は入れ替え（画面の移動）、× と ⌥クリックは履歴に積まずに ?side= を付け外す", async () => {
     nav.search = `side=${B}`;
     window.history.replaceState(null, "", `/p/${A}?side=${B}`);
     const replaceState = vi.spyOn(window.history, "replaceState");
@@ -2894,12 +2968,9 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     expect(replaceState).toHaveBeenLastCalledWith(null, "", `/p/${A}`);
     expect(nav.push).toHaveBeenCalledTimes(1);
 
-    // 行の右クリック → 右に並べて開く
-    await act(async () => void rowButton("三つ目").closest(".es-dirow")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 80 })));
-    const menu = container!.querySelector<HTMLElement>('[role="menu"][aria-label="ページのメニュー"]')!;
-    await act(async () => [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent?.startsWith("右に並べて開く"))!.click());
+    // 行の ⌥クリックで右に並べる（メインは替えない。メニューからは並べない）
+    await act(async () => void rowButton("三つ目").dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true })));
     expect(replaceState).toHaveBeenLastCalledWith(null, "", `/p/${A}?side=${C}`);
-    // ⌥クリックでも同じ（メインは替えない）
     await act(async () => void rowButton("右のページ").dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true })));
     expect(replaceState).toHaveBeenLastCalledWith(null, "", `/p/${A}?side=${B}`);
     expect(nav.push).toHaveBeenCalledTimes(1);
@@ -2957,7 +3028,7 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     expect([...container!.querySelectorAll('[role="alert"]')].map((node) => node.textContent)).not.toContain(SWAP_UNSAVED_TEXT);
   });
 
-  it("AI を左のドック・メインの下へ移しても、作り直さず書きかけが残る。置き場所は端末に覚える", async () => {
+  it("AI を左のドック・メインの下へ（見出しのドラッグで）移しても、作り直さず書きかけが残る。置き場所は端末に覚える", async () => {
     await mount({ pages: pages() }, <FakePage id={A} />);
     await tick();
     const presence = container!.querySelector<HTMLElement>(".es-rail-presence")!;
@@ -2965,11 +3036,14 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     const draft = presence.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')!;
     draft.value = "動かしても残す書きかけ";
     expect(aiMock.props?.placement?.at).toBe("right");
+    // 会話メニューの「〜へ移す」は無い（ドラッグだけ）
+    expect(aiMock.props?.placement).not.toHaveProperty("onMove");
 
-    await act(async () => aiMock.props!.placement!.onMove("left"));
+    await dropPanel(SHELL_DND.ai, 10);
     expect(presence.dataset.dock).toBe("left");
     expect(JSON.parse(window.localStorage.getItem(LAYOUT_KEY)!).place).toEqual({ list: "left", ai: "left" });
-    await act(async () => aiMock.props!.placement!.onMove("float"));
+    // メインの列の下の帯へ落とすと浮かせる
+    await dropPanel(SHELL_DND.ai, Math.round(window.innerWidth / 2));
     expect(presence.dataset).toMatchObject({ dock: "float", float: "bar" });
     expect(shellRoot().dataset.ai).toBe("float");
     await act(async () => aiMock.props!.placement!.onOpenChange(true));
@@ -2981,11 +3055,13 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     expect(after.value).toBe("動かしても残す書きかけ");
   });
 
-  it("一覧は「一覧のメニュー」から右のドックへ移せる（同じドックに 2 つなら一覧が上・AI が下）", async () => {
+  it("一覧は上の 1 行を掴んで右のドックへ移せる（移すメニューは無い。同じドックに 2 つなら一覧が上・AI が下）", async () => {
     await mount({ pages: pages() }, <FakePage id={A} />);
     await tick();
-    await act(async () => container!.querySelector<HTMLButtonElement>('button[aria-label="一覧のメニュー"]')!.click());
-    await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="一覧のメニュー"] [role="menuitem"]')][0]!.click());
+    expect(container!.querySelector(".es-sb-top")!.getAttribute("draggable")).toBe("true");
+    expect(container!.querySelector('button[aria-label="一覧のメニュー"]')).toBeNull();
+    // 右の端の帯（枠の幅は jsdom では測れないので、どの幅でも右端より右になる位置）
+    await dropPanel(SHELL_DND.list, 100_000);
     expect(container!.querySelector<HTMLElement>(".es-pane")!.dataset.dock).toBe("right");
     expect(container!.querySelector<HTMLElement>(".es-pane")!.style.gridRow).toBe("1 / 3");
     expect(container!.querySelector<HTMLElement>(".es-rail-presence")!.style.gridRow).toBe("3 / 4");

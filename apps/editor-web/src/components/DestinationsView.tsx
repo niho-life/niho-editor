@@ -92,6 +92,7 @@ export function DestinationsView({ initial }: DestinationsViewProps) {
       faces={faces}
       sites={destinations.sites.map((site) => ({ id: site.id, handle: site.handle, host: site.urlShape.host, path: site.urlShape.path, mode: site.mode, published: site.published }))}
       onOpenSite={(id) => router.push(`/destinations/${id}`)}
+      onNavigate={(href) => router.push(href)}
       draft={draft}
       onAdd={() => setDraft(EMPTY_DRAFT)}
       onDraft={setDraft}

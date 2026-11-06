@@ -22,7 +22,6 @@ import {
   shellStepSay,
   ShellTools,
   StatusDot,
-  shellAccountItems,
   shellMoreItems,
   shellPublishButton,
   shellStatus,
@@ -48,7 +47,7 @@ function sidebar(over: Partial<Parameters<typeof ShellSidebar>[0]> = {}) {
       onCollapse={noop}
       newMenu={{ open: false, onToggle: noop, onClose: noop, onPick: noop }}
       search={{ open: false, value: "", onOpen: noop, onClose: noop, onChange: noop }}
-      me={{ name: "Mika Sato", initial: "M", badge: 1, open: false, items: shellAccountItems(1, undefined, "Mika Sato"), onToggle: noop, onClose: noop, onSelect: noop }}
+      me={{ badge: 1, onOpen: noop }}
       {...over}
     />
   );
@@ -148,15 +147,12 @@ describe("ShellSidebar", () => {
     expect([...html.matchAll(/録音/g)]).toHaveLength(1);
   });
 
-  it("上段は右端の「一覧をしまう」だけ。その下に行ボタン「検索」「新しいページ」（見える文字が名前。ショートカットは飾り）", () => {
-    const top = html.slice(html.indexOf('class="es-sb-top"'), html.indexOf('class="es-sb-acts"'));
-    expect([...top.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1])).toEqual(["一覧をしまう"]);
-    const acts = html.slice(html.indexOf('class="es-sb-acts"'), html.indexOf("<nav"));
-    expect([...acts.matchAll(/class="es-sb-act"[^>]*>(?:<svg[\s\S]*?<\/svg>)?([^<]+)<kbd aria-hidden="true">([^<]+)<\/kbd>/g)].map((m) => [m[1], m[2]])).toEqual([
-      ["検索", "⌘K"],
-      ["新しいページ", "⌘N"],
-    ]);
-    expect(acts).not.toContain("aria-label=");
+  it("上は 1 行: アプリ名 Editor …… 検索・＋・一覧をしまう のアイコン（言葉は aria-label と title）", () => {
+    const top = html.slice(html.indexOf('class="es-sb-top"'), html.indexOf("<nav"));
+    expect([...top.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1])).toEqual(["Editor", "検索（⌘K）", "新しいページ（⌘N）", "一覧をしまう"]);
+    expect(top).toContain('title="検索（⌘K）"');
+    expect(top).toContain('class="es-brand" role="img"');
+    expect(html).not.toContain("es-sb-acts");
     expect(html).not.toContain("es-newbtn");
   });
 
@@ -185,12 +181,16 @@ describe("ShellSidebar", () => {
     expect([...closed.matchAll(/<ul>/g)]).toHaveLength(1);
   });
 
-  it("現在のページは aria-current=page、下は本人の行ひとつ（招待の数つき）", () => {
-    expect(html).toContain('aria-current="page"');
+  it("現在のページは aria-current=page、左下は「設定」の直リンクひとつ（招待の数つき・メニューは無い）", () => {
+    expect([...html.matchAll(/aria-current="page"/g)]).toHaveLength(1);
     expect(html).toContain('aria-label="未処理の招待 1 件"');
     expect([...html.matchAll(/class="es-sb-me/g)]).toHaveLength(1);
-    expect(shellAccountItems(1).map((item) => item.label)).toEqual(["発信先", "役割とつながり", "設定", "ログアウト"]);
-    expect(shellAccountItems(0).every((item) => !item.badge)).toBe(true);
+    const foot = html.slice(html.indexOf('class="es-sb-foot"'));
+    expect(foot).toContain("<b>設定</b>");
+    expect(foot).not.toContain("aria-haspopup");
+    expect(foot).not.toContain("es-av");
+    expect(renderToStaticMarkup(sidebar({ me: { current: true, onOpen: noop } }))).toMatch(/class="es-sb-me" aria-current="page"/);
+    expect(renderToStaticMarkup(sidebar({ me: { badge: 0, onOpen: noop } }))).not.toContain("es-badge");
   });
 
   it("listEnd は一覧の <ul> の直後（<nav> の中）に出る。渡さなければ何も足さない", () => {
@@ -213,6 +213,12 @@ describe("ShellHeader", () => {
     const order = ["一覧を出す", "ブロックを足す", "録音", "ページの状態", ">公開<", "AIと作る", 'aria-label="その他"'].map((needle) => html.indexOf(needle));
     expect(order.every((at) => at >= 0)).toBe(true);
     expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it("一覧をしまったときだけ「一覧を出す」の右隣にアプリ名 Editor を出す", () => {
+    const html = renderToStaticMarkup(header());
+    expect(html).toMatch(/aria-label="一覧を出す"[\s\S]*?<\/button><span class="es-brand" role="img" aria-label="Editor">/);
+    expect(renderToStaticMarkup(header({ showListButton: false }))).not.toContain("es-brand");
   });
 
   it("道具: ＋ テキスト B I リンク 見出し 箇条書き 画像 録音", () => {

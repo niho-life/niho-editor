@@ -105,6 +105,14 @@ const type = async (label: string, value: string) => {
 const status = () => container?.querySelector('[role="status"]')?.textContent;
 
 describe("DestinationsView", () => {
+  it("goes back to 設定 through the router (「← 設定」 is a link to /settings)", async () => {
+    const host = await mount();
+    const back = host.querySelector<HTMLAnchorElement>("a.es-back")!;
+    expect(back.getAttribute("href")).toBe("/settings");
+    await act(async () => void back.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })));
+    expect(push).toHaveBeenCalledWith("/settings");
+  });
+
   it("shows Experience and connected sites without the retired NIHO face, and opens a site's settings", async () => {
     const text = (await mount(dto({ sites: [site] }))).textContent ?? "";
     expect(text).toContain("NIHO Experience");

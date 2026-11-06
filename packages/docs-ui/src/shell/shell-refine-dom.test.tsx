@@ -11,7 +11,6 @@ import {
   ShellSheet,
   ShellSidebar,
   ShellTools,
-  shellAccountItems,
   type PublishFormProps,
   type ShellDropTarget,
   type ShellListItem,
@@ -106,7 +105,7 @@ function Sidebar(props: { items?: ShellListItem[]; onDrop?: (id: string, target:
       items={props.items ?? ITEMS}
       onDrop={props.onDrop}
       canDrop={props.canDrop}
-      me={{ name: "Mika", initial: "M", open: false, items: shellAccountItems(), onToggle: noop, onClose: noop, onSelect: noop }}
+      me={{ onOpen: noop }}
     />
   );
 }
@@ -165,7 +164,7 @@ describe("ShellSidebar のドラッグ（入れ子・並べ替え）", () => {
         items={ITEMS}
         onDrop={vi.fn()}
         recent={{ items: [{ id: "r", title: "最近の行", when: "今" }], open: true, onToggle: noop }}
-        me={{ name: "Mika", initial: "M", open: false, items: shellAccountItems(), onToggle: noop, onClose: noop, onSelect: noop }}
+        me={{ onOpen: noop }}
       />,
     );
     expect(host.querySelectorAll('.es-dirow[draggable="true"]')).toHaveLength(3);
