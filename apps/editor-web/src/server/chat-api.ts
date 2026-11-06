@@ -17,6 +17,7 @@ import {
   type EditorSettings,
   type OwnerId,
   type Page,
+  type PageFields,
   type PageVersionSummary,
   type Recording,
   type RestoreResult,
@@ -62,7 +63,8 @@ export type ChatPagesStore = {
   getPage: (owner: OwnerId, id: string) => Promise<Page | null>;
   savePage: (owner: OwnerId, id: string, patch: { blocks: Block[] }, options: { baseRevision: number }) => Promise<SaveResult | null>;
   createVersion: (owner: OwnerId, id: string, reason: "ai") => Promise<PageVersionSummary | null>;
-  createPage: (owner: OwnerId, input: CreatePageInput) => Promise<Page>;
+  /** 上の段に作る（チャットからはフォルダの中に作らない）。 */
+  createPage: (owner: OwnerId, input: Omit<CreatePageInput, "parent">) => Promise<Page>;
   restoreVersion: (
     owner: OwnerId,
     id: string,
@@ -78,6 +80,8 @@ export type ChatConversationStore = {
   references?: (owner: OwnerId, pageId: string) => Promise<ReferencePage[] | null>;
   /** 録音ページの文字起こし（search_transcript。渡さなければ探せない）。他人の・無いページは null。 */
   recording?: (owner: OwnerId, pageId: string) => Promise<Recording | null>;
+  /** 録音ページの「この録音について」（背景・登場人物・固有名詞）。開いているのが録音ページのとき、指示の文脈に入れる。 */
+  fields?: (owner: OwnerId, pageId: string) => Promise<PageFields>;
   history: (owner: OwnerId, pageId: string, conversationId: string) => Promise<{ messages: AiMessage[] } | null>;
   append: (owner: OwnerId, input: ChatTurnInput) => Promise<{ conversation: { id: string }; result: AiMessage } | null>;
   changes: (owner: OwnerId, pageId: string, messageId: string) => Promise<AiMessageChange[] | null>;
@@ -577,11 +581,18 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
     if (backend.route === "server" && overLimit(await usage.get(owner, month), limitUsd)) return jsonResponse(429, { error: "quota_exceeded" });
 
     const settings = (await deps.settings?.()?.(owner)) ?? DEFAULT_EDITOR_SETTINGS;
+    // 開いているのが録音ページなら「この録音について」（背景・登場人物・固有名詞）も指示の文脈に入れる（AI の欄の「読むもの」と同じ）
+    const recordingInfo = open.kind === "rec" && chats.fields ? await chats.fields(owner, open.id) : null;
     const respond = async (onEvent?: (event: ChatEvent) => void): Promise<unknown> => {
       const changes = new Map<string, ChatChangeInput & { title: string }>();
       const run = await runChatTurn({
         client: backend.client,
-        system: buildChatSystem({ glossary: settings.glossary, about: { name: settings.aboutName, text: settings.about }, ...(settings.aiLang === "same" ? {} : { lang: settings.aiLang }) }),
+        system: buildChatSystem({
+          glossary: settings.glossary,
+          about: { name: settings.aboutName, text: settings.about },
+          ...(settings.aiLang === "same" ? {} : { lang: settings.aiLang }),
+          ...(recordingInfo ? { recording: recordingInfo } : {}),
+        }),
         messages: buildChatMessages(historyOf(past?.messages ?? []), input.value.text, { id: open.id, title: open.title, kind: open.kind }),
         run: createToolRunner({ store, owner, workspace, changes, ...(chats.recording ? { recording: chats.recording } : {}) }),
         // 往復のたびに上限を見る（会話が長くても 1 人 1 か月の上限は同じ意味で働く）

@@ -99,7 +99,7 @@ function setup(options: {
   return createAiStepExecutor(deps);
 }
 
-const input = { recipe: tpl1, stepIndex: 0, owner: OWNER, parentBlocks: transcript, backgroundBlocks: [], previousBlocks: null };
+const input = { recipe: tpl1, stepIndex: 0, owner: OWNER, parentBlocks: transcript, background: "", previousBlocks: null };
 
 describe("the real step executor", () => {
   it("turns the model's output into blocks and reports the usage", async () => {
@@ -148,7 +148,7 @@ describe("the real step executor", () => {
     await setup({ client: first.client }).run(input);
     expect(first.calls[0]!.user).toContain(`手順「${tpl1.name}」の段階 1/${tpl1.steps.length}「${tpl1.steps[0]!.name}」`);
     expect(first.calls[0]!.user).toContain("合成の座談会の文字起こし\n\n二つ目の段落");
-    expect(first.calls[0]!.user).not.toContain("背景情報（親フォルダ）");
+    expect(first.calls[0]!.user).not.toContain("背景情報（この録音について）");
 
     const second = okClient();
     await setup({ client: second.client }).run({
@@ -161,17 +161,17 @@ describe("the real step executor", () => {
     expect(second.calls[0]!.user).toContain("合成の座談会の文字起こし");
   });
 
-  it("uses the captured folder fields, settings and stable reference labels", async () => {
+  it("uses the captured recording fields, settings and stable reference labels", async () => {
     const call = okClient();
     const prior = (text: string): Block[] => [{ type: "paragraph", content: [{ type: "text", text }] }];
     await setup({ client: call.client }).run({
       ...input,
       stepIndex: 2,
-      backgroundBlocks: prior("合成の親フォルダ背景"),
+      background: "合成の録音の背景",
       previousBlocks: prior("二番目"),
       materials: {
         parentBlocks: transcript,
-        backgroundBlocks: prior("合成の親フォルダ背景"),
+        background: "合成の録音の背景",
         upstream: [{ id: tpl1.steps[0]!.id, blocks: prior("一番目") }, { id: tpl1.steps[1]!.id, blocks: prior("二番目") }],
         refs: [{ id: "synthetic-ref", blocks: prior("参考の本文"), title: "変更される題名" }],
         fields: { entities: [{ name: "合成人物", reading: "ごうせい", role: "取材相手", note: "" }], terms: [{ term: "合成語", reading: "", variants: [], note: "" }] },
@@ -187,7 +187,7 @@ describe("the real step executor", () => {
     expect(prompt).toContain("合成語");
     expect(prompt).toContain("出力の言語: en");
     expect(prompt).toContain("合成の筆者");
-    expect(prompt).toContain("## 背景情報（親フォルダ）\n<untrusted_data>\n合成の親フォルダ背景\n</untrusted_data>");
+    expect(prompt).toContain("## 背景情報（この録音について）\n<untrusted_data>\n合成の録音の背景\n</untrusted_data>");
   });
 
   it("records the estimated cost of the call", async () => {

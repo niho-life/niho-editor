@@ -3,6 +3,7 @@ import type { AuthProvider } from "../auth/types";
 import {
   conflictResponse,
   errorResponse,
+  folderResponse,
   guarded,
   isSameOriginRequest,
   jsonResponse,
@@ -29,6 +30,9 @@ export type PagesStore = Pick<
   | "listTrash"
   | "restoreFromTrash"
 >;
+
+/** store がフォルダの規則で断ったときの TypeError の文言（store.ts の createPage・savePage）。 */
+const FOLDER_RULES = /^editor-store: (folder has no body|a folder cannot be inside a folder|kind cannot change to or from folder)$/;
 
 /** `/api/pages`・`/api/trash` が使うもの。route から渡す（テストでは差し替える）。 */
 export type PagesApiDeps = {
@@ -63,7 +67,11 @@ export function listPages(request: Request, deps: PagesApiDeps): Promise<Respons
   });
 }
 
-/** POST /api/pages — 新しいページ（`{}` で空のページ）。 */
+/**
+ * POST /api/pages — 新しいページ（`{}` で空のページ）。`{ kind?: 'note' | 'rec' | 'folder', parent?: id }`。
+ * `parent` は本人の生きているフォルダだけ（別の人・ゴミ箱・無い id・フォルダでないは同じ 404）。
+ * フォルダに本文・`parent` を付けると 400。
+ */
 export function createPage(request: Request, deps: PagesApiDeps): Promise<Response> {
   return guarded("POST /api/pages", async () => {
     const session = await sessionOf(request, deps);
@@ -76,9 +84,13 @@ export function createPage(request: Request, deps: PagesApiDeps): Promise<Respon
     const input = parseCreatePage(body.value);
     if (!input.ok) return errorResponse("bad_request");
     try {
-      return jsonResponse(201, { page: await store.createPage(session.userId, input.value) });
+      const page = await store.createPage(session.userId, input.value);
+      if (!page) return notFoundResponse();
+      return jsonResponse(201, { page });
     } catch (error) {
       if (error instanceof RangeError && error.message === "editor-store: page is too large") return errorResponse("page_full");
+      // フォルダの規則（本文を持たない・入れ子にしない）。入口で断っているので、ここへは来ない見込み
+      if (error instanceof TypeError && FOLDER_RULES.test(error.message)) return errorResponse("bad_request");
       throw error;
     }
   });
@@ -114,7 +126,14 @@ export function patchPage(request: Request, id: string, deps: PagesApiDeps): Pro
     if (!input.ok) return errorResponse("bad_request");
     const { patch, baseRevision, overwrite } = input.value;
     // 404 の判定（自分のページか）は store が revision の比較より先に行う
-    const result = await store.savePage(session.userId, id, patch, { baseRevision, overwrite });
+    let result: Awaited<ReturnType<PagesStore["savePage"]>>;
+    try {
+      result = await store.savePage(session.userId, id, patch, { baseRevision, overwrite });
+    } catch (error) {
+      // フォルダは本文を持たず、ほかの種類と行き来しない（自分のフォルダにだけ届く。ほかは store が先に null）
+      if (error instanceof TypeError && FOLDER_RULES.test(error.message)) return folderResponse();
+      throw error;
+    }
     if (!result) return notFoundResponse();
     if (result.status === "page_full") return errorResponse("page_full");
     return result.status === "saved" ? jsonResponse(200, { page: result.page }) : conflictResponse(result.page);
@@ -124,7 +143,8 @@ export function patchPage(request: Request, id: string, deps: PagesApiDeps): Pro
 /**
  * PATCH /api/pages/{id}/parent — フォルダへ入れる・出す（`{ parent: id | null }`。`null` で上の段へ出す）。
  * 変わるのは親だけで、本文・`revision`・`updated_at` は動かない（移動は編集ではない）。
- * 段が深くなりすぎる移動は 409 `too_deep`、自分自身・自分の子孫の下へ入れる移動は 409 `cycle`（どちらも何も書かない）。
+ * 段が深くなりすぎる移動は 409 `too_deep`、自分自身・自分の子孫の下へ入れる移動は 409 `cycle`、入れ先がフォルダでない・
+ * フォルダをフォルダへ入れる移動は 409 `not_folder`（どれも何も書かない）。
  * 自分のページでない・入れ先が自分のページでないときは、どれも同じ 404。
  */
 export function movePage(request: Request, id: string, deps: PagesApiDeps): Promise<Response> {
@@ -142,7 +162,7 @@ export function movePage(request: Request, id: string, deps: PagesApiDeps): Prom
     const result = await store.movePage(session.userId, id, parent.value);
     if (!result) return notFoundResponse();
     if (result === "moved") return jsonResponse(200, { parent: parent.value });
-    return errorResponse(result === "too_deep" ? "too_deep" : "cycle");
+    return errorResponse(result);
   });
 }
 

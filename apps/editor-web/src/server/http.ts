@@ -29,6 +29,7 @@ export type ApiErrorCode =
   | "published"
   | "too_deep"
   | "cycle"
+  | "not_folder"
   | "payload_too_large"
   | "page_full"
   | "unrestorable"
@@ -46,6 +47,8 @@ const STATUS: Record<ApiErrorCode, number> = {
   too_deep: 409,
   // 自分自身・自分の子孫の下へ入れる移動
   cycle: 409,
+  // 入れ先がフォルダでない・フォルダをフォルダへ入れる移動（親になれるのはフォルダだけ）
+  not_folder: 409,
   payload_too_large: 413,
   page_full: 413,
   // 今の形では保存できない古い版には戻さない
@@ -60,6 +63,15 @@ export function jsonResponse(status: number, body: unknown): Response {
 
 export function errorResponse(code: ApiErrorCode): Response {
   return jsonResponse(STATUS[code], { error: code });
+}
+
+/**
+ * フォルダ（`kind = 'folder'`）にはできない操作（公開・共有・複製・英語版・録音・文字起こし・本文の保存）。
+ * 400 `bad_request` に理由 `folder` を付ける（docs/architecture/editor-recipes-and-folders.md §3.2 の 3）。
+ * 自分のフォルダにだけ返す（それ以外は notFoundResponse）。
+ */
+export function folderResponse(): Response {
+  return jsonResponse(400, { error: "bad_request", reason: "folder" });
 }
 
 /**

@@ -96,7 +96,7 @@ export async function runAttempt(deps: RunnerDeps, task: { runId: string; stepIn
         owner: claim.owner,
         parentPageId: claim.parentId,
         parentBlocks: input.parentBlocks,
-        backgroundBlocks: input.backgroundBlocks,
+        background: input.background,
         previousBlocks: input.previousBlocks,
         materials: input,
         signal: controller.signal,

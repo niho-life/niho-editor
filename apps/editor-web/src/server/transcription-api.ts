@@ -12,7 +12,7 @@ import {
 import type { AuthProvider } from "../auth/types";
 import type { TranscriptionDispatcher } from "../transcription/dispatch";
 import type { TranscriptionEngineName } from "../transcription/engine";
-import { errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
+import { errorResponse, folderResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
 
 /**
  * 録音の文字起こし（#36 段 2b）の API: 開始（「もう一度」を含む）と状態の取得。
@@ -31,6 +31,11 @@ export type TranscriptionStore = {
   enqueue: (owner: OwnerId, pageId: string, input: EnqueueTranscriptionInput) => Promise<EnqueueTranscriptionResult | null>;
   status: (owner: OwnerId, pageId: string) => Promise<{ run: TranscriptionRunView | null } | null>;
   failRun: (runId: string, generation: number, errorCode: TranscriptionErrorCode) => Promise<boolean>;
+  /**
+   * ページの種類と、文字起こしのヒント（その録音ページ自身の固有名詞。editor-store の `readTranscriptionHints`）。
+   * 無ければヒントを足さない（ページが無いときは null。そのときは enqueue が同じ 404 を返す）。
+   */
+  hints?: (owner: OwnerId, pageId: string) => Promise<{ kind: string; terms: string[] } | null>;
 };
 
 /**
@@ -103,7 +108,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-type StartRequest = { language?: PageLang; diarize: boolean; replace: boolean; terms: string[]; engine?: TranscriptionEngineName };
+type StartRequest = { language?: PageLang; diarize: boolean; replace: boolean; terms: string[]; engine?: TranscriptionEngineName; termsGiven: boolean };
 
 /**
  * `{ lang?, diarize?, replace?, terms?, engine? }` だけを受ける。既定は diarize: true・replace: false・terms: []・
@@ -141,6 +146,7 @@ function parseStart(body: unknown, engines: readonly TranscriptionEngineName[]):
       diarize: body.diarize ?? true,
       replace: body.replace ?? false,
       terms,
+      termsGiven: body.terms !== undefined,
       ...(engine === undefined ? {} : { engine }),
     },
   };
@@ -165,10 +171,15 @@ export function startTranscriptionRoute(request: Request, id: string, deps: Tran
     if (!body.ok) return body.response.status === 400 ? badRequest("body") : body.response;
     const parsed = parseStart(body.value, runner.engines);
     if (!parsed.ok) return badRequest(parsed.reason);
-    const { engine = runner.engine, ...start } = parsed.value;
+    const { engine = runner.engine, termsGiven, ...start } = parsed.value;
 
     // owner は認証の層の本人だけ（要求の値からは決めない）
     const owner = session.userId;
+    const hints = store.hints ? await store.hints(owner, id) : null;
+    // フォルダは録音を持たない（§3.2 の 3）
+    if (hints?.kind === "folder") return folderResponse();
+    // 画面が terms を送らなければ、その録音の固有名詞をヒントにする（§3.3）
+    if (!termsGiven && hints) start.terms = hints.terms;
     const result = await store.enqueue(owner, id, { engine, ...start });
     if (!result) return notFoundResponse();
     switch (result.status) {

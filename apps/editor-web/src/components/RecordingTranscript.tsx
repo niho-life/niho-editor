@@ -51,6 +51,8 @@ const PART_CONTROLS_STYLE: CSSProperties = { display: "flex", alignItems: "cente
  *   シークする。Partが取り込み中・期限切れ・欠落ならその状態を知らせ、別Partへ移動できる。段落の時刻を押すと該当Partから再生し、
  *   いま再生している段落を強調する（段落が移ったときだけ描き直す）。
  */
+const TRANSCRIPT_HEADING_STYLE = { margin: "18px 0 8px", fontSize: 16, fontWeight: 600, color: "var(--ed-ink)" } as const;
+
 export function RecordingTranscript({ pageId }: { pageId: string }) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [attempt, setAttempt] = useState(0);
@@ -325,6 +327,8 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
         if (!composing.current) setTyping(false);
       }}
     >
+      {/* 本文の見出し「文字起こし」（文字起こしはページにしない。録音ページの本文で、この見出しの下に出す。§3.3） */}
+      <h2 style={TRANSCRIPT_HEADING_STYLE}>文字起こし</h2>
       <div inert={adopting} aria-busy={adopting} data-recording-controls="">
       {audio && (
         <RecordingTranscription pageId={pageId} audio={audio} engine={snapshot.defaultEngine ?? null} hasTranscript={hasSegments} onSucceeded={reloadAfterTranscription} onHasTranscript={reloadAfterTranscription} showMacCli={!hasSegments} />

@@ -7,12 +7,12 @@ import { after, before, describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Pool as PgPool } from "pg";
 import { applyMigrations, defaultMigrationsDir, readMigrations } from "../src/migrate.ts";
-import { PAGE_KINDS } from "../src/types.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 
 // 合成のユーザー ID と合成の本文だけを使う
 const OWNER = "synthetic-journal-owner";
+const KINDS_AT_0020 = ["note", "rec", "article", "step"] as const;
 
 async function withSchema(label: string): Promise<{ pool: PgPool; drop: () => Promise<void> }> {
   const { Pool } = await import("pg");
@@ -79,7 +79,8 @@ describe("0020 removes the journal kind", { skip: databaseUrl === undefined }, (
       assert.deepEqual(after.get(note), before.get(note));
 
       await assert.rejects(insert(pool, "journal", "x"), (error: { code?: string }) => error.code === "23514");
-      for (const kind of PAGE_KINDS) await insert(pool, kind, `kind ${kind}`);
+      // 0020 の時点の種類の集合（folder は後の 20261106161433 で足す）
+      for (const kind of KINDS_AT_0020) await insert(pool, kind, `kind ${kind}`);
     } finally {
       client.release();
     }

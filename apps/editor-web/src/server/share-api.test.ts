@@ -20,7 +20,7 @@ import {
 
 const ORIGIN = "http://editor.test";
 
-type Row = { id: string; owner: string; title: string; blocks: Block[]; deleted: boolean; token: string | null; createdAt: string; rotatedAt: string | null };
+type Row = { id: string; owner: string; title: string; blocks: Block[]; kind?: string; deleted: boolean; token: string | null; createdAt: string; rotatedAt: string | null };
 
 /** owner ごとに分けた、メモリの中だけの合成の store（packages/editor-store と同じ約束: 自分の・ゴミ箱でない行だけ、無ければ null）。 */
 function memoryStore(rows: Row[]) {
@@ -73,7 +73,7 @@ function memoryStore(rows: Row[]) {
     getPage: async (owner, id) => {
       calls.push(`page:${owner}`);
       const row = find(owner, id);
-      return row ? { title: row.title, blocks: row.blocks } : null;
+      return row ? { title: row.title, blocks: row.blocks, ...(row.kind ? { kind: row.kind } : {}) } : null;
     },
   };
   return { store, calls };
@@ -237,7 +237,24 @@ describe("share API", () => {
     const { page } = (await response.json()) as { page: DuplicatedPage };
     expect(page.id).not.toBe(mine.id);
     expect(page.title).toBe("元の題名のコピー");
-    expect(calls).toEqual(["duplicate:user-a"]);
+    expect(calls).toEqual(["page:user-a", "duplicate:user-a"]);
+  });
+
+  it("refuses to share, rotate, duplicate or export.md a folder with 400 (reason folder), and writes nothing", async () => {
+    const folder = row("user-a", { kind: "folder", blocks: [] });
+    const { store, calls } = memoryStore([folder]);
+    const d = deps("user-a", store);
+    for (const [label, method, suffix, handler] of ROUTES.filter(([label]) => label !== "GET share" && label !== "DELETE share")) {
+      const response = await call(handler, method, suffix, folder.id, d);
+      expect(response.status, label).toBe(400);
+      expect(await response.json(), label).toEqual({ error: "bad_request", reason: "folder" });
+    }
+    expect(folder.token).toBeNull();
+    expect(calls.filter((entry) => !entry.startsWith("page:"))).toEqual([]);
+    // 別の人のフォルダは同じ 404
+    const theirs = row("user-b", { kind: "folder", blocks: [] });
+    const other = memoryStore([theirs]);
+    expect((await call(enableShareRoute, "PUT", "/share", theirs.id, deps("user-a", other.store))).status).toBe(404);
   });
 
   it("answers 500 without internal details or the token when the store fails", async () => {

@@ -61,6 +61,8 @@ export type CandidatesStore = {
   deleteCandidate: (owner: OwnerId, pageId: string, candidateId: string) => Promise<DeleteRecordingCandidateResult | null>;
   enqueue: (owner: OwnerId, pageId: string, input: EnqueueTranscriptionInput) => Promise<EnqueueTranscriptionResult | null>;
   failRun: (runId: string, generation: number, errorCode: TranscriptionErrorCode) => Promise<boolean>;
+  /** その録音ページ自身の固有名詞（文字起こしのヒント。transcription-api の TranscriptionStore.hints と同じ）。 */
+  hints?: (owner: OwnerId, pageId: string) => Promise<{ kind: string; terms: string[] } | null>;
 };
 
 export type CandidatesApiDeps = {
@@ -164,7 +166,9 @@ async function startCandidateRun(
   candidateId: string,
   engine: TranscriptionEngineName = runner.engine,
 ): Promise<{ run: ReturnType<typeof transcriptionRunBody> | null; reason: string | null }> {
-  const result = await store.enqueue(owner, pageId, { engine, diarize: true, replace: false, terms: [], candidate: candidateId });
+  // その録音の固有名詞をヒントにする（§3.3。読めなければ足さない）
+  const terms = store.hints ? ((await store.hints(owner, pageId))?.terms ?? []) : [];
+  const result = await store.enqueue(owner, pageId, { engine, diarize: true, replace: false, terms, candidate: candidateId });
   if (!result) return { run: null, reason: "missing" };
   if (result.status === "audio_not_ready" || result.status === "audio_expired" || result.status === "has_transcript" || result.status === "candidate_missing") {
     return { run: null, reason: result.status };

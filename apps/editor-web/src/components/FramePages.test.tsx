@@ -28,6 +28,12 @@ vi.mock("./PageEditor", () => ({
     return <div data-editor="" />;
   },
 }));
+vi.mock("./RecordingInfo", () => ({
+  RecordingInfo: ({ pageId }: { pageId: string }) => <div data-recording-info={pageId} />,
+}));
+vi.mock("./FolderPage", () => ({
+  FolderPage: ({ summary }: { summary: { id: string } }) => <div data-folder-page={summary.id} />,
+}));
 vi.mock("./RecordingTranscript", () => ({
   RecordingTranscript: ({ pageId }: { pageId: string }) => <div data-transcript={pageId} />,
 }));
@@ -105,7 +111,7 @@ describe("NewPage: the creation redirect belongs to the draft that made the page
     expect(window.location.pathname).toBe("/p/new");
     expect(rememberLastPage).not.toHaveBeenCalled();
     // ページは作られているので、一覧には載せる
-    expect(frame.pageCreated).toHaveBeenCalledWith("22222222-2222-4222-8222-222222222222", "");
+    expect(frame.pageCreated).toHaveBeenCalledWith("22222222-2222-4222-8222-222222222222", "", "note", null);
   });
 
   it("keeps the safe Experience handoff through creation and starts the private page in English", async () => {
@@ -166,9 +172,9 @@ describe("NewPage: a page left without anything added is discarded (owner decisi
 
 describe("OpenPage: the steps band, the transcript, then the title and body", () => {
   const PAGE = "33333333-3333-4333-8333-333333333333";
-  const summary = (kind: "note" | "rec" | "step", parent: string | null = null) => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent, stepStatus: null, sortOrder: 0, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
+  const summary = (kind: "note" | "rec" | "step" | "folder", parent: string | null = null) => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent, stepStatus: null, sortOrder: 0, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
 
-  async function open(kind: "note" | "rec" | "step", parent: string | null = null) {
+  async function open(kind: "note" | "rec" | "step" | "folder", parent: string | null = null) {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -179,12 +185,19 @@ describe("OpenPage: the steps band, the transcript, then the title and body", ()
   }
 
   const order = (host: HTMLElement) =>
-    [...host.children].map((node) => node.getAttribute("data-steps") ?? node.getAttribute("data-transcript") ?? "editor");
+    [...host.children].map((node) => node.getAttribute("data-steps") ?? node.getAttribute("data-transcript") ?? (node.hasAttribute("data-recording-info") ? "info" : "editor"));
 
-  it("puts the steps band first, then the transcript (kind=rec), then the page editor", async () => {
+  it("puts the steps band first, then この録音について and the transcript (kind=rec), then the page editor", async () => {
     const host = await open("rec");
-    expect(order(host)).toEqual([`${PAGE}:rec:none`, PAGE, "editor"]);
+    expect(order(host)).toEqual([`${PAGE}:rec:none`, "info", PAGE, "editor"]);
     expect(frame.pageOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a folder as the folder screen (no page editor, no transcript)", async () => {
+    const host = await open("folder");
+    expect(host.querySelector(`[data-folder-page="${PAGE}"]`)).not.toBeNull();
+    expect(host.querySelector("[data-editor]")).toBeNull();
+    expect(host.querySelector("[data-steps]")).toBeNull();
   });
 
   it("shows the band and the editor for an ordinary page, without the transcript", async () => {

@@ -37,13 +37,21 @@ function subOf(page: PageSummary): ShellListItem["sub"] {
   return say ? { text: say } : undefined;
 }
 
-function rowOf(page: PageSummary, now: number, depth: 0 | 1 | 2, folder: boolean, open: boolean): ShellListItem {
+/** 題名の前のアイコン（フォルダ・録音・工程のサブページの ✦）。ほかの種類は出さない。 */
+function iconOf(page: Pick<PageSummary, "kind">): ShellListItem["icon"] {
+  return page.kind === "folder" ? "folder" : page.kind === "rec" ? "mic" : page.kind === "step" ? "spark" : undefined;
+}
+
+function rowOf(page: PageSummary, now: number, depth: 0 | 1 | 2, folder: boolean, open: boolean, empty = false): ShellListItem {
   const item: ShellListItem = { id: page.id, title: page.title, when: formatWhen(page.updatedAt, now) };
   if (depth > 0) item.depth = depth;
   if (folder) {
     item.folder = true;
     item.open = open;
+    if (empty) item.empty = true;
   }
+  const icon = iconOf(page);
+  if (icon) item.icon = icon;
   // 進行中の行は回るマーク（#37）。公開中のサブページでも、作っている間は印を出す
   if (page.stepStatus === "run") item.busy = true;
   const sub = subOf(page);
@@ -105,7 +113,10 @@ function byOrderThenGiven(a: PageSummary, b: PageSummary): number {
 const MAX_DEPTH = 2;
 
 /**
- * サイドバーの 1 本の木（フォルダ＝子を持てるページ。docs/architecture/editor-recipes-and-folders.md §3・§4）。
+ * サイドバーの 1 本の木（フォルダ＝`kind = 'folder'` の入れ物。docs/architecture/editor-recipes-and-folders.md §3・§4）。
+ *
+ * - フォルダかどうかは `kind` で決める（子の有無でなく）。空のフォルダも開閉の場所を取るフォルダの行で出る（押せない）。
+ * - 録音の下の工程のサブページは、いつも録音の下に出す（録音は開閉を持たない）。
  *
  * - 並びは手動の並び（`sortOrder`）が先。同じなら上の段は渡した順（更新順）、その中の行は作った順
  *   （手順のサブページが段の順に並ぶ）。読み込んだ分の中で並べ替えるので、まだ読んでいないページは続きを読んだときに入る。
@@ -134,9 +145,10 @@ export function arrangeSidebarItems(pages: readonly PageSummary[], options: { no
     if (shown.has(page.id)) return;
     shown.add(page.id);
     const under = depth < MAX_DEPTH ? (children.get(page.id) ?? []).toSorted(byOrderThenCreated) : [];
+    const folder = page.kind === "folder";
     const open = under.length > 0 && collapsed?.has(page.id) !== true;
-    items.push(rowOf(page, now, depth, under.length > 0, open));
-    if (!open) return;
+    items.push(rowOf(page, now, depth, folder, folder && open, folder && under.length === 0));
+    if (under.length === 0 || (folder && !open)) return;
     for (const child of under) walk(child, (depth + 1) as 1 | 2);
   };
   // 手動の並び（渡した順＝更新の新しい順は、同じ並びの中でそのまま。sort は安定）
@@ -145,11 +157,12 @@ export function arrangeSidebarItems(pages: readonly PageSummary[], options: { no
 }
 
 /**
- * そのページを入れられるフォルダ（情報パネルの「フォルダ」の選択肢）。上の段のページだけを出し、
- * 自分自身・自分の子孫（読み込んである分）と、入れると段が深くなりすぎるものは出さない。
- * サーバーも同じ規則で断る（`EditorStore.movePage`。深すぎる移動は `too_deep`、自分の中は `cycle`）。
+ * そのページを入れられるフォルダ（「移動…」の選択肢）。上の段のフォルダ（`kind = 'folder'`）だけを出し、
+ * 自分自身・自分の子孫（読み込んである分）と、入れると段が深くなりすぎるものは出さない。フォルダはどこへも入れない（空）。
+ * サーバーも同じ規則で断る（`EditorStore.movePage`。深すぎる移動は `too_deep`、自分の中は `cycle`、フォルダでない入れ先は `not_folder`）。
  */
 export function folderOptions(pages: readonly PageSummary[], id: string): { id: string; title: string }[] {
+  if (pages.find((page) => page.id === id)?.kind === "folder") return [];
   const children = new Map<string, PageSummary[]>();
   for (const page of pages) {
     if (page.parent === null) continue;
@@ -173,7 +186,9 @@ export function folderOptions(pages: readonly PageSummary[], id: string): { id: 
       }
     }
   }
-  return pages.filter((page) => page.parent === null && !inside.has(page.id)).map((page) => ({ id: page.id, title: page.title }));
+  return pages
+    .filter((page) => page.parent === null && page.kind === "folder" && !inside.has(page.id))
+    .map((page) => ({ id: page.id, title: page.title }));
 }
 
 /**
@@ -198,6 +213,46 @@ export function siblingOrder(pages: readonly PageSummary[], id: string): string[
   if (!page) return [];
   const siblings = pages.filter((item) => item.parent === page.parent);
   return (page.parent === null ? siblings.toSorted(byOrderThenGiven) : siblings.toSorted(byOrderThenCreated)).map((item) => item.id);
+}
+
+/**
+ * フォルダを開いた画面の中身（読み込んである分。サイドバーと同じ並びの規則）。フォルダの直下のページを並べ、録音の下には
+ * 工程のサブページを 1 段下げて続ける。2 行目は一覧と同じ言葉。フォルダの行を作らない（開閉も持たない）。
+ */
+export function folderContents(pages: readonly PageSummary[], folderId: string, now: number): ShellListItem[] {
+  const rows: ShellListItem[] = [];
+  for (const page of pages.filter((item) => item.parent === folderId).toSorted(byOrderThenCreated)) {
+    rows.push(rowOf(page, now, 0, false, false));
+    for (const step of pages.filter((item) => item.parent === page.id).toSorted(byOrderThenCreated)) rows.push(rowOf(step, now, 1, false, false));
+  }
+  return rows;
+}
+
+/**
+ * 開いているページの所属フォルダ（開いているのがフォルダならそれ、フォルダの直下のページならその親、工程のサブページなら
+ * 録音の親）。読み込んである行で見る。上の段のページは null。
+ */
+export function folderOfPage(pages: readonly PageSummary[], id: string | null): PageSummary | null {
+  if (id === null) return null;
+  const byId = new Map(pages.map((page) => [page.id, page]));
+  for (let at = byId.get(id), steps = 0; at && steps <= MAX_DEPTH; at = at.parent ? byId.get(at.parent) : undefined, steps++) {
+    if (at.kind === "folder") return at;
+  }
+  return null;
+}
+
+/**
+ * ヘッダーのパンくず（場所）。親のフォルダ › 親の録音 だけで、そのページ自身は入れない。上の段のページは空。
+ */
+export function locationOf(pages: readonly PageSummary[], id: string | null): { id: string; title: string; icon: "folder" | "mic" }[] {
+  if (id === null) return [];
+  const byId = new Map(pages.map((page) => [page.id, page]));
+  const parts: { id: string; title: string; icon: "folder" | "mic" }[] = [];
+  const self = byId.get(id);
+  for (let at = self?.parent ? byId.get(self.parent) : undefined, steps = 0; at && steps < MAX_DEPTH; at = at.parent ? byId.get(at.parent) : undefined, steps++) {
+    parts.unshift({ id: at.id, title: at.title, icon: at.kind === "folder" ? "folder" : "mic" });
+  }
+  return parts;
 }
 
 /** 「最近」の行（木にしない。段も開閉も持たない）。 */

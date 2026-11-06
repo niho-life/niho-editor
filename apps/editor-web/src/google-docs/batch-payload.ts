@@ -134,7 +134,12 @@ function backgroundMarkdown(page: GoogleDocsBatchTreePage, counts: Map<string, n
       .map((entry) => cleanTextLinks(entry.trim(), counts)).join(" / ");
     lines.push(`- ${cleanTextLinks(item.term.trim(), counts)}${detail ? `: ${detail}` : ""}`);
   }
-  return { markdown: lines.length ? `## 背景\n\n${lines.join("\n")}\n` : "", count: lines.length };
+  // 録音の背景（文字。2026-11-06）は、登場人物・固有名詞の後ろに段落で置く
+  const text = typeof page.background === "string" ? page.background.trim() : "";
+  const paragraph = text === "" ? "" : cleanTextLinks(text.replace(/\r\n?/g, "\n"), counts);
+  const count = lines.length + (paragraph === "" ? 0 : 1);
+  const body = [lines.join("\n"), paragraph].filter((part) => part !== "").join("\n\n");
+  return { markdown: count ? `## 背景\n\n${body}\n` : "", count };
 }
 
 function transcriptMarkdown(page: GoogleDocsBatchTreePage, counts: Map<string, number>): { markdown: string; count: number } {

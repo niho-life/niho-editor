@@ -24,7 +24,7 @@ import { stepGenerationOptions } from "./profile";
  * 配線は src/server/steps-deps.ts の 1 か所。
  *
  * 1 段階 = モデルの 1 往復（ai/compose.ts のプロンプト → AnthropicClient → 検証 → 本文のブロック）。
- * 資料は録音ページの本文、上流の全結果、親フォルダの背景、同じフォルダの参考ページ。
+ * 資料は録音ページの本文、上流の全結果、録音ページ自身の背景（この録音について）、同じフォルダの参考ページ。
  *
  * - 月の上限は提案（server/ai-api.ts）と同じ意味で効く: 呼ぶ前に今月の使用額を見て、上限以上なら
  *   モデルを呼ばずに `quota_exceeded` で失敗する（再試行しない）。使った分は失敗しても記録する。
@@ -86,7 +86,7 @@ function overLimit(totals: AiUsageTotals, limitUsd: number | null): boolean {
   return limitUsd !== null && totals.costMicroUsd >= Math.round(limitUsd * 1e6);
 }
 
-/** 原文と上流の全結果。親フォルダの背景は独立した info section に渡す。 */
+/** 原文と上流の全結果。録音の背景は独立した info section に渡す。 */
 function sourcesOf(input: StepExecutorInput): ComposeSource[] {
   return [
     { label: "録音ページの本文", text: stepBlocksText(input.parentBlocks) },
@@ -134,7 +134,7 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
         stepNumber: input.stepIndex + 1,
         stepCount: input.recipe.steps.length,
         sources: sourcesOf(input),
-        background: stepBlocksText(input.backgroundBlocks),
+        background: input.background.trim(),
         // 「書いた言語のまま」は日本語（段階の資料は録音の文字起こしで、設計 §7.2 の手順はどれも日本語）
         lang: settings.aiLang === "en" ? "en" : "ja",
         glossary: [...settings.glossary, ...(input.materials?.fields.terms ?? []), ...(input.recipe.terms ?? [])],

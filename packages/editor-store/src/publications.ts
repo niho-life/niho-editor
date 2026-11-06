@@ -1,5 +1,5 @@
 import { InvalidPageCursorError, isPageId } from "./store.ts";
-import type { Block, Database, OwnerId, PageLang, PublishDest, PublishRange, Queryable } from "./types.ts";
+import type { Block, Database, OwnerId, PageKind, PageLang, PublishDest, PublishRange, Queryable } from "./types.ts";
 
 /**
  * 公開（#39 公開のシート・#40 公開 API・#41 発信先の設定）の SQL。表は migrations/0009_publications.sql。
@@ -52,6 +52,8 @@ export type DraftPageRow = {
   lead: string | null;
   coverAssetId: string | null;
   content: Block[];
+  /** ページの種類（フォルダは公開しない。docs/architecture/editor-recipes-and-folders.md §3.2）。 */
+  kind: PageKind;
   /** 保存の版（pages.revision）と保存の時刻（pages.updated_at）。公開 API のプレビューが下書きの version・時刻に使う。 */
   revision: number;
   savedAt: string;
@@ -179,6 +181,7 @@ function isInvalidDatetime(error: unknown): boolean {
 type DraftPageDbRow = {
   id: string;
   owner: string;
+  kind: PageKind;
   title: string;
   lang: PageLang;
   lead: string | null;
@@ -195,7 +198,7 @@ type DraftPageDbRow = {
 export async function getDraftPage(db: Queryable, pageId: string, options: { lock?: boolean } = {}): Promise<DraftPageRow | null> {
   if (!isPageId(pageId)) return null;
   const result = await db.query<DraftPageDbRow>(
-    `SELECT id, owner, title, lang, lead, cover, blocks, revision, updated_at
+    `SELECT id, owner, kind, title, lang, lead, cover, blocks, revision, updated_at
        FROM pages
       WHERE id = $1 AND deleted_at IS NULL${options.lock === true ? "\n      FOR NO KEY UPDATE" : ""}`,
     [pageId],
@@ -210,6 +213,7 @@ export async function getDraftPage(db: Queryable, pageId: string, options: { loc
     lead: row.lead,
     coverAssetId: row.cover,
     content: row.blocks,
+    kind: row.kind,
     revision: row.revision,
     savedAt: iso(row.updated_at),
   };

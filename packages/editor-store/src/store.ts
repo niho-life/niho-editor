@@ -234,21 +234,49 @@ export class EditorStore {
     this.#autosaveVersionIntervalMs = interval;
   }
 
-  async createPage(owner: OwnerId, input: CreatePageInput = {}): Promise<Page> {
+  /**
+   * ページを作る。`parent` を渡すと、そのフォルダの中に作る（docs/architecture/editor-recipes-and-folders.md §3.2）。
+   *
+   * - `parent` は本人の生きている `kind='folder'` だけ。それ以外（別の人・ゴミ箱・無い id・フォルダでない）は null（同じ 404）。
+   * - `kind='folder'` は本文を持たず（`blocks` は空だけ）、`parent` も付けられない（入れ子にしない）。どちらも TypeError。
+   */
+  async createPage(owner: OwnerId, input?: Omit<CreatePageInput, "parent"> & { parent?: null }): Promise<Page>;
+  async createPage(owner: OwnerId, input: CreatePageInput): Promise<Page | null>;
+  async createPage(owner: OwnerId, input: CreatePageInput = {}): Promise<Page | null> {
     assertOwner(owner);
     if (input.lead !== undefined && input.lead !== null && (typeof input.lead !== "string" || Array.from(input.lead).length > 160 || input.lead.includes("\u0000"))) {
       throw new TypeError("editor-store: lead must be at most 160 characters or null");
     }
+    const parent = input.parent ?? null;
+    if (input.kind === "folder") {
+      if (parent !== null) throw new TypeError("editor-store: a folder cannot be inside a folder");
+      if (input.blocks !== undefined && input.blocks.length > 0) throw new TypeError("editor-store: folder has no body");
+    }
     if (pageSizeBytes(input.title ?? "", input.blocks ?? [], [], null, input.lead ?? null) > PAGE_MAX_BYTES) throw new RangeError("editor-store: page is too large");
-    const result = await this.#db.query<PageRow>(
-      `INSERT INTO pages (owner, kind, title, lang, blocks, lead)
-       VALUES ($1, COALESCE($2, 'note'), COALESCE($3, ''), COALESCE($4, 'ja'), COALESCE($5::jsonb, '[]'::jsonb), $6)
-       RETURNING ${PAGE_COLUMNS}`,
-      [owner, input.kind ?? null, input.title ?? null, input.lang ?? null, input.blocks === undefined ? null : JSON.stringify(input.blocks), input.lead ?? null],
+    const insert = async (client: Queryable): Promise<Page> => {
+      const result = await client.query<PageRow>(
+        `INSERT INTO pages (owner, kind, title, lang, blocks, lead, parent)
+         VALUES ($1, COALESCE($2, 'note'), COALESCE($3, ''), COALESCE($4, 'ja'), COALESCE($5::jsonb, '[]'::jsonb), $6, $7::uuid)
+         RETURNING ${PAGE_COLUMNS}`,
+        [owner, input.kind ?? null, input.title ?? null, input.lang ?? null, input.blocks === undefined ? null : JSON.stringify(input.blocks), input.lead ?? null, parent],
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error("editor-store: insert returned no row");
+      return toPage(row);
+    };
+    if (parent === null) return insert(this.#db);
+    if (!isPageId(parent)) return null;
+    return this.#orNull(() =>
+      this.#transaction(async (client): Promise<Page | null> => {
+        // 入れ先のフォルダを押さえる（作る間にゴミ箱へ入る・別の種類に変わるのを防ぐ）
+        const folder = await client.query<{ kind: PageKind }>(
+          "SELECT kind FROM pages WHERE owner = $1 AND deleted_at IS NULL AND id = $2 FOR SHARE",
+          [owner, parent],
+        );
+        if (folder.rows[0]?.kind !== "folder") return null;
+        return insert(client);
+      }),
     );
-    const row = result.rows[0];
-    if (!row) throw new Error("editor-store: insert returned no row");
-    return toPage(row);
   }
 
   async listPages(owner: OwnerId, options: { limit?: number } = {}): Promise<PageSummary[]> {
@@ -338,6 +366,11 @@ export class EditorStore {
       this.#transaction(async (client): Promise<SaveResult | null> => {
         const current = await lockPage(client, owner, id);
         if (!current) return null;
+        // フォルダは入れ物で、ほかの種類と行き来せず、本文を持たない（§3.2。API はこれを bad_request にする）
+        if (patch.kind !== undefined && patch.kind !== current.kind && (patch.kind === "folder" || current.kind === "folder")) {
+          throw new TypeError("editor-store: kind cannot change to or from folder");
+        }
+        if (current.kind === "folder" && patch.blocks !== undefined && patch.blocks.length > 0) throw new TypeError("editor-store: folder has no body");
         if (current.revision !== options.baseRevision) return { status: "conflict", page: toPage(current) };
         const candidateTitle = patch.title ?? current.title;
         const candidateBlocks = patch.blocks ?? current.blocks;
@@ -387,12 +420,13 @@ export class EditorStore {
   }
 
   /**
-   * ページをフォルダへ入れる・出す（`parent` を変える。フォルダは子を持てるふつうのページ。設計の規則は
-   * docs/architecture/editor-recipes-and-folders.md §3）。
+   * ページをフォルダへ入れる・出す（`parent` を変える唯一の所。フォルダは `kind='folder'` の入れ物。設計の規則は
+   * docs/architecture/editor-recipes-and-folders.md §3.2）。
    *
    * - `parent` に `null` を渡すと上の段へ出す。
    * - 親も本人のページだけ（別の人のページ・ゴミ箱の中・無い id はどれも null＝同じ 404）。
-   * - 段が深くなりすぎる移動は `too_deep`、自分自身・自分の子孫の下へ入れる移動は `cycle`（どちらも何も書かない）。
+   * - 段が深くなりすぎる移動は `too_deep`、自分自身・自分の子孫の下へ入れる移動は `cycle`、入れ先がフォルダでない・
+   *   フォルダをフォルダへ入れる移動は `not_folder`（どれも何も書かない）。
    * - 変えるのは `parent` だけ。本文・`revision`・`updated_at` は動かさない（移動は編集ではないので、開いている
    *   エディタの楽観ロックも一覧の並びも壊さない）。
    */
@@ -408,7 +442,15 @@ export class EditorStore {
         if (current.parent === parent) return "moved";
         // 入れ先の段（上へ辿る）。上の段へ出すなら -1（入れたページが 0 の段になる）
         let parentDepth = -1;
+        let parentKind: PageKind | null = null;
         if (parent !== null) {
+          const target = await client.query<{ kind: PageKind }>(
+            "SELECT kind FROM pages WHERE owner = $1 AND deleted_at IS NULL AND id = $2 FOR SHARE",
+            [owner, parent],
+          );
+          // 入れ先が無い・別の人のもの・ゴミ箱の中なら、ページが無いときと同じ
+          if (!target.rows[0]) return null;
+          parentKind = target.rows[0].kind;
           const up = await client.query<{ depth: number | null }>(
             `WITH RECURSIVE up AS (
                SELECT id, parent, 0 AS depth FROM pages WHERE owner = $1 AND deleted_at IS NULL AND id = $2
@@ -441,6 +483,8 @@ export class EditorStore {
         if (down.rows[0]?.inside === true) return "cycle";
         const height = Number(down.rows[0]?.height ?? 0);
         if (parentDepth + 1 + height > MAX_PAGE_DEPTH) return "too_deep";
+        // 親になれるのはフォルダだけ。フォルダは入れ子にしない（§3.2 の 4・5。cycle / too_deep の判定のあと）
+        if (parent !== null && (parentKind !== "folder" || current.kind === "folder")) return "not_folder";
         const moved = await client.query(
           "UPDATE pages SET parent = $3 WHERE owner = $1 AND deleted_at IS NULL AND id = $2",
           [owner, id, parent],
@@ -632,6 +676,8 @@ export class EditorStore {
       this.#transaction(async (client): Promise<RestoreResult | null> => {
         const current = await lockPage(client, owner, id);
         if (!current) return null;
+        // フォルダは本文を持たない（旧「親ページ」の版も本文へは戻さない）
+        if (current.kind === "folder") return { status: "unrestorable" };
         const target = await client.query<{ blocks: unknown; cover: string | null; lead: string | null; metadata_tracked: boolean }>(
           "SELECT blocks, cover, lead, metadata_tracked FROM page_versions WHERE page_id = $1 AND version = $2",
           [id, version],
@@ -986,7 +1032,6 @@ function isBlankParagraph(block: Block): boolean {
 function isBlankPageRow(row: PageRow): boolean {
   return (
     row.kind === "note" &&
-    row.parent === null &&
     row.recipe === null &&
     row.step_status === null &&
     row.sort_order === 0 &&

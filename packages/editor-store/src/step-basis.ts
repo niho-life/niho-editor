@@ -7,10 +7,12 @@ import type { StepRecipe } from "./step-runs.ts";
 export type StepReference = { id: string; blocks: Block[]; title?: string };
 export type StepMaterials = {
   parentBlocks: Block[];
-  backgroundBlocks: Block[];
+  /** 録音ページ自身の背景（`page_fields.background`。文字。docs/architecture/editor-recipes-and-folders.md §3.3）。 */
+  background: string;
   upstream: { id: string; blocks: Block[] }[];
   refs: StepReference[];
-  fields: PageFields;
+  /** 録音ページ自身の登場人物・固有名詞。 */
+  fields: Pick<PageFields, "entities" | "terms">;
   settings: Pick<EditorSettings, "aiLang" | "glossary" | "aboutName" | "about">;
 };
 export type StepBasis = {
@@ -53,7 +55,7 @@ export function computeStepBasis(recipe: StepRecipe, index: number, materials: S
     source: digest(stepBlocksText(materials.parentBlocks)),
     artifacts,
     refs: digest(refs.length ? JSON.stringify(refs) : ""),
-    info: digest(JSON.stringify([stepBlocksText(materials.backgroundBlocks), materials.fields.entities, materials.fields.terms, materials.settings.aiLang, materials.settings.glossary, materials.settings.aboutName, materials.settings.about])),
+    info: digest(JSON.stringify([materials.background.trim(), materials.fields.entities, materials.fields.terms, materials.settings.aiLang, materials.settings.glossary, materials.settings.aboutName, materials.settings.about])),
     guide: digest(JSON.stringify([(recipe.guide ?? "").trim(), recipe.terms ?? []])),
     step: digest(step.instruction.trim()),
   };

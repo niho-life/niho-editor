@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties, type DragEvent } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { RecordingStart, type RecordingHow, type RecordingNext } from "niho-docs-ui/shell";
 import { AUDIO_FILE_EXTENSIONS_LABEL, AUDIO_FILE_PICKER_ACCEPT, isAudioFileName, unsupportedAudioFormatMessage } from "@/lib/audio-formats";
 import { probeAudioDuration } from "@/lib/audio-duration";
@@ -13,6 +13,9 @@ import { formatClock } from "@/lib/recording-view";
 import { AUDIO_STAGE_LABELS, useAudioImport } from "@/lib/use-audio-import";
 import { micErrorMessage, useMicCapture } from "@/lib/use-mic-capture";
 import { transcriptionServiceNote } from "@/recording/candidate-names";
+import { savePageFieldsRequest } from "@/lib/folder-client";
+import { RECORDING_FIELD_LIMITS } from "@/lib/page-limits";
+import { movePageRequest } from "@/lib/pages-client";
 import { useEditorFrame } from "./EditorFrame";
 import { MacNativeAudioImport } from "./MacNativeAudioImport";
 
@@ -55,7 +58,9 @@ const UNKNOWN_FILE: Message = { kind: "error", text: "このファイルは取�
  *   「前回の録音が残っています」を出して取り込める（「消す」で捨てる）。取り込めた控えは消す。
  * - 上限（長さ・容量）とクラウドの音声が消える日数は、ページ（server）から渡った値で欄の下に出す（audioLimitsNote。
  *   画面に数を埋め込まない・そのための要求を増やさない）。
- * 背景情報・登場人物・「このあと」は、手順（#37）ができるまで使われない。
+ * - 作った録音ページは、`?in=<フォルダ>` があればそのフォルダへ入れ、背景情報は録音ページの「この録音について」の背景
+ *   （`page_fields.background`）に保存する（docs/architecture/editor-recipes-and-folders.md §3.3）。どちらも届かなくても録音は残す。
+ * 登場人物・「このあと」は、まだ使われない。
  */
 export function RecordingStartScreen({
   limits: given,
@@ -71,6 +76,9 @@ export function RecordingStartScreen({
 } = {}) {
   const router = useRouter();
   const frame = useEditorFrame();
+  const query = useSearchParams();
+  const inside = query.get("in");
+  const folderId = inside !== null && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(inside) ? inside.toLowerCase() : null;
   const [how, setHow] = useState<RecordingHow>("file");
   const [background, setBackground] = useState("");
   const [next, setNext] = useState<RecordingNext>("article");
@@ -95,6 +103,27 @@ export function RecordingStartScreen({
   // 取り込み中の二重送信を、再描画を待たずに止める
   const importing = useRef(false);
   const audio = useAudioImport();
+  const backgroundRef = useRef(background);
+  useEffect(() => {
+    backgroundRef.current = background;
+  }, [background]);
+
+  /**
+   * 作った録音ページを、開いたフォルダへ入れ、背景を録音の欄に書く（届かなくても録音ページは残る。入れられなければ上の段のまま）。
+   * 一覧に足すのもここ（入れたフォルダを親にして）。
+   */
+  const settleCreated = async (page: { id: string; title: string }): Promise<void> => {
+    let parent: string | null = null;
+    if (folderId) {
+      parent = await movePageRequest(page.id, folderId).then(
+        () => folderId,
+        () => null,
+      );
+    }
+    frame.pageCreated(page.id, page.title, "rec", parent);
+    const text = Array.from(backgroundRef.current.trim()).slice(0, RECORDING_FIELD_LIMITS.backgroundChars).join("");
+    if (text !== "") await savePageFieldsRequest(page.id, { background: text }).catch(() => undefined);
+  };
 
   const importAudio = async (source: File, durationSec: number | null, keepId: string | null = null) => {
     if (importing.current) return;
@@ -110,7 +139,7 @@ export function RecordingStartScreen({
         void keep?.remove(keepId).catch(() => undefined);
         setKept((takes) => takes.filter((take) => take.id !== keepId));
       }
-      frame.pageCreated(page.id, page.title, "rec");
+      await settleCreated(page);
       // 2 本目以降は、作った録音に足す（1 本でも失敗したらここで止め、画面に残って知らせる）
       const rest = [...extra];
       for (const [index, part] of rest.entries()) {
@@ -247,7 +276,7 @@ export function RecordingStartScreen({
       const vtt = await vttFile.text().catch(() => null);
       if (vtt === null) throw new Error("unreadable");
       const imported = await importVtt({ name: vttFile.name, vtt });
-      frame.pageCreated(imported.page.id, imported.page.title);
+      await settleCreated(imported.page);
       router.push(`/p/${imported.page.id}`);
       // 移るまで、もう一度取り込ませない（この画面は移ると外れる）
     } catch (error) {
@@ -411,8 +440,7 @@ export function RecordingStartScreen({
       />
       <div className="es-start" aria-busy={busy}>
         <MacNativeAudioImport onCreated={(page) => {
-          frame.pageCreated(page.id, page.title, "rec");
-          router.push(`/p/${page.id}`);
+          void settleCreated(page).then(() => router.push(`/p/${page.id}`));
         }} />
         {kept.map((take) => (
           <div key={take.id} style={PANEL_STYLE} role="group" aria-label="前回の録音" data-mic-kept={take.finished ? "stopped" : "interrupted"}>

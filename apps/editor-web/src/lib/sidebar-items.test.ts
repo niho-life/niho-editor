@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PageSummary } from "@niho/editor-store";
 import type { SearchHit } from "./search-client";
-import { arrangeSidebarItems, folderOptions, formatWhen, searchRows, siblingOrder, withoutPageTree } from "./sidebar-items";
+import { arrangeSidebarItems, folderContents, folderOfPage, folderOptions, formatWhen, locationOf, searchRows, siblingOrder, withoutPageTree } from "./sidebar-items";
 
 /** 2026-10-31 12:00（東京）＝ 03:00 UTC。 */
 const NOW = Date.parse("2026-10-31T03:00:00.000Z");
@@ -68,29 +68,38 @@ describe("arrangeSidebarItems", () => {
       ["step-3", 2],
       ["orphan", 0],
     ]);
-    // 子を持つ行はフォルダ（開閉のボタンが付く）。既定は開いている
-    expect(items.filter((item) => item.folder).map((item) => [item.id, item.open])).toEqual([
-      ["rec", true],
-      ["step-2", true],
+    // フォルダは kind で決まる。子を持つ録音はフォルダにならない（開閉なし。工程のサブページはいつも下に出る）
+    expect(items.filter((item) => item.folder)).toEqual([]);
+    expect(items.map((item) => item.icon)).toEqual([undefined, "mic", "spark", "spark", "spark", "spark"]);
+  });
+
+  it("decides a folder by kind: an empty folder is still a folder row (empty, not openable) with the folder icon", () => {
+    const items = arrangeSidebarItems([page("empty", { kind: "folder" }), page("full", { kind: "folder" }), page("in", { parent: "full" }), page("note")], { now: NOW });
+    expect(items.map((item) => [item.id, item.folder ?? false, item.open ?? null, item.empty ?? false, item.icon ?? null])).toEqual([
+      ["empty", true, false, true, "folder"],
+      ["full", true, true, false, "folder"],
+      ["in", false, null, false, null],
+      ["note", false, null, false, null],
     ]);
   });
 
   it("hides the rows inside a closed folder and says that it is closed", () => {
-    const pages = [page("folder"), page("inside", { parent: "folder" }), page("deeper", { parent: "inside" }), page("other")];
+    const pages = [page("folder", { kind: "folder" }), page("inside", { parent: "folder", kind: "rec" }), page("deeper", { parent: "inside", kind: "step" }), page("other")];
     const closed = arrangeSidebarItems(pages, { now: NOW, collapsed: new Set(["folder"]) });
     expect(closed.map((item) => item.id)).toEqual(["folder", "other"]);
     expect(closed[0]).toMatchObject({ folder: true, open: false });
-    // 中の段だけを閉じる
+    // 録音は閉じない（フォルダだけが開閉を持つ）
     const half = arrangeSidebarItems(pages, { now: NOW, collapsed: new Set(["inside"]) });
     expect(half.map((item) => [item.id, item.depth ?? 0])).toEqual([
       ["folder", 0],
       ["inside", 1],
+      ["deeper", 2],
       ["other", 0],
     ]);
   });
 
   it("never shows a fourth 段: a page under a 録音のサブページ is left out of the tree", () => {
-    const pages = [page("folder"), page("inside", { parent: "folder" }), page("sub", { parent: "inside" }), page("too-deep", { parent: "sub" })];
+    const pages = [page("folder", { kind: "folder" }), page("inside", { parent: "folder" }), page("sub", { parent: "inside" }), page("too-deep", { parent: "sub" })];
     const items = arrangeSidebarItems(pages, { now: NOW });
     expect(items.map((item) => [item.id, item.depth ?? 0])).toEqual([
       ["folder", 0],
@@ -207,23 +216,60 @@ describe("withoutPageTree", () => {
 });
 
 describe("folderOptions", () => {
-  it("offers the top-level pages, without the page itself or anything inside it", () => {
-    const pages = [page("folder-a"), page("folder-b"), page("inside", { parent: "folder-a" }), page("note")];
-    expect(folderOptions(pages, "note").map((option) => option.id)).toEqual(["folder-a", "folder-b", "note"].filter((id) => id !== "note"));
-    expect(folderOptions(pages, "inside").map((option) => option.id)).toEqual(["folder-a", "folder-b", "note"]);
-    // 自分自身と自分の中のページは入れ先に出さない
-    expect(folderOptions(pages, "folder-a").map((option) => option.id)).toEqual(["folder-b", "note"]);
+  it("offers only the top-level folders (kind), and nothing for a folder itself", () => {
+    const pages = [page("folder-a", { kind: "folder" }), page("folder-b", { kind: "folder" }), page("inside", { parent: "folder-a" }), page("note")];
+    expect(folderOptions(pages, "note").map((option) => option.id)).toEqual(["folder-a", "folder-b"]);
+    expect(folderOptions(pages, "inside").map((option) => option.id)).toEqual(["folder-a", "folder-b"]);
+    // フォルダは入れ子にしない
+    expect(folderOptions(pages, "folder-a")).toEqual([]);
   });
 
   it("offers nothing for a page that already has 2 段 under it (the move would be refused)", () => {
-    const pages = [page("folder"), page("deep"), page("inside", { parent: "deep" }), page("sub", { parent: "inside" })];
+    const pages = [page("folder", { kind: "folder" }), page("deep"), page("inside", { parent: "deep" }), page("sub", { parent: "inside" })];
     expect(folderOptions(pages, "deep")).toEqual([]);
     // 1 段だけなら入れられる
-    expect(folderOptions(pages, "inside").map((option) => option.id)).toEqual(["folder", "deep"]);
+    expect(folderOptions(pages, "inside").map((option) => option.id)).toEqual(["folder"]);
   });
 
   it("keeps the title as it is (the empty one is written 無題 by the shell)", () => {
-    expect(folderOptions([page("a", { title: "" }), page("b")], "b")).toEqual([{ id: "a", title: "" }]);
+    expect(folderOptions([page("a", { title: "", kind: "folder" }), page("b")], "b")).toEqual([{ id: "a", title: "" }]);
+  });
+});
+
+describe("folderContents / folderOfPage / locationOf", () => {
+  const pages = [
+    page("f", { kind: "folder", title: "鎌倉の取材" }),
+    page("rec", { kind: "rec", parent: "f", title: "座談会", createdAt: "2026-10-02T00:00:00.000Z" }),
+    page("step", { kind: "step", parent: "rec", title: "記事本文", stepStatus: "run" }),
+    page("memo", { parent: "f", title: "メモ", createdAt: "2026-10-03T00:00:00.000Z" }),
+    page("top"),
+  ];
+
+  it("lists the folder's pages with each recording's step pages one 段 down, in the sidebar's words", () => {
+    expect(folderContents(pages, "f", NOW).map((row) => [row.id, row.depth ?? 0, row.sub?.text ?? null])).toEqual([
+      ["rec", 0, "録音"],
+      ["step", 1, "作成中…"],
+      ["memo", 0, null],
+    ]);
+    expect(folderContents(pages, "top", NOW)).toEqual([]);
+  });
+
+  it("finds the folder a page belongs to (itself, its parent, or the recording's parent)", () => {
+    expect(folderOfPage(pages, "f")?.id).toBe("f");
+    expect(folderOfPage(pages, "memo")?.id).toBe("f");
+    expect(folderOfPage(pages, "step")?.id).toBe("f");
+    expect(folderOfPage(pages, "top")).toBeNull();
+    expect(folderOfPage(pages, null)).toBeNull();
+  });
+
+  it("gives the location (parent folder › parent recording) without the page itself, and nothing on the top 段", () => {
+    expect(locationOf(pages, "step")).toEqual([
+      { id: "f", title: "鎌倉の取材", icon: "folder" },
+      { id: "rec", title: "座談会", icon: "mic" },
+    ]);
+    expect(locationOf(pages, "memo")).toEqual([{ id: "f", title: "鎌倉の取材", icon: "folder" }]);
+    expect(locationOf(pages, "f")).toEqual([]);
+    expect(locationOf(pages, "top")).toEqual([]);
   });
 });
 

@@ -63,6 +63,8 @@ const PATHS: Record<ShellIconName, ReactNode> = {
       <path d="M19 17l.7 1.8 1.8.7-1.8.7L19 22l-.7-1.8-1.8-.7 1.8-.7z" />
     </>
   ),
+  /** フォルダ（モック editor-folders-v1 の symbol）。 */
+  folder: <path d="M3.5 7.5a2 2 0 0 1 2-2h4.2l2 2h6.8a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />,
   img: (
     <>
       <rect x="3.5" y="5" width="17" height="14" rx="2.5" />

@@ -67,9 +67,14 @@ function memoryStore() {
     rows,
     versions,
     published,
+    /** EditorStore と同じ約束（親は本人の生きているフォルダだけ。違えば null。フォルダに本文・親は付けられない）。 */
     async createPage(owner: string, input: CreatePageInput = {}): Promise<Page> {
       const now = new Date().toISOString();
-      const page: Page = { id: randomUUID(), kind: input.kind ?? "note", title: input.title ?? "", lang: input.lang ?? "ja", blocks: input.blocks ?? [], cover: null, lead: null, parent: null, recipe: null, stepStatus: null, sortOrder: 0, revision: 1, createdAt: now, updatedAt: now };
+      const parent = input.parent ?? null;
+      if (input.kind === "folder" && (parent !== null || (input.blocks?.length ?? 0) > 0)) throw new TypeError("editor-store: folder has no body");
+      // 型は EditorStore の重ね書き（親なし＝Page）に合わせ、親があって入れられないときだけ null を返す
+      if (parent !== null && visible(owner, parent)?.kind !== "folder") return null as unknown as Page;
+      const page: Page = { id: randomUUID(), kind: input.kind ?? "note", title: input.title ?? "", lang: input.lang ?? "ja", blocks: input.blocks ?? [], cover: null, lead: null, parent, recipe: null, stepStatus: null, sortOrder: 0, revision: 1, createdAt: now, updatedAt: now };
       rows.set(page.id, { ...page, owner, deleted: false, deletedAt: null });
       return page;
     },
@@ -94,6 +99,8 @@ function memoryStore() {
     async savePage(owner: string, id: string, patch: PagePatch, options: SaveOptions): Promise<SaveResult | null> {
       const row = visible(owner, id);
       if (!row) return null;
+      if (patch.kind !== undefined && patch.kind !== row.kind && (patch.kind === "folder" || row.kind === "folder")) throw new TypeError("editor-store: kind cannot change to or from folder");
+      if (row.kind === "folder" && (patch.blocks?.length ?? 0) > 0) throw new TypeError("editor-store: folder has no body");
       if (row.revision !== options.baseRevision) return { status: "conflict", page: strip(row) };
       if (options.overwrite === true) snapshot(row, "overwrite");
       else if (patch.blocks !== undefined && !same(patch.blocks, row.blocks)) snapshot(row, "autosave");
@@ -145,6 +152,7 @@ function memoryStore() {
       };
       if (parent !== null && inside(parent)) return "cycle";
       if ((parent === null ? -1 : depthOf(parent)) + 1 + heightOf(id) > 2) return "too_deep";
+      if (parent !== null && (visible(owner, parent)?.kind !== "folder" || row.kind === "folder")) return "not_folder";
       row.parent = parent;
       return "moved";
     },
@@ -565,7 +573,7 @@ describe("/api/pages/{id}/parent", () => {
 
   it("puts a page into a folder and takes it out again, changing nothing but the parent", async () => {
     const store = memoryStore();
-    const folder = await store.createPage("user-a", { title: "鎌倉の記事" });
+    const folder = await store.createPage("user-a", { kind: "folder", title: "鎌倉の記事" });
     const note = await store.createPage("user-a", { title: "取材メモ" });
 
     const inside = await move(note.id, folder.id, store);
@@ -607,12 +615,13 @@ describe("/api/pages/{id}/parent", () => {
 
   it("refuses a move that would make a fourth 段 with 409 too_deep, and a move into itself with 409 cycle", async () => {
     const store = memoryStore();
-    const folder = await store.createPage("user-a", { title: "フォルダ" });
-    const note = await store.createPage("user-a", { title: "ページ" });
-    const sub = await store.createPage("user-a", { title: "サブページ" });
+    const folder = await store.createPage("user-a", { kind: "folder", title: "フォルダ" });
+    const note = await store.createPage("user-a", { kind: "rec", title: "ページ" });
+    const sub = await store.createPage("user-a", { kind: "step", title: "サブページ" });
     const deeper = await store.createPage("user-a", { title: "その下" });
     expect((await move(note.id, folder.id, store)).status).toBe(200);
-    expect((await move(sub.id, note.id, store)).status).toBe(200);
+    // 工程のサブページは step_runs が録音を親に作る（movePage を通らない）
+    store.rows.get(sub.id)!.parent = note.id;
 
     const tooDeep = await move(deeper.id, sub.id, store);
     expect(tooDeep.status).toBe(409);
@@ -624,6 +633,66 @@ describe("/api/pages/{id}/parent", () => {
     expect(await cycle.json()).toEqual({ error: "cycle" });
     expect((await move(folder.id, folder.id, store)).status).toBe(409);
     expect(store.rows.get(folder.id)?.parent).toBe(null);
+  });
+
+  it("answers 409 not_folder when the new parent is not a folder, or a folder goes into a folder, and writes nothing", async () => {
+    const store = memoryStore();
+    const folder = await store.createPage("user-a", { kind: "folder", title: "フォルダ" });
+    const other = await store.createPage("user-a", { kind: "folder", title: "別のフォルダ" });
+    const note = await store.createPage("user-a", { title: "ページ" });
+    const rec = await store.createPage("user-a", { kind: "rec", title: "録音" });
+    for (const [id, parent] of [[note.id, rec.id], [rec.id, note.id], [other.id, folder.id]] as const) {
+      const response = await move(id, parent, store);
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: "not_folder" });
+      expect(store.rows.get(id)?.parent).toBe(null);
+    }
+  });
+});
+
+describe("POST /api/pages with a folder", () => {
+  it("creates an empty folder, and a page inside a folder with { kind, parent }", async () => {
+    const store = memoryStore();
+    const made = await createPage(request("POST", "/api/pages", { kind: "folder", title: "合成のフォルダ" }), deps("user-a", store));
+    expect(made.status).toBe(201);
+    const { page: folder } = (await made.json()) as { page: Page };
+    expect(folder).toMatchObject({ kind: "folder", blocks: [], parent: null });
+
+    const inside = await createPage(request("POST", "/api/pages", { kind: "rec", parent: folder.id }), deps("user-a", store));
+    expect(inside.status).toBe(201);
+    expect(((await inside.json()) as { page: Page }).page).toMatchObject({ kind: "rec", parent: folder.id });
+  });
+
+  it("answers 400 for a folder with a body or a parent, and the same 404 when the parent is not the person's living folder", async () => {
+    const store = memoryStore();
+    const folder = await store.createPage("user-a", { kind: "folder", title: "フォルダ" });
+    const note = await store.createPage("user-a", { title: "ページ" });
+    const theirs = await store.createPage("user-b", { kind: "folder", title: "別の人のフォルダ" });
+    const trashed = await store.createPage("user-a", { kind: "folder", title: "ゴミ箱のフォルダ" });
+    await store.deletePage("user-a", trashed.id);
+    expect((await createPage(request("POST", "/api/pages", { kind: "folder", blocks: [paragraph("本文")] }), deps("user-a", store))).status).toBe(400);
+    expect((await createPage(request("POST", "/api/pages", { kind: "folder", parent: folder.id }), deps("user-a", store))).status).toBe(400);
+    expect((await createPage(request("POST", "/api/pages", { parent: "not-a-uuid" }), deps("user-a", store))).status).toBe(400);
+    const expected = await snapshot(await createPage(request("POST", "/api/pages", { parent: randomUUID() }), deps("user-a", store)));
+    expect(expected.status).toBe(404);
+    for (const parent of [note.id, theirs.id, trashed.id]) {
+      expect(await snapshot(await createPage(request("POST", "/api/pages", { parent }), deps("user-a", store)))).toEqual(expected);
+    }
+  });
+
+  it("refuses to save a body into a folder or change a kind to or from folder with 400 (reason folder)", async () => {
+    const store = memoryStore();
+    const folder = await store.createPage("user-a", { kind: "folder", title: "フォルダ" });
+    const note = await store.createPage("user-a", { title: "ページ" });
+    const save = (id: string, body: unknown) => patchPage(request("PATCH", `/api/pages/${id}`, body), id, deps("user-a", store));
+    for (const [id, body] of [[folder.id, { baseRevision: 1, blocks: [paragraph("本文")] }], [folder.id, { baseRevision: 1, kind: "note" }], [note.id, { baseRevision: 1, kind: "folder" }]] as const) {
+      const response = await save(id, body);
+      expect(response.status, JSON.stringify(body)).toBe(400);
+      expect(await response.json()).toEqual({ error: "bad_request", reason: "folder" });
+    }
+    // 題名だけは直せる
+    expect((await save(folder.id, { baseRevision: 1, title: "新しい名前" })).status).toBe(200);
+    expect(store.rows.get(folder.id)).toMatchObject({ title: "新しい名前", blocks: [] });
   });
 });
 

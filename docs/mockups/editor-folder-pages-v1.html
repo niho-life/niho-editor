@@ -1,0 +1,955 @@
+<!doctype html>
+<!--
+  mock: フォルダ＝仕事の単位。文字起こしと手順の成果物はフォルダの中のページ（0〜N 枚）v1（PC と 320px）。Issue #288
+  土台: docs/mockups/editor-folders-v1.html（フォルダ・この録音について・手順の帯）。色は :root の仮値（hex）。実装では packages/ui の token を引く。
+
+  決めたこと（オーナー 2026-11-06。#288）:
+    - 「案」という語も概念も置かない。あるのはフォルダとページだけ。
+    - 機能（文字起こし・手順の段階）はフォルダの中にページを作る。同じ役割のページが複数あれば、それがそのまま別の文。
+    - 段は フォルダ › ページ の 2 つ。工程のサブページ（録音の下）はやめ、フォルダの中の兄弟ページにする。
+    - 文字起こしはページ（録音ページの音声を参照して再生する）。「採用」と文字起こしの候補の台帳はやめる。
+    - 入力は「今見ているページ」。記事方針が 2 枚あっても、開いている方針で「ここから続きを作る」を押せばその方針から本文ができる。
+    - 比べる＝並べて開く（分割ビュー）。差分は出さない。要らないページ＝ゴミ箱。
+    - フォルダの外の録音で「文字起こしする」を押したら、録音の題名でフォルダを作って中に入れる。
+
+  このモックで見せたいこと:
+    1. 録音ページ: 録音ブロック・「この録音について」・見出し「文字起こし」の下に文字起こしページの一覧と「文字起こしする ▾」（エンジン）。
+    2. 文字起こしページ: 再生バー（元の録音の音声）・話者と時刻つきの本文・帯「記事にする ▾」。できた段階のページが帯に並ぶ。
+    3. 成果物のページの帯: 「何から作られたか › このページ › そこから作ったもの」を 1 行で。押すとそのページへ。
+       右に「作り直す」（同じページ・版が増える）「もう 1 枚作る」（新しいページ）「ここから続きを作る」（次の段階がまだのとき）。
+    4. 同じ役割のページが 2 枚: サイドバーに兄弟として並ぶ（記事本文・記事本文 2）。帯には「記事本文 · 記事本文 2」。「並べて開く」で分割。
+    5. 記事方針の 2 枚目: 帯の先が「記事本文（まだ）」で、「ここから続きを作る」を押すとこの方針から本文ができる。
+    6. フォルダを開いた画面: 中身の一覧（録音 › 文字起こし › 段階の順 › ほかのページ）。
+    7. フォルダの外の録音: 「文字起こしする」を押すとフォルダができて中に入る（押して確かめる）。
+
+  見かた:
+    - 上の黒い帯は mock 用。本物には無い。帯のボタンか ?state=rec|transcribing|transcript|step|two|plan2|split|folder|wrap で状態を開ける。
+    - 一覧の行を押すとそのページ。帯の名前を押すとそのページ。「文字起こしする ▾」「記事にする ▾」でメニュー。
+    - 幅 720px 以下はスマホの並び（一覧がはじめの画面。ページは全画面で、左上のボタンで一覧へ。並べて開くは縦に積む）。
+
+  作っていない:
+    - 本文の保存・公開・AI の送信・検索・ドラッグ・並べ替え・削除の実行は見た目だけ（押すと右上に一言）。
+    - 音声の再生・文字起こしの実行・段階の実行は動かない（「文字起こしする」「記事にする」「もう 1 枚作る」「ここから続きを作る」は
+      ページを 1 枚足して開くだけ）。波形は飾り。
+    - 版の履歴・英語版・公開のシート・AI の返答は出していない。
+  参照: Issue #288 / docs/architecture/editor-recipes-and-folders.md §3 / docs/mockups/editor-folders-v1.html（土台）/
+        docs/mockups/editor-transcript-candidates-v1.html（採らない形）
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>NIHO editor フォルダとページ v1</title>
+<style>
+:root{
+  --ink:#2a2a26;--ink2:#54544d;--mute:#6e6d66;--faint:#898880;
+  --white:#fff;--canvas:#fffdfa;--shell:#fcfaf5;--sand:#f7f7f4;--sand2:#f5f3ee;
+  --line:#f1f1ed;--line2:#e7e7e2;--line3:#dbdbd5;--track:#f2efe8;
+  --moss:#56751e;--pale:#EEF6E1;--leaf:#B2D67C;--deep:#63A109;
+  --grad:linear-gradient(140deg,#7DBA3A 0%,#63A109 100%);--grad-h:linear-gradient(140deg,#74B033 0%,#5C9508 100%);
+  --amber:#C8713A;--amber-ink:#a55827;--amber-pale:#FAF0E6;
+  --red:#B42318;--red-pale:#fdebec;
+  --sans:"Hiragino Maru Gothic ProN","Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;
+  --mono:ui-monospace,Menlo,monospace;
+  --sbw:252px;--aiw:320px;--bar:40px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{font:14px/1.6 var(--sans);color:var(--ink);background:var(--canvas);-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4,p,ul,ol,dl,dd{margin:0}
+ul,ol{padding:0;list-style:none}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0;padding:0;text-align:left}
+b,strong{font-weight:600}
+:focus-visible{outline:2px solid var(--moss);outline-offset:2px;border-radius:6px}
+[hidden]{display:none!important}
+.ico{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.sp{flex:1}
+kbd{font:12px var(--mono);color:var(--faint)}
+
+/* ===== 共通の部品 ===== */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:34px;padding:0 15px;border-radius:999px;background:var(--grad);color:#fff;font-weight:600;font-size:13.5px;white-space:nowrap}
+.btn:hover{background:var(--grad-h)}
+.btn.line{background:#fff;color:var(--ink);box-shadow:inset 0 0 0 1.5px var(--line3)}
+.btn.line:hover{background:var(--sand);box-shadow:inset 0 0 0 1.5px var(--line3)}
+.btn.quiet{background:none;color:var(--ink2)}
+.btn.quiet:hover{background:var(--sand)}
+.btn.danger{background:var(--red);color:#fff}
+.btn.sm{height:30px;padding:0 12px;font-size:13px}
+.btn .ico{width:15px;height:15px}
+.btn .ico.dn{width:13px;height:13px;margin-left:-2px}
+.ib{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:var(--ink2);flex:none;position:relative}
+.ib:hover,.ib.on{background:var(--sand2);color:var(--ink)}
+.ib[data-tip]::after{content:attr(data-tip);position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);white-space:nowrap;background:var(--ink);color:#fff;font-size:12px;font-weight:600;padding:3px 8px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .12s;z-index:60}
+.ib[data-tip]:hover::after,.ib[data-tip]:focus-visible::after{opacity:1}
+.ib[data-tip].tip-l::after{left:0;transform:none}
+.ib[data-tip].tip-r::after{left:auto;right:0;transform:none}
+.menu{position:absolute;right:0;top:calc(100% + 4px);z-index:50;min-width:210px;background:#fff;border:1px solid var(--line2);border-radius:12px;box-shadow:0 12px 36px rgba(28,28,26,.12);padding:6px;display:none}
+.menu.open{display:block}
+.menu.left{right:auto;left:0}
+.menu button{display:flex;align-items:center;gap:10px;width:100%;padding:7px 10px;border-radius:8px;font-size:13.5px;color:var(--ink)}
+.menu button:hover{background:var(--sand)}
+.menu button .ico{width:16px;height:16px;color:var(--ink2)}
+.menu button small{margin-left:auto;font-size:12px;color:var(--faint);white-space:nowrap}
+.menu button.danger{color:var(--red)}
+.menu button.danger .ico{color:var(--red)}
+.menu hr{border:0;border-top:1px solid var(--line);margin:5px 4px}
+.menu .hd{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--mute);padding:4px 10px 6px}
+.menu .hd .ico{width:14px;height:14px}
+.menu.at{position:fixed;top:0;left:0;right:auto}
+.newwrap{position:relative;display:inline-grid}
+.tag{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 8px;border-radius:999px;font-size:11.5px;font-weight:600;color:var(--faint);background:var(--sand2);white-space:nowrap;flex:none}
+.tag.ok{color:var(--moss);background:var(--pale)}
+.tag.no{color:var(--amber-ink);background:var(--amber-pale)}
+.tag .ico{width:12px;height:12px}
+.toast{position:fixed;top:52px;right:16px;z-index:120;background:var(--ink);color:#fff;font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;box-shadow:0 8px 24px rgba(28,28,26,.2);opacity:0;transition:opacity .15s;pointer-events:none;max-width:calc(100vw - 32px)}
+.toast.show{opacity:1}
+.seg{display:inline-flex;background:var(--sand2);border-radius:999px;padding:3px;flex:none;max-width:100%}
+.seg button{height:26px;padding:0 11px;border-radius:999px;font-size:12.5px;font-weight:600;color:var(--ink2);white-space:nowrap}
+.seg button.on{background:#fff;color:var(--moss);box-shadow:0 1px 2px rgba(28,28,26,.08)}
+@keyframes sp{to{transform:rotate(360deg)}}
+.spin{width:12px;height:12px;border:2px solid var(--leaf);border-top-color:var(--deep);border-radius:50%;animation:sp 1s linear infinite;flex:none;display:inline-block;vertical-align:-1px}
+
+/* ===== mock bar（本物には無い） ===== */
+.mock{position:sticky;top:0;z-index:100;overflow:hidden;display:flex;align-items:center;gap:10px;height:var(--bar);padding:0 12px;background:#141413;color:#fff;font-size:12.5px}
+.mock .url{flex:1;min-width:0;background:rgba(255,255,255,.08);border-radius:8px;padding:4px 10px;font-family:var(--mono);font-size:12px;color:rgba(255,255,255,.55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mock .url b{color:#fff;font-weight:600}
+.mock .sw{display:flex;align-items:center;gap:6px;overflow:auto}
+.mock .sw button{height:24px;padding:0 10px;border-radius:999px;color:rgba(255,255,255,.75);font-weight:600;font-size:12px;border:1px solid rgba(255,255,255,.18);white-space:nowrap;flex:none}
+.mock .sw button.on{background:#fff;color:#141413;border-color:#fff}
+@media (max-width:820px){.mock .url{display:none}}
+
+/* ===== shell ===== */
+.ws{display:grid;grid-template-columns:var(--sbw) minmax(0,1fr);min-height:calc(100vh - var(--bar))}
+.ws.nosb{grid-template-columns:minmax(0,1fr)}
+.ws.nosb .sb{display:none}
+.sb{position:sticky;top:var(--bar);height:calc(100vh - var(--bar));display:flex;flex-direction:column;background:var(--shell);border-right:1px solid var(--line);min-width:0}
+.sb-top{display:flex;align-items:center;gap:2px;height:52px;padding:10px 8px 6px 12px;flex:none}
+.brand{display:flex;align-items:center;gap:7px;min-width:0;flex:1;font-weight:600;font-size:14px;letter-spacing:.01em;color:var(--ink);padding:3px 6px 3px 2px;border-radius:8px;white-space:nowrap}
+.brand .logo{width:22px;height:22px;flex:none;border-radius:6px;box-shadow:0 1px 2px rgba(28,28,26,.14)}
+.sb-top .ib{width:30px;height:30px;color:var(--mute)}
+.sb-top .ib:hover,.sb-top .ib.on{color:var(--ink)}
+.sb-top .ib .ico{width:17px;height:17px}
+.sb-list{flex:1;min-height:0;overflow:auto;padding:4px 8px 10px}
+
+/* 一覧の行: フォルダ › ページ の 2 段。録音はマイク、文字起こしは行、段階のページは ✦ */
+.row{position:relative;display:flex;align-items:center;gap:6px;min-height:34px;padding:4px 4px 4px calc(8px + var(--d,0) * 16px);border-radius:8px;cursor:pointer;user-select:none;flex-wrap:wrap}
+.row:hover{background:var(--sand2)}
+.row.on{background:#fff;box-shadow:0 1px 2px rgba(28,28,26,.06),0 0 0 1px var(--line)}
+.row b{flex:1;min-width:0;font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .when{font-size:12px;color:var(--faint);white-space:nowrap;width:40px;text-align:right}
+.row .sub{flex-basis:100%;font-size:12px;color:var(--mute);margin-top:-2px;padding:0 0 2px 22px;display:flex;align-items:center;gap:6px}
+.row .tw{width:20px;height:20px;border-radius:5px;display:grid;place-items:center;color:var(--faint);flex:none}
+.row .tw:hover{background:var(--line2);color:var(--ink)}
+.row .tw .ico{width:14px;height:14px;transition:transform .12s}
+.row.closed .tw .ico{transform:rotate(-90deg)}
+.row .tw.none{visibility:hidden}
+.row .ki{width:17px;height:17px;flex:none;color:var(--ink2)}
+.row.folder b{font-weight:600}
+.row.step .ki{width:13px;height:13px;color:var(--faint)}
+.row.transcript .ki{width:15px;height:15px;color:var(--mute)}
+.row .more{width:24px;height:24px;border-radius:6px;display:none;place-items:center;color:var(--faint);flex:none}
+.row .more .ico{width:16px;height:16px}
+.row .more:hover,.row .more.on{background:var(--line2);color:var(--ink)}
+.row:hover .when,.row.menu-on .when{display:none}
+.row:hover .more,.row.menu-on .more{display:grid}
+.row:hover .more{margin-left:16px}
+.row.menu-on .more{margin-left:16px;background:var(--line2);color:var(--ink)}
+@media (hover:none){.row .when{display:none}.row .more{display:grid}.ib[data-tip]::after{display:none}}
+
+.sb-foot{border-top:1px solid var(--line);padding:8px 10px;flex:none}
+.sb-set{display:flex;align-items:center;gap:10px;width:100%;padding:7px 8px;border-radius:10px;font-size:13.5px;font-weight:600;color:var(--ink2);text-decoration:none}
+.sb-set:hover{background:var(--sand2);color:var(--ink)}
+.sb-set .ico{width:18px;height:18px;color:var(--mute)}
+
+/* ===== ページ ===== */
+.doc{position:relative;display:flex;flex-direction:column;min-width:0;min-height:calc(100vh - var(--bar))}
+.dt{position:sticky;top:var(--bar);z-index:20;display:flex;align-items:center;gap:2px;height:52px;padding:0 10px 0 8px;background:var(--canvas)}
+.dt .brand{flex:none;margin-right:4px}
+.crumbs{display:flex;align-items:center;gap:2px;min-width:0;margin:0 4px;font-size:13px;color:var(--mute)}
+.crumbs button{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:22vw;padding:3px 7px;border-radius:7px;color:var(--mute)}
+.crumbs button:hover{background:var(--sand);color:var(--ink)}
+.crumbs button span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.crumbs i{color:var(--line3);font-style:normal;flex:none}
+.crumbs .ico{width:14px;height:14px}
+.loc{display:none}
+.dt .ins{display:flex;align-items:center;gap:2px;margin-left:6px;padding-left:10px;border-left:1px solid var(--line2)}
+.dt .ins .ib{color:var(--faint)}
+.dt .ins .ib:hover{color:var(--ink)}
+.pubbtn{height:30px;padding:0 13px;border-radius:8px;font-weight:600;font-size:13.5px;color:var(--ink);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:none}
+.pubbtn:hover{background:var(--sand)}
+.dbody{display:grid;grid-template-columns:minmax(0,1fr) 0;flex:1;transition:grid-template-columns .2s}
+.dbody.open{grid-template-columns:minmax(0,1fr) var(--aiw)}
+.canvas{padding:44px 56px 140px;min-width:0}
+.canvas .in{max-width:680px;margin:auto}
+.tt{font-weight:600;font-size:32px;line-height:1.25;letter-spacing:-.01em;min-height:1.25em;outline:none}
+.tt.fh{display:flex;align-items:center;gap:12px}
+.tt.fh .ico{width:30px;height:30px;color:var(--ink2);stroke-width:1.5}
+.bd{font-size:16px;line-height:1.95;margin-top:14px;min-height:30vh;outline:none}
+.bd h2{font-size:20px;margin:26px 0 6px}
+.bd p+p{margin-top:10px}
+.bd ol{list-style:decimal;padding-left:1.5em}
+.ph:empty::before{content:attr(data-ph);color:var(--faint);pointer-events:none}
+.count{position:fixed;right:18px;bottom:14px;z-index:15;font-size:12px;color:var(--faint);padding:4px 9px;border-radius:999px;background:color-mix(in srgb,var(--canvas) 85%,transparent)}
+.dbody.open .count{right:calc(var(--aiw) + 18px)}
+
+/* 帯: 何から作られたか › このページ › そこから作ったもの（1 行）＋ 右に操作 */
+.band{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:16px 0 4px;padding:7px 10px 7px 14px;border:1px solid var(--line2);border-radius:12px;background:#fff;font-size:13px}
+.band .bn{font-weight:600;color:var(--ink2);margin-right:2px;white-space:nowrap}
+.band.start{border-style:dashed;background:none;padding-left:10px}
+.chain{display:flex;align-items:center;gap:2px;flex-wrap:wrap;flex:1 1 360px;min-width:0}
+.chain li{display:flex;align-items:center;gap:2px}
+.chain li+li::before{content:"›";color:var(--line3);margin:0 4px}
+.chain li.sib::before{content:"·";color:var(--line3);margin:0 2px}
+.chain li button,.chain li span.cur,.chain li span.none{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:999px;font-size:12.5px;font-weight:600;color:var(--ink2);white-space:nowrap;max-width:46vw;overflow:hidden;text-overflow:ellipsis}
+.chain li button:hover{background:var(--sand)}
+.chain li button .ico{width:13px;height:13px;color:var(--moss);stroke-width:2.2}
+.chain li span.cur{box-shadow:inset 0 0 0 1.5px var(--line3);color:var(--ink);background:var(--sand)}
+.chain li span.none{color:var(--faint);font-weight:500}
+.chain li.run button{background:var(--pale);color:var(--moss)}
+.band .acts{display:flex;align-items:center;gap:2px;margin-left:auto;flex:0 0 auto;flex-wrap:wrap;justify-content:flex-end}
+.band .acts .btn.quiet{padding:0 10px}
+.band.start .acts{margin-left:0}
+
+/* 録音ブロック */
+.recblk{display:flex;align-items:center;gap:12px;margin-top:18px;padding:10px 12px;border-radius:12px;background:var(--sand);flex-wrap:wrap}
+.recblk .src{flex-basis:100%;font-size:12.5px;color:var(--mute);display:flex;align-items:center;gap:6px;margin-top:-2px}
+.recblk .src button{color:var(--ink2);font-weight:600;display:inline-flex;align-items:center;gap:4px}
+.recblk .src button:hover{text-decoration:underline}
+.recblk .src .ico{width:13px;height:13px}
+.play{width:34px;height:34px;border-radius:50%;background:var(--grad);color:#fff;display:grid;place-items:center;flex:none}
+.play .ico{width:16px;height:16px;fill:#fff;stroke:none;margin-left:2px}
+.wave{flex:1;min-width:120px;height:26px;border-radius:6px;background:repeating-linear-gradient(90deg,var(--line3) 0 2px,transparent 2px 5px);mask:linear-gradient(90deg,#000 0 55%,rgba(0,0,0,.35) 55%)}
+.time{font:12px var(--mono);color:var(--mute);white-space:nowrap}
+
+/* この録音について（録音ブロックの直下。畳める） */
+.recinfo{margin-top:10px;border:1px solid var(--line2);border-radius:12px;background:#fff}
+.ri-hd{display:flex;align-items:center;gap:8px;width:100%;padding:10px 12px;font-size:13px;border-radius:12px}
+.ri-hd:hover{background:var(--sand)}
+.ri-hd b{font-weight:600;white-space:nowrap}
+.ri-hd .ico.mic{color:var(--ink2)}
+.ri-hd .sum{flex:1;min-width:0;color:var(--mute);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ri-hd .chev{width:16px;height:16px;color:var(--faint);transition:transform .12s}
+.recinfo.closed .ri-hd .chev{transform:rotate(-90deg)}
+.recinfo:not(.closed) .ri-hd .sum{visibility:hidden}
+.recinfo.closed .ri-body{display:none}
+.ri-body{border-top:1px solid var(--line);padding:2px 12px 8px}
+.ri-r{display:grid;grid-template-columns:86px minmax(0,1fr);gap:6px 12px;align-items:start;padding:9px 0;border-top:1px solid var(--line)}
+.ri-r:first-child{border-top:0}
+.ri-r label{font-size:12.5px;font-weight:600;color:var(--ink2);padding-top:5px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+.chip{display:inline-flex;align-items:center;gap:4px;height:27px;padding:0 4px 0 10px;border-radius:999px;background:var(--sand2);font-size:12.5px;max-width:100%}
+.chip span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip small{color:var(--faint);font-size:11.5px;white-space:nowrap}
+.chip .x{width:19px;height:19px;border-radius:50%;display:grid;place-items:center;color:var(--faint);flex:none}
+.chip .x:hover{background:var(--line2);color:var(--ink)}
+.chip .x .ico{width:11px;height:11px;stroke-width:2.2}
+.chip.add{background:none;color:var(--moss);font-weight:600;padding:0 9px;box-shadow:inset 0 0 0 1px var(--line2)}
+.chip.add:hover{background:var(--pale)}
+.chip.add .ico{width:13px;height:13px;stroke-width:2.2}
+.chips .tag{height:27px;padding:0 9px}
+.ri-r textarea{width:100%;border:1px solid var(--line2);border-radius:8px;padding:6px 9px;font-size:13px;line-height:1.6;resize:vertical;min-height:58px;background:#fff;outline:none;display:block}
+.ri-r textarea:focus{border-color:var(--leaf)}
+.ri-r textarea::placeholder{color:var(--faint)}
+
+/* 録音ページの「文字起こし」: 文字起こしページの一覧 ＋「文字起こしする ▾」 */
+.txhd{display:flex;align-items:center;gap:8px;margin-top:28px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.txhd h2{font-size:14px;font-weight:600;color:var(--ink2);margin-right:2px}
+.txhd .newwrap{margin-left:auto}
+.txhd .btn{height:28px;padding:0 11px;font-size:12.5px}
+.txlist{margin-top:8px}
+.txlist li{display:flex;align-items:center;gap:10px;min-height:42px;padding:6px 10px;border-radius:10px;cursor:pointer}
+.txlist li:hover{background:var(--sand)}
+.txlist li .ki{width:16px;height:16px;color:var(--mute)}
+.txlist li .t{flex:1;min-width:0}
+.txlist li .t b{display:block;font-weight:500;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.txlist li .t small{display:block;font-size:12.5px;color:var(--mute)}
+.txlist li .when{font-size:12px;color:var(--faint);white-space:nowrap}
+.txlist li .ico.chev{width:14px;height:14px;color:var(--line3)}
+.txempty{margin-top:10px;padding:26px 16px;border:1px dashed var(--line3);border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:8px}
+.txempty small{color:var(--faint);font-size:12.5px}
+
+/* 文字起こしページの本文 */
+.txmeta{display:flex;align-items:center;gap:8px;margin-top:22px;padding-bottom:6px;border-bottom:1px solid var(--line);font-size:12.5px;color:var(--mute)}
+.txmeta .btn{margin-left:auto;height:26px;padding:0 9px;font-size:12.5px}
+.tx{margin-top:10px;font-size:15.5px;line-height:1.9}
+.tx p{padding:6px 0}
+.tx .meta{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mute);line-height:1.4;margin-bottom:1px}
+.tx .meta b{color:var(--ink2);font-size:12.5px}
+.tx .meta small{font:11.5px var(--mono);color:var(--faint)}
+.tx .meta button{font:11.5px var(--mono);color:var(--faint)}
+.tx .meta button:hover{color:var(--moss)}
+
+/* フォルダを開いた画面（中身の一覧だけ） */
+.facts{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
+.frows{margin-top:16px;border:1px solid var(--line2);border-radius:14px;background:#fff}
+.frows li{display:flex;align-items:center;gap:10px;min-height:46px;padding:8px 14px;border-top:1px solid var(--line);cursor:pointer}
+.frows li:first-child{border-top:0;border-radius:13px 13px 0 0}
+.frows li:last-child{border-radius:0 0 13px 13px}
+.frows li:hover{background:var(--sand)}
+.frows li .ki{width:17px;height:17px;color:var(--ink2)}
+.frows li.step .ki{width:13px;height:13px;color:var(--faint)}
+.frows li.transcript .ki{width:15px;height:15px;color:var(--mute)}
+.frows li .t{flex:1;min-width:0}
+.frows li .t b{display:block;font-weight:500;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frows li .t small{display:block;font-size:12.5px;color:var(--mute)}
+.frows li .when{font-size:12px;color:var(--faint);white-space:nowrap}
+.empty{margin-top:28px;padding:36px 16px;border:1px dashed var(--line3);border-radius:14px;text-align:center;color:var(--faint);font-size:13.5px}
+
+/* 並べて開く（分割ビュー） */
+.canvas.wide .in{max-width:none}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:start}
+.cols>section{min-width:0;border-left:1px solid var(--line);padding-left:24px}
+.cols>section:first-child{border-left:0;padding-left:0}
+.cols .ch{display:flex;align-items:center;gap:6px;margin:-20px 0 10px;font-size:12.5px;color:var(--faint)}
+.cols .ch .ib{width:26px;height:26px;margin-left:auto}
+.cols .tt{font-size:24px}
+.cols .bd{font-size:15px;min-height:0}
+
+/* AI（右） */
+.ai{position:sticky;top:calc(var(--bar) + 52px);align-self:start;height:calc(100vh - var(--bar) - 52px);border-left:1px solid var(--line);background:var(--canvas);display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.ai .hd{display:flex;align-items:center;gap:2px;height:40px;padding:0 8px 0 16px;font-size:13px;font-weight:600;flex:none}
+.ai .hd span{flex:1}
+.thread{flex:1;overflow:auto;padding:4px 16px}
+.ctx{display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:0 14px 8px;font-size:12px;color:var(--faint)}
+.ctx .tag{font-weight:500;color:var(--mute);background:var(--sand)}
+.ctx .tag .ico{color:var(--faint)}
+.composer{padding:0 12px 12px;flex:none}
+.composer .box{border:1px solid var(--line2);border-radius:14px;background:#fff;padding:9px 10px 7px}
+.composer textarea{width:100%;border:0;outline:none;resize:none;font-size:13.5px;line-height:1.6;min-height:48px;background:none;padding:0 2px;display:block}
+.composer textarea::placeholder{color:var(--faint)}
+.composer .foot{display:flex;align-items:center;gap:4px;margin-top:4px}
+.composer .foot .ib{width:28px;height:28px;color:var(--faint)}
+.send{width:28px;height:28px;border-radius:50%;background:var(--grad);color:#fff;display:grid;place-items:center;margin-left:auto}
+.send .ico{width:15px;height:15px;stroke-width:2.2}
+
+/* ===== シート（削除） ===== */
+.veil{position:fixed;inset:0;z-index:110;background:rgba(28,28,26,.28);display:none;align-items:center;justify-content:center;padding:16px}
+.veil.open{display:flex}
+.sheet{width:min(440px,100%);background:#fff;border-radius:16px;box-shadow:0 24px 60px rgba(28,28,26,.24);padding:22px 22px 18px}
+.sheet h2{font-size:17px;font-weight:600;margin-bottom:8px}
+.sheet p{font-size:13.5px;color:var(--ink2)}
+.sheet .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+
+/* ===== スマホ（720px 以下） ===== */
+@media (max-width:720px){
+  .ws,.ws.nosb{grid-template-columns:minmax(0,1fr)}
+  .sb{position:static;height:auto;min-height:calc(100vh - var(--bar));border-right:0}
+  .ws[data-screen="page"] .sb{display:none}
+  .ws[data-screen="list"] .doc{display:none}
+  .sb-top{padding-left:10px}
+  #btn-collapse{display:none}
+  .dt .brand{display:none}
+  .dt .ins{margin-left:0;padding-left:6px}
+  .dt .crumbs{display:none}
+  .loc{display:flex;flex-wrap:wrap;margin:0 auto 4px;min-height:0}
+  .loc:empty{display:none}
+  .loc button{max-width:60vw;margin-left:-7px}
+  .loc button+i{margin-left:0}
+  .dbody,.dbody.open{grid-template-columns:minmax(0,1fr)}
+  .ai{display:none}
+  .canvas{padding:24px 16px 120px}
+  .tt{font-size:25px}
+  .count,.dbody.open .count{right:12px}
+  #aitoggle{display:none}
+  .ri-r{grid-template-columns:minmax(0,1fr);gap:4px}
+  .ri-r label{padding-top:0}
+  .band{flex-direction:column;flex-wrap:nowrap;align-items:stretch;gap:6px;padding:8px 10px}
+  .band .bn{margin:0}
+  .band .acts{margin-left:0;justify-content:flex-start}
+  .chain{flex:0 0 auto;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none;padding-bottom:2px}
+  .chain li{flex:none}
+  .chain li button,.chain li span.cur,.chain li span.none{max-width:none}
+  .frows li .when,.txlist li .when{display:none}
+  .cols{grid-template-columns:minmax(0,1fr);gap:20px}
+  .cols>section{border-left:0;padding-left:0;border-top:1px solid var(--line);padding-top:16px}
+  .cols>section:first-child{border-top:0;padding-top:0}
+  .cols .ch{margin-top:0}
+}
+</style>
+</head>
+<body>
+
+<div class="mock">
+  <div class="url"><b>editor.niho.life</b><span id="url">/p/r1</span></div>
+  <div class="sw" id="sw">
+    <button data-state="rec" class="on">録音ページ</button>
+    <button data-state="transcribing">2 枚目を作成中</button>
+    <button data-state="transcript">文字起こしページ</button>
+    <button data-state="step">記事本文</button>
+    <button data-state="two">記事本文が 2 枚</button>
+    <button data-state="plan2">記事方針の 2 枚目</button>
+    <button data-state="split">並べて開く</button>
+    <button data-state="folder">フォルダ</button>
+    <button data-state="wrap">フォルダの外の録音</button>
+  </div>
+</div>
+
+<div class="ws" id="ws" data-screen="page">
+  <!-- 左: 一覧（フォルダ › ページ の 2 段） -->
+  <aside class="sb" aria-label="ページ">
+    <div class="sb-top" id="sbtop">
+      <div class="brand" id="brand"></div>
+      <button class="ib tip-r" id="btn-search" data-tip="検索 ⌘K" aria-label="検索（⌘K）"></button>
+      <span class="newwrap">
+        <button class="ib tip-r" id="btn-new" data-menu="new" data-tip="新しいページ ⌘N" aria-label="新しいページ（⌘N）" aria-haspopup="menu"></button>
+        <div class="menu" id="menu-new" role="menu" aria-label="新しいページ"></div>
+      </span>
+      <button class="ib tip-r" id="btn-collapse" data-tip="一覧をしまう" aria-label="一覧をしまう"></button>
+    </div>
+    <ul class="sb-list" id="list" aria-label="ページの一覧"></ul>
+    <div class="sb-foot">
+      <a class="sb-set" href="#" data-toast="設定（モック）"><span id="gear"></span>設定</a>
+    </div>
+  </aside>
+
+  <!-- 中央: ページ／フォルダ -->
+  <main class="doc" id="doc">
+    <header class="dt">
+      <button class="ib tip-l" id="btn-expand" data-tip="一覧を出す" aria-label="一覧を出す" hidden></button>
+      <button class="ib tip-l" id="btn-list" data-tip="一覧" aria-label="一覧へ" hidden></button>
+      <div class="brand" id="brand-hd" hidden></div>
+      <nav class="crumbs" id="crumbs" aria-label="場所"></nav>
+      <div class="ins" id="ins">
+        <button class="ib" data-tip="ブロック" aria-label="ブロックを挿入" data-toast="ブロックの一覧（モック）"><span data-ic="plus"></span></button>
+        <button class="ib" data-tip="画像" aria-label="画像" data-toast="画像（モック）"><span data-ic="img"></span></button>
+        <button class="ib" data-tip="録音" aria-label="録音" data-toast="録音（モック）"><span data-ic="mic"></span></button>
+      </div>
+      <span class="sp"></span>
+      <button class="pubbtn" id="pubbtn" data-toast="公開のシート（モック）">公開</button>
+      <button class="ib on" id="aitoggle" data-tip="AIと作る" aria-label="AIと作る"><span data-ic="panel"></span></button>
+      <span class="newwrap">
+        <button class="ib tip-r" data-menu="dots" data-tip="その他" aria-label="その他"><span data-ic="more"></span></button>
+        <div class="menu" id="menu-dots" role="menu" aria-label="ページのメニュー"></div>
+      </span>
+    </header>
+    <div class="dbody open" id="dbody">
+      <div class="canvas" id="cv"><nav class="in loc crumbs" id="loc" aria-label="場所"></nav><div class="in" id="canvas"></div></div>
+      <aside class="ai" id="ai" aria-label="AIと作る">
+        <div class="hd"><span>AIと作る</span>
+          <button class="ib" data-tip="新しい会話" aria-label="新しい会話" data-toast="新しい会話（モック）"><span data-ic="edit"></span></button>
+          <button class="ib tip-r" data-tip="会話の履歴" aria-label="会話の履歴" data-toast="会話の履歴（モック）"><span data-ic="more"></span></button>
+        </div>
+        <div class="thread"></div>
+        <div class="ctx" id="ctx" aria-label="AI が読むもの"></div>
+        <div class="composer">
+          <div class="box">
+            <textarea rows="2" placeholder="直したいこと・作りたいもの…" aria-label="AI への依頼"></textarea>
+            <div class="foot">
+              <button class="ib" data-tip="工程・スキル" aria-label="工程・スキル" data-toast="工程・スキル（モック）"><span data-ic="plus"></span></button>
+              <button class="send" aria-label="送る" data-toast="送信（モック）"><span data-ic="up"></span></button>
+            </div>
+          </div>
+        </div>
+      </aside>
+      <button class="count" id="count" data-toast="ページの情報（モック）">0 字</button>
+    </div>
+  </main>
+</div>
+
+<!-- 行の「…」 -->
+<div class="menu at" id="menu-row" role="menu" aria-label="行のメニュー"></div>
+
+<!-- 削除の確認 -->
+<div class="veil" id="veil-del">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="del-h">
+    <h2 id="del-h">削除しますか？</h2>
+    <p id="del-p">ゴミ箱に 30 日残ります。</p>
+    <div class="foot"><button class="btn line sm" data-close="veil-del">やめる</button><button class="btn danger sm" id="del-ok">削除</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+/* ===== アイコン（packages/docs-ui/src/shell/icons.tsx の写し ＋ フォルダ・✦・行・再生・✓・列） ===== */
+const IC = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  chev: '<path d="m9.5 6 6 6-6 6"/>',
+  down: '<path d="m6 9.5 6 6 6-6"/>',
+  back: '<path d="m14.5 6-6 6 6 6"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/>',
+  side: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/>',
+  panel: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/>',
+  cols: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M12 4.5v15"/>',
+  more: '<circle cx="6" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="18" cy="12" r="1.2" fill="currentColor"/>',
+  mic: '<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M6 11.5a6 6 0 0 0 12 0M12 17.5v3"/>',
+  img: '<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4 17 5-4.5 4 3.5 3-2.5 4 3.5"/>',
+  doc: '<path d="M7 3.5h7l4 4v13H7z"/><path d="M14 3.5v4h4M10 12h5M10 15.5h5"/>',
+  lines: '<path d="M5 7h14M5 12h14M5 17h9"/>',
+  folder: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4.2l2 2h6.8a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
+  spark: '<path d="M12 4.5l1.6 4.4 4.4 1.6-4.4 1.6L12 16.5l-1.6-4.4L6 10.5l4.4-1.6z"/>',
+  play: '<path d="M8 5.5v13l10-6.5z"/>',
+  check: '<path d="m5.5 12.5 4 4 9-9"/>',
+  up: '<path d="M12 19V6M6 12l6-6 6 6"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.5M12 18v2.5M3.5 12H6M18 12h2.5M6 6l1.8 1.8M16.2 16.2 18 18M6 18l1.8-1.8M16.2 7.8 18 6"/>',
+  trash: '<path d="M5 7h14M9 7V4.5h6V7M7 7l1 13h8l1-13"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  cal: '<rect x="4" y="5.5" width="16" height="14" rx="2.5"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/>',
+  edit: '<path d="M4.5 19.5h4l10-10a2.8 2.8 0 0 0-4-4l-10 10z"/><path d="m13 7 4 4M4.5 19.5l1-4"/>',
+  move: '<path d="M4 12h16M13 5l7 7-7 7"/>',
+  copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
+  redo: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
+};
+const svg = (n, cls = "ico") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${IC[n]}</svg>`;
+const LOGO = `<svg class="logo" viewBox="0 0 256 256" aria-hidden="true"><rect width="256" height="256" fill="#F3F0E8"/><g transform="translate(128 128) scale(2.05) translate(-50 -50)">
+<path fill="#A6D2DE" d="M22 14 C34 11 46 12 58 11 L79 31 C80 48 81 68 79 87 C60 90 40 88 21 89 C19 66 20 40 22 14 Z"/>
+<path fill="#DCEDF2" d="M58 11 C59 18 58 25 59 31 C66 31 73 31 79 31 Z"/>
+<path fill="#4B5F73" d="M31 42 C38 40 48 40 56 41 C58 43 58 46 56 48 C48 49 38 49 31 48 C29 46 29 44 31 42 Z"/>
+<path fill="#4B5F73" d="M31 56 C36 54 42 54 46 55 C48 57 48 60 46 62 C42 63 36 63 31 62 C29 60 29 58 31 56 Z"/>
+<g transform="translate(78 34.2) rotate(36.4)"><path fill="#EE9B7E" d="M-5.6 -1 C-5.2 -5.4 5.4 -6 6.2 -1.4 C6.6 10 5.6 24 6.4 36 C6.6 41 5.9 45 5.2 47.5 C2 48.6 -2 48.4 -5.4 47.4 C-6.2 44 -5.8 38 -6.4 30 C-6.8 20 -5.4 10 -5.6 -1 Z"/><path fill="#FAF0D6" d="M-4.2 -3.4 C-2.6 -6.6 3.2 -6.4 4.8 -3 C5.4 -0.4 3 2.6 -0.4 2.4 C-3.4 2.2 -5.2 -0.6 -4.2 -3.4 Z"/><path fill="#4B5F73" d="M-5.2 46.4 C-3.6 45 -0.8 45.8 1.6 45.6 C3.4 45.4 4.6 46.2 5.1 47.2 C4.4 48.9 4.9 50.7 3.9 52.3 C3.3 53.6 2.6 54.8 0.8 55.4 C-1 55.8 -2.8 54.9 -3.6 53.6 C-4.1 52.6 -4 51.3 -4.7 50 C-5.3 48.9 -5.6 47.7 -5.2 46.4 Z"/></g></g></svg>`;
+
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+$("#brand").innerHTML = `${LOGO}<span>Editor</span>`;
+$("#brand-hd").innerHTML = `${LOGO}<span>Editor</span>`;
+$("#btn-search").innerHTML = svg("search");
+$("#btn-new").innerHTML = svg("plus");
+$("#btn-collapse").innerHTML = svg("side");
+$("#btn-expand").innerHTML = svg("side");
+$("#btn-list").innerHTML = svg("side");
+$("#gear").innerHTML = svg("gear");
+$$("[data-ic]").forEach((el) => (el.outerHTML = svg(el.dataset.ic)));
+
+/* ===== 木（合成データ）。フォルダ › ページ。ページは role（transcript / 段階）と from（何から作られたか）を持つ ===== */
+const RECIPE = { name: "記事制作", steps: ["文字起こし修正", "記事方針", "記事本文"] };
+const TREE = [
+  { id: "f1", kind: "folder", t: "鎌倉の朝の散歩", open: true, children: [
+    { id: "r1", kind: "rec", t: "取材 11/3 北鎌倉", when: "2日前" },
+    { id: "t1", kind: "transcript", t: "取材 11/3 北鎌倉 · Gemini", when: "2日前", engine: "Gemini", from: "r1" },
+    { id: "t2", kind: "transcript", t: "取材 11/3 北鎌倉 · Deepgram", when: "今", engine: "Deepgram", from: "r1", st: "run", only: ["transcribing"] },
+    { id: "s1", kind: "step", t: "文字起こし修正", when: "2日前", step: 0, from: "t1" },
+    { id: "s2", kind: "step", t: "記事方針", when: "2日前", step: 1, from: "s1" },
+    { id: "s2b", kind: "step", t: "記事方針（人物から）", when: "今", step: 1, from: "s1", only: ["plan2"] },
+    { id: "s3", kind: "step", t: "記事本文", when: "昨日", step: 2, from: "s2" },
+    { id: "s3b", kind: "step", t: "記事本文 2", when: "今", step: 2, from: "s2", only: ["two", "split"] },
+    { id: "d1", kind: "note", t: "散歩コースのメモ", when: "3日前" },
+    { id: "d2", kind: "note", t: "円覚寺の資料", when: "3日前" },
+  ] },
+  { id: "f2", kind: "folder", t: "コラム執筆", open: true, children: [
+    { id: "w1", kind: "note", t: "冬の鎌倉、海辺の朝", when: "昨日" },
+    { id: "w2", kind: "note", t: "文体のメモ", when: "4日前" },
+  ] },
+  { id: "r9", kind: "rec", t: "取材 11/5 材木座", when: "今日" },
+  { id: "p2", kind: "note", t: "鎌倉大好き", when: "昨日" },
+  { id: "p4", kind: "note", t: "合成記事：鎌倉の朝の散歩", when: "2日前", pub: "NIHO" },
+];
+const BY = new Map();
+function index() { BY.clear(); (function walk(nodes, parent) { for (const n of nodes) { n.parent = parent; BY.set(n.id, n); if (n.children) walk(n.children, n); } })(TREE, null); }
+index();
+const folderOf = (n) => (n.kind === "folder" ? n : n.parent && n.parent.kind === "folder" ? n.parent : null);
+
+let state = "rec";
+let current = "r1";
+const shown = (n) => !n.only || n.only.includes(state);
+const kidsOf = (f) => (f.children ?? []).filter(shown);
+/* フォルダの中の並び: 録音 › 文字起こし › 段階の順 › ほかのページ */
+const ORDER = { rec: 0, transcript: 1, step: 2, note: 3 };
+const sorted = (kids) => [...kids].sort((a, b) => (ORDER[a.kind] - ORDER[b.kind]) || ((a.step ?? 0) - (b.step ?? 0)));
+
+const label = (n) => (n.kind === "transcript" ? `文字起こし（${n.engine}）` : n.kind === "rec" ? "録音" : n.t);
+const roleSay = (n) => (n.kind === "transcript" ? (n.st === "run" ? "文字起こし中…" : `文字起こし · ${n.engine} · 42:10`) : n.kind === "step" ? `${RECIPE.name} · ${RECIPE.steps[n.step]}` : n.kind === "rec" ? "録音 · 42:10" : n.pub ? n.pub : "");
+const madeFrom = (n) => (n.from ? BY.get(n.from) : null);
+const madeHere = (n) => { const out = []; for (const f of TREE) { if (f.kind === "folder") for (const k of kidsOf(f)) { if (k.from === n.id) out.push(k); } else if (f.from === n.id) out.push(f); } return out; };
+
+/* ===== 一覧 ===== */
+function renderList() {
+  const out = [];
+  const row = (n, d) => {
+    const isFolder = n.kind === "folder";
+    const kids = isFolder ? sorted(kidsOf(n)) : [];
+    const open = isFolder ? n.open !== false : true;
+    const sub = n.kind === "transcript" ? (n.st === "run" ? "文字起こし中…" : `文字起こし · ${n.engine}`) : n.kind === "rec" ? "録音 · 42:10" : n.pub ? n.pub : "";
+    out.push(`<li class="row ${n.kind}${n.id === current ? " on" : ""}${isFolder && !open ? " closed" : ""}" data-id="${n.id}" style="--d:${d}" tabindex="0" draggable="true">
+      ${isFolder ? `<button class="tw${kids.length ? "" : " none"}" aria-label="${open ? "閉じる" : "開く"}" aria-expanded="${open}">${svg("down")}</button>${svg("folder", "ico ki")}` : ""}
+      ${n.kind === "rec" ? svg("mic", "ico ki") : n.kind === "transcript" ? svg("lines", "ico ki") : n.kind === "step" ? svg("spark", "ico ki") : ""}
+      <b>${n.t}</b><span class="when">${isFolder ? "" : n.when}</span>
+      <button class="more" aria-label="${n.t} のメニュー" aria-haspopup="menu">${svg("more")}</button>
+      ${sub ? `<span class="sub">${n.st === "run" ? '<i class="spin"></i>' : ""}${sub}</span>` : ""}</li>`);
+    if (isFolder && open) for (const k of kids) row(k, d + 1);
+  };
+  for (const n of TREE) row(n, 0);
+  $("#list").innerHTML = out.join("");
+}
+
+/* ===== 中身 ===== */
+const TX = [
+  ["Mika", "00:12", "北鎌倉の駅を降りると、朝の空気がもう違いますね。"],
+  ["佐藤", "00:21", "ええ。店を開ける前にこの道を歩くのが、もう二十年の習慣で。円覚寺の総門のあたりは、季節で匂いが変わるんです。"],
+  ["Mika", "01:04", "匂い、ですか。"],
+  ["佐藤", "01:06", "春は土と梅、秋は金木犀。観光の方が来る前の一時間だけ、町が自分のものになる。"],
+  ["Mika", "02:40", "明月院の方へも行かれますか。"],
+  ["佐藤", "02:43", "行きます。紫陽花の季節は避けますけど。"],
+];
+const chip = (name, note) => `<span class="chip"><span>${name}</span>${note ? `<small>${note}</small>` : ""}<button class="x" aria-label="${name} を外す" data-toast="外しました（モック）">${svg("x")}</button></span>`;
+const addChip = (l) => `<button class="chip add" data-toast="${l}（モック）">${svg("plus")}${l}</button>`;
+const seg = (labels, on) => `<div class="seg" role="group">${labels.map((l, i) => `<button class="${i === on ? "on" : ""}"${i === on ? ' aria-pressed="true"' : ""}>${l}</button>`).join("")}</div>`;
+
+/* 帯: 何から作られたか › このページ › そこから作ったもの（1 行）。押すとそのページへ。右に操作 */
+function bandHtml(n) {
+  const up = []; for (let a = madeFrom(n); a; a = madeFrom(a)) up.unshift(a);
+  const li = [];
+  for (const a of up) li.push(`<li><button data-open="${a.id}">${a.kind === "rec" ? svg("mic") : svg("check")}${label(a)}</button></li>`);
+  li.push(`<li><span class="cur">${label(n)}</span></li>`);
+  /* 同じ入力から作った兄弟（記事本文 · 記事本文 2）は横に並べる */
+  if (n.kind === "step") for (const s of kidsOf(folderOf(n)).filter((k) => k !== n && k.kind === "step" && k.step === n.step && k.from === n.from)) li.push(`<li class="sib"><button data-open="${s.id}">${s.st === "run" ? '<i class="spin"></i>' : svg("check")}${label(s)}</button></li>`);
+  let cur = n;
+  for (;;) {
+    const ds = madeHere(cur);
+    if (!ds.length) {
+      const next = cur.kind === "transcript" ? 0 : cur.kind === "step" ? cur.step + 1 : -1;
+      if (next >= 0 && next < RECIPE.steps.length) li.push(`<li><span class="none">${RECIPE.steps[next]}（まだ）</span></li>`);
+      break;
+    }
+    ds.forEach((d, i) => li.push(`<li${i ? ' class="sib"' : ""}${d.st === "run" ? ' class="run"' : ""}><button data-open="${d.id}">${d.st === "run" ? '<i class="spin"></i>' : svg("check")}${label(d)}</button></li>`));
+    cur = ds[0];
+  }
+  const acts = [];
+  if (n.kind === "transcript") {
+    acts.push(`<span class="newwrap"><button class="btn sm" data-menu="start">${svg("spark")}記事にする${svg("down", "ico dn")}</button><div class="menu" id="menu-start" role="menu" aria-label="手順"><button data-make="run">${svg("spark")}記事制作<small>文字起こし修正 › 記事方針 › 記事本文</small></button><button data-toast="議事録にする（モック）">議事録にする</button><button data-toast="インサイト整理（モック）">インサイト整理</button><button data-toast="コーチングにする（モック）">コーチングにする</button></div></span>`);
+  } else {
+    acts.push(`<button class="btn quiet sm" data-toast="このページを作り直します。前の本文は版に残ります（モック）">${svg("redo")}作り直す</button>`);
+    acts.push(`<button class="btn quiet sm" data-make="sibling">${svg("copy")}もう 1 枚作る</button>`);
+    if (!madeHere(n).length && n.step + 1 < RECIPE.steps.length) acts.push(`<button class="btn sm" data-make="continue">${svg("spark")}ここから続きを作る</button>`);
+    const sibs = kidsOf(folderOf(n)).filter((k) => k !== n && k.kind === "step" && k.step === n.step && k.from === n.from);
+    if (sibs.length) acts.push(`<button class="btn quiet sm" data-split="${sibs[0].id}">${svg("cols")}並べて開く</button>`);
+  }
+  const bn = n.kind === "step" || madeHere(n).length ? RECIPE.name : "手順";
+  return `<div class="band"><span class="bn">${bn}</span><ol class="chain" aria-label="何から作られたか">${li.join("")}</ol><div class="acts">${acts.join("")}</div></div>`;
+}
+
+function recHtml(n) {
+  const txs = n.parent ? kidsOf(n.parent).filter((k) => k.kind === "transcript" && k.from === n.id) : [];
+  const info = n.id === "r9"
+    ? { sum: "未入力", speakers: 0, people: "", terms: "", bg: "" }
+    : { sum: "2人 · 日本語 · 登場人物 2 · 固有名詞 3 · 背景あり", speakers: 2, people: chip("Mika", "聞き手") + chip("佐藤さん", "北鎌倉の珈琲店主"), terms: chip("北鎌倉") + chip("円覚寺", "えんがくじ") + chip("明月院", "めいげついん"), bg: "北鎌倉で二十年続く珈琲店の店主に、開店前の散歩の習慣を聞いた。観光ガイドではなく、暮らしの手触りを伝える記事にしたい。" };
+  const closed = n.id !== "r9" && txs.length > 0;
+  const startMenu = `<span class="newwrap"><button class="btn sm" data-menu="tx">${svg("lines")}文字起こしする${svg("down", "ico dn")}</button><div class="menu" id="menu-tx" role="menu" aria-label="エンジン"><div class="hd">同じフォルダに文字起こしのページができます</div><button data-make="tx:Gemini">Gemini<small>既定</small></button><button data-make="tx:Deepgram">Deepgram</button><button data-make="tx:Apple">この Mac<small>オフライン</small></button></div></span>`;
+  const list = txs.length
+    ? `<ul class="txlist">${txs.map((t) => `<li data-open="${t.id}">${svg("lines", "ico ki")}<div class="t"><b>${t.t}</b><small>${t.st === "run" ? '<i class="spin"></i> 文字起こし中… · 残り 3 分ほど' : `${t.engine} · 42:10 · 1,240 字`}</small></div><span class="when">${t.when}</span>${svg("chev", "ico chev")}</li>`).join("")}</ul>`
+    : `<div class="txempty">${startMenu.replace('class="btn sm"', 'class="btn"')}<small>42 分 · 同じフォルダに文字起こしのページができます</small></div>`;
+  return `<h1 class="tt" contenteditable="true" spellcheck="false">${n.t}</h1>
+  <div class="recblk"><button class="play" aria-label="再生" data-toast="再生（モック）">${svg("play")}</button><div class="wave" aria-hidden="true"></div><span class="time">00:00 / 42:10</span><span class="tag">2 ファイル</span></div>
+  <section class="recinfo${closed ? " closed" : ""}" id="recinfo" aria-label="この録音について">
+    <button class="ri-hd" aria-expanded="${!closed}" aria-controls="ri-body">${svg("mic", "ico mic")}<b>この録音について</b><span class="sum">${info.sum}</span>${svg("down", "ico chev")}</button>
+    <div class="ri-body" id="ri-body">
+      <div class="ri-r"><label>話者人数</label>${seg(["自動", "1人", "2人", "3人", "4人以上"], info.speakers)}</div>
+      <div class="ri-r"><label>言語</label>${seg(["日本語", "English"], 0)}</div>
+      <div class="ri-r"><label>登場人物</label><div class="chips">${info.people}${addChip("追加")}</div></div>
+      <div class="ri-r"><label>固有名詞</label><div class="chips">${info.terms}${addChip("追加")}<span class="tag" title="設定の固有名詞">${svg("gear")}共通 5</span></div></div>
+      <div class="ri-r"><label>背景</label><textarea rows="3" aria-label="背景" placeholder="取材の目的、相手、場所など">${info.bg}</textarea></div>
+    </div>
+  </section>
+  <div class="txhd"><h2>文字起こし</h2>${txs.length ? `<span class="tag">${txs.length} 枚</span>` : ""}${txs.length ? startMenu : ""}</div>
+  ${list}`;
+}
+
+function transcriptHtml(n) {
+  const r = madeFrom(n);
+  const body = n.st === "run"
+    ? `<p><i class="spin"></i> 文字起こし中… 残り 3 分ほど。終わるとここに出ます。</p>`
+    : TX.map(([who, at, text]) => `<p><span class="meta"><b>${who}</b><button data-toast="${at} から再生（モック）">${at}</button></span>${text}</p>`).join("");
+  return `<h1 class="tt" contenteditable="true" spellcheck="false">${n.t}</h1>
+  ${bandHtml(n)}
+  <div class="recblk"><button class="play" aria-label="再生" data-toast="再生（モック）">${svg("play")}</button><div class="wave" aria-hidden="true"></div><span class="time">00:00 / 42:10</span><span class="src">音声:<button data-open="${r.id}">${svg("mic")}${r.t}</button></span></div>
+  <div class="txmeta"><span>${n.engine} · 日本語 · 2人</span><button class="btn quiet" data-toast="話者の名前（モック）">話者の名前</button></div>
+  <div class="tx" contenteditable="${n.st === "run" ? "false" : "true"}" spellcheck="false">${body}</div>`;
+}
+
+function stepHtml(n) {
+  const body = n.step === 1 ? (n.id === "s2b" ? `
+    <h2>狙い</h2><p>珈琲店主・佐藤さんの二十年を、朝の散歩という一本の線で描く人物記事。</p>
+    <h2>読者</h2><p>店の常連と、これから鎌倉に通う人。</p>
+    <h2>構成</h2><ol><li>店を開ける前の一時間、何を見ているか</li><li>二十年の変化と、変わらない道</li><li>最後に、店の一杯へ</li></ol>
+    <h2>書かないこと</h2><p>観光案内、営業情報。</p>` : `
+    <h2>狙い</h2><p>北鎌倉の「観光客が来る前の一時間」を、珈琲店主の二十年の習慣から描く。</p>
+    <h2>読者</h2><p>鎌倉に住んでみたい人。観光ガイドではなく、暮らしの手触りを求めている。</p>
+    <h2>構成</h2><ol><li>朝 6 時の総門の匂い（春と秋の対比）</li><li>二十年の散歩が店の味にどうつながるか</li><li>読者が同じ道を歩くための、短い案内</li></ol>
+    <h2>書かないこと</h2><p>店の営業情報、紫陽花の時期の混雑。</p>`)
+    : n.step === 0 ? TX.map(([who, , text]) => `<p><b>${who}</b>：${text}</p>`).join("")
+    : n.id === "s3b" ? `<p>北鎌倉の朝は、駅を降りた瞬間に始まる。空気が、もう違う。</p><p>珈琲店を開ける前の一時間、佐藤さんは二十年、同じ道を歩いてきた。円覚寺の総門の前で季節の匂いを確かめ、明月院へ抜ける。紫陽花の季節だけは避ける。</p><p>観光の人が来る前の一時間だけ、町は自分のものになる——その言葉が、この店の一杯の味を決めている。</p>`
+    : n.st === "run" ? `<p><i class="spin"></i> 作成中…</p>`
+    : `<h2>観光客が来る前の一時間</h2><p>北鎌倉の駅を降りると、朝の空気がもう違う。珈琲店を開ける前にこの道を歩くのが、佐藤さんの二十年の習慣だ。</p><p>円覚寺の総門のあたりは、季節で匂いが変わる。春は土と梅、秋は金木犀。「観光の方が来る前の一時間だけ、町が自分のものになる」。</p><h2>二十年の散歩と、一杯の珈琲</h2><p>その一時間が、店の味をつくってきた。散歩の途中で見た光と匂いが、その日の豆の挽き方を決める。</p><h2>同じ道を歩くなら</h2><p>北鎌倉駅から円覚寺の総門へ。建長寺の前を通って明月院まで、歩いて四十分ほど。朝六時台なら、人はいない。</p>`;
+  return `<h1 class="tt" contenteditable="true" spellcheck="false">${n.t}</h1>${bandHtml(n)}<div class="bd" contenteditable="true" spellcheck="false">${body}</div>`;
+}
+
+function noteHtml(n) {
+  const body = n.id === "w1" ? `<p>材木座の冬の海は、朝の七時でもまだ青くない。灰色の水面に、サーファーが二人、点のように浮いている。</p><p>海辺の町で冬を過ごすと、海は見るものではなく、天気のように「ある」ものになる。</p>`
+    : n.id === "d1" ? `<p>北鎌倉駅 → 円覚寺の総門 → 建長寺の前を通って → 明月院。徒歩で 40 分ほど。</p><p>朝 6 時台は人がいない。総門の前の坂で振り返ると、線路の向こうに朝日。</p>`
+    : n.id === "p2" ? `<p>鎌倉が大好きです。</p>` : "";
+  return `<h1 class="tt ph" contenteditable="true" data-ph="無題" spellcheck="false">${n.t}</h1><div class="bd ph" contenteditable="true" data-ph="書きはじめる。「/」でブロック" spellcheck="false">${body}</div>`;
+}
+
+function folderHtml(n) {
+  const rows = sorted(kidsOf(n)).map((k) => `<li class="${k.kind}" data-open="${k.id}">${k.kind === "rec" ? svg("mic", "ico ki") : k.kind === "transcript" ? svg("lines", "ico ki") : k.kind === "step" ? svg("spark", "ico ki") : svg("doc", "ico ki")}<div class="t"><b>${k.t}</b>${roleSay(k) ? `<small>${k.st === "run" ? '<i class="spin"></i> ' : ""}${roleSay(k)}</small>` : ""}</div><span class="when">${k.when}</span></li>`);
+  return `<h1 class="tt fh" contenteditable="true" spellcheck="false">${svg("folder")}${n.t}</h1>
+  <div class="facts"><button class="btn sm" data-toast="このフォルダに空のページを作ります（モック）">${svg("plus")}新しいページ</button><button class="btn line sm" data-toast="このフォルダに録音のページを作ります（モック）">${svg("mic")}録音から</button></div>
+  ${rows.length ? `<ul class="frows">${rows.join("")}</ul>` : `<div class="empty">まだページがありません</div>`}`;
+}
+
+function pageHtml(n) { return n.kind === "folder" ? folderHtml(n) : n.kind === "rec" ? recHtml(n) : n.kind === "transcript" ? transcriptHtml(n) : n.kind === "step" ? stepHtml(n) : noteHtml(n); }
+
+function ctxHtml(n) {
+  const tags = [`<span class="tag">${svg("doc")}このページ</span>`];
+  if (n.kind !== "note") tags.push(`<span class="tag">${svg("mic")}この録音について</span>`);
+  if (n.kind === "step") tags.push(`<span class="tag">${svg("spark")}文書ガイド（${RECIPE.name}）</span>`);
+  const f = folderOf(n);
+  if (f && n.kind !== "folder") {
+    const others = kidsOf(f).filter((k) => k.id !== n.id);
+    if (others.length) tags.push(`<span class="tag">${svg("folder")}${f.t} の ${others.length} ページ</span>`);
+  }
+  return `<span>読むもの</span>${tags.join("")}`;
+}
+
+/* パンくずは場所（親のフォルダ）だけ。 */
+function crumbsHtml(n) {
+  const f = n.kind === "folder" ? null : folderOf(n);
+  return f ? `<button data-open="${f.id}">${svg("folder")}<span>${f.t}</span></button>` : "";
+}
+
+function open(id) {
+  const n = BY.get(id);
+  if (!n) return;
+  current = id;
+  const folder = n.kind === "folder";
+  $("#cv").classList.remove("wide");
+  $("#canvas").innerHTML = pageHtml(n);
+  $("#crumbs").innerHTML = crumbsHtml(n);
+  $("#loc").innerHTML = crumbsHtml(n);
+  $("#ins").hidden = folder || n.kind === "transcript";
+  $("#pubbtn").hidden = folder;
+  $("#aitoggle").hidden = folder;
+  $("#count").hidden = folder;
+  $("#dbody").classList.toggle("open", !folder && $("#aitoggle").classList.contains("on"));
+  $("#ctx").innerHTML = ctxHtml(n);
+  $("#count").textContent = n.kind === "transcript" ? (n.st === "run" ? "0 字" : "1,240 字") : n.kind === "step" ? (n.step === 2 ? "1,980 字" : "380 字") : n.id === "w1" ? "132 字" : "0 字";
+  $("#menu-dots").innerHTML = folder
+    ? `<button data-toast="フォルダの中を .zip に書き出します（モック）">${svg("doc")}書き出し<small>.zip</small></button><hr><button class="danger" data-del="${id}">${svg("trash")}削除</button>`
+    : `<button data-toast="共有のリンク（モック）">${svg("link")}リンクで共有</button><button data-toast="書き出し（モック）">${svg("doc")}書き出し<small>.md · Google ドキュメント</small></button><button data-toast="履歴（モック）">${svg("cal")}履歴</button><button data-toast="並べて開く相手を選びます（モック）">${svg("cols")}並べて開く…</button><button data-toast="移動（モック）">${svg("move")}移動…</button><hr><button class="danger" data-del="${id}">${svg("trash")}削除</button>`;
+  $("#url").textContent = "/p/" + id;
+  renderList();
+  renderNewMenu();
+  $("#ws").dataset.screen = "page";
+  window.scrollTo(0, 0);
+}
+
+/* 並べて開く: 2 枚を横に（スマホは縦） */
+function openSplit(a, b) {
+  const A = BY.get(a), B = BY.get(b);
+  current = a;
+  $("#cv").classList.add("wide");
+  $("#canvas").innerHTML = `<div class="cols">${[A, B].map((n) => `<section><div class="ch">${svg("doc")}${n.t}<button class="ib" aria-label="閉じる" data-open="${n === A ? b : a}">${svg("x")}</button></div>${pageHtml(n)}</section>`).join("")}</div>`;
+  $("#crumbs").innerHTML = crumbsHtml(A);
+  $("#loc").innerHTML = crumbsHtml(A);
+  $("#ins").hidden = true; $("#pubbtn").hidden = true; $("#count").hidden = true;
+  $("#dbody").classList.remove("open"); $("#aitoggle").classList.remove("on");
+  $("#url").textContent = `/p/${a}?with=${b}`;
+  renderList();
+  $("#ws").dataset.screen = "page";
+  window.scrollTo(0, 0);
+}
+
+/* 「新しいページ ▾」: フォルダの中にいるときは「『◯◯』の中に」 */
+function renderNewMenu() {
+  const n = BY.get(current);
+  const f = n ? folderOf(n) : null;
+  $("#menu-new").innerHTML = `${f ? `<div class="hd">${svg("folder")}「${f.t}」の中に</div>` : ""}
+    <button data-toast="空のページを作ります（モック）">${svg("doc")}空のページ<small>⌘N</small></button>
+    <button data-toast="録音のページを作ります（モック）">${svg("mic")}録音から</button>
+    <hr><button data-toast="フォルダを作ります（モック）">${svg("folder")}フォルダ</button>`;
+}
+
+/* ===== 機能がページを作る（モック: 1 枚足して開くだけ） ===== */
+let seq = 10;
+function makeTranscript(rec, engine) {
+  let f = folderOf(rec);
+  if (!f) {
+    /* フォルダの外の録音: 録音の題名でフォルダを作って中に入れる */
+    f = { id: "f" + (seq++), kind: "folder", t: rec.t, open: true, children: [] };
+    TREE.splice(TREE.indexOf(rec), 1, f);
+    f.children.push(rec);
+    toast(`フォルダ「${rec.t}」を作って、録音を中に入れました`);
+  }
+  const t = { id: "t" + (seq++), kind: "transcript", t: `${rec.t} · ${engine}`, when: "今", engine, from: rec.id, st: "run" };
+  f.children.push(t);
+  index();
+  open(t.id);
+  setTimeout(() => { t.st = "run"; }, 0);
+}
+function makeRun(tx) {
+  const f = folderOf(tx);
+  let from = tx.id;
+  RECIPE.steps.forEach((name, i) => {
+    const same = kidsOf(f).filter((k) => k.kind === "step" && k.step === i).length;
+    const n = { id: "s" + (seq++), kind: "step", t: same ? `${name} ${same + 1}` : name, when: "今", step: i, from, st: i === 0 ? "run" : "wait" };
+    f.children.push(n);
+    from = n.id;
+  });
+  index();
+  open(from);
+  toast(`${RECIPE.name}を始めました。順に作ります（モック）`);
+}
+function makeSibling(n) {
+  const f = folderOf(n);
+  const same = kidsOf(f).filter((k) => k.kind === "step" && k.step === n.step).length;
+  const s = { id: "s" + (seq++), kind: "step", t: `${RECIPE.steps[n.step]} ${same + 1}`, when: "今", step: n.step, from: n.from, st: "run" };
+  f.children.push(s);
+  index();
+  open(s.id);
+  toast("同じ入力から、もう 1 枚作っています（モック）");
+}
+function makeContinue(n) {
+  const f = folderOf(n);
+  let from = n.id;
+  for (let i = n.step + 1; i < RECIPE.steps.length; i++) {
+    const same = kidsOf(f).filter((k) => k.kind === "step" && k.step === i).length;
+    const s = { id: "s" + (seq++), kind: "step", t: same ? `${RECIPE.steps[i]} ${same + 1}` : RECIPE.steps[i], when: "今", step: i, from, st: i === n.step + 1 ? "run" : "wait" };
+    f.children.push(s);
+    from = s.id;
+  }
+  index();
+  open(from);
+  toast(`「${n.t}」から続きを作っています（モック）`);
+}
+
+/* ===== 画面の切替（mock 用） ===== */
+const STATES = {
+  rec: () => open("r1"),
+  transcribing: () => open("r1"),
+  transcript: () => open("t1"),
+  step: () => open("s3"),
+  two: () => open("s3b"),
+  plan2: () => open("s2b"),
+  split: () => openSplit("s3", "s3b"),
+  folder: () => open("f1"),
+  wrap: () => open("r9"),
+};
+function go(name) {
+  closeMenus();
+  state = STATES[name] ? name : "rec";
+  STATES[state]();
+  $$("#sw button").forEach((b) => b.classList.toggle("on", b.dataset.state === state));
+  history.replaceState(null, "", "?state=" + state);
+}
+
+document.addEventListener("click", (e) => {
+  const st = e.target.closest("[data-state]");
+  if (st) { go(st.dataset.state); return; }
+  const o = e.target.closest("[data-open]");
+  if (o) { open(o.dataset.open); return; }
+  const sp = e.target.closest("[data-split]");
+  if (sp) { openSplit(current, sp.dataset.split); return; }
+  const mk = e.target.closest("[data-make]");
+  if (mk) {
+    const n = BY.get(current); closeMenus();
+    const [what, arg] = mk.dataset.make.split(":");
+    if (what === "tx") makeTranscript(n, arg);
+    else if (what === "run") makeRun(n);
+    else if (what === "sibling") makeSibling(n);
+    else if (what === "continue") makeContinue(n);
+    return;
+  }
+  const c = e.target.closest("[data-close]");
+  if (c) $("#" + c.dataset.close).classList.remove("open");
+  const t = e.target.closest("[data-toast]");
+  if (t && !e.target.closest("[data-del]")) { e.preventDefault(); toast(t.dataset.toast); closeMenus(); }
+});
+
+/* この録音について: 畳む・開く */
+document.addEventListener("click", (e) => {
+  const hd = e.target.closest(".ri-hd");
+  if (!hd) return;
+  const box = hd.closest(".recinfo");
+  box.classList.toggle("closed");
+  hd.setAttribute("aria-expanded", String(!box.classList.contains("closed")));
+});
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".seg button");
+  if (!b) return;
+  $$("button", b.parentElement).forEach((x) => { x.classList.toggle("on", x === b); x.toggleAttribute("aria-pressed", x === b); });
+});
+
+/* ===== メニュー ===== */
+function closeMenus() {
+  $$(".menu.open").forEach((m) => m.classList.remove("open"));
+  $$("[data-menu].on").forEach((b) => { b.classList.remove("on"); b.setAttribute("aria-expanded", "false"); });
+  $$(".row.menu-on").forEach((r) => r.classList.remove("menu-on"));
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-menu]");
+  if (!b) return;
+  e.stopPropagation();
+  const m = $("#menu-" + b.dataset.menu);
+  const was = m.classList.contains("open");
+  closeMenus();
+  if (!was) { m.classList.add("open"); b.classList.add("on"); b.setAttribute("aria-expanded", "true"); }
+}, true);
+document.addEventListener("click", (e) => { if (!e.target.closest(".menu") && !e.target.closest("[data-menu]")) closeMenus(); }, true);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeMenus(); $$(".veil.open").forEach((v) => v.classList.remove("open")); } });
+
+/* 行: 押すと開く。▾ で開閉。「…」と右クリックでメニュー */
+function openRowMenu(row, x, y) {
+  closeMenus();
+  const n = BY.get(row.dataset.id);
+  row.classList.add("menu-on");
+  const m = $("#menu-row");
+  m.innerHTML = n.kind === "folder"
+    ? `<button data-toast="このフォルダに空のページを作ります（モック）">${svg("plus")}中に新しいページ</button><button data-toast="フォルダの中を .zip に書き出します（モック）">${svg("doc")}書き出し<small>.zip</small></button><hr><button class="danger" data-del="${n.id}">${svg("trash")}削除<small>中のページも</small></button>`
+    : `<button data-split="${n.id}">${svg("cols")}右に並べて開く</button><button data-toast="移動（モック）">${svg("move")}移動…</button><hr><button class="danger" data-del="${n.id}">${svg("trash")}削除<small>ゴミ箱に 30 日</small></button>`;
+  m.classList.add("open");
+  const w = 230, h = 120;
+  m.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + "px";
+  m.style.top = Math.max(8, Math.min(y, window.innerHeight - h - 8)) + "px";
+}
+$("#list").addEventListener("click", (e) => {
+  const row = e.target.closest(".row");
+  if (!row) return;
+  const tw = e.target.closest(".tw");
+  if (tw) { e.stopPropagation(); const n = BY.get(row.dataset.id); n.open = n.open === false; renderList(); return; }
+  const more = e.target.closest(".more");
+  if (more) { e.stopPropagation(); const r = more.getBoundingClientRect(); openRowMenu(row, r.left, r.bottom + 4); return; }
+  open(row.dataset.id);
+});
+$("#list").addEventListener("contextmenu", (e) => { const row = e.target.closest(".row"); if (!row) return; e.preventDefault(); openRowMenu(row, e.clientX, e.clientY); });
+
+/* 削除の確認 */
+document.addEventListener("click", (e) => {
+  const d = e.target.closest("[data-del]");
+  if (!d) return;
+  e.stopPropagation();
+  const n = BY.get(d.dataset.del);
+  closeMenus();
+  const inside = n.kind === "folder" ? kidsOf(n).length : 0;
+  $("#del-h").textContent = n.kind === "folder" ? `「${n.t}」と中の ${inside} ページを削除しますか？` : `「${n.t}」を削除しますか？`;
+  $("#del-p").textContent = n.kind === "rec" ? "文字起こしのページは残ります（再生はできなくなります）。ゴミ箱に 30 日残ります。" : madeHere(n).length ? "このページから作ったページは残ります。ゴミ箱に 30 日残ります。" : "ゴミ箱に 30 日残ります。";
+  $("#veil-del").classList.add("open");
+  $("#del-ok").onclick = () => { $("#veil-del").classList.remove("open"); toast("ゴミ箱に入れました（30 日で消えます）"); };
+});
+$$(".veil").forEach((v) => v.addEventListener("click", (e) => { if (e.target === v) v.classList.remove("open"); }));
+
+/* 検索（見た目だけ）・一覧のしまう／出す・スマホ */
+$("#btn-search").addEventListener("click", () => toast("検索（モック）"));
+const ws = $("#ws");
+function setSidebar(openSb) { ws.classList.toggle("nosb", !openSb); $("#btn-expand").hidden = openSb; $("#brand-hd").hidden = openSb; }
+$("#btn-collapse").addEventListener("click", () => setSidebar(false));
+$("#btn-expand").addEventListener("click", () => setSidebar(true));
+$("#btn-list").addEventListener("click", () => (ws.dataset.screen = "list"));
+const mq = matchMedia("(max-width:720px)");
+function onMq() { $("#btn-list").hidden = !mq.matches; if (mq.matches) setSidebar(true); }
+mq.addEventListener("change", onMq); onMq();
+$("#aitoggle").addEventListener("click", () => { $("#dbody").classList.toggle("open"); $("#aitoggle").classList.toggle("on"); });
+
+let tt;
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(tt); tt = setTimeout(() => t.classList.remove("show"), 2200); }
+
+/* ===== URL の指定（確認用） ===== */
+const q = new URLSearchParams(location.search);
+go(q.get("state") || "rec");
+if (q.get("sb") === "closed") setSidebar(false);
+if (q.get("screen")) ws.dataset.screen = q.get("screen");
+</script>
+</body>
+</html>

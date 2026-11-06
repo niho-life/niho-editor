@@ -2,7 +2,7 @@ import type { EditorStore, OwnerId, PageFields, PageFieldsPatch } from "@niho/ed
 import { pageFieldsProblem } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
 import { buildFolderExport, photoAssetIds, type FolderExportPhoto } from "../export/folder";
-import { ROBOTS_HEADER_VALUE, errorResponse, guarded, isSameOriginRequest, jsonResponse, noContentResponse, notFoundResponse, readJsonBody } from "./http";
+import { ROBOTS_HEADER_VALUE, errorResponse, folderResponse, guarded, isSameOriginRequest, jsonResponse, noContentResponse, notFoundResponse, readJsonBody } from "./http";
 import { exportContentDisposition } from "./share-api";
 
 /**
@@ -10,7 +10,7 @@ import { exportContentDisposition } from "./share-api";
  *
  * - `PATCH /api/pages/{id}/order` — 手動の並びを 1 つ動かす（`{ move: "up" | "down" }`）。もう端なら `{ moved: false }`。
  * - `GET /api/pages/{id}/children` — そのページの中の行（フォルダの子。自動参考ページ・書き出しの画面が読む）。
- * - `GET /api/pages/{id}/fields`・`PATCH …` — フォルダの登場人物・固有名詞（背景情報はページの本文そのもの）。
+ * - `GET /api/pages/{id}/fields`・`PATCH …` — 録音ページの「この録音について」（登場人物・固有名詞・背景）。フォルダには欄が無い。
  * - `POST /api/pages/{id}/open` — 「最近」に記録する（本文は送らない。応答は 204）。
  * - `GET /api/pages/{id}/export.zip` — フォルダ単位の書き出し（.md ＋写真）。
  */
@@ -86,7 +86,7 @@ export function listPageChildren(request: Request, id: string, deps: FolderApiDe
   });
 }
 
-/** GET /api/pages/{id}/fields — フォルダの登場人物・固有名詞（行が無ければ空）。 */
+/** GET /api/pages/{id}/fields — 録音ページの登場人物・固有名詞・背景（行が無ければ空）。 */
 export function getPageFields(request: Request, id: string, deps: FolderApiDeps): Promise<Response> {
   return guarded("GET /api/pages/[id]/fields", async () => {
     const session = await deps.auth().getSession(request);
@@ -114,6 +114,8 @@ export function patchPageFields(request: Request, id: string, deps: FolderApiDep
     if (pageFieldsProblem(body.value) !== null) return errorResponse("bad_request");
     const page = await store.getPage(session.userId, id);
     if (!page) return notFoundResponse();
+    // フォルダは欄を持たない（§3.2 の 2）
+    if (page.kind === "folder") return folderResponse();
     return jsonResponse(200, { fields: await fields.save(session.userId, page.id, body.value as PageFieldsPatch) });
   });
 }
@@ -159,7 +161,10 @@ export function exportFolder(request: Request, id: string, deps: FolderApiDeps):
         }
       }
     }
-    const archive = buildFolderExport({ pages, fields: await fields.get(owner, folder.id), photos });
+    // 「この録音について」は録音ページごとに、その録音自身の欄を読む
+    const recordingFields = new Map<string, PageFields>();
+    for (const page of pages) if (page.kind === "rec") recordingFields.set(page.id, await fields.get(owner, page.id));
+    const archive = buildFolderExport({ pages, fields: recordingFields, photos });
     if (!archive.ok) return archive.reason === "unsupported_markdown"
       ? jsonResponse(422, { error: "unsupported_markdown", reason: archive.detail })
       : errorResponse(EXPORT_PROBLEMS[archive.reason]);

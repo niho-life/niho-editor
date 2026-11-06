@@ -1,4 +1,4 @@
-import { FOLDER_EXPORT_CONTEXT_TITLE, FOLDER_EXPORT_MAX_CHARS, FOLDER_EXPORT_MAX_TABS } from "@niho/docs-core";
+import { FOLDER_EXPORT_MAX_CHARS, FOLDER_EXPORT_MAX_TABS } from "@niho/docs-core";
 import { buildZip, type ZipEntry } from "@niho/editor-publish";
 import type { PageEntity, PageFields } from "@niho/editor-store";
 import { exportFullMarkdown, MarkdownExportError } from "./markdown";
@@ -6,8 +6,9 @@ import { exportFullMarkdown, MarkdownExportError } from "./markdown";
 /**
  * フォルダ単位の書き出し（#37。旧 NIHO docs の `folder-export-tree.ts` の木を、ページ＋サブページの木に作り替えたもの）。
  *
- * - 出すのは `.md` と写真の zip。`背景情報.md`（フォルダの本文＋登場人物＋固有名詞）を先頭に、フォルダの中のページを
- *   木の順に 1 ページ 1 ファイルで並べる。Google ドキュメントへの書き出しは別（この module は触らない）。
+ * - 出すのは `.md` と写真の zip。フォルダの中のページを木の順に 1 ページ 1 ファイルで並べる（2026-11-06: `背景情報.md` は
+ *   作らない。フォルダは本文も欄も持たない）。録音ページ（`kind = 'rec'`）の `.md` は題名の下に「この録音について」
+ *   （登場人物・固有名詞・背景。空の節は出さない）を置く。Google ドキュメントへの書き出しは別（この module は触らない）。
  * - 件数と字数の上限は旧版と同じ（`FOLDER_EXPORT_MAX_TABS`・`FOLDER_EXPORT_MAX_CHARS`。docs-core の定数）。
  * - 写真は本文に出てくる資産だけを `photos/{sha256}.{拡張子}` に 1 回ずつ入れ、本文はその相対 path を指す。
  *   読めなかった写真は**黙って落とさず**、その本文から画像の行を出さない（`photoPath` が null を返す）。
@@ -15,11 +16,13 @@ import { exportFullMarkdown, MarkdownExportError } from "./markdown";
  * - 本文・題名はログ・エラーに書かない（結果は数と理由だけ）。
  */
 
-/** 書き出すページ（`EditorStore.listPageTree` の 1 行。先頭がフォルダ）。 */
+/** 書き出すページ（`EditorStore.listPageTree` の 1 行。先頭が書き出す木の根で、ふつうはフォルダ）。 */
 export type FolderExportPage = {
   id: string;
   title: string;
   blocks: readonly unknown[];
+  /** `folder` の行は本文を書き出さない（旧「親ページ」の本文が残っていても出さない）。`rec` は「この録音について」を付ける。 */
+  kind?: string;
 };
 
 /** 本文に出てくる写真（読めたものだけ）。 */
@@ -32,8 +35,8 @@ export type FolderExportPhoto = {
 
 export type FolderExportInput = {
   pages: readonly FolderExportPage[];
-  /** フォルダの登場人物・固有名詞（`page_fields`）。 */
-  fields: PageFields;
+  /** 録音ページの id → その録音の欄（`page_fields`。登場人物・固有名詞・背景）。無い録音は空として扱う。 */
+  fields: ReadonlyMap<string, PageFields>;
   /** 資産の id → 読めた写真。 */
   photos: ReadonlyMap<string, FolderExportPhoto>;
 };
@@ -115,13 +118,11 @@ function entityLine(entity: PageEntity): string {
 }
 
 /**
- * 「背景情報」のページ（旧 NIHO docs の `info`）。フォルダの本文をそのまま置き、登場人物・固有名詞があれば
- * 見出しを付けて並べる。どれも無ければ null（そのページを出さない）。
+ * 録音ページの「この録音について」（旧 NIHO docs の `info`）。登場人物・固有名詞・背景を見出しを付けて並べる。
+ * 空の節は出さず、どれも無ければ null。
  */
-export function contextMarkdown(folder: FolderExportPage, fields: PageFields, photoPath: (assetId: string) => string | null): string | null {
-  const body = exportFullMarkdown(folder.blocks, { photoPath }).trim();
+export function recordingInfoMarkdown(fields: PageFields): string | null {
   const parts: string[] = [];
-  if (body !== "") parts.push(body);
   if (fields.entities.length > 0) parts.push(`## 登場人物\n${fields.entities.map(entityLine).join("\n")}`);
   if (fields.terms.length > 0) {
     const lines = fields.terms.map((term) => {
@@ -130,33 +131,42 @@ export function contextMarkdown(folder: FolderExportPage, fields: PageFields, ph
     });
     parts.push(`## 固有名詞\n${lines.join("\n")}`);
   }
-  return parts.length === 0 ? null : `# ${FOLDER_EXPORT_CONTEXT_TITLE}\n\n${parts.join("\n\n")}\n`;
-}
-
-/** ページ 1 枚の `.md`（題名を h1 にして本文を続ける。公開の書き出しと違い、front matter は付けない）。 */
-export function pageMarkdown(page: FolderExportPage, photoPath: (assetId: string) => string | null): string {
-  const body = exportFullMarkdown(page.blocks, { photoPath }).trim();
-  const title = page.title.trim() === "" ? "無題" : page.title.trim();
-  return body === "" ? `# ${title}\n` : `# ${title}\n\n${body}\n`;
+  const background = fields.background.trim();
+  if (background !== "") parts.push(`## 背景\n${background}`);
+  return parts.length === 0 ? null : parts.join("\n\n");
 }
 
 /**
- * フォルダの書き出しを組む。`pages` の先頭がフォルダで、その後ろが中のページ（木の順）。
+ * ページ 1 枚の `.md`（題名を h1 にして本文を続ける。公開の書き出しと違い、front matter は付けない）。
+ * `info` を渡すと題名の下・本文の前に置く（録音ページの「この録音について」）。
+ */
+export function pageMarkdown(page: FolderExportPage, photoPath: (assetId: string) => string | null, info: string | null = null): string {
+  const body = exportFullMarkdown(page.blocks, { photoPath }).trim();
+  const title = page.title.trim() === "" ? "無題" : page.title.trim();
+  const parts = [info, body].filter((part): part is string => part !== null && part !== "");
+  return parts.length === 0 ? `# ${title}\n` : `# ${title}\n\n${parts.join("\n\n")}\n`;
+}
+
+/**
+ * フォルダの書き出しを組む。`pages` の先頭が根（ふつうはフォルダ）で、その後ろが中のページ（木の順）。
+ * 根がフォルダなら根のファイルは作らない（本文を持たない）。フォルダでない根（録音とその工程のサブページなど）は根も 1 ファイル。
  * 件数・字数の上限を超えたら何も作らずに断る（`too_many`・`too_large`）。
  */
 export function buildFolderExport(input: FolderExportInput): FolderExportResult {
-  const [folder, ...inside] = input.pages;
-  if (!folder) return { ok: false, reason: "empty" };
+  const [root] = input.pages;
+  if (!root) return { ok: false, reason: "empty" };
+  const exported = input.pages.filter((page) => page.kind !== "folder");
   const photoPath = (assetId: string): string | null => {
     const photo = input.photos.get(assetId);
     return photo ? photoArchivePath(photo) : null;
   };
   const files: { name: string; text: string }[] = [];
   try {
-    const context = contextMarkdown(folder, input.fields, photoPath);
-    if (context !== null) files.push({ name: `${FOLDER_EXPORT_CONTEXT_TITLE}.md`, text: context });
-    const names = uniqueFileNames([FOLDER_EXPORT_CONTEXT_TITLE, ...inside.map((page) => page.title)]).slice(1);
-    for (const [index, page] of inside.entries()) files.push({ name: names[index]!, text: pageMarkdown(page, photoPath) });
+    const names = uniqueFileNames(exported.map((page) => page.title));
+    for (const [index, page] of exported.entries()) {
+      const fields = page.kind === "rec" ? input.fields.get(page.id) : undefined;
+      files.push({ name: names[index]!, text: pageMarkdown(page, photoPath, fields ? recordingInfoMarkdown(fields) : null) });
+    }
   } catch (error) {
     if (error instanceof MarkdownExportError) return { ok: false, reason: "unsupported_markdown", detail: error.message };
     throw error;

@@ -20,8 +20,6 @@ const GOOGLE_DOCS_BATCH_ITEM = "export-google-docs-batch";
 export const FOLDER_EXPORT_ITEM = "export-folder";
 /** 「移動…」（フォルダへ入れる・出す、並び。左の一覧のドラッグのキーボード・スマホの代替）。 */
 export const MOVE_ITEM = "move";
-/** 「フォルダの背景…」（登場人物・固有名詞）。フォルダのときだけ出す。 */
-export const FOLDER_FIELDS_ITEM = "folder-fields";
 /** 「ページの情報」（本文の列の右下のポップオーバーを開く）。 */
 export const PAGE_INFO_ITEM = "page-info";
 
@@ -29,11 +27,14 @@ export const PAGE_INFO_ITEM = "page-info";
 export const AI_GRAY_ITEM = "ai-gray";
 
 /** 枠が受け持つ項目（ページの操作ではなく、シートやポップオーバーを開く・表示を切り替える）。 */
-export type PageMenuLocalItem = typeof MOVE_ITEM | typeof FOLDER_FIELDS_ITEM | typeof PAGE_INFO_ITEM | typeof AI_GRAY_ITEM;
+export type PageMenuLocalItem = typeof MOVE_ITEM | typeof PAGE_INFO_ITEM | typeof AI_GRAY_ITEM;
 
 /** 「…」に足す項目（ページによって出し分ける）。 */
 export type PageMenuExtras = {
-  /** フォルダ（子を持つ上の段のページ）か。「フォルダを書き出し」「フォルダの背景…」を出す。 */
+  /**
+   * フォルダ（`kind = 'folder'`）か。フォルダでは「書き出し（.zip）」「削除」だけを出す（共有・.md・Google ドキュメント・履歴・複製・
+   * 移動…・ページの情報は出さない。オーナー決定 2026-11-06）。
+   */
   folder?: boolean;
   /** 「移動…」を出すか（入れ先が無く上の段にいて、並びも動かせないページでは出さない）。 */
   move?: boolean;
@@ -44,25 +45,27 @@ export type PageMenuExtras = {
 };
 
 /**
- * 「…」の項目: リンクで共有・書き出し（.md）・Google ドキュメントへ・[フォルダを書き出し（.zip）]・履歴・複製・[移動…]・
- * [フォルダの背景…]・[ページの情報]・[AI の文を灰色で見せる]・削除。shellMoreItems（Mac も使う）は変えず、ここで足す。
+ * 「…」の項目: リンクで共有・書き出し（.md）・Google ドキュメントへ・履歴・複製・[移動…]・[ページの情報]・
+ * [AI の文を灰色で見せる]・削除。フォルダでは 書き出し（.zip）・削除 だけ。shellMoreItems（Mac も使う）は変えず、ここで足す。
  * shellMoreItems の「書き出し」は .md と Google ドキュメントをまとめた 1 項目だが、項目は入れ子にできないので、
  * ここで 2 つに分ける（「書き出し」は .md、Google ドキュメントは次の項目）。
  * リンクで共有の補足「共有中」は、共有していると分かっているときだけ出す（分からないときは出さない）。
  */
 export function pageMenuItems(shared: boolean | null, extras: PageMenuExtras = {}): ShellMenuItem[] {
+  if (extras.folder) {
+    const remove = shellMoreItems(false).find((item) => item.id === "delete")!;
+    return [{ id: FOLDER_EXPORT_ITEM, label: "書き出し", icon: "doc", hint: ".zip" }, { ...remove, hint: "中のページも" }];
+  }
   return shellMoreItems(shared === true).flatMap((item): ShellMenuItem[] => {
     if (item.id === "export") {
       return [
         { ...item, hint: ".md" },
         { id: GOOGLE_DOCS_BATCH_ITEM, label: "Google ドキュメントへ", icon: item.icon },
-        ...(extras.folder ? [{ id: FOLDER_EXPORT_ITEM, label: "フォルダを書き出し", icon: item.icon, hint: ".zip" }] : []),
       ];
     }
     if (item.id === "delete") {
       return [
         ...(extras.move ? [{ id: MOVE_ITEM, label: "移動…", icon: "side" as const }] : []),
-        ...(extras.folder ? [{ id: FOLDER_FIELDS_ITEM, label: "フォルダの背景…", icon: "people" as const }] : []),
         ...(extras.pageInfo ? [{ id: PAGE_INFO_ITEM, label: "ページの情報", icon: "info" as const }] : []),
         ...(extras.aiGray !== undefined ? [{ id: AI_GRAY_ITEM, label: "AI の文を灰色で見せる", checked: extras.aiGray }] : []),
         item,
@@ -72,7 +75,7 @@ export function pageMenuItems(shared: boolean | null, extras: PageMenuExtras = {
   });
 }
 
-const LOCAL_ITEMS: ReadonlySet<string> = new Set([MOVE_ITEM, FOLDER_FIELDS_ITEM, PAGE_INFO_ITEM, AI_GRAY_ITEM]);
+const LOCAL_ITEMS: ReadonlySet<string> = new Set([MOVE_ITEM, PAGE_INFO_ITEM, AI_GRAY_ITEM]);
 
 
 /** 「…」から開くシート（どちらも、まだ届いていない変更を保存してから開く）。 */
@@ -215,8 +218,7 @@ export function usePageMenu(options: PageMenuOptions): PageMenu {
         (latest.current.download ?? clickDownload)(pageExportUrl(target.id));
       });
     } else if (item === FOLDER_EXPORT_ITEM) {
-      // フォルダの書き出しも、まだ届いていない本文の変更を先に保存してから始める（保存できなければ止めて理由を出す）。
-      // 保存前に始めると、サーバーが読む古い本文が「背景情報.md」に入る
+      // フォルダの書き出しも、まだ届いていない変更（題名）を先に保存してから始める（保存できなければ止めて理由を出す）
       void run(target, "書き出し", async () => {
         (latest.current.download ?? clickDownload)(folderExportUrl(target.id));
       });

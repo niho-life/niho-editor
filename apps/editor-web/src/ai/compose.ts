@@ -22,7 +22,7 @@ import { aboutSection, referencesSection, type Reference } from "./references";
  * 使った字数は `composeSourceUsedChars` で帯に出す。#277）。文書ガイド・背景は別枠。
  */
 export const MAX_COMPOSE_SOURCE_CHARS = 100_000;
-/** 親フォルダの背景本文の上限（文字）。source の予算には含めない。 */
+/** 録音の背景（この録音について）の上限（文字）。source の予算には含めない。 */
 export const MAX_COMPOSE_BACKGROUND_CHARS = 8_000;
 /** お手本（文書ガイド）の上限（文字）。設定の上限（20,000）と同じ。 */
 export const MAX_COMPOSE_GUIDE_CHARS = 20_000;
@@ -58,7 +58,7 @@ export type ComposeInput = {
   stepNumber: number;
   stepCount: number;
   sources: readonly ComposeSource[];
-  /** 親フォルダの背景本文。録音ページの原文とは別の資料。 */
+  /** 録音ページ自身の背景（`page_fields.background`）。録音ページの原文とは別の資料。 */
   background: string;
   lang: "ja" | "en";
   /** 固有名詞と誤りやすい表記（設定。#108）。 */
@@ -191,7 +191,7 @@ export function buildComposePrompt(input: ComposeInput): AiPrompt {
     ...(glossary ? ["", "## 固有名詞と誤りやすい表記", glossary] : []),
     ...(entities ? ["", "## 登場人物", wrapUntrusted(entities)] : []),
     ...(about ? ["", about] : []),
-    ...(background ? ["", `## 背景情報（親フォルダ）${boundedBackground.truncated ? "（長いので先頭だけ）" : ""}`, wrapUntrusted(boundedBackground.text)] : []),
+    ...(background ? ["", `## 背景情報（この録音について）${boundedBackground.truncated ? "（長いので先頭だけ）" : ""}`, wrapUntrusted(boundedBackground.text)] : []),
     "",
     "## 資料",
     ...(sections.length > 0 ? sections : ["（資料なし）"]),

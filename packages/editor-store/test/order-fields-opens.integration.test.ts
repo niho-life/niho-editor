@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { after, before, beforeEach, describe, it } from "node:test";
 import type { Pool as PgPool } from "pg";
 import { applyMigrations } from "../src/migrate.ts";
-import { getPageFields, hasPageFields, pageFieldsProblem, savePageFields, type PageFieldsPatch } from "../src/page-fields.ts";
+import { getPageFields, hasPageFields, pageFieldsProblem, readTranscriptionHints, savePageFields, transcriptionTermsOf, type PageFieldsPatch } from "../src/page-fields.ts";
 import { RECENT_LIMIT, listRecentPages, recordPageOpen } from "../src/page-opens.ts";
 import { EditorStore } from "../src/store.ts";
 
@@ -46,6 +46,11 @@ describe("manual order, folder fields and 最近 (20261101013000)", { skip: data
   });
 
   /** 作った順に、少しずつ新しい更新時刻で（並べ替える前は更新の新しい順に出る）。 */
+  /** 作ったページをフォルダにする（本文は書き出しの木の読み取りが見るので残す。旧データの形）。 */
+  async function asFolders(...ids: string[]): Promise<void> {
+    await pool.query("UPDATE pages SET kind = 'folder' WHERE id = ANY($1::uuid[])", [ids]);
+  }
+
   async function pages(...titles: string[]): Promise<string[]> {
     const ids: string[] = [];
     for (const [index, title] of titles.entries()) {
@@ -89,6 +94,7 @@ describe("manual order, folder fields and 最近 (20261101013000)", { skip: data
 
     it("orders inside a folder on its own, and never mixes two folders", async () => {
       const [folder, other] = await pages("フォルダ", "別のフォルダ");
+      await asFolders(folder!, other!);
       const [one, two] = await pages("1", "2");
       for (const id of [one!, two!]) assert.equal(await store.movePage(OWNER, id, folder!), "moved");
       const inOther = (await pages("3"))[0]!;
@@ -141,10 +147,13 @@ describe("manual order, folder fields and 最近 (20261101013000)", { skip: data
   describe("listPageTree（書き出しが読む木）", () => {
     it("reads the folder and everything under it, each parent followed by its own rows in order", async () => {
       const [folder] = await pages("フォルダ");
+      await asFolders(folder!);
       const [note, rec] = await pages("メモ", "録音");
       for (const id of [note!, rec!]) assert.equal(await store.movePage(OWNER, id, folder!), "moved");
       const [step] = await pages("文字起こし修正");
-      assert.equal(await store.movePage(OWNER, step!, rec!), "moved");
+      // 工程のサブページは step_runs が録音を親に作る（movePage を通らない）
+      await pool.query("UPDATE pages SET kind = 'rec' WHERE id = $1", [rec]);
+      await pool.query("UPDATE pages SET kind = 'step', parent = $2 WHERE id = $1", [step, rec]);
 
       // フォルダ・録音の中は作った順（上の段だけが更新の新しい順）
       const tree = await store.listPageTree(OWNER, folder!);
@@ -166,10 +175,10 @@ describe("manual order, folder fields and 最近 (20261101013000)", { skip: data
     });
   });
 
-  describe("folder fields", () => {
+  describe("recording fields (この録音について)", () => {
     it("is empty without a row, and replaces each passed field as a whole", async () => {
       const [folder] = await pages("フォルダ");
-      assert.deepEqual(await getPageFields(pool, OWNER, folder!), { entities: [], terms: [] });
+      assert.deepEqual(await getPageFields(pool, OWNER, folder!), { entities: [], terms: [], background: "" });
       assert.equal(hasPageFields(await getPageFields(pool, OWNER, folder!)), false);
 
       const saved = await savePageFields(pool, OWNER, folder!, {
@@ -188,16 +197,54 @@ describe("manual order, folder fields and 最近 (20261101013000)", { skip: data
       assert.equal(after.terms.length, 1);
     });
 
+    it("saves and reads the background as text (trimmed, up to 4,000 characters) without touching the other fields", async () => {
+      const [rec] = await pages("録音");
+      await savePageFields(pool, OWNER, rec!, { terms: [{ term: "北鎌倉", reading: "", variants: [], note: "" }] });
+      const saved = await savePageFields(pool, OWNER, rec!, { background: "  取材の目的と場所。  " });
+      assert.equal(saved.background, "取材の目的と場所。");
+      assert.equal(saved.terms.length, 1, "渡していない項目は残る");
+      assert.deepEqual(await getPageFields(pool, OWNER, rec!), saved);
+      assert.equal(hasPageFields({ entities: [], terms: [], background: "背景だけ" }), true);
+      assert.equal(hasPageFields({ entities: [], terms: [], background: "  " }), false);
+
+      const longest = "あ".repeat(4000);
+      assert.equal((await savePageFields(pool, OWNER, rec!, { background: longest })).background, longest);
+      assert.equal(pageFieldsProblem({ background: "あ".repeat(4001) }), "background");
+      await assert.rejects(() => savePageFields(pool, OWNER, rec!, { background: "あ".repeat(4001) }), TypeError);
+      assert.equal(pageFieldsProblem({ background: 1 }), "background");
+      // 空にもできる
+      assert.equal((await savePageFields(pool, OWNER, rec!, { background: "" })).background, "");
+    });
+
     it("keeps each person's fields to themselves and goes away with the page", async () => {
       const [folder] = await pages("フォルダ");
       await savePageFields(pool, OWNER, folder!, { entities: [{ name: "田中", reading: "", role: "", note: "" }] });
-      assert.deepEqual(await getPageFields(pool, OTHER, folder!), { entities: [], terms: [] });
+      assert.deepEqual(await getPageFields(pool, OTHER, folder!), { entities: [], terms: [], background: "" });
       // ゴミ箱の間は残る
       assert.equal(await store.deletePage(OWNER, folder!), "deleted");
       assert.equal((await getPageFields(pool, OWNER, folder!)).entities.length, 1);
       // 完全に消すと一緒に消える
       await pool.query("DELETE FROM pages WHERE id = $1", [folder]);
-      assert.deepEqual(await getPageFields(pool, OWNER, folder!), { entities: [], terms: [] });
+      assert.deepEqual(await getPageFields(pool, OWNER, folder!), { entities: [], terms: [], background: "" });
+    });
+
+    it("gives the recording's own 固有名詞 (term and variants) as transcription hints, and null for a page that is not mine", async () => {
+      const [rec] = await pages("録音");
+      assert.deepEqual(await readTranscriptionHints(pool, OWNER, rec!), { kind: "note", terms: [] });
+      await savePageFields(pool, OWNER, rec!, { terms: [
+        { term: "北鎌倉", reading: "", variants: ["北鎌", "北鎌倉"], note: "" },
+        { term: "円覚寺", reading: "", variants: ["あ".repeat(65)], note: "" },
+      ] });
+      assert.deepEqual(await readTranscriptionHints(pool, OWNER, rec!), { kind: "note", terms: ["北鎌倉", "北鎌", "円覚寺"] });
+      assert.equal(await readTranscriptionHints(pool, OTHER, rec!), null);
+      assert.equal(await readTranscriptionHints(pool, OWNER, randomUUID()), null);
+      assert.equal(await readTranscriptionHints(pool, OWNER, "not-a-uuid"), null);
+      // 上限を超える分は先頭から数えて切る
+      const many = Array.from({ length: 120 }, (_, index) => ({ term: `語${index}`, reading: "", variants: [], note: "" }));
+      const hints = transcriptionTermsOf(many);
+      assert.equal(hints.length, 100);
+      assert.equal(hints[0], "語0");
+      assert.equal(hints[99], "語99");
     });
 
     it("refuses what the screen could not have sent, writing nothing", async () => {
@@ -207,13 +254,14 @@ describe("manual order, folder fields and 最近 (20261101013000)", { skip: data
         { why: "同じ名前が 2 つ", patch: { entities: [{ name: "田中", reading: "", role: "", note: "" }, { name: "田中", reading: "", role: "", note: "" }] } },
         { why: "件数の上限", patch: { entities: Array.from({ length: 201 }, (_, index) => ({ name: `人${index}`, reading: "", role: "", note: "" })) } },
         { why: "固有名詞の形", patch: { terms: [{ term: "", reading: "", variants: [], note: "" }] } },
-        { why: "知らない項目", patch: { background: "" } as unknown as PageFieldsPatch },
+        { why: "知らない項目", patch: { notes: "" } as unknown as PageFieldsPatch },
+        { why: "背景の字数", patch: { background: "あ".repeat(4001) } },
       ];
       for (const { why, patch } of bad) {
         assert.ok(pageFieldsProblem(patch) !== null, why);
         await assert.rejects(() => savePageFields(pool, OWNER, folder!, patch), TypeError, why);
       }
-      assert.deepEqual(await getPageFields(pool, OWNER, folder!), { entities: [], terms: [] });
+      assert.deepEqual(await getPageFields(pool, OWNER, folder!), { entities: [], terms: [], background: "" });
     });
   });
 

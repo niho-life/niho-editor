@@ -15,6 +15,7 @@ import {
   duplicatePage,
   enableShare,
   enqueueTranscription,
+  readTranscriptionHints,
   finalStepPageNames,
   failRun,
   failMacTranscription,
@@ -159,6 +160,7 @@ export const candidatesDeps: CandidatesApiDeps = {
       deleteCandidate: (owner, pageId, candidateId) => deleteRecordingCandidate(pool, owner, pageId, candidateId),
       enqueue: (owner, pageId, input) => enqueueTranscription(pool, owner, pageId, input),
       failRun: (runId, generation, errorCode) => failRun(pool, runId, generation, errorCode),
+      hints: (owner, pageId) => readTranscriptionHints(pool, owner, pageId),
     };
   },
   runner: () => {
@@ -275,6 +277,7 @@ export const transcriptionDeps: TranscriptionApiDeps = {
       enqueue: (owner, pageId, input) => enqueueTranscription(pool, owner, pageId, input),
       status: (owner, pageId) => transcriptionStatus(pool, owner, pageId),
       failRun: (runId, generation, errorCode) => failRun(pool, runId, generation, errorCode),
+      hints: (owner, pageId) => readTranscriptionHints(pool, owner, pageId),
     };
   },
   runner: () => {
