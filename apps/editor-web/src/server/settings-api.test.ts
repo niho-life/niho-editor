@@ -101,6 +101,7 @@ describe("GET /api/settings", () => {
     expect(dto.aiLang).toBe("same");
     expect(dto.glossary).toEqual([]);
     expect(dto.aboutName).toBe("");
+    expect(dto.webSearch).toBe(true);
     expect(dto.recipes.map((recipe) => [recipe.id, recipe.isDefault, recipe.modified])).toEqual([
       ["tpl-1", true, false],
       ["tpl-2", true, false],
@@ -109,6 +110,14 @@ describe("GET /api/settings", () => {
     ]);
     expect(dto.recipes[0]?.steps.map((step) => step.name)).toEqual(DEFAULT_RECIPES[0]?.steps.map((step) => step.name));
     expect(dto.limits).toEqual(SETTINGS_LIMITS);
+  });
+
+  it("saves the Web search switch and answers it back, refusing anything but a boolean (#283)", async () => {
+    const store = memoryStore();
+    expect((await settingsOf(await write({ webSearch: false }, deps(OWNER, store)))).webSearch).toBe(false);
+    expect((await settingsOf(await read(deps(OWNER, store)))).webSearch).toBe(false);
+    expect((await write({ webSearch: "off" }, deps(OWNER, store))).status).toBe(400);
+    expect((await settingsOf(await write({ webSearch: true }, deps(OWNER, store)))).webSearch).toBe(true);
   });
 
   it("does not answer with another person's settings", async () => {
@@ -337,7 +346,7 @@ describe("PATCH /api/settings", () => {
 
   it("never hands the response a key the screen does not need", async () => {
     const dto = await settingsOf(await read(deps(OWNER, memoryStore())));
-    expect(Object.keys(dto).sort()).toEqual(["about", "aboutName", "aiLang", "glossary", "limits", "recipes"]);
+    expect(Object.keys(dto).sort()).toEqual(["about", "aboutName", "aiLang", "glossary", "limits", "recipes", "webSearch"]);
     expect(Object.keys(dto.recipes[0]!).sort()).toEqual(["defaults", "guide", "id", "isDefault", "modified", "name", "samples", "steps", "terms", "unusableReason"]);
   });
 });

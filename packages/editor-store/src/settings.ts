@@ -4,7 +4,7 @@ import type { OwnerId, Queryable } from "./types.ts";
  * アカウントの設定（表 editor_settings。migration 0013。Issue #108）。owner ごとに 1 行で、行が無ければ既定値。
  *
  * - 持つのは画面から変えられるものだけ: AI の提案の言語、固有名詞と誤りやすい表記、手順（段階の名前・指示・お手本）、
- *   「あなたについて」（旧アプリの about.json。AI に渡す本人の説明と書き方の希望。**公開のときの著者情報とは別物**）。
+ *   AI チャットの Web 検索の可否（`web_search`。#283）、「あなたについて」（旧アプリの about.json。AI に渡す本人の説明と書き方の希望。**公開のときの著者情報とは別物**）。
  * - 文字起こしのエンジンはサーバーの設定（`EDITOR_TRANSCRIBE_ENGINE`）、保存先は NIHO から毎回読む（設計 §2.1）ので、
  *   どちらもここには無い。
  * - 書き込みは項目ごとに全部入れ替える（部分的な継ぎ足しをしない）。同時の保存は後から来たものが勝つ。
@@ -45,6 +45,8 @@ export type EditorSettings = {
   aboutName: string;
   /** 「あなたについて」（AI に渡す本人の説明と書き方の希望。空なら渡さない）。 */
   about: string;
+  /** AI チャットが Web を検索してよいか（設定 › AI の「Web を検索する」。既定 ON。#283）。 */
+  webSearch: boolean;
 };
 
 /** 変える項目だけを渡す（渡した項目は全部入れ替える）。 */
@@ -77,10 +79,11 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = Object.freeze({
   recipes: [],
   aboutName: "",
   about: "",
+  webSearch: true,
 }) as EditorSettings;
 
 /** 検証が断る理由（API はこれをそのまま 400 の理由にしない。短い code だけを返す）。 */
-export type SettingsProblem = "ai_lang" | "glossary" | "recipes" | "about" | "about_name";
+export type SettingsProblem = "ai_lang" | "glossary" | "recipes" | "about" | "about_name" | "web_search";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -134,7 +137,7 @@ export function isSettingsRecipe(value: unknown): value is SettingsRecipe {
 
 /** 設定の変更に通らないところがあれば、その項目を返す（無ければ null）。 */
 export function settingsProblem(patch: unknown): SettingsProblem | null {
-  if (!isPlainObject(patch) || !hasOnlyKeys(patch, ["aiLang", "glossary", "recipes", "about", "aboutName"])) return "ai_lang";
+  if (!isPlainObject(patch) || !hasOnlyKeys(patch, ["aiLang", "glossary", "recipes", "about", "aboutName", "webSearch"])) return "ai_lang";
   if (patch.aiLang !== undefined && !isSettingsAiLang(patch.aiLang)) return "ai_lang";
   if (patch.glossary !== undefined) {
     const { glossary } = patch;
@@ -150,6 +153,7 @@ export function settingsProblem(patch: unknown): SettingsProblem | null {
   }
   if (patch.about !== undefined && !isSettingsText(patch.about, SETTINGS_LIMITS.aboutChars, true)) return "about";
   if (patch.aboutName !== undefined && !isSettingsText(patch.aboutName, SETTINGS_LIMITS.aboutNameChars, true)) return "about_name";
+  if (patch.webSearch !== undefined && typeof patch.webSearch !== "boolean") return "web_search";
   return null;
 }
 
@@ -167,6 +171,7 @@ export function cleanSettingsPatch(patch: EditorSettingsPatch): EditorSettingsPa
   }
   if (patch.about !== undefined) cleaned.about = patch.about.trim();
   if (patch.aboutName !== undefined) cleaned.aboutName = patch.aboutName.replace(/\s+/gu, " ").trim();
+  if (patch.webSearch !== undefined) cleaned.webSearch = patch.webSearch;
   if (patch.recipes !== undefined) {
     cleaned.recipes = patch.recipes.map((recipe) => ({
       id: recipe.id,
@@ -185,7 +190,7 @@ function assertOwner(owner: OwnerId): void {
   }
 }
 
-type SettingsRow = { ai_lang: string; glossary: unknown; recipes: unknown; about_name: string | null; about: string | null };
+type SettingsRow = { ai_lang: string; glossary: unknown; recipes: unknown; about_name: string | null; about: string | null; web_search: boolean | null };
 
 /** 保存した値が今の形に合わなければ既定値として読む（古い行・手で直した行で画面を壊さない）。 */
 function toSettings(row: SettingsRow | undefined): EditorSettings {
@@ -198,10 +203,11 @@ function toSettings(row: SettingsRow | undefined): EditorSettings {
     recipes,
     aboutName: typeof row.about_name === "string" ? row.about_name : "",
     about: typeof row.about === "string" ? row.about : "",
+    webSearch: typeof row.web_search === "boolean" ? row.web_search : DEFAULT_EDITOR_SETTINGS.webSearch,
   };
 }
 
-const COLUMNS = "ai_lang, glossary, recipes, about_name, about";
+const COLUMNS = "ai_lang, glossary, recipes, about_name, about, web_search";
 
 /** その人の設定（行が無ければ既定値）。 */
 export async function getEditorSettings(db: Queryable, owner: OwnerId): Promise<EditorSettings> {
@@ -224,18 +230,20 @@ export async function saveEditorSettings(db: Queryable, owner: OwnerId, patch: E
   const recipes = value.recipes === undefined ? null : JSON.stringify(value.recipes);
   const aboutName = value.aboutName ?? null;
   const about = value.about ?? null;
+  const webSearch = value.webSearch ?? null;
   const result = await db.query<SettingsRow>(
-    `INSERT INTO editor_settings (owner, ai_lang, glossary, recipes, about_name, about)
-     VALUES ($1, COALESCE($2, 'same'), COALESCE($3::jsonb, '[]'::jsonb), COALESCE($4::jsonb, '[]'::jsonb), COALESCE($5, ''), COALESCE($6, ''))
+    `INSERT INTO editor_settings (owner, ai_lang, glossary, recipes, about_name, about, web_search)
+     VALUES ($1, COALESCE($2, 'same'), COALESCE($3::jsonb, '[]'::jsonb), COALESCE($4::jsonb, '[]'::jsonb), COALESCE($5, ''), COALESCE($6, ''), COALESCE($7::boolean, true))
      ON CONFLICT (owner) DO UPDATE
         SET ai_lang = COALESCE($2, editor_settings.ai_lang),
             glossary = COALESCE($3::jsonb, editor_settings.glossary),
             recipes = COALESCE($4::jsonb, editor_settings.recipes),
             about_name = COALESCE($5, editor_settings.about_name),
             about = COALESCE($6, editor_settings.about),
+            web_search = COALESCE($7::boolean, editor_settings.web_search),
             updated_at = clock_timestamp()
      RETURNING ${COLUMNS}`,
-    [owner, aiLang, glossary, recipes, aboutName, about],
+    [owner, aiLang, glossary, recipes, aboutName, about, webSearch],
   );
   const row = result.rows[0];
   if (!row) throw new Error("editor-store: settings upsert returned no row");

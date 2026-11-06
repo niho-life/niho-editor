@@ -96,6 +96,8 @@ export type SettingsDto = {
   /** 「あなたについて」（AI に渡す本人の説明と書き方の希望）。 */
   aboutName: string;
   about: string;
+  /** AI チャットが Web を検索してよいか（既定 ON。#283）。 */
+  webSearch: boolean;
   limits: typeof SETTINGS_LIMITS;
 };
 
@@ -127,6 +129,7 @@ export function settingsDto(settings: EditorSettings, recipes: readonly RecipeDe
     glossary: settings.glossary,
     aboutName: settings.aboutName,
     about: settings.about,
+    webSearch: settings.webSearch,
     recipes: contents.map((recipe) => {
       const base = findRecipeIn(DEFAULT_RECIPES, recipe.id);
       const defaults = base ? toSettingsRecipe(base) : null;
@@ -204,11 +207,11 @@ function recipeInputProblem(value: unknown): boolean {
 }
 
 /**
- * PATCH の本文（`{ aiLang?, glossary?, recipes? }` だけ）。手順は既定の 3 つの id を 1 回ずつ含み、
+ * PATCH の本文（`{ aiLang?, glossary?, recipes?, about?, aboutName?, webSearch? }` だけ）。手順は既定の 3 つの id を 1 回ずつ含み、
  * 段階の id は既定の手順ではそのままでなければならない（成果物のサブページがその id に結んでいる）。
  */
 export function parseSettingsPatch(body: unknown): PatchResult {
-  if (!plainObject(body) || Object.keys(body).some((key) => !["aiLang", "glossary", "recipes", "about", "aboutName"].includes(key))) return { ok: false };
+  if (!plainObject(body) || Object.keys(body).some((key) => !["aiLang", "glossary", "recipes", "about", "aboutName", "webSearch"].includes(key))) return { ok: false };
   const { recipes: rawRecipes, ...settingsPatch } = body;
   if (rawRecipes === undefined) {
     if (settingsProblem(settingsPatch) !== null) return { ok: false };
