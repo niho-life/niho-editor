@@ -147,6 +147,10 @@ describe("shell.css（フェーズ2）", () => {
     // アプリ名と一覧の行の題名は token（fallback 付き）
     expect(bodyOf(".es-brand")).toContain("font-size:var(--ed-fs-brand,17px)");
     expect(bodyOf(".es-di-t")).toContain("font-size:var(--ed-fs-list,15px)");
+    // 本文の列（.es-canvas-in）とタブの帯（#315）は同じ幅（680px・中央）
+    expect(bodyOf(".es-canvas-in")).toContain("max-width:680px");
+    expect(bodyOf(".es-tabbar")).toContain("max-width:680px");
+    expect(bodyOf(".es-tabbar")).toContain("margin:0 auto 10px");
   });
 
   it("書体は token。発信先ごとの見え方（serif・sans）も --ed-font-* から引く", () => {
