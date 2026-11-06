@@ -1000,6 +1000,8 @@ function EditorScreen(props: ScreenProps) {
   return (
     <div
       ref={setRoot}
+      // 本文の列（.es-canvas-in。最大 680px・中央。フォルダのページと同じ幅）
+      className="es-canvas-in"
       data-docs-app-root=""
       data-docs-shared-ui=""
       // 保存の状態（見える文字は失敗のときだけ、枠のヘッダーに出す。読み上げはヘッダーの状態の丸の live region が持つ）

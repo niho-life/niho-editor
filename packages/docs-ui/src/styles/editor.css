@@ -7,6 +7,18 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc {
   padding-left: 52px;
 }
+/*
+ * 本文の文字（新しい枠 .es-root の中の文書。editor-web の PageEditor）。枠の基準（shell.css の 14px）を継がず、本文の token を読む。
+ * 見出し・箇条書きは本文に対する em のままなので、ここだけで本文の大きさが決まる（見直し 2026-11-07）。
+ */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .be .doc {
+  font-size: var(--ed-fs-body, 16px);
+  line-height: var(--ed-lh-body, 1.9);
+}
+/* 見出しは本文の行間（1.9）を継がず、詰める */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .be .doc :is(h1, h2, h3) {
+  line-height: 1.4;
+}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be {
   position: relative;
 }
@@ -497,13 +509,19 @@
   background: transparent;
   padding: 0;
   font: inherit;
-  font-size: 30px;
+  font-size: var(--ed-fs-title, 30px);
   font-weight: 700;
   line-height: 1.35;
   color: var(--niho-text);
 }
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .page-title::placeholder {
   color: var(--niho-text-muted);
+}
+/* 900px 未満（スマホ・タブレット縦）は題名を少し小さく（枠の 900px の区切りと同じ） */
+@media (max-width: 900px) {
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .page-title.page-title {
+    font-size: var(--ed-fs-title-narrow, 26px);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

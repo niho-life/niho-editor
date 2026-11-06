@@ -131,6 +131,24 @@ describe("shell.css（フェーズ2）", () => {
     expect(bodyOf(".es-pv-hd")).toContain("flex-wrap:wrap");
   });
 
+  it("見直し 2026-11-07: ヘッダーと本文の間に余白、スマホの「…」はレールより上、読む文字は token から", () => {
+    // 本文の列の上の余白（題名がヘッダーに貼り付かない）。設定・録音から も同じ余白を使う（.es-page・.es-start は自前の上の余白を持たない）
+    expect(bodyOf(".es-canvas")).toContain("padding:32px 48px 120px");
+    expect(mobileOf(".es-canvas")).toContain("padding:24px 18px 80px");
+    expect(bodyOf(".es-page")).toContain("padding:0");
+    expect(bodyOf(".es-start")).toContain("margin:0 auto");
+    // 900px 未満: ヘッダー（メニューの親）はレール（46）より上、幕（60）より下
+    const header = Number(/z-index:(\d+)/.exec(mobileOf(".es-dt"))?.[1]);
+    expect(header).toBeGreaterThan(46);
+    expect(header).toBeLessThan(60);
+    // iOS の自動拡大を避ける 16px の入力欄
+    expect(mobileOf(".es-ai-composer textarea")).toContain("font-size:16px");
+    expect(mobileOf(".es-sb-find input")).toContain("font-size:16px");
+    // アプリ名と一覧の行の題名は token（fallback 付き）
+    expect(bodyOf(".es-brand")).toContain("font-size:var(--ed-fs-brand,17px)");
+    expect(bodyOf(".es-di-t")).toContain("font-size:var(--ed-fs-list,15px)");
+  });
+
   it("書体は token。発信先ごとの見え方（serif・sans）も --ed-font-* から引く", () => {
     const rule = rules.find((item) => item.selectors.includes(`${PREFIX}.es-root .es-pv--site`));
     expect(decls(rule)).toContain("font-family:var(--ed-font-serif)");

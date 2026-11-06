@@ -22,8 +22,18 @@
   gap: 8px;
   margin-top: 16px;
 }
+/* ボタンの列と一覧の間（20px）。中の ul・p の margin は枠が 0 に初期化するので、間隔はこの包みが持つ */
+.list {
+  display: grid;
+  gap: 8px;
+  margin-top: 20px;
+}
+/* grid の子は既定で中身より縮まない（min-width:auto）ので、長い題名の行が列からはみ出さないように */
+.list > * {
+  min-width: 0;
+}
 .rows {
-  margin: 16px 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
   border: 1px solid var(--ed-line-2);
@@ -91,7 +101,7 @@
   white-space: nowrap;
 }
 .empty {
-  margin: 16px 0 0;
+  margin: 0;
   padding: 18px 14px;
   border: 1px dashed var(--ed-line-3);
   border-radius: 14px;
@@ -99,7 +109,7 @@
   color: var(--ed-ink-mute);
 }
 .note {
-  margin: 8px 0 0;
+  margin: 0;
   font-size: 12.5px;
   color: var(--ed-amber-ink);
 }

@@ -88,7 +88,8 @@ export function FolderPage({ summary, revision, aboveTitle }: { summary: PageSum
   const inside = `in=${encodeURIComponent(id)}`;
 
   return (
-    <div data-docs-app-root="" data-docs-shared-ui="" data-folder-page="">
+    // 本文の列（.es-canvas-in。最大 680px・中央）。ページの本文と同じ幅にそろえる
+    <div data-docs-app-root="" data-docs-shared-ui="" data-folder-page="" className="es-canvas-in">
       {aboveTitle}
       {/* 題名は欄を離れたときに保存する（題名だけの PATCH。本文は持たない） */}
       <div className={styles.head} onBlur={() => void saveTitle()}>
@@ -114,29 +115,32 @@ export function FolderPage({ summary, revision, aboveTitle }: { summary: PageSum
           録音から
         </button>
       </div>
-      {note && (
-        <p role="alert" className={styles.note}>
-          {note}
-        </p>
-      )}
-      {rows.length === 0 ? (
-        <p className={styles.empty}>まだページがありません</p>
-      ) : (
-        <ul className={styles.rows} aria-label={`「${title || "無題"}」の中`}>
-          {rows.map((row) => (
-            <li key={row.id} className={`${styles.row}${row.depth ? ` ${styles.step}` : ""}`}>
-              <button type="button" className={styles.rowButton} onClick={() => router.push(`/p/${row.id}`)}>
-                <Icon name={row.icon ?? "doc"} className={styles.ki} />
-                <span className={styles.text}>
-                  <b className={row.title ? undefined : styles.untitled}>{row.title || "無題"}</b>
-                  {(row.sub || row.busy) && <small>{row.busy && !row.sub ? "作成中…" : row.sub?.text}</small>}
-                </span>
-                <span className={styles.when}>{row.when}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      {/* 一覧（と知らせ）はボタンの列から離す。ul・p の margin は枠（shell.css）が 0 に初期化するので、間隔はこの包みが持つ */}
+      <div className={styles.list}>
+        {note && (
+          <p role="alert" className={styles.note}>
+            {note}
+          </p>
+        )}
+        {rows.length === 0 ? (
+          <p className={styles.empty}>まだページがありません</p>
+        ) : (
+          <ul className={styles.rows} aria-label={`「${title || "無題"}」の中`}>
+            {rows.map((row) => (
+              <li key={row.id} className={`${styles.row}${row.depth ? ` ${styles.step}` : ""}`}>
+                <button type="button" className={styles.rowButton} onClick={() => router.push(`/p/${row.id}`)}>
+                  <Icon name={row.icon ?? "doc"} className={styles.ki} />
+                  <span className={styles.text}>
+                    <b className={row.title ? undefined : styles.untitled}>{row.title || "無題"}</b>
+                    {(row.sub || row.busy) && <small>{row.busy && !row.sub ? "作成中…" : row.sub?.text}</small>}
+                  </span>
+                  <span className={styles.when}>{row.when}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }

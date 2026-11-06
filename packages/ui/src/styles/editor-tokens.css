@@ -65,6 +65,16 @@
   --ed-red-soft: #fdebec;
   --ed-brown: #5d4335;
 
+  /* ── 文字の大きさ（UI/UX の見直し 2026-11-07）──
+   * 枠（shell.css）と本文（editor.css）が同じ値を読む。枠の基準の 14px（ボタン・補足）はそのままで、読む・書く文字だけを大きくした。
+   * 色ではないので editor-tokens.test.ts のコントラストの検査の対象外。 */
+  --ed-fs-body: 16px; /* 本文（日本語）。行の高さは --ed-lh-body */
+  --ed-lh-body: 1.9;
+  --ed-fs-title: 30px; /* ページ・フォルダの題名（900px 未満は --ed-fs-title-narrow） */
+  --ed-fs-title-narrow: 26px;
+  --ed-fs-list: 15px; /* 一覧の行の題名 */
+  --ed-fs-brand: 17px; /* 左上のアプリ名 */
+
   /* ── 書体 ──
    * 本文の明朝系は仮素材（モックは Fraunces を内蔵）。Web font は配信せず、無ければ端末の明朝へ落とす。 */
   --ed-font-sans: var(--font-family-sans);
