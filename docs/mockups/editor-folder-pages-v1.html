@@ -19,7 +19,7 @@
     - **パネルは全部動かせる**（Cursor の感じ）: 一覧・AIと作る・ページ・写真 を、左右のレールの上／下へドラッグで置ける。
       同じレールに 2 つ以上あれば上下に分かれ、境目をドラッグして高さを変える。× で閉じる。ヘッダー右上のボタンは閉じているパネルの分だけ出る
       （開いているパネルには × があるので出さない）。配置は localStorage に残る。中央のエディタ（タブの帯 › 題名 › 本文）だけは固定。
-    - 一覧の今のページは網掛けせず、名前を太くするだけ。
+    - 一覧の今のページは網掛けせず、名前を太くするだけ。録音ページの 2 行目（録音 · 42:10）は書かない（マイクの印で分かる）。
     - **アプリ名・アイコンはいつでも画面の左上端**（左レールの一番上の左端）。**設定はいつでも画面の最下端**（左下）。どちらもパネルの配置に関係なく。
     - 「ページ」パネルは「流れ」だけ。役割・タブ・字数は帯と右下にあるので置かない。今の行には「◯◯ から」を 1 行添える。
       作り直す・同じ入力でもう 1 つ はタブの ▾。
@@ -726,7 +726,8 @@ function renderList() {
     const open = isFolder ? n.open !== false : true;
     const ts = isFolder ? [] : tabsOf(n);
     const running = ts.some((t) => t.st === "run");
-    const sub = isFolder ? "" : running ? (n.role === "transcript" ? "文字起こし中…" : "作成中…") : n.role === "rec" ? "録音 · 42:10" : n.pub ? n.pub : "";
+    /* 2 行目は 作成中 と 公開先 だけ（録音はマイクの印で分かるので書かない） */
+    const sub = isFolder ? "" : running ? (n.role === "transcript" ? "文字起こし中…" : "作成中…") : n.pub ? n.pub : "";
     out.push(`<li class="row ${isFolder ? "folder" : kindOf(n)}${n.id === curPage ? " on" : ""}${isFolder && !open ? " closed" : ""}" data-id="${n.id}" style="--d:${d}" tabindex="0">
       ${isFolder ? `<button class="tw${kids.length ? "" : " none"}" aria-label="${open ? "閉じる" : "開く"}" aria-expanded="${open}">${svg("down")}</button>${svg("folder", "ico ki")}` : ""}
       ${n.role === "rec" ? svg("mic", "ico ki") : n.role === "transcript" ? svg("lines", "ico ki") : typeof n.role === "number" ? svg("spark", "ico ki") : ""}
