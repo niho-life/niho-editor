@@ -761,6 +761,41 @@ describe("AiPanel", () => {
     expect(server.calls.some((call) => call.method === "DELETE")).toBe(false);
   });
 
+  it("履歴を読み終えたあとにページを移っても、最新の会話を読み直さない（続けている会話・履歴で選んだ会話・「新しい会話」の下書きをそのまま続ける。#312 レビュー）", async () => {
+    const server = defaultServer({ list: json(200, { conversations: [summary(CHAT_1), summary(CHAT_2, "二つ目")] }), chat: () => chatResponse("返答") });
+    const lists = () => server.calls.filter((call) => call.method === "GET" && call.url.endsWith("/ai/conversations")).length;
+    const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+    await render(PAGE_1, context(PAGE_1));
+    await until(() => logText().includes(CHAT_1));
+    const listed = lists();
+    // 読み終えたあとの移動: 一覧を読み直さず、続けている会話（送った分も）がそのまま
+    setValue("続きの依頼");
+    await press("Enter");
+    await until(() => logText().includes("返答"));
+    await render(PAGE_2, context(PAGE_2));
+    await settle();
+    expect(lists()).toBe(listed);
+    expect(logText()).toContain("続きの依頼");
+    expect(logText()).toContain("返答");
+    // 履歴から古い会話へ切り替えてから移っても、選んだ会話のまま
+    await click(button("会話履歴と切り替え"));
+    await click([...container!.querySelectorAll<HTMLButtonElement>(".es-ai-menu-row")].find((item) => item.textContent?.includes("二つ目"))!);
+    await until(() => logText().includes(CHAT_2));
+    await render(PAGE_1, context(PAGE_1));
+    await settle();
+    expect(lists()).toBe(listed);
+    expect(logText()).toContain(CHAT_2);
+    expect(logText()).not.toContain(CHAT_1);
+    // 「新しい会話」の下書きも、移って最新の会話に戻されない
+    await click(button("新しい会話"));
+    expect(logText()).not.toContain(CHAT_2);
+    await render(PAGE_2, context(PAGE_2));
+    await settle();
+    expect(lists()).toBe(listed);
+    expect(logText()).not.toContain(CHAT_1);
+    expect(logText()).not.toContain(CHAT_2);
+  });
+
   it("shows a saved-chat read failure and retries the same conversation", async () => {
     let failSecond = true;
     defaultServer({

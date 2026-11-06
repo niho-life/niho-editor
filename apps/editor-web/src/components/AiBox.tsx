@@ -464,7 +464,8 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged }: A
   );
 
   // 会話の履歴は利用者のもの。最初に（と「再試行」で）いちばん新しい会話を開く。ページが無い間（下書きを読んでいる・作る前）は待ち、
-  // ページが決まってから読む。読んでいる途中でページが替わったら、次のページで読み直す
+  // ページが決まってから読む。読んでいる途中でページが替わったら、次のページで読み直す。読み終えたあとは、ページを移っても
+  // 読み直さない（履歴で選んだ会話・「新しい会話」の下書きをそのまま続ける）
   const loadedForRef = useRef(-1);
   useEffect(() => {
     if (!pageId || !context?.bridge || loadedForRef.current === retry) return;
@@ -472,6 +473,8 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged }: A
     const generation = generationRef.current;
     const controller = new AbortController();
     sessionControllerRef.current = controller;
+    // 読み終えた（成功・失敗・ほかの操作での中断のどれでも）。cleanup で「読んでいる途中にページが替わった」と見分ける
+    let settled = false;
     setHistoryState("loading");
     setSessionLoading(true);
     setHistoryOpen(false);
@@ -493,15 +496,15 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged }: A
         setHistoryState("error");
         setStatus(`会話履歴を読み込めませんでした。${messageError(error)}`);
       } finally {
+        settled = true;
         if (generationRef.current === generation && !controller.signal.aborted) setSessionLoading(false);
       }
     })();
     return () => {
-      // 読み終える前にページが替わった（か外れた）: 次のページで読み直す
-      if (!controller.signal.aborted) {
-        controller.abort();
-        if (loadedForRef.current === retry) loadedForRef.current = -1;
-      }
+      // 読み終える前にページが替わった（か外れた）: 次のページで読み直す。読み終えていれば今の会話のまま
+      if (settled || controller.signal.aborted) return;
+      controller.abort();
+      if (loadedForRef.current === retry) loadedForRef.current = -1;
     };
   }, [pageId, context?.bridge, retry]);
 
