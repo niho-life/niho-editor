@@ -1,49 +1,54 @@
 <!doctype html>
 <!--
-  mock: フォルダ › ページ › タブ。本文はタブにある。機能（文字起こし・手順の段階）はページとタブを作る。
-        画面はパネル（一覧・AI・ページ・写真）をレールに置く形（Cursor のように動かせる）v1（PC と 320px）。Issue #288
+  mock: フォルダ › ページ › タブ。本文はタブにある。1 フォルダに 1 つの手順（ワークフロー）があり、「ページ」パネルの「流れ」から
+        今開いているタブを入力にして次の出力を作る。画面はパネル（一覧・AI・ページ・写真）をレールに置く形（Cursor のように動かせる）
+        v1（PC と 320px）。Issue #288
   土台: docs/mockups/editor-folders-v1.html（フォルダ・この録音について）。色は :root の仮値（hex）。実装では packages/ui の token を引く。
 
   決めたこと（オーナー 2026-11-06。#288）:
     - 「案」という語も概念も置かない。あるのは フォルダ › ページ › タブ の 3 つ。
-    - 本文はタブにある。タブが 1 つだけのページは、今までのページと同じに見える（タブの帯は出ない）。どのページでもタブを足せる。
-      新しいタブはまっさら（複製だけ元の本文を持つ）。
-    - 機能の出力はフォルダの中へ。同じ役割のページがあればそのページに**タブ**が増え、無ければページができる（文字起こし › Gemini · Deepgram、記事本文 › 1 · 2）。
-    - 手順（AI の生成・整理）はどのページ・タブにも当てられる。入力は「今見ているタブ」。
-    - 本文の中にも、ページ名の下にも、ボタンや帯を置かない。操作（文字起こしする・記事にする・作り直す・もう 1 つ作る・ここから続きを作る・
-      タブを足す）と段階の帯（流れ）と系譜は「ページ」パネル（オーナーの言う「エディタパネル」）。
+    - 本文はタブにある。タブが無いページも、ページ名の上に薄い罫線が本文のコンテンツ幅（680px）であり、右端の ＋ でタブができる
+      （「タブを足す」というボタンは置かない）。新しいタブはまっさら（複製だけ元の本文を持つ）。
+    - **1 フォルダに 1 つの手順。** 手順は「ページ」パネルの「流れ」に出ていて、各行の右端の「作成」が、今開いているタブを入力に
+      その段階の出力を作る（間の段階が無ければ一緒に作る）。この入力から作成済みなら「済み」で押せない。
+      「記事にする」「ここから続きを作る」「もう 1 つ作る」というボタンは置かない（同じ入力からもう 1 つはタブの ▾ から）。
+    - 機能の出力はフォルダの中へ。同じ役割のページがあればそのページに**タブ**が増え、無ければページができる。
+    - 本文の中にも、ページ名の下にも、ボタンや帯を置かない。
+    - **AI チャットはアプリ全体で 1 つ。** ページを移っても会話は残る（Cursor の composer と同じ）。探す範囲は、今開いているページの
+      入っているフォルダ（固定なので、範囲や「今のタブ」の表示は置かない）。
     - **パネルは全部動かせる**（Cursor の感じ）: 一覧・AIと作る・ページ・写真 を、左右のレールの上／下へドラッグで置ける。
-      同じレールに 2 つ以上あれば上下に分かれ、境目をドラッグして高さを変える。× で閉じ、ヘッダーのボタンで出す。配置は localStorage に残る。
-      中央のエディタ（タブ › 題名 › 本文）だけは固定。
+      同じレールに 2 つ以上あれば上下に分かれ、境目をドラッグして高さを変える。× で閉じる。ヘッダー右上のボタンは閉じているパネルの分だけ出る
+      （開いているパネルには × があるので出さない）。配置は localStorage に残る。中央のエディタ（タブの帯 › 題名 › 本文）だけは固定。
+    - 一覧の今のページは網掛けせず、名前を太くするだけ。録音ページの 2 行目（録音 · 42:10）は書かない（マイクの印で分かる）。
+    - **アプリ名・アイコンはいつでも画面の左上端**（左レールの一番上の左端）。**設定はいつでも画面の最下端**（左下）。どちらもパネルの配置に関係なく。
+    - 「ページ」パネルは「流れ」だけ。役割・タブ・字数は帯と右下にあるので置かない。今の行には「◯◯ から」を 1 行添える。
+      作り直す・同じ入力でもう 1 つ はタブの ▾。
     - 比べる＝並べて開く（分割ビュー）。差分は出さない。要らないタブ・ページ＝ゴミ箱。
-    - フォルダの外の録音で「文字起こしする」を押したら、録音の題名でフォルダを作って中に入れる。
+    - フォルダの外の録音で「作成」を押したら、録音の題名でフォルダを作って中に入れる。
 
   このモックで見せたいこと:
-    1. 録音ページ: 本文は 録音ブロック・「この録音について」・見出し「文字起こし」の下にタブの一覧だけ。「文字起こしする ▾」は「ページ」パネル。
-    2. 文字起こしページ: 上部に Gemini · Deepgram のタブ。再生バー（元の録音の音声）・話者と時刻つきの本文。「記事にする ▾」はパネル。
-    3. 記事本文: タブが 1 つなら題名と本文だけのふつうのページ。2 つになると上部にタブ（1 · 2）。
-    4. 「ページ」パネル: 上から 操作のボタン › 流れ（このフォルダの段階。今のページを強調。タブの名前つき。「…（まだ）」）›
-       このタブ（役割・何から・ここから・タブ・字数）。
-    5. 記事方針のタブ 2: パネルの「ここから続きを作る」で、この方針から記事本文のタブができる。
-    6. ふつうのページ（コラム）のタブ: 下書き · 英語版。役割が無くても「ここから作る ▾」で手順を当てられる。
-    7. フォルダを開いた画面: 中身の一覧だけ（録音 › 文字起こし › 段階の順。タブの名前つき）。
-    8. フォルダの外の録音: パネルの「文字起こしする」を押すとフォルダができて中に入る（押して確かめる）。
-    9. パネルの配置: 既定は 左＝一覧、右＝ページ（上）＋AIと作る（下）。パネルの見出しをつかんで、現れる置き場（上／下、空のレール）へ落とす。
+    1. 録音ページ: 本文は 録音ブロック・「この録音について」・見出し「文字起こし」の下にタブの一覧だけ。文字起こしは「流れ」の行の「作成 ▾」（エンジン）。
+    2. 文字起こしページ: 上の帯に Gemini · Deepgram のタブ。再生バー・話者と時刻つきの本文。次の段階は「流れ」の行の「作成」。
+    3. 記事本文: タブが 1 つなら題名と本文だけ（帯は罫線と ＋ だけ）。2 つになると帯にタブ（1 · 2）。
+    4. 「ページ」パネル: 流れ（手順の全段階。あるページは名前とタブ、無い段階は「（まだ）」。今のページを強調して「◯◯ から」を添える。
+       右端に 作成／済み）。
+    5. 記事方針のタブ 2: 流れの「記事本文」の「作成」で、この方針から記事本文のタブができる（済みになる）。
+    6. AI チャット: 文字起こし修正で相談した会話が、記事本文に移っても残る。会話だけ（範囲の表示は無い）。
+    7. ふつうのページ（コラム）のタブ: 下書き · 英語版。役割が無くても流れの「作成」で手順を当てられる。
+    8. フォルダを開いた画面: 中身の一覧だけ。
+    9. パネルの配置: 既定は 左＝一覧、右＝ページ（上）＋AIと作る（下）。見出しをつかんで置き場へ落とす。
 
   見かた:
     - 上の黒い帯は mock 用。本物には無い。帯のボタンか ?state=rec|transcript|transcribing|step|two|plan2|split|tabs|folder|wrap で状態を開ける。
       「配置を戻す」でパネルを既定に戻す。
-    - 一覧の行を押すとそのページ（最後に見たタブ）。タブを押すと切り替え。
-    - タブは動く: 上部の ＋ ／ パネルの「タブを足す ▾」「＋ 足す」／「…」› タブを足す で足せる（空・複製）。タブの ▾ で 名前を変える（prompt）・
-      複製・並べて開く・削除（本当に消える）。パネルの「タブ」の名前を押しても切り替わる。
-    - 幅 720px 以下はスマホの並び（一覧がはじめの画面。ページは全画面で、左上のボタンで一覧へ。パネルは 1 つずつ全画面。ドラッグは無し。
-      並べて開くは縦に積む）。
+    - 一覧の行を押すとそのページ（最後に見たタブ）。タブを押すと切り替え。帯の右端の ＋ でまっさらなタブ。タブの ▾ で 名前を変える（prompt）・
+      複製・同じ入力でもう 1 つ（AI）・並べて開く・削除（本当に消える）。パネルの「タブ」の名前を押しても切り替わる。
+    - 幅 720px 以下はスマホの並び（一覧がはじめの画面。ページは全画面で、左上のボタンで一覧へ。パネルは 1 つずつ全画面。ドラッグは無し）。
 
   作っていない:
-    - 本文の保存・公開・AI の送信・検索・ドラッグでの並べ替え・移動の実行・写真の追加は見た目だけ（押すと右上に一言）。
-    - 音声の再生・文字起こしの実行・段階の実行は動かない（「文字起こしする」「記事にする」「もう 1 つ作る」「ここから続きを作る」は
-      タブやページを 1 つ足して開くだけ）。波形は飾り。レールの幅は固定。
-    - 版の履歴・公開のシート・AI の返答は出していない。
+    - 本文の保存・公開・AI の送信・検索・ドラッグでの並べ替え・移動の実行・写真の追加・手順の切替は見た目だけ（押すと右上に一言）。
+    - 音声の再生・文字起こしの実行・段階の実行は動かない（「作成」はタブやページを 1 つ足して開くだけ）。波形は飾り。レールの幅は固定。
+    - 版の履歴・公開のシート・AI の返答（会話は作り置き）は出していない。
   参照: Issue #288 / docs/architecture/editor-recipes-and-folders.md §3 / docs/mockups/editor-folders-v1.html（土台）/
         docs/mockups/editor-transcript-candidates-v1.html（採らない形）
 -->
@@ -101,6 +106,8 @@ kbd{font:12px var(--mono);color:var(--faint)}
 .menu.open{display:block}
 .menu button{display:flex;align-items:center;gap:10px;width:100%;padding:7px 10px;border-radius:8px;font-size:13.5px;color:var(--ink)}
 .menu button:hover{background:var(--sand)}
+.menu button[disabled]{color:var(--faint);cursor:default}
+.menu button[disabled]:hover{background:none}
 .menu button .ico{width:16px;height:16px;color:var(--ink2)}
 .menu button small{margin-left:auto;font-size:12px;color:var(--faint);white-space:nowrap}
 .menu button.danger{color:var(--red)}
@@ -112,7 +119,6 @@ kbd{font:12px var(--mono);color:var(--faint)}
 .newwrap{position:relative;display:inline-grid}
 .tag{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:600;color:var(--faint);background:var(--sand2);white-space:nowrap;flex:none}
 .tag.ok{color:var(--moss);background:var(--pale)}
-.tag.no{color:var(--amber-ink);background:var(--amber-pale)}
 .tag .ico{width:12px;height:12px}
 .toast{position:fixed;top:52px;right:16px;z-index:140;background:var(--ink);color:#fff;font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;box-shadow:0 8px 24px rgba(28,28,26,.2);opacity:0;transition:opacity .15s;pointer-events:none;max-width:calc(100vw - 32px)}
 .toast.show{opacity:1}
@@ -136,6 +142,11 @@ kbd{font:12px var(--mono);color:var(--faint)}
 /* ===== shell: 左レール › 中央 › 右レール。レールにはパネルが縦に並ぶ ===== */
 .ws{display:grid;grid-template-columns:auto minmax(0,1fr) auto;min-height:calc(100vh - var(--bar))}
 .rail{position:sticky;top:var(--bar);height:calc(100vh - var(--bar));display:flex;flex-direction:column;min-width:0;width:var(--sbw);background:var(--shell);border-right:1px solid var(--line)}
+#rail-left{padding:52px 0 48px}
+/* アプリ名・アイコン: いつでも画面の左上端（左レールの一番上の左端）。左レールが無いときは中央のヘッダーの左を空ける */
+.brandbar{position:fixed;left:0;top:var(--bar);height:52px;z-index:17;display:flex;align-items:center;padding:0 10px 0 12px;pointer-events:none}
+.brandbar .brand{pointer-events:auto;text-decoration:none}
+.ws.noleft .dt{padding-left:116px}
 #rail-right{width:var(--aiw);background:var(--canvas);border-right:0;border-left:1px solid var(--line)}
 .panel{display:flex;flex-direction:column;min-height:0;flex:1 1 0;overflow:hidden;background:inherit}
 .ph{display:flex;align-items:center;gap:4px;height:38px;padding:0 6px 0 8px;font-size:12.5px;font-weight:600;color:var(--ink2);flex:none;user-select:none;cursor:grab}
@@ -156,12 +167,17 @@ kbd{font:12px var(--mono);color:var(--faint)}
 body.dragging .dz{display:flex;pointer-events:auto}
 .dz.over{background:rgba(178,214,124,.42);border-style:solid}
 body.dragging .ph{cursor:grabbing}
+/* 設定: いつでも画面の最下端（左下）。パネルの配置に関係なく */
+.setbtn{position:fixed;left:12px;bottom:12px;z-index:16;display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 12px 0 10px;border-radius:999px;font-size:13px;font-weight:600;color:var(--ink2);background:color-mix(in srgb,var(--shell) 92%,transparent);box-shadow:0 1px 2px rgba(28,28,26,.08),0 0 0 1px var(--line2);text-decoration:none}
+.setbtn:hover{color:var(--ink);background:var(--sand2)}
+.setbtn .ico{width:17px;height:17px;color:var(--mute)}
 
 /* 一覧のパネル */
 .sb-list{flex:1;min-height:0;overflow:auto;padding:2px 8px 10px}
 .row{position:relative;display:flex;align-items:center;gap:6px;min-height:34px;padding:4px 4px 4px calc(8px + var(--d,0) * 16px);border-radius:8px;cursor:pointer;user-select:none;flex-wrap:wrap}
 .row:hover{background:var(--sand2)}
-.row.on{background:#fff;box-shadow:0 1px 2px rgba(28,28,26,.06),0 0 0 1px var(--line)}
+/* 今のページ: 網掛けは付けず、名前を太くするだけ */
+.row.on b{font-weight:600;color:var(--ink)}
 .row b{flex:1;min-width:0;font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .when{font-size:12px;color:var(--faint);white-space:nowrap;width:40px;text-align:right}
 .row .n{font-size:12px;font-weight:600;color:var(--moss);background:var(--pale);border-radius:999px;padding:0 6px;line-height:18px;flex:none}
@@ -183,10 +199,6 @@ body.dragging .ph{cursor:grabbing}
 .row:hover .more{margin-left:16px}
 .row.menu-on .more{margin-left:16px;background:var(--line2);color:var(--ink)}
 @media (hover:none){.row .when{display:none}.row .more{display:grid}.ib[data-tip]::after{display:none}}
-.sb-foot{border-top:1px solid var(--line);padding:8px 10px;flex:none}
-.sb-set{display:flex;align-items:center;gap:10px;width:100%;padding:7px 8px;border-radius:10px;font-size:13.5px;font-weight:600;color:var(--ink2);text-decoration:none}
-.sb-set:hover{background:var(--sand2);color:var(--ink)}
-.sb-set .ico{width:18px;height:18px;color:var(--mute)}
 
 /* ===== 中央: ページ ===== */
 .doc{position:relative;display:flex;flex-direction:column;min-width:0;min-height:calc(100vh - var(--bar))}
@@ -203,12 +215,28 @@ body.dragging .ph{cursor:grabbing}
 .dt .ins{display:flex;align-items:center;gap:2px;margin-left:6px;padding-left:10px;border-left:1px solid var(--line2)}
 .dt .ins .ib{color:var(--faint)}
 .dt .ins .ib:hover{color:var(--ink)}
+/* パネルを出すボタン: 閉じているパネルの分だけ出す（開いているパネルには × があるので、ヘッダーには出さない） */
 .dt .tg{display:flex;align-items:center;gap:2px;margin-left:4px;padding-left:8px;border-left:1px solid var(--line2)}
 .dt .tg .ib{color:var(--faint)}
-.dt .tg .ib.on{color:var(--ink);background:var(--sand2)}
+.dt .tg .ib.on{display:none}
+.dt .tg:not(:has(.ib:not(.on))){display:none}
 .pubbtn{height:30px;padding:0 13px;border-radius:8px;font-weight:600;font-size:13.5px;color:var(--ink);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:none}
 .pubbtn:hover{background:var(--sand)}
-.canvas{padding:44px 56px 140px;min-width:0;flex:1}
+/* タブの帯: ページ名の上、本文のコンテンツ幅（680px）と同じ薄い罫線。右端に ＋。タブが 2 つ以上なら左にタブ */
+.tabbar{position:sticky;top:calc(var(--bar) + 52px);z-index:19;padding:0 56px;background:var(--canvas)}
+.tabbar .in{display:flex;align-items:flex-end;gap:2px;height:38px;max-width:680px;margin:auto;border-bottom:1px solid var(--line2)}
+.tabbar .tb{display:flex;align-items:flex-end;flex:none;position:relative}
+.tabbar [role=tab]{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 12px;margin-bottom:-1px;border-bottom:2px solid transparent;border-radius:8px 8px 0 0;font-size:13.5px;font-weight:600;color:var(--mute);white-space:nowrap;max-width:46vw;overflow:hidden;text-overflow:ellipsis}
+.tabbar [role=tab]:hover{background:var(--sand);color:var(--ink)}
+.tabbar [role=tab][aria-selected=true]{color:var(--ink);border-bottom-color:var(--moss)}
+.tabbar .tm{width:22px;height:36px;margin:0 0 -1px -8px;display:none;place-items:center;color:var(--faint);border-radius:8px 8px 0 0;border-bottom:2px solid var(--moss)}
+.tabbar .tm .ico{width:13px;height:13px}
+.tabbar .tb.on .tm{display:grid}
+.tabbar .tm:hover{color:var(--ink);background:var(--sand)}
+.tabbar .add{margin-left:auto;width:30px;height:30px;margin-bottom:3px;display:grid;place-items:center;color:var(--faint);border-radius:8px;flex:none}
+.tabbar .add:hover{background:var(--sand);color:var(--ink)}
+.tabbar .add .ico{width:16px;height:16px}
+.canvas{padding:36px 56px 140px;min-width:0;flex:1}
 .canvas .in{max-width:680px;margin:auto}
 .tt{font-weight:600;font-size:32px;line-height:1.25;letter-spacing:-.01em;min-height:1.25em;outline:none}
 .tt.fh{display:flex;align-items:center;gap:12px}
@@ -221,21 +249,6 @@ body.dragging .ph{cursor:grabbing}
 .count{position:fixed;right:calc(var(--rw) + 18px);bottom:14px;z-index:15;font-size:12px;color:var(--faint);padding:4px 9px;border-radius:999px;background:color-mix(in srgb,var(--canvas) 85%,transparent)}
 .count:hover{color:var(--ink);background:var(--sand2)}
 .runnote{display:flex;align-items:center;gap:8px;margin-top:14px;padding:8px 12px;border-radius:10px;background:var(--pale);color:var(--moss);font-size:13px;font-weight:600}
-
-/* タブ（中央の上部。ページにタブが 2 つ以上あるときだけ出る） */
-.tabs{display:flex;align-items:flex-end;gap:2px;margin:-18px 0 18px;border-bottom:1px solid var(--line2);overflow-x:auto;scrollbar-width:none}
-.tabs::-webkit-scrollbar{display:none}
-.tabs .tb{display:flex;align-items:flex-end;flex:none;position:relative}
-.tabs [role=tab]{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 12px;margin-bottom:-1px;border-bottom:2px solid transparent;border-radius:8px 8px 0 0;font-size:13.5px;font-weight:600;color:var(--mute);white-space:nowrap;max-width:46vw;overflow:hidden;text-overflow:ellipsis}
-.tabs [role=tab]:hover{background:var(--sand);color:var(--ink)}
-.tabs [role=tab][aria-selected=true]{color:var(--ink);border-bottom-color:var(--moss)}
-.tabs .tm{width:22px;height:36px;margin:0 0 -1px -8px;display:none;place-items:center;color:var(--faint);border-radius:8px 8px 0 0;border-bottom:2px solid var(--moss)}
-.tabs .tm .ico{width:13px;height:13px}
-.tabs .tb.on .tm{display:grid}
-.tabs .tm:hover{color:var(--ink);background:var(--sand)}
-.tabs .add{width:34px;height:36px;margin-bottom:-1px;display:grid;place-items:center;color:var(--faint);flex:none;border-radius:8px 8px 0 0}
-.tabs .add:hover{background:var(--sand);color:var(--ink)}
-.tabs .add .ico{width:16px;height:16px}
 
 /* 録音ブロック */
 .recblk{display:flex;align-items:center;gap:12px;margin-top:18px;padding:10px 12px;border-radius:12px;background:var(--sand);flex-wrap:wrap}
@@ -326,17 +339,20 @@ body.dragging .ph{cursor:grabbing}
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:start}
 .cols>section{min-width:0;border-left:1px solid var(--line);padding-left:24px}
 .cols>section:first-child{border-left:0;padding-left:0}
-.cols .ch{display:flex;align-items:center;gap:6px;margin:-20px 0 10px;font-size:12.5px;color:var(--faint)}
+.cols .ch{display:flex;align-items:center;gap:6px;margin:-12px 0 10px;font-size:12.5px;color:var(--faint)}
 .cols .ch .ib{width:26px;height:26px;margin-left:auto}
 .cols .tt{font-size:24px}
 .cols .bd{font-size:15px;min-height:0}
-.cols .tabs{display:none}
 
-/* AI のパネル */
-.thread{flex:1;overflow:auto;padding:4px 16px}
-.ctx{display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:0 14px 8px;font-size:12px;color:var(--faint)}
-.ctx .tag{font-weight:500;color:var(--mute);background:var(--sand)}
-.ctx .tag .ico{color:var(--faint)}
+/* AI のパネル: アプリ全体で 1 つの会話。範囲はフォルダで固定なので表示しない */
+.thread{flex:1;overflow:auto;padding:6px 14px 6px}
+.msg{font-size:13px;line-height:1.65;margin:8px 0}
+.msg.me{margin-left:28px;padding:8px 11px;border-radius:12px 12px 4px 12px;background:var(--sand)}
+.msg.ai{padding:0 2px}
+.msg .at{display:block;font-size:12px;color:var(--faint);margin-bottom:2px}
+.msg .at .ico{width:12px;height:12px;vertical-align:-2px;margin-right:3px}
+.msg .did{display:inline-flex;align-items:center;gap:5px;margin-top:4px;font-size:12px;font-weight:600;color:var(--moss);background:var(--pale);border-radius:999px;padding:1px 9px}
+.msg .did .ico{width:12px;height:12px;stroke-width:2.2}
 .composer{padding:0 12px 12px;flex:none}
 .composer .box{border:1px solid var(--line2);border-radius:14px;background:#fff;padding:9px 10px 7px}
 .composer textarea{width:100%;border:0;outline:none;resize:none;font-size:13.5px;line-height:1.6;min-height:48px;background:none;padding:0 2px;display:block}
@@ -346,24 +362,32 @@ body.dragging .ph{cursor:grabbing}
 .send{width:28px;height:28px;border-radius:50%;background:var(--grad);color:#fff;display:grid;place-items:center;margin-left:auto}
 .send .ico{width:15px;height:15px;stroke-width:2.2}
 
-/* ページのパネル: 操作 › 流れ › このタブ */
-.ibody{padding:0 16px 16px;font-size:13px}
+/* ページのパネル: 流れ（手順。各行の右端に 作成／済み）› このタブ */
+.ibody{padding:0 14px 16px;font-size:13px}
 .sec{padding:12px 0 10px;border-top:1px solid var(--line2)}
 .sec:first-child{border-top:0;padding-top:4px}
-.sec h3{font-size:12px;font-weight:600;color:var(--mute);margin-bottom:6px}
-.pacts{display:flex;flex-wrap:wrap;gap:6px}
-.pacts .btn.quiet{padding:0 10px;box-shadow:inset 0 0 0 1px var(--line2)}
+.sec h3{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--mute);margin-bottom:6px;min-width:0}
+.sec h3 .wf{display:inline-flex;align-items:center;gap:3px;color:var(--ink2);border-radius:6px;padding:1px 4px 1px 6px}
+.sec h3 .wf:hover{background:var(--sand)}
+.sec h3 .wf .ico{width:12px;height:12px}
+.sec h3 .fn{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
 .fl{display:flex;flex-direction:column;gap:1px}
-.fl li{display:flex;align-items:stretch;min-width:0}
-.fl li button,.fl li>span{display:flex;align-items:center;gap:8px;width:100%;min-height:32px;padding:4px 8px;border-radius:8px;color:var(--ink2);font-weight:500;min-width:0}
-.fl li button:hover{background:var(--sand)}
-.fl li button .ico{width:14px;height:14px;color:var(--moss);stroke-width:2.2}
-.fl li button .ki{color:var(--mute);stroke-width:1.7}
-.fl li button span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fl li button small{margin-left:auto;font-size:12px;color:var(--faint);white-space:nowrap;padding-left:8px}
-.fl li.cur button{background:var(--pale);color:var(--ink);font-weight:600}
-.fl li.none>span{color:var(--faint)}
-.fl li.none>span .ico{width:14px;height:14px;color:var(--line3)}
+.fl li{display:flex;align-items:center;gap:4px;min-width:0}
+.fl li .go{display:flex;align-items:center;gap:8px;flex:1;min-width:0;min-height:34px;padding:4px 8px;border-radius:8px;color:var(--ink2);font-weight:500;flex-wrap:wrap}
+.fl li .go .src{flex-basis:100%;font-size:12px;font-style:normal;font-weight:500;color:var(--mute);padding-left:22px;margin-top:-3px}
+.fl li .go:hover{background:var(--sand)}
+.fl li .go .ico{width:14px;height:14px;color:var(--moss);stroke-width:2.2}
+.fl li .go .ki{color:var(--mute);stroke-width:1.7}
+.fl li .go span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fl li .go small{margin-left:auto;font-size:12px;color:var(--faint);white-space:nowrap;padding-left:8px}
+.fl li.cur .go{background:var(--pale);color:var(--ink);font-weight:600}
+.fl li.none .go{color:var(--faint);font-weight:500;cursor:default}
+.fl li.none .go:hover{background:none}
+.fl li.none .go .ico{color:var(--line3)}
+.fl li .mk{display:inline-flex;align-items:center;gap:3px;height:26px;padding:0 10px;border-radius:999px;font-size:12px;font-weight:600;background:var(--grad);color:#fff;flex:none;white-space:nowrap}
+.fl li .mk:hover{background:var(--grad-h)}
+.fl li .mk .ico{width:11px;height:11px;stroke-width:2.4}
+.fl li .mk[disabled]{background:var(--sand2);color:var(--faint);cursor:default}
 .ir{display:grid;grid-template-columns:54px minmax(0,1fr);gap:8px;padding:8px 0;border-top:1px solid var(--line)}
 .ir:first-of-type{border-top:0}
 .ir dt{font-size:12px;font-weight:600;color:var(--mute);padding-top:3px}
@@ -373,7 +397,6 @@ body.dragging .ph{cursor:grabbing}
 .lk+.lk{margin-left:0}
 .lk:hover{background:var(--sand);color:var(--ink)}
 .lk.cur{color:var(--ink);font-weight:600;background:var(--sand);box-shadow:inset 0 0 0 1px var(--line3)}
-.lk.add{color:var(--moss);font-weight:600}
 .lk .ico{width:13px;height:13px;color:var(--moss);stroke-width:2.2}
 .sep{color:var(--line3);margin:0 3px}
 .lineage{display:flex;flex-direction:column;gap:1px}
@@ -404,13 +427,15 @@ body.dragging .ph{cursor:grabbing}
 @media (max-width:720px){
   .ws{grid-template-columns:minmax(0,1fr)}
   .rail{display:none}
-  .ws[data-screen="list"] #rail-left{display:flex;position:static;height:auto;min-height:calc(100vh - var(--bar));width:auto;border:0}
+  .ws[data-screen="list"] #rail-left{display:flex;position:static;height:auto;min-height:calc(100vh - var(--bar));width:auto;border:0;padding-top:52px}
   .ws[data-screen="list"] .doc{display:none}
-  #rail-right.mob{display:flex;position:fixed;top:var(--bar);left:0;right:0;bottom:0;height:auto;width:auto;z-index:90;border:0}
+  .brandbar{display:none}
+  .ws[data-screen="list"] + .brandbar{display:flex}
+  .ws.noleft .dt{padding-left:8px}
+  #rail-right.mob{display:flex;position:fixed;top:var(--bar);left:0;right:0;bottom:0;height:auto;width:auto;z-index:90;border:0;padding-bottom:0}
   .ph{cursor:default}
   .ph .grip{display:none}
   .split{display:none}
-  .dt .brand{display:none}
   .dt .ins{display:none}
   .dt .crumbs{display:none}
   .dt .tg{padding-left:4px;margin-left:2px}
@@ -420,11 +445,12 @@ body.dragging .ph{cursor:grabbing}
   .loc:empty{display:none}
   .loc button{max-width:60vw;margin-left:-7px}
   .loc button+i{margin-left:0}
-  .canvas{padding:24px 16px 120px}
+  .tabbar{padding:0 16px}
+  .tabbar [role=tab]{max-width:none}
+  .canvas{padding:22px 16px 120px}
   .tt{font-size:25px}
-  .tabs{margin:-6px -16px 14px;padding:0 10px}
-  .tabs [role=tab]{max-width:none}
   .count{right:12px}
+  .setbtn{bottom:10px;left:10px;height:30px;padding:0 10px 0 8px}
   .ri-r{grid-template-columns:minmax(0,1fr);gap:4px}
   .ri-r label{padding-top:0}
   .frows li .when,.txlist li .when{display:none}
@@ -457,11 +483,10 @@ body.dragging .ph{cursor:grabbing}
 <div class="ws" id="ws" data-screen="page">
   <div class="rail" id="rail-left" aria-label="左のレール"></div>
 
-  <!-- 中央: ページ（タブ › 題名 › 本文）／フォルダ -->
+  <!-- 中央: タブの帯 › ページ（題名 › 本文）／フォルダ -->
   <main class="doc" id="doc">
     <header class="dt">
       <button class="ib tip-l" id="btn-list" data-tip="一覧" aria-label="一覧へ" hidden></button>
-      <div class="brand" id="brand-hd"></div>
       <nav class="crumbs" id="crumbs" aria-label="場所"></nav>
       <div class="ins" id="ins">
         <button class="ib" data-tip="ブロック" aria-label="ブロックを挿入" data-toast="ブロックの一覧（モック）"><span data-ic="plus"></span></button>
@@ -481,12 +506,17 @@ body.dragging .ph{cursor:grabbing}
         <div class="menu" id="menu-dots" role="menu" aria-label="ページのメニュー"></div>
       </span>
     </header>
+    <div class="tabbar" id="tabbar"><div class="in" id="tabs" role="tablist" aria-label="タブ"></div></div>
     <div class="canvas" id="cv"><nav class="in loc crumbs" id="loc" aria-label="場所"></nav><div class="in" id="canvas"></div></div>
     <button class="count" id="count" aria-label="字数。押すとページのパネル">0 字</button>
   </main>
 
   <div class="rail" id="rail-right" aria-label="右のレール"></div>
 </div>
+
+<!-- アプリ名・アイコン: いつでも画面の左上端（左レールの一番上の左端）。設定: いつでも左下 -->
+<div class="brandbar" id="brandbar"><a class="brand" href="#" data-toast="ホーム（モック）" aria-label="NIHO Editor"></a></div>
+<a class="setbtn" href="#" data-toast="設定（モック）" aria-label="設定"><span data-ic="gear"></span>設定</a>
 
 <!-- パネル（レールへ移して使う。ここは置き場） -->
 <div id="park">
@@ -496,10 +526,7 @@ body.dragging .ph{cursor:grabbing}
       <button class="ib" id="btn-new" data-menu="new" data-tip="新しいページ ⌘N" aria-label="新しいページ（⌘N）" aria-haspopup="menu"></button>
       <button class="ib tip-r" data-close-panel="list" data-tip="閉じる" aria-label="一覧を閉じる"><span data-ic="x"></span></button>
     </div>
-    <div class="pb">
-      <ul class="sb-list" id="list" aria-label="ページの一覧"></ul>
-      <div class="sb-foot"><a class="sb-set" href="#" data-toast="設定（モック）"><span id="gear"></span>設定</a></div>
-    </div>
+    <div class="pb"><ul class="sb-list" id="list" aria-label="ページの一覧"></ul></div>
   </section>
   <section class="panel" id="panel-ai" data-panel="ai" aria-label="AIと作る">
     <div class="ph" draggable="true"><span data-ic="grip" class="grip"></span><span class="pt">AIと作る</span>
@@ -508,8 +535,7 @@ body.dragging .ph{cursor:grabbing}
       <button class="ib tip-r" data-close-panel="ai" data-tip="閉じる" aria-label="AIと作るを閉じる"><span data-ic="x"></span></button>
     </div>
     <div class="pb">
-      <div class="thread"></div>
-      <div class="ctx" id="ctx" aria-label="AI が読むもの"></div>
+      <div class="thread" id="thread" aria-label="会話"></div>
       <div class="composer">
         <div class="box">
           <textarea rows="2" placeholder="直したいこと・作りたいもの…" aria-label="AI への依頼"></textarea>
@@ -545,9 +571,8 @@ body.dragging .ph{cursor:grabbing}
 <div class="menu at" id="menu-new" role="menu" aria-label="新しいページ"></div>
 <div class="menu at" id="menu-row" role="menu" aria-label="行のメニュー"></div>
 <div class="menu at" id="menu-tab" role="menu" aria-label="タブのメニュー"></div>
-<div class="menu at" id="menu-addtab" role="menu" aria-label="タブを足す"></div>
-<div class="menu at" id="menu-start" role="menu" aria-label="手順"></div>
 <div class="menu at" id="menu-tx" role="menu" aria-label="文字起こしのエンジン"></div>
+<div class="menu at" id="menu-flow" role="menu" aria-label="このフォルダの手順"></div>
 
 <!-- 削除の確認 -->
 <div class="veil" id="veil-del">
@@ -605,16 +630,17 @@ const LOGO = `<svg class="logo" viewBox="0 0 256 256" aria-hidden="true"><rect w
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
-$("#brand-hd").innerHTML = `${LOGO}<span>Editor</span>`;
+$("#brandbar .brand").innerHTML = `${LOGO}<span>Editor</span>`;
 $("#btn-search").innerHTML = svg("search");
 $("#btn-new").innerHTML = svg("plus");
 $("#btn-list").innerHTML = svg("side");
-$("#gear").innerHTML = svg("gear");
 $$("[data-ic]").forEach((el) => { const cls = el.classList.contains("grip") ? "ico grip" : "ico"; el.outerHTML = svg(el.dataset.ic, cls); });
 
 /* ===== 木（合成データ）: フォルダ › ページ › タブ。本文はタブにある。
-   ページは role（"rec"／"transcript"／段階の番号／無し）を持ち、タブは from（何から作られたか）を持つ ===== */
+   ページは role（"rec"／"transcript"／段階の番号／無し）を持ち、タブは from（何から作られたか）を持つ。
+   フォルダは 1 つの手順（flow）を持つ ===== */
 const RECIPE = { name: "記事制作", steps: ["文字起こし修正", "記事方針", "記事本文"] };
+const FLOWS = ["記事制作", "議事録", "インサイト整理", "コーチング"];
 const TREE = [
   { id: "f1", kind: "folder", t: "鎌倉の朝の散歩", open: true, children: [
     { id: "r1", kind: "page", role: "rec", t: "取材 11/3 北鎌倉", when: "2日前", tabs: [{ id: "r1a", when: "2日前" }] },
@@ -674,7 +700,8 @@ const roleSay = (p) => (p.role === "rec" ? "録音 · 42:10" : p.role === "trans
 const fullLabel = (t) => { const p = t.page; return p.role === "transcript" && t.engine ? `文字起こし（${t.engine}）` : tabsOf(p).length > 1 ? `${p.t} ${tl(t)}` : p.t; };
 const madeFrom = (t) => (t && t.from ? BY.get(t.from) : null);
 const madeHere = (t) => allPages().flatMap((p) => tabsOf(p)).filter((x) => x.from === t.id);
-const nextName = (p) => (p.role === "transcript" ? RECIPE.steps[0] : typeof p.role === "number" && p.role + 1 < RECIPE.steps.length ? RECIPE.steps[p.role + 1] : null);
+/* x が cur から（間に何段階かはさんで）作られたか */
+const derivedFrom = (x, cur) => { for (let t = x, hops = 0; t && hops < 8; hops++) { const up = madeFrom(t); if (!up) return false; if (up === cur) return true; t = up; } return false; };
 const findRole = (f, role) => kidsOf(f).find((k) => k.role === role);
 /* まっさらなタブ・複製したタブは、本文の出どころを変える */
 const srcOf = (t) => (t.dupOf ? BY.get(t.dupOf) : t);
@@ -699,7 +726,8 @@ function renderList() {
     const open = isFolder ? n.open !== false : true;
     const ts = isFolder ? [] : tabsOf(n);
     const running = ts.some((t) => t.st === "run");
-    const sub = isFolder ? "" : running ? (n.role === "transcript" ? "文字起こし中…" : "作成中…") : n.role === "rec" ? "録音 · 42:10" : n.pub ? n.pub : "";
+    /* 2 行目は 作成中 と 公開先 だけ（録音はマイクの印で分かるので書かない） */
+    const sub = isFolder ? "" : running ? (n.role === "transcript" ? "文字起こし中…" : "作成中…") : n.pub ? n.pub : "";
     out.push(`<li class="row ${isFolder ? "folder" : kindOf(n)}${n.id === curPage ? " on" : ""}${isFolder && !open ? " closed" : ""}" data-id="${n.id}" style="--d:${d}" tabindex="0">
       ${isFolder ? `<button class="tw${kids.length ? "" : " none"}" aria-label="${open ? "閉じる" : "開く"}" aria-expanded="${open}">${svg("down")}</button>${svg("folder", "ico ki")}` : ""}
       ${n.role === "rec" ? svg("mic", "ico ki") : n.role === "transcript" ? svg("lines", "ico ki") : typeof n.role === "number" ? svg("spark", "ico ki") : ""}
@@ -724,14 +752,12 @@ const TX = [
 const chip = (name, note) => `<span class="chip"><span>${name}</span>${note ? `<small>${note}</small>` : ""}<button class="x" aria-label="${name} を外す" data-toast="外しました（モック）">${svg("x")}</button></span>`;
 const addChip = (l) => `<button class="chip add" data-toast="${l}（モック）">${svg("plus")}${l}</button>`;
 const seg = (labels, on) => `<div class="seg" role="group">${labels.map((l, i) => `<button class="${i === on ? "on" : ""}"${i === on ? ' aria-pressed="true"' : ""}>${l}</button>`).join("")}</div>`;
-const txBtn = (cls = "btn sm") => `<button class="${cls}" data-menu="tx" aria-haspopup="menu">${svg("lines")}文字起こしする${svg("down", "ico dn")}</button>`;
-const startBtn = (label, cls = "btn sm") => `<button class="${cls}" data-menu="start" aria-haspopup="menu">${svg("spark")}${label}${svg("down", "ico dn")}</button>`;
 
-/* タブの帯（2 つ以上のときだけ）。開いているタブに ▾（名前・複製・並べて開く・移す・削除）。右端の ＋ でタブを足す */
-function tabsHtml(p, tab) {
+/* タブの帯: 右端の ＋ はいつでも（押すとまっさらなタブ）。タブが 2 つ以上なら左に並ぶ。開いているタブに ▾ */
+function tabbarHtml(p, tab) {
   const ts = tabsOf(p);
-  if (ts.length < 2) return "";
-  return `<div class="tabs" role="tablist" aria-label="${p.t} のタブ">${ts.map((t) => `<span class="tb${t === tab ? " on" : ""}"><button role="tab" aria-selected="${t === tab}" data-open="${t.id}">${t.st === "run" ? '<i class="spin"></i>' : ""}${tl(t)}</button>${t === tab ? `<button class="tm" data-menu="tab" aria-label="タブ「${tl(t)}」のメニュー" aria-haspopup="menu">${svg("down")}</button>` : ""}</span>`).join("")}<button class="add" data-menu="addtab" aria-label="タブを足す" aria-haspopup="menu">${svg("plus")}</button></div>`;
+  const tabs = ts.length < 2 ? "" : ts.map((t) => `<span class="tb${t === tab ? " on" : ""}"><button role="tab" aria-selected="${t === tab}" data-open="${t.id}">${t.st === "run" ? '<i class="spin"></i>' : ""}${tl(t)}</button>${t === tab ? `<button class="tm" data-menu="tab" aria-label="タブ「${tl(t)}」のメニュー" aria-haspopup="menu">${svg("down")}</button>` : ""}</span>`).join("");
+  return `${tabs}<button class="add" data-make="tab" data-tip="タブを足す" aria-label="タブを足す">${svg("plus")}</button>`;
 }
 
 function recHtml(p, tab) {
@@ -744,7 +770,7 @@ function recHtml(p, tab) {
   const closed = p.id !== "r9" && txs.length > 0;
   const list = txs.length
     ? `<ul class="txlist">${txs.map((t) => `<li data-open="${t.id}">${svg("lines", "ico ki")}<div class="t"><b>${tl(t)}</b><small>${t.st === "run" ? '<i class="spin"></i> 文字起こし中… · 残り 3 分ほど' : `${t.engine} · 42:10 · 1,240 字`}</small></div><span class="when">${t.when}</span>${svg("chev", "ico chev")}</li>`).join("")}</ul>`
-    : `<div class="txempty"><small>まだありません。「ページ」パネルの「文字起こしする」で、同じフォルダに「文字起こし」のページができます</small><button class="btn quiet sm" data-show-panel="page">${svg("info")}パネルを開く</button></div>`;
+    : `<div class="txempty"><small>まだありません。「ページ」パネルの「流れ」で、文字起こしの「作成」を押すと、同じフォルダに「文字起こし」のページができます</small><button class="btn quiet sm" data-show-panel="page">${svg("info")}パネルを開く</button></div>`;
   return `<h1 class="tt" contenteditable="true" spellcheck="false">${p.t}</h1>
   <div class="recblk"><button class="play" aria-label="再生" data-toast="再生（モック）">${svg("play")}</button><div class="wave" aria-hidden="true"></div><span class="time">00:00 / 42:10</span><span class="tag">2 ファイル</span></div>
   <section class="recinfo${closed ? " closed" : ""}" id="recinfo" aria-label="この録音について">
@@ -817,63 +843,52 @@ function folderHtml(f) {
   ${rows.length ? `<ul class="frows">${rows.join("")}</ul>` : `<div class="empty">まだページがありません</div>`}`;
 }
 
-/* 流れ（段階の帯をパネルへ、縦に）: このフォルダの役割のあるページを順に。今のページを強調。次がまだなら「…（まだ）」 */
-function flowHtml(p) {
+/* 流れ: このフォルダの手順の全段階（録音 › 文字起こし › 段階…）。あるページは名前とタブ、無い段階は「（まだ）」。
+   各行の右端に「作成」: 今開いているタブを入力に、その段階まで作る。この入力から作成済みなら「済み」で押せない */
+function flowHtml(p, tab) {
   const f = folderOf(p);
-  const roles = f ? sorted(kidsOf(f)).filter((k) => k.role !== undefined) : [];
-  if (!roles.length) return "";
-  const li = roles.map((k) => {
-    const ts = tabsOf(k); const run = ts.some((t) => t.st === "run");
-    const ic = k.role === "rec" ? svg("mic", "ico ki") : run ? '<i class="spin"></i>' : svg("check");
-    return `<li${k.id === p.id ? ' class="cur"' : ""}><button data-open="${k.id}"${k.id === p.id ? ' aria-current="page"' : ""}>${ic}<span>${k.t}</span>${ts.length > 1 || k.role === "transcript" ? `<small>${ts.map(tl).join(" · ")}</small>` : ""}</button></li>`;
-  });
-  const hasTx = roles.some((k) => k.role === "transcript");
-  const last = Math.max(-1, ...roles.filter((k) => typeof k.role === "number").map((k) => k.role));
-  const missing = !hasTx ? "文字起こし" : last + 1 < RECIPE.steps.length ? RECIPE.steps[last + 1] : null;
-  if (missing) li.push(`<li class="none"><span>${svg("spark")}${missing}（まだ）</span></li>`);
-  return `<section class="sec"><h3>流れ · ${f.t}</h3><ol class="fl" aria-label="流れ">${li.join("")}</ol></section>`;
-}
-
-/* 「ページ」パネル（オーナーの言う「エディタパネル」）: 操作 › 流れ › このタブ */
-function infoHtml(p, tab) {
+  const kids = f ? sorted(kidsOf(f)) : [];
   const role = p.role;
-  const roleTxt = role === "rec" ? "録音" : role === "transcript" ? `文字起こし${tab.engine ? ` · ${tab.engine}` : ""}` : typeof role === "number" ? `${RECIPE.name} › ${RECIPE.steps[role]}（${role + 1} / ${RECIPE.steps.length}）` : '<span class="none">なし</span>';
-  const up = []; for (let a = madeFrom(tab); a; a = madeFrom(a)) up.unshift(a);
-  const down = madeHere(tab);
-  const ts = tabsOf(p);
-  const acts = [];
-  if (role === "rec") acts.push(txBtn());
-  else if (role === "transcript") acts.push(startBtn("記事にする"));
-  else if (typeof role === "number") {
-    if (!down.length && nextName(p)) acts.push(`<button class="btn sm" data-make="continue">${svg("spark")}ここから続きを作る</button>`);
-    acts.push(`<button class="btn quiet sm" data-toast="このタブを作り直します。前の本文は版に残ります（モック）">${svg("redo")}作り直す</button>`);
-    acts.push(`<button class="btn quiet sm" data-make="sibling">${svg("copy")}もう 1 つ作る</button>`);
-  } else acts.push(startBtn("ここから作る"));
-  acts.push(`<button class="btn quiet sm" data-menu="addtab" aria-haspopup="menu">${svg("tab")}タブを足す${svg("down", "ico dn")}</button>`);
-  const rows = [["役割", roleTxt]];
-  if (up.length) rows.push(["何から", `<ol class="lineage">${up.map((a) => `<li><button class="lk" data-open="${a.id}"><span>${fullLabel(a)}</span></button></li>`).join("")}<li><span class="cur">このタブ</span></li></ol>`]);
-  if (role === "rec" || role === "transcript" || typeof role === "number") {
-    const nx = nextName(p);
-    rows.push(["ここから", down.length ? down.map((d) => `<button class="lk" data-open="${d.id}">${d.st === "run" ? '<i class="spin"></i>' : ""}<span>${fullLabel(d)}</span></button>`).join('<span class="sep">·</span>') : `<span class="none">${role === "rec" ? "文字起こし" : nx ?? ""}${role === "rec" || nx ? "（まだ）" : "まだ"}</span>`]);
-  }
-  rows.push(["タブ", `${ts.map((t) => `<button class="lk${t === tab ? " cur" : ""}" data-open="${t.id}"${t === tab ? ' aria-current="true"' : ""}><span>${tl(t)}</span></button>`).join('<span class="sep">·</span>')}<span class="sep">·</span><button class="lk add" data-make="tab">${svg("plus")}足す</button>`]);
-  rows.push(["字数", `${countOf(tab)} · ${tab.when ?? "今"}`]);
-  return `<section class="sec"><div class="pacts">${acts.join("")}</div></section>${flowHtml(p)}<section class="sec"><h3>このタブ</h3><dl>${rows.map(([k, v]) => `<div class="ir"><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl></section>`;
+  const pos = role === "rec" ? -1 : role === "transcript" ? -0.5 : typeof role === "number" ? role : -0.5; /* 役割の無いページは文字起こしの位置（段階の入力になれる） */
+  const rows = [];
+  /* 今の行には、このタブが何から作られたかを 1 行添える（記事方針 2 から）。入力の見分けがつくのはここだけ */
+  const from = madeFrom(tab);
+  const rowHtml = (page, label, icon, mk, cur) => `<li class="${cur ? "cur" : page ? "" : "none"}">${page ? `<button class="go" data-open="${page.id}"${cur ? ' aria-current="page"' : ""}>${icon}<span>${page.t}</span>${tabsOf(page).length > 1 || page.role === "transcript" ? `<small>${tabsOf(page).map(tl).join(" · ")}</small>` : ""}${cur && from ? `<em class="src">${fullLabel(from)} から</em>` : ""}</button>` : `<span class="go">${icon}<span>${label}（まだ）</span></span>`}${mk}</li>`;
+  const mkBtn = (state, attrs = "") => state === "done" ? `<button class="mk" disabled aria-disabled="true">${svg("check")}済み</button>` : state === "go" ? `<button class="mk" ${attrs}>${svg("plus")}作成</button>` : "";
+  /* 録音 */
+  const rec = kids.find((k) => k.role === "rec") || (role === "rec" ? p : null);
+  rows.push(rowHtml(rec, "録音", svg("mic", "ico ki"), rec ? "" : `<button class="mk" data-toast="録音のページを作ります（モック）">${svg("plus")}録音</button>`, rec && rec.id === p.id));
+  /* 文字起こし: 録音があれば作れる。エンジンを選ぶ。今のタブ（録音）から作成済みのエンジンはメニューの中で済み */
+  const txp = kids.find((k) => k.role === "transcript") || (role === "transcript" ? p : null);
+  const txRun = txp && tabsOf(txp).some((t) => t.st === "run");
+  const txIcon = txRun ? '<i class="spin"></i>' : txp ? svg("check") : svg("lines", "ico ki");
+  const canTx = !!(rec || role === "rec");
+  rows.push(rowHtml(txp, "文字起こし", txIcon, canTx && pos <= -1 ? `<button class="mk" data-menu="tx" aria-haspopup="menu">${svg("plus")}作成${svg("down")}</button>` : canTx && !txp ? `<button class="mk" data-menu="tx" aria-haspopup="menu">${svg("plus")}作成${svg("down")}</button>` : "", txp && txp.id === p.id));
+  /* 段階 */
+  RECIPE.steps.forEach((name, i) => {
+    const sp = kids.find((k) => k.role === i) || (role === i ? p : null);
+    const run = sp && tabsOf(sp).some((t) => t.st === "run");
+    const icon = run ? '<i class="spin"></i>' : sp ? svg("check") : svg("spark", "ico ki");
+    let st = "";
+    if (i > pos && !(role === "rec")) st = sp && tabsOf(sp).some((t) => derivedFrom(t, tab)) ? "done" : "go";
+    rows.push(rowHtml(sp, name, icon, mkBtn(st, `data-make="step:${i}"`), sp && sp.id === p.id));
+  });
+  return `<section class="sec"><h3><button class="wf" data-menu="flow" aria-haspopup="menu">${RECIPE.name}${svg("down")}</button><span class="fn">· ${f ? f.t : "（フォルダの外。作成するとフォルダに入ります）"}</span></h3><ol class="fl" aria-label="流れ">${rows.join("")}</ol></section>`;
 }
 
-function ctxHtml(p, tab) {
-  const ts = tabsOf(p);
-  const tags = [`<span class="tag">${svg("doc")}${ts.length > 1 ? `このタブ（${tl(tab)}）` : "このページ"}</span>`];
-  if (p.role !== undefined) tags.push(`<span class="tag">${svg("mic")}この録音について</span>`);
-  if (typeof p.role === "number") tags.push(`<span class="tag">${svg("spark")}文書ガイド（${RECIPE.name}）</span>`);
-  const f = folderOf(p);
-  if (f) {
-    const others = kidsOf(f).filter((k) => k.id !== p.id);
-    if (others.length) tags.push(`<span class="tag">${svg("folder")}${f.t} の ${others.length} ページ</span>`);
-  }
-  return `<span>読むもの</span>${tags.join("")}`;
-}
+/* 「ページ」パネル（オーナーの言う「エディタパネル」）: 流れだけ。役割・タブ・字数は帯と右下にあるので置かない */
+function infoHtml(p, tab) { return flowHtml(p, tab); }
 
+/* AI チャット: アプリ全体で 1 つ。会話は作り置きで、ページを移っても残る（範囲はフォルダで固定。表示しない） */
+const THREAD = [
+  { me: true, at: "文字起こし修正", text: "佐藤さんの発言の「二十年」を「20年」にそろえて。" },
+  { me: false, text: "文字起こし修正の 3 か所を「20年」にしました。「二十年の習慣」「二十年の散歩」も同じです。", did: "文字起こし修正を書き換え" },
+  { me: true, at: "記事本文 2", text: "この本文も同じ表記に。見出しはそのままで。" },
+  { me: false, text: "記事本文 2 の本文 2 か所を「20年」にしました。見出しは触っていません。", did: "記事本文 2 を部分置換" },
+];
+function renderThread() {
+  $("#thread").innerHTML = THREAD.map((m) => `<div class="msg ${m.me ? "me" : "ai"}">${m.me && m.at ? `<span class="at">${svg("doc")}${m.at} で</span>` : ""}${m.text}${m.did ? `<br><span class="did">${svg("check")}${m.did}</span>` : ""}</div>`).join("");
+}
 /* パンくずは場所（親のフォルダ）だけ。 */
 function crumbsHtml(p) {
   const f = p.kind === "folder" ? null : folderOf(p);
@@ -893,18 +908,19 @@ function open(id) {
   }
   curPage = p.id; curTab = tab ? tab.id : null;
   $("#cv").classList.remove("wide");
-  $("#canvas").innerHTML = folder ? folderHtml(p) : tabsHtml(p, tab) + bodyHtml(p, tab);
+  $("#tabbar").hidden = folder;
+  $("#tabs").innerHTML = folder ? "" : tabbarHtml(p, tab);
+  $("#canvas").innerHTML = folder ? folderHtml(p) : bodyHtml(p, tab);
   $("#crumbs").innerHTML = crumbsHtml(p);
   $("#loc").innerHTML = crumbsHtml(p);
   $("#ins").hidden = folder || (p.role === "transcript" && !tab.blank);
   $("#pubbtn").hidden = folder;
   $("#count").hidden = folder;
-  $("#ctx").innerHTML = folder ? "" : ctxHtml(p, tab);
-  $("#info-body").innerHTML = folder ? `<section class="sec"><p class="none">フォルダには操作がありません。ページを開くと、操作・流れ・タブが出ます。</p></section>` : infoHtml(p, tab);
+  $("#info-body").innerHTML = folder ? `<section class="sec"><p class="none">フォルダには操作がありません。ページを開くと、流れとタブが出ます。</p></section>` : infoHtml(p, tab);
   $("#count").textContent = countOf(tab);
   $("#menu-dots").innerHTML = folder
-    ? `<button data-toast="フォルダの中を .zip に書き出します（モック）">${svg("doc")}書き出し<small>.zip</small></button><hr><button class="danger" data-del="${p.id}">${svg("trash")}削除</button>`
-    : `<button data-toast="共有のリンク（モック）">${svg("link")}リンクで共有</button><button data-toast="書き出し（モック）">${svg("doc")}書き出し<small>.md · Google ドキュメント</small></button><button data-toast="履歴（モック）">${svg("cal")}履歴</button><hr><button data-make="tab">${svg("tab")}タブを足す</button><button data-toast="並べて開く相手を選びます（モック）">${svg("cols")}並べて開く…</button><button data-toast="移動（モック）">${svg("move")}移動…</button><hr><button class="danger" data-del="${p.id}">${svg("trash")}削除</button>`;
+    ? `<button data-menu="flow">${svg("spark")}このフォルダの手順<small>${RECIPE.name}</small></button><button data-toast="フォルダの中を .zip に書き出します（モック）">${svg("doc")}書き出し<small>.zip</small></button><hr><button class="danger" data-del="${p.id}">${svg("trash")}削除</button>`
+    : `<button data-toast="共有のリンク（モック）">${svg("link")}リンクで共有</button><button data-toast="書き出し（モック）">${svg("doc")}書き出し<small>.md · Google ドキュメント</small></button><button data-toast="履歴（モック）">${svg("cal")}履歴</button><hr><button data-toast="並べて開く相手を選びます（モック）">${svg("cols")}並べて開く…</button><button data-toast="移動（モック）">${svg("move")}移動…</button><hr><button class="danger" data-del="${p.id}">${svg("trash")}削除</button>`;
   $("#url").textContent = "/p/" + (tab ? tab.id : p.id);
   renderList();
   $("#ws").dataset.screen = "page";
@@ -912,16 +928,16 @@ function open(id) {
   window.scrollTo(0, 0);
 }
 
-/* 並べて開く: 2 つのタブを横に（スマホは縦） */
+/* 並べて開く: 2 つのタブを横に（スマホは縦）。帯は出さない */
 function openSplit(a, b) {
   const A = BY.get(a), B = BY.get(b);
   curPage = A.page.id; curTab = a;
   $("#cv").classList.add("wide");
+  $("#tabbar").hidden = true;
   $("#canvas").innerHTML = `<div class="cols">${[A, B].map((t) => `<section><div class="ch">${svg("doc")}${fullLabel(t)}<button class="ib" aria-label="閉じる" data-open="${t === A ? b : a}">${svg("x")}</button></div>${bodyHtml(t.page, t)}</section>`).join("")}</div>`;
   $("#crumbs").innerHTML = crumbsHtml(A.page);
   $("#loc").innerHTML = crumbsHtml(A.page);
   $("#ins").hidden = true; $("#pubbtn").hidden = true; $("#count").hidden = true;
-  $("#ctx").innerHTML = ctxHtml(A.page, A);
   $("#info-body").innerHTML = infoHtml(A.page, A);
   $("#url").textContent = `/p/${a}?with=${b}`;
   renderList();
@@ -932,19 +948,18 @@ function openSplit(a, b) {
 /* 固定のメニューの中身（開くときに今のページ・タブで作る） */
 const MENUS = {
   new: () => { const n = BY.get(curPage); const f = n ? folderOf(n) : null; return `${f ? `<div class="hd">${svg("folder")}「${f.t}」の中に</div>` : ""}<button data-toast="空のページを作ります（モック）">${svg("doc")}空のページ<small>⌘N</small></button><button data-toast="録音のページを作ります（モック）">${svg("mic")}録音から</button><hr><button data-toast="フォルダを作ります（モック）">${svg("folder")}フォルダ</button>`; },
-  tx: () => `<div class="hd">同じフォルダの「文字起こし」にタブができます</div><button data-make="tx:Gemini">Gemini<small>既定</small></button><button data-make="tx:Deepgram">Deepgram</button><button data-make="tx:この Mac">この Mac<small>オフライン</small></button>`,
-  start: () => `<div class="hd">${svg("spark")}このタブから作る</div><button data-make="run">${svg("spark")}${RECIPE.name}<small>${RECIPE.steps.join(" › ")}</small></button><button data-toast="議事録にする（モック）">議事録にする</button><button data-toast="インサイト整理（モック）">インサイト整理</button><button data-toast="コーチングにする（モック）">コーチングにする</button>`,
-  addtab: () => {
-    const p = BY.get(curPage);
-    let extra = "";
-    if (p.role === "transcript") extra = `<hr><div class="hd">別のエンジンで文字起こし</div><button data-make="tx:Gemini">Gemini</button><button data-make="tx:Deepgram">Deepgram</button><button data-make="tx:この Mac">この Mac</button>`;
-    else if (typeof p.role === "number") extra = `<hr><button data-make="sibling">${svg("spark")}同じ入力でもう 1 つ作る<small>AI</small></button>`;
-    return `<button data-make="tab">${svg("tab")}空のタブ</button><button data-make="dup">${svg("copy")}このタブを複製</button>${extra}`;
+  tx: () => {
+    const n = BY.get(curTab); const r = recTabOf(n);
+    const f = r ? folderOf(r.page) : null; const txp = f ? findRole(f, "transcript") : null;
+    const used = txp && r ? tabsOf(txp).filter((t) => t.from === r.id).map((t) => t.engine) : [];
+    const item = (eng, note) => used.includes(eng) ? `<button disabled>${eng}<small>済み</small></button>` : `<button data-make="tx:${eng}">${eng}${note ? `<small>${note}</small>` : ""}</button>`;
+    return `<div class="hd">エンジンを選ぶ · 「文字起こし」のタブになります</div>${item("Gemini", "既定")}${item("Deepgram")}${item("この Mac", "オフライン")}`;
   },
+  flow: () => `<div class="hd">${svg("spark")}このフォルダの手順（1 つ）</div>${FLOWS.map((n) => n === RECIPE.name ? `<button disabled>${n}<small>今の手順</small></button>` : `<button data-toast="手順を「${n}」に変えます（モック）">${n}</button>`).join("")}`,
   tab: () => {
     const t = BY.get(curTab);
     const others = tabsOf(t.page).filter((x) => x !== t);
-    return `<button data-rename="${t.id}">${svg("edit")}名前を変える</button><button data-make="dup">${svg("copy")}複製</button>${others.length ? `<button data-split="${others[0].id}">${svg("cols")}並べて開く<small>${tl(others[0])}</small></button>` : ""}<button data-toast="別のページへ移します（モック）">${svg("move")}別のページへ移す</button><hr><button class="danger" data-del="${t.id}">${svg("trash")}削除<small>ゴミ箱に 30 日</small></button>`;
+    return `<button data-rename="${t.id}">${svg("edit")}名前を変える</button><button data-make="dup">${svg("copy")}複製</button>${t.from ? `<hr><button data-toast="このタブを作り直します。前の本文は版に残ります（モック）">${svg("redo")}作り直す<small>AI</small></button><button data-make="sibling">${svg("spark")}同じ入力でもう 1 つ<small>AI</small></button><hr>` : ""}${others.length ? `<button data-split="${others[0].id}">${svg("cols")}並べて開く<small>${tl(others[0])}</small></button>` : ""}<button data-toast="別のページへ移します（モック）">${svg("move")}別のページへ移す</button><hr><button class="danger" data-del="${t.id}">${svg("trash")}削除<small>ゴミ箱に 30 日</small></button>`;
   },
 };
 
@@ -1014,42 +1029,33 @@ function makeTranscript(engine) {
   addTab(p, { id: "t" + (seq++), t: engine, engine, from: recTab.id, when: "今", st: "run" });
   toast(tabsOf(p).length > 1 ? `「文字起こし」に ${engine} のタブを足しました（モック）` : "「文字起こし」のページができました（モック）");
 }
-function makeRun(tab) {
+/* 流れの「作成」: 今のタブを入力に、その段階まで作る（間の段階が無ければ一緒に）。同じ役割のページがあればタブ、無ければページ */
+function makeChain(tab, k) {
   const f = wrapFolder(tab.page);
-  let from = tab.id, last = null;
-  RECIPE.steps.forEach((name, i) => {
-    const p = rolePage(f, i, name);
-    const t = { id: "s" + (seq++), t: String(tabsOf(p).length + 1), from, when: "今", st: i === 0 ? "run" : "wait" };
-    p.tabs.push(t); from = t.id; last = t;
-  });
+  const role = tab.page.role;
+  const start = typeof role === "number" ? role + 1 : 0;
+  let from = tab.id, last = null, made = 0;
+  for (let i = start; i <= k; i++) {
+    const p = rolePage(f, i, RECIPE.steps[i]);
+    const t = { id: "s" + (seq++), t: String(tabsOf(p).length + 1), from, when: "今", st: i === start ? "run" : "wait" };
+    p.tabs.push(t); from = t.id; last = t; made++;
+  }
   index();
   open(last.id);
-  toast(`${RECIPE.name}を始めました。段階ごとにページ（同じ段階があればタブ）ができます（モック）`);
+  toast(made > 1 ? `「${fullLabel(tab)}」から ${RECIPE.steps[k]} まで ${made} 段階を作っています（モック）` : `「${fullLabel(tab)}」から ${RECIPE.steps[k]} を作っています（モック）`);
 }
 function makeSibling(tab) {
   const p = tab.page;
   addTab(p, { id: "s" + (seq++), t: String(tabsOf(p).length + 1), from: tab.from, when: "今", st: "run" });
   toast("同じ入力から、もう 1 つ作っています（モック）");
 }
-function makeContinue(tab) {
-  const f = folderOf(tab);
-  let from = tab.id, last = null;
-  for (let i = tab.page.role + 1; i < RECIPE.steps.length; i++) {
-    const p = rolePage(f, i, RECIPE.steps[i]);
-    const t = { id: "s" + (seq++), t: String(tabsOf(p).length + 1), from, when: "今", st: i === tab.page.role + 1 ? "run" : "wait" };
-    p.tabs.push(t); from = t.id; last = t;
-  }
-  index();
-  open(last.id);
-  toast(`「${fullLabel(tab)}」から続きを作っています（モック）`);
-}
-/* タブを足す: 空のタブはまっさら（本文なし）。複製は元のタブの本文をそのまま */
+/* タブを足す: ＋ はまっさら（本文なし）。複製は元のタブの本文をそのまま */
 function makeTab(dup) {
   const p = BY.get(curPage), cur = BY.get(curTab);
   const t = { id: "n" + (seq++), t: String(tabsOf(p).length + 1), when: "今" };
   if (dup) { t.dupOf = srcOf(cur).id; t.t = `${tl(cur)} のコピー`; } else t.blank = true;
   addTab(p, t);
-  toast(dup ? "タブを複製しました（モック）" : "空のタブを足しました（モック）");
+  toast(dup ? "タブを複製しました（モック）" : "まっさらなタブを足しました（モック）");
 }
 
 /* ===== パネルの配置（Cursor のように動かせる）: レールごとの並びと高さの割合 ===== */
@@ -1078,6 +1084,7 @@ function renderLayout() {
     rail.hidden = ids.length === 0;
     rail.classList.toggle("mob", mob && side === "right" && ids.length > 0);
   }
+  $("#ws").classList.toggle("noleft", !mob && layout.left.length === 0);
   document.documentElement.style.setProperty("--rw", !mob && layout.right.length ? getComputedStyle(document.documentElement).getPropertyValue("--aiw") : "0px");
   for (const id of Object.keys(PANELS)) {
     const b = $("#tg-" + id); if (!b) continue;
@@ -1190,9 +1197,8 @@ document.addEventListener("click", (e) => {
     const t = BY.get(curTab); closeMenus();
     const [what, arg] = mk.dataset.make.split(":");
     if (what === "tx") makeTranscript(arg);
-    else if (what === "run") makeRun(t);
+    else if (what === "step") makeChain(t, +arg);
     else if (what === "sibling") makeSibling(t);
-    else if (what === "continue") makeContinue(t);
     else if (what === "tab") makeTab(false);
     else if (what === "dup") makeTab(true);
     return;
@@ -1242,7 +1248,7 @@ document.addEventListener("click", (e) => {
   if (was) return;
   if (MENUS[name]) m.innerHTML = MENUS[name]();
   b.classList.add("on"); b.setAttribute("aria-expanded", "true");
-  if (m.classList.contains("at")) { const r = b.getBoundingClientRect(); placeMenu(m, r.left, r.bottom + 4); }
+  if (m.classList.contains("at")) { const r = b.getBoundingClientRect(); placeMenu(m, Math.min(r.left, window.innerWidth - 240), r.bottom + 4); }
   else m.classList.add("open");
 }, true);
 document.addEventListener("click", (e) => { if (!e.target.closest(".menu") && !e.target.closest("[data-menu]")) closeMenus(); }, true);
@@ -1256,7 +1262,7 @@ function openRowMenu(row, x, y) {
   const m = $("#menu-row");
   m.innerHTML = n.kind === "folder"
     ? `<button data-toast="このフォルダに空のページを作ります（モック）">${svg("plus")}中に新しいページ</button><button data-toast="フォルダの中を .zip に書き出します（モック）">${svg("doc")}書き出し<small>.zip</small></button><hr><button class="danger" data-del="${n.id}">${svg("trash")}削除<small>中のページも</small></button>`
-    : `<button data-open="${n.id}" data-maketab="1">${svg("tab")}タブを足す</button><button data-toast="並べて開く相手を選びます（モック）">${svg("cols")}右に並べて開く…</button><button data-toast="移動（モック）">${svg("move")}移動…</button><hr><button class="danger" data-del="${n.id}">${svg("trash")}削除<small>ゴミ箱に 30 日</small></button>`;
+    : `<button data-toast="並べて開く相手を選びます（モック）">${svg("cols")}右に並べて開く…</button><button data-toast="移動（モック）">${svg("move")}移動…</button><hr><button class="danger" data-del="${n.id}">${svg("trash")}削除<small>ゴミ箱に 30 日</small></button>`;
   placeMenu(m, x, y);
 }
 $("#list").addEventListener("click", (e) => {
@@ -1269,8 +1275,6 @@ $("#list").addEventListener("click", (e) => {
   open(row.dataset.id);
 });
 $("#list").addEventListener("contextmenu", (e) => { const row = e.target.closest(".row"); if (!row) return; e.preventDefault(); openRowMenu(row, e.clientX, e.clientY); });
-/* 行のメニューの「タブを足す」: そのページを開いてから足す */
-document.addEventListener("click", (e) => { const b = e.target.closest("[data-maketab]"); if (b) setTimeout(() => makeTab(false), 0); }, true);
 
 /* 削除の確認（ページ・タブ・フォルダ） */
 document.addEventListener("click", (e) => {
@@ -1312,6 +1316,7 @@ function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.ad
 const q = new URLSearchParams(location.search);
 loadLayout();
 onMq();
+renderThread();
 go(q.get("state") || "rec");
 if (q.get("screen")) ws.dataset.screen = q.get("screen");
 if (q.get("layout") === "default") { layout = DEFAULT_LAYOUT(); renderLayout(); }
