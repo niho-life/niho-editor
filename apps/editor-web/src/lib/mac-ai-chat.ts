@@ -144,6 +144,14 @@ export type MacAiTurnOutput = {
   writes: { pageId: string; markdown: string }[];
 };
 
+/**
+ * 選択範囲があるときに指示へ足す文（#280）。範囲の外が変わった書き戻しは、サーバーが断る（chat-api の `keepsOutsideSelection`）ので、
+ * その理由を CLI に先に伝える。
+ */
+function selectionInstruction(label: string | undefined): string {
+  return `選択範囲${label ? `（本文の${label}）` : ""}だけを直してください。範囲の外は 1 字も変えないでください（変えると書き戻しが断られます）。選択範囲の文は context/selection.md にあります。`;
+}
+
 /** native の一時置き場でだけ動く。確定前の結果はサーバーへ送らない。 */
 export async function runMacAiTurn(input: {
   shell: ShellBridge;
@@ -151,6 +159,8 @@ export async function runMacAiTurn(input: {
   model: string;
   page: { pageId: string; title: string; markdown: string };
   selection: string | null;
+  /** 選んだ範囲の言い方（「第 2〜3 段落」）。CLI への指示に添える。 */
+  selectionLabel?: string;
   instruction: string;
   conversationId: string | null;
   resumeSession: string | null;
@@ -181,7 +191,7 @@ export async function runMacAiTurn(input: {
       ...(input.effort ? { effort: input.effort } : {}),
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       ...(input.resumeSession ? { resumeSession: input.resumeSession } : {}),
-      instruction: input.selection === null ? input.instruction : `${input.instruction}\n\n選択範囲を主な対象にしてください。選択範囲は context/selection.md にあります。`,
+      instruction: input.selection === null ? input.instruction : `${input.instruction}\n\n${selectionInstruction(input.selectionLabel)}`,
       page: input.page,
       ...(input.selection === null ? {} : { context: [{ name: "selection", title: "選択範囲", markdown: input.selection }] }),
     }, (envelope) => {

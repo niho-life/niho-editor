@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
+import { Editor, type JSONContent } from "@tiptap/core";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import axe from "axe-core";
 import type { AiDiffState, AttachedAi, AttachedAiDiff, AttachedAiSteps } from "@/lib/attached-page";
+import { AiSelection, aiSelectionOf } from "@/editor/ai-selection";
+import { buildPageExtensions } from "@/editor/page-extensions";
 import { AiPanel, aiReadsTags } from "./AiBox";
 
 const nativeMock = vi.hoisted(() => ({ shell: null as unknown }));
@@ -1210,5 +1213,224 @@ describe("AiPanel: 作業中の指示を送信待ちに積む（#282）", () => 
     expect(queueRow()).toBeNull();
     expect(field().value).toBe("");
     expect(chatCalls(server.calls)).toEqual(["最初の依頼"]);
+  });
+});
+
+describe("AiPanel: 本文の選択範囲を渡す（#280）", () => {
+  let editor: Editor | null = null;
+  afterEach(() => {
+    editor?.destroy();
+    editor = null;
+  });
+
+  const para = (text: string): JSONContent => ({ type: "paragraph", content: [{ type: "text", text }] });
+  const BODY = [para("一つ目の段落です。"), para("二つ目の段落です。"), para("三つ目の段落です。")];
+  const chatBodies = (calls: { url: string; method: string; body: Record<string, unknown> }[]) => calls.filter((call) => call.method === "POST" && call.url.endsWith("/ai/chat")).map((call) => call.body);
+  const chipText = () => container!.querySelector(".es-ai-chip")?.textContent ?? "";
+
+  function openEditor(content: JSONContent[] = BODY): Editor {
+    const host = document.createElement("div");
+    document.body.append(host);
+    editor = new Editor({ element: host, extensions: [...buildPageExtensions(), AiSelection], content: { type: "doc", content } });
+    return editor;
+  }
+  function rangeOf(target: Editor, needle: string): { from: number; to: number } {
+    let found: { from: number; to: number } | null = null;
+    target.state.doc.descendants((node, pos) => {
+      if (found || !node.isText) return;
+      const at = (node.text ?? "").indexOf(needle);
+      if (at >= 0) found = { from: pos + at, to: pos + at + needle.length };
+    });
+    if (!found) throw new Error(`not found: ${needle}`);
+    return found;
+  }
+  /** 本文で範囲を選ぶ（人が選んだのと同じ: エディタの選択が変わる）。 */
+  async function select(target: Editor, needle: string) {
+    await act(async () => { target.commands.setTextSelection(rangeOf(target, needle)); });
+  }
+  async function renderWith(target: Editor, overrides: Partial<AttachedAi["bridge"]> = {}) {
+    const ai = { ...context(PAGE_1, overrides), editor: target };
+    await render(PAGE_1, ai);
+    await until(() => !button("新しい会話").disabled);
+    return ai;
+  }
+
+  it("本文で範囲を選ぶと入力欄の上に「選択範囲 N 字」が付き、本文に下地が残る。エディタの選択が外れても残り、×で外れる", async () => {
+    defaultServer();
+    const target = openEditor();
+    await renderWith(target);
+    expect(chipText()).toBe("");
+    await select(target, "二つ目の段落");
+    expect(chipText()).toBe("選択範囲 6 字×");
+    expect([...target.view.dom.querySelectorAll(".es-ai-selection")].map((node) => node.textContent).join("")).toBe("二つ目の段落");
+    // 入力欄へ移ってエディタの選択が消えても、チップと下地は残る
+    await act(async () => { target.commands.setTextSelection(1); });
+    expect(chipText()).toBe("選択範囲 6 字×");
+    expect(target.view.dom.querySelector(".es-ai-selection")).not.toBeNull();
+    // 選び直すと置き換わる
+    await select(target, "三つ目の段落です。");
+    expect(chipText()).toBe("選択範囲 9 字×");
+    expect(target.view.dom.querySelectorAll(".es-ai-selection")).toHaveLength(1);
+    await click(button("選択範囲を外す"));
+    expect(chipText()).toBe("");
+    expect(aiSelectionOf(target.state)).toBeNull();
+    expect(target.view.dom.querySelector(".es-ai-selection")).toBeNull();
+  });
+
+  it("チップを出した入力欄に、axe の serious 以上の違反が無い", async () => {
+    defaultServer();
+    const target = openEditor();
+    await renderWith(target);
+    await select(target, "二つ目の段落");
+    expect(chipText()).toContain("選択範囲 6 字");
+    const result = await axe.run(container!, { rules: { "color-contrast": { enabled: false } } });
+    expect(result.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical")).toEqual([]);
+  });
+
+  it("本文を直すと字数が追従し、範囲が全部消えたらチップも消える", async () => {
+    defaultServer();
+    const target = openEditor();
+    await renderWith(target);
+    await select(target, "二つ目の段落");
+    const range = aiSelectionOf(target.state)!;
+    await act(async () => { target.view.dispatch(target.state.tr.delete(range.from, range.from + 2)); });
+    expect(chipText()).toBe("選択範囲 4 字×");
+    const now = aiSelectionOf(target.state)!;
+    await act(async () => { target.view.dispatch(target.state.tr.delete(now.from, now.to)); });
+    expect(chipText()).toBe("");
+  });
+
+  it("送ると、段落の番号・字数・選んだ文字・本文の版を添え、チップと下地は消える。次の依頼には付かない", async () => {
+    const server = defaultServer();
+    const target = openEditor();
+    await renderWith(target);
+    await select(target, "二つ目の段落");
+    setValue("短くして");
+    await press("Enter");
+    await until(() => chatBodies(server.calls).length === 1 && chipText() === "");
+    expect(chatBodies(server.calls)[0]).toEqual({
+      text: "短くして",
+      conversationId: undefined,
+      selection: { startParagraph: 2, endParagraph: 2, revision: 1, chars: 6, text: "二つ目の段落" },
+    });
+    expect(aiSelectionOf(target.state)).toBeNull();
+    await until(() => !button("メッセージを送る").disabled || field().value === "");
+    setValue("もう一度");
+    await press("Enter");
+    await until(() => chatBodies(server.calls).length === 2);
+    expect(chatBodies(server.calls)[1]).not.toHaveProperty("selection");
+  });
+
+  it("2 つの段落にまたがる範囲は、始まりと終わりの段落の番号を添える。送信中に選び直しても、依頼の範囲は送ったときのまま", async () => {
+    const held = deferred<Response>();
+    const server = defaultServer({ chat: () => held.promise });
+    const target = openEditor();
+    await renderWith(target);
+    await act(async () => { target.commands.setTextSelection({ from: rangeOf(target, "一つ目").from, to: rangeOf(target, "二つ目の段落").to }); });
+    setValue("まとめて");
+    await press("Enter");
+    await until(() => chatBodies(server.calls).length === 1);
+    // 作業中に別の範囲を選んでも、チップは付かない（送った依頼の範囲は変わらない）
+    await select(target, "三つ目");
+    expect(chipText()).toBe("");
+    expect(chatBodies(server.calls)[0]!.selection).toMatchObject({ startParagraph: 1, endParagraph: 2 });
+    held.resolve(chatResponse("まとめました"));
+    await until(() => container!.querySelector('button[aria-label="止める"]') === null);
+  });
+
+  it("失敗して結果に残らなかったら、依頼の文と選択範囲を戻す（本文がそのままなら）", async () => {
+    const server = defaultServer({ chat: () => json(500, { error: "failed" }) });
+    const target = openEditor();
+    await renderWith(target);
+    await select(target, "二つ目の段落");
+    setValue("短くして");
+    await press("Enter");
+    await until(() => chatBodies(server.calls).length === 1 && container!.querySelector('button[aria-label="止める"]') === null);
+    expect(field().value).toBe("短くして");
+    expect(chipText()).toBe("選択範囲 6 字×");
+    expect(target.view.dom.querySelector(".es-ai-selection")?.textContent).toBe("二つ目の段落");
+  });
+
+  it("本文が最新に替わった（競合）ときは、選択範囲を戻さない（番号が合わないため）", async () => {
+    const latest = { ...page(), blocks: [{ type: "paragraph", content: [{ type: "text", text: "別の画面で書き換えた" }] }] };
+    defaultServer({ chat: () => json(409, { error: "conflict", page: latest }) });
+    const target = openEditor();
+    const ai = await renderWith(target, { replace: vi.fn(async () => { target.commands.setContent({ type: "doc", content: [para("別の画面で書き換えた")] }); return true; }) });
+    await select(target, "二つ目の段落");
+    setValue("短くして");
+    await press("Enter");
+    await until(() => container!.textContent!.includes("ページが更新されました"));
+    expect(ai.bridge.replace).toHaveBeenCalled();
+    expect(chipText()).toBe("");
+    expect(aiSelectionOf(target.state)).toBeNull();
+  });
+
+  it("⌘L で入力欄へ移れる。変換中（IME）や Shift 付きは取らない", async () => {
+    defaultServer();
+    const target = openEditor();
+    await renderWith(target);
+    const press = (init: KeyboardEventInit) => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true, cancelable: true, ...init })); });
+    await press({ metaKey: true, shiftKey: true });
+    expect(document.activeElement).not.toBe(field());
+    await press({ metaKey: true, isComposing: true });
+    expect(document.activeElement).not.toBe(field());
+    await press({ metaKey: true });
+    expect(document.activeElement).toBe(field());
+  });
+
+  it("工程を付けているあいだは、選択範囲のチップを出さない", async () => {
+    defaultServer();
+    const target = openEditor();
+    const ai = { ...context(PAGE_1), editor: target };
+    const steps: AttachedAiSteps = { ownerId: "o", options: [{ id: "s1", label: "文字起こし修正", hint: "", disabledReason: null }], start: vi.fn(async () => ({ ok: true, message: "始めました" })) };
+    await render(PAGE_1, ai, steps);
+    await until(() => !button("新しい会話").disabled);
+    await select(target, "二つ目の段落");
+    expect(chipText()).toContain("選択範囲");
+    await click(button("工程とスキルを開く"));
+    await click([...container!.querySelectorAll<HTMLButtonElement>(".es-ai-menu-row")].find((item) => item.textContent?.includes("文字起こし修正"))!);
+    expect(chipText()).toContain("文字起こし修正");
+    expect(chipText()).not.toContain("選択範囲");
+  });
+
+  it("Mac の CLI へは、選んだ文字を context に、範囲の言い方を指示に添え、書き戻しにも選択範囲を付ける", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const aiTurn = vi.fn(async (turnId: string, request: Record<string, unknown>) => {
+      void turnId;
+      void request;
+      return {
+        finalEvent: {
+          type: "Done" as const,
+          text: "CLI の返答",
+          stop_reason: "EndTurn" as const,
+          session_id: "resume-one",
+          usage: { input_tokens: 1, output_tokens: 1, cost_usd: null, model_used: "gpt-5", cost_known: false },
+          duration_ms: 1,
+          continuations: 0,
+        },
+        page: null,
+        pageRemoved: false,
+        extraFiles: 0,
+      };
+    });
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-5"], effort: true, resume: true }]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    const server = defaultServer();
+    const target = openEditor();
+    await renderWith(target);
+    await until(() => enginePill()?.textContent?.includes("Codex CLI") ?? false);
+    await select(target, "二つ目の段落です。");
+    setValue("短くして");
+    await press("Enter");
+    await until(() => server.calls.some((call) => call.url.endsWith("/ai/chat/turns")));
+    const request = aiTurn.mock.calls[0]![1] as { instruction: string; context?: { name: string; markdown: string }[] };
+    expect(request.instruction).toContain("第 2 段落");
+    expect(request.instruction).toContain("範囲の外は 1 字も変えないでください");
+    expect(request.context).toEqual([{ name: "selection", title: "選択範囲", markdown: "二つ目の段落です。" }]);
+    expect(server.calls.find((call) => call.url.endsWith("/ai/chat/turns"))?.body.selection).toEqual({ startParagraph: 2, endParagraph: 2, revision: 1, chars: 9, text: "二つ目の段落です。" });
+    expect(chipText()).toBe("");
   });
 });
