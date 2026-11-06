@@ -163,6 +163,14 @@ load_deploy_env() {
   # Both go into --set-env-vars (comma-separated): refuse anything that could add another variable.
   [[ "$AI_MODEL" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || die "AI_MODEL in $DEPLOY_ENV is not a model name"
   [[ "$AI_MONTHLY_LIMIT_USD" =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "AI_MONTHLY_LIMIT_USD in $DEPLOY_ENV is not a non-negative number"
+  # The output cap of one model call (tokens, thinking included; EDITOR_AI_MAX_TOKENS). Empty means 32000, the most the app
+  # accepts (MAX_MAX_TOKENS in apps/editor-web/src/ai/anthropic.ts), because the app's own default (12000) cuts the
+  # "軽量" profile (32000) short and a long transcript then needs many continuations (#276). The app clamps a value outside
+  # 256..32000 without a word, so a typo would silently change the cap: refuse it here instead.
+  AI_MAX_TOKENS="${AI_MAX_TOKENS:-32000}"
+  # 3 to 5 digits with no leading zero: bash reads `032000` as octal, and a very long number would wrap around.
+  [[ "$AI_MAX_TOKENS" =~ ^[1-9][0-9]{2,4}$ ]] || die "AI_MAX_TOKENS in $DEPLOY_ENV must be empty or a whole number of tokens"
+  (( AI_MAX_TOKENS >= 256 && AI_MAX_TOKENS <= 32000 )) || die "AI_MAX_TOKENS in $DEPLOY_ENV must be between 256 and 32000 tokens"
   # Steps (#37): off unless STEPS_MODE=cloud-tasks (docs/ops/editor-deploy.md §11).
   STEPS_MODE="${STEPS_MODE:-}"
   [[ -z "$STEPS_MODE" || "$STEPS_MODE" == cloud-tasks ]] || die "STEPS_MODE must be empty or cloud-tasks in $DEPLOY_ENV"
@@ -302,8 +310,8 @@ service_env_vars() {
       "$ENV_SEP" "$GOOGLE_OAUTH_CLIENT_ID" "$ENV_SEP" "$GOOGLE_ALLOWED_EMAILS"
   fi
   if [[ "${1:-0}" == 1 ]]; then
-    printf '%sEDITOR_AI_MODE=anthropic%sEDITOR_AI_MODEL=%s%sEDITOR_AI_MONTHLY_LIMIT_USD=%s' \
-      "$ENV_SEP" "$ENV_SEP" "$AI_MODEL" "$ENV_SEP" "$AI_MONTHLY_LIMIT_USD"
+    printf '%sEDITOR_AI_MODE=anthropic%sEDITOR_AI_MODEL=%s%sEDITOR_AI_MONTHLY_LIMIT_USD=%s%sEDITOR_AI_MAX_TOKENS=%s' \
+      "$ENV_SEP" "$ENV_SEP" "$AI_MODEL" "$ENV_SEP" "$AI_MONTHLY_LIMIT_USD" "$ENV_SEP" "$AI_MAX_TOKENS"
   fi
   if [[ "${2:-0}" == 1 ]]; then
     printf '%sEDITOR_TRANSCRIBE_ENGINE=deepgram' "$ENV_SEP"
@@ -352,15 +360,26 @@ transcribe_env_vars() {
 # be longer than the engine's own timeout: the engine stops first and the run ends as engine_timeout, instead of Cloud Run
 # cutting the request while the run stays `running` until the sweep. The margin is the one the task's dispatchDeadline uses
 # (DISPATCH_MARGIN_SECONDS in apps/editor-web/src/transcription/cloud-tasks.ts).
+# The steps (#37) are the same shape: one step runs inside one request of the worker route, and the AI call is cut after
+# MAX_STEP_GENERATION_MS (24 minutes: apps/editor-web/src/steps/ai-executor.ts). A shorter request would be cut by Cloud Run
+# before the step's own budget ends, and the work would stay `running` until the sweep (#276). With the margin the request
+# (1560 seconds) still fits in the task's own deadline (1800 seconds: DISPATCH_DEADLINE_SECONDS in
+# apps/editor-web/src/steps/cloud-tasks.ts) and in Cloud Run's limit.
 SERVICE_TIMEOUT_BASE_SEC=300
 TRANSCRIBE_TIMEOUT_DEFAULT_SEC=1200
 TRANSCRIBE_TIMEOUT_MARGIN_SEC=120
+STEPS_GENERATION_BUDGET_SEC=1440
+STEPS_TIMEOUT_MARGIN_SEC=120
 CLOUD_RUN_TIMEOUT_MAX_SEC=3600
 service_request_timeout() {
   local seconds=$SERVICE_TIMEOUT_BASE_SEC
   if [[ "$TRANSCRIBE_MODE" == cloud-tasks ]]; then
     local wanted=$(( ${TRANSCRIBE_TIMEOUT_SEC:-$TRANSCRIBE_TIMEOUT_DEFAULT_SEC} + TRANSCRIBE_TIMEOUT_MARGIN_SEC ))
     if (( wanted > seconds )); then seconds=$wanted; fi
+  fi
+  if [[ "$STEPS_MODE" == cloud-tasks ]]; then
+    local steps_wanted=$(( STEPS_GENERATION_BUDGET_SEC + STEPS_TIMEOUT_MARGIN_SEC ))
+    if (( steps_wanted > seconds )); then seconds=$steps_wanted; fi
   fi
   if (( seconds > CLOUD_RUN_TIMEOUT_MAX_SEC )); then seconds=$CLOUD_RUN_TIMEOUT_MAX_SEC; fi
   printf '%s' "$seconds"

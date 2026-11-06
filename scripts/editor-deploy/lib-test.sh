@@ -73,7 +73,7 @@ check "secrets with AI: the database URL stays" "$(service_secrets 1)" \
   "DATABASE_URL=niho-editor-database-url:latest,ANTHROPIC_API_KEY=niho-editor-anthropic-key:latest"
 check "env without AI: no EDITOR_AI_*" "$(service_env_vars 0)" "$base_env"
 check "env with AI" "$(service_env_vars 1)" \
-  "$base_env,EDITOR_AI_MODE=anthropic,EDITOR_AI_MODEL=claude-sonnet-5-5,EDITOR_AI_MONTHLY_LIMIT_USD=10"
+  "$base_env,EDITOR_AI_MODE=anthropic,EDITOR_AI_MODEL=claude-sonnet-5-5,EDITOR_AI_MONTHLY_LIMIT_USD=10,EDITOR_AI_MAX_TOKENS=32000"
 
 # The storage mode is not a switch: unset means `off` in production, so every deploy passes gcs.
 case "$(service_env_vars 0)" in *EDITOR_STORAGE=gcs*) check "storage is always gcs" ok ok ;; *) check "storage is always gcs" missing ok ;; esac
@@ -101,10 +101,11 @@ check "env without gemini ignores the model" "$(GEMINI_MODEL=gemini-3.1-pro-prev
 # The example's own AI lines, and overrides.
 DEPLOY_ENV="$dir/deploy.env.example" load_deploy_env
 check "example AI_MODEL" "$AI_MODEL" "claude-sonnet-5-5"
-printf 'AI_MODEL=claude-opus-5-5\nAI_MONTHLY_LIMIT_USD=2.5\n' >> "$tmp/deploy.env"
+check "example AI_MAX_TOKENS" "$AI_MAX_TOKENS" "32000"
+printf 'AI_MODEL=claude-opus-5-5\nAI_MONTHLY_LIMIT_USD=2.5\nAI_MAX_TOKENS=16000\n' >> "$tmp/deploy.env"
 load_deploy_env
 check "env with overridden AI settings" "$(service_env_vars 1)" \
-  "$base_env,EDITOR_AI_MODE=anthropic,EDITOR_AI_MODEL=claude-opus-5-5,EDITOR_AI_MONTHLY_LIMIT_USD=2.5"
+  "$base_env,EDITOR_AI_MODE=anthropic,EDITOR_AI_MODEL=claude-opus-5-5,EDITOR_AI_MONTHLY_LIMIT_USD=2.5,EDITOR_AI_MAX_TOKENS=16000"
 
 # Values that would add another variable to --set-env-vars (or are not what they claim) stop load_deploy_env.
 refused() {
@@ -116,6 +117,17 @@ check "AI_MODEL with a comma is refused" "$(refused 'AI_MODEL=claude,EDITOR_AUTH
 check "AI_MODEL in capitals is refused" "$(refused 'AI_MODEL=Claude')" 1
 check "a negative limit is refused" "$(refused 'AI_MONTHLY_LIMIT_USD=-1')" 1
 check "a limit that is not a number is refused" "$(refused 'AI_MONTHLY_LIMIT_USD=10,EDITOR_AI_MODE=fake')" 1
+# The app clamps EDITOR_AI_MAX_TOKENS to 256..32000 without a word, so a value outside it is refused here (#276).
+check "a token cap that is not a number is refused" "$(refused 'AI_MAX_TOKENS=32k')" 1
+check "a token cap with a comma is refused" "$(refused 'AI_MAX_TOKENS=12000,EDITOR_AI_MODE=fake')" 1
+check "a negative token cap is refused" "$(refused 'AI_MAX_TOKENS=-1')" 1
+check "a token cap below 256 is refused" "$(refused 'AI_MAX_TOKENS=255')" 1
+check "a token cap with a leading zero is refused (bash would read it as octal)" "$(refused 'AI_MAX_TOKENS=032000')" 1
+check "a token cap that is far too long is refused" "$(refused 'AI_MAX_TOKENS=99999999999999999999')" 1
+check "a token cap above 32000 is refused" "$(refused 'AI_MAX_TOKENS=32001')" 1
+check "the lowest accepted token cap" "$(refused 'AI_MAX_TOKENS=256')" 0
+check "the highest accepted token cap" "$(refused 'AI_MAX_TOKENS=32000')" 0
+check "an empty token cap is accepted (the default applies)" "$(refused 'AI_MAX_TOKENS=')" 0
 check "a valid API domain is accepted" "$(refused 'PUBLIC_API_DOMAIN=api.editor.example.com')" 0
 check "an API domain URL is refused" "$(refused 'PUBLIC_API_DOMAIN=https://api.editor.example.com')" 1
 check "an API domain path is refused" "$(refused 'PUBLIC_API_DOMAIN=api.editor.example.com/v1')" 1
@@ -173,13 +185,13 @@ check "the newest google secret version disabled" "$(ready_google)" 0
 google_client="synthetic-client.apps.googleusercontent.com"
 google_list="owner@example.test,owner.second@example.invalid"
 grep -v '^AI_\|^GOOGLE_\|^EDITOR_AUTH_MODE' "$dir/deploy.env.example" > "$tmp/google.env"
-printf 'EDITOR_AUTH_MODE=google\nGOOGLE_OAUTH_CLIENT_ID=%s\nGOOGLE_ALLOWED_EMAILS=%s\nAI_MODEL=claude-sonnet-5-5\nAI_MONTHLY_LIMIT_USD=10\n' \
+printf 'EDITOR_AUTH_MODE=google\nGOOGLE_OAUTH_CLIENT_ID=%s\nGOOGLE_ALLOWED_EMAILS=%s\nAI_MODEL=claude-sonnet-5-5\nAI_MONTHLY_LIMIT_USD=10\nAI_MAX_TOKENS=32000\n' \
   "$google_client" "$google_list" >> "$tmp/google.env"
 DEPLOY_ENV="$tmp/google.env" load_deploy_env
 google_env="^|^EDITOR_AUTH_MODE=google|EDITOR_ORIGIN=https://editor.example.com|EDITOR_STORAGE=gcs|EDITOR_ASSETS_BUCKET=my-gcp-project-editor-assets|EDITOR_GOOGLE_CLIENT_ID=$google_client|EDITOR_GOOGLE_ALLOWED_EMAILS=$google_list"
 check "google: the client id and the allowlist go in, with the allowlist's commas kept" "$(service_env_vars 0 0)" "$google_env"
 check "google: AI and the transcription engine use the same delimiter" "$(service_env_vars 1 1)" \
-  "$google_env|EDITOR_AI_MODE=anthropic|EDITOR_AI_MODEL=claude-sonnet-5-5|EDITOR_AI_MONTHLY_LIMIT_USD=10|EDITOR_TRANSCRIBE_ENGINE=deepgram"
+  "$google_env|EDITOR_AI_MODE=anthropic|EDITOR_AI_MODEL=claude-sonnet-5-5|EDITOR_AI_MONTHLY_LIMIT_USD=10|EDITOR_AI_MAX_TOKENS=32000|EDITOR_TRANSCRIBE_ENGINE=deepgram"
 
 # The queues' variables follow the delimiter too (the project number comes from the stub).
 gcp() {
@@ -200,6 +212,32 @@ printf 'STEPS_MODE=cloud-tasks\nTRANSCRIBE_MODE=cloud-tasks\n' >> "$tmp/niho-que
 DEPLOY_ENV="$tmp/niho-queues.env" load_deploy_env
 check "niho: the transcription queue keeps the comma form" "$(transcribe_env_vars)" \
   ",EDITOR_TRANSCRIBE_MODE=cloud-tasks,EDITOR_TRANSCRIBE_QUEUE=projects/my-gcp-project/locations/asia-northeast1/queues/niho-editor-transcribe,EDITOR_TRANSCRIBE_WORKER_URL=$worker_url,EDITOR_TRANSCRIBE_INVOKER_SA=niho-editor-tasks@my-gcp-project.iam.gserviceaccount.com"
+
+# The request timeout of the web service (--timeout). The steps run one whole step inside one request of the worker route
+# and cut the AI call after 24 minutes, so with them on the request has to outlast that (#276); the transcription needs its
+# own time out plus 2 minutes. The longer one wins, and Cloud Run's 3600 seconds is the ceiling.
+timeout_with() {
+  cp "$tmp/niho.env" "$tmp/timeout-modes.env"
+  local line
+  for line in "$@"; do printf '%s\n' "$line" >> "$tmp/timeout-modes.env"; done
+  (DEPLOY_ENV="$tmp/timeout-modes.env" load_deploy_env; service_request_timeout)
+}
+check "request timeout with neither queue" "$(timeout_with)" "300"
+check "request timeout with the steps" "$(timeout_with 'STEPS_MODE=cloud-tasks')" "1560"
+check "request timeout with the transcription (default 20 minutes)" "$(timeout_with 'TRANSCRIBE_MODE=cloud-tasks')" "1320"
+check "request timeout with both: the steps are longer" "$(timeout_with 'STEPS_MODE=cloud-tasks' 'TRANSCRIBE_MODE=cloud-tasks')" "1560"
+check "request timeout with both: a long transcription is longer" \
+  "$(timeout_with 'STEPS_MODE=cloud-tasks' 'TRANSCRIBE_MODE=cloud-tasks' 'TRANSCRIBE_TIMEOUT_SEC=3300')" "3420"
+check "request timeout with a short transcription and the steps" \
+  "$(timeout_with 'STEPS_MODE=cloud-tasks' 'TRANSCRIBE_MODE=cloud-tasks' 'TRANSCRIBE_TIMEOUT_SEC=600')" "1560"
+
+# The two numbers above come from the app. A drift would bring the old hole back (a request that Cloud Run cuts before the
+# step's own budget ends, or a task deadline shorter than the request), so read them from the source and compare.
+app_steps_dir="$dir/../../apps/editor-web/src/steps"
+app_budget_ms="$(sed -n 's/^export const MAX_STEP_GENERATION_MS = \(.*\);$/\1/p' "$app_steps_dir/ai-executor.ts")"
+app_task_deadline_sec="$(sed -n 's/^export const DISPATCH_DEADLINE_SECONDS = \([0-9]*\);$/\1/p' "$app_steps_dir/cloud-tasks.ts")"
+check "the steps' budget in lib.sh is the app's MAX_STEP_GENERATION_MS" "$(( STEPS_GENERATION_BUDGET_SEC * 1000 ))" "$(( app_budget_ms ))"
+check "the steps' request fits in the task's own deadline" "$(( $(timeout_with 'STEPS_MODE=cloud-tasks') <= ${app_task_deadline_sec:-0} ? 1 : 0 ))" "1"
 
 # What load_deploy_env refuses for the login. Every value is written quoted, so a value with a space or a '|' is tested
 # as a value and not run by the shell that sources the file, and both google variables start empty on every case.
