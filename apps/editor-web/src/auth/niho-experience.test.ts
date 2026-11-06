@@ -168,6 +168,23 @@ describe("NIHO Experience editor auth", () => {
     }
   });
 
+  it("reads back the longest display name the login accepts (200 four-byte characters)", async () => {
+    // 200 絵文字 = UTF-8 で 800 バイト = base64url で 1067 文字（読み取り側が 1024 までだと、保存した名前を読めなかった）
+    const longest = "😀".repeat(200);
+    const auth = provider(exchangeFetch(longest), loginRandomValues());
+    const started = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start`), returnTo: "/" });
+    const cookies = (await auth.completeLogin(formPost(EDITOR, pendingCookie(started)))).headers.getSetCookie();
+    const name = cookiePair(cookies, EXPERIENCE_EDITOR_NAME_COOKIE);
+    expect(name).toBeDefined();
+    const session = await auth.getSession({ headers: new Headers({ cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}; ${name}` }) });
+    expect(session?.profile).toEqual({ name: longest });
+    // 201 文字は、保存の側が名前なしにする（クッキーを書かない）
+    const tooLong = provider(exchangeFetch("😀".repeat(201)), loginRandomValues());
+    const again = await tooLong.beginLogin({ request: new Request(`${EDITOR}/auth/login/start`), returnTo: "/" });
+    const clearing = (await tooLong.completeLogin(formPost(EDITOR, pendingCookie(again)))).headers.getSetCookie();
+    expect(clearing).toContain(`${EXPERIENCE_EDITOR_NAME_COOKIE}=; Max-Age=0; HttpOnly; Secure; SameSite=Lax; Path=/`);
+  });
+
   it("clears a previous name when NIHO returns no display name", async () => {
     const auth = provider(exchangeFetch(null), loginRandomValues());
     const started = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start`), returnTo: "/" });

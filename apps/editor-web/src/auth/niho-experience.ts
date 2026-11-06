@@ -43,6 +43,8 @@ const TOKEN_RE = /^[A-Za-z0-9._~-]{32,8192}$/;
 const API_KEY_RE = /^[A-Za-z0-9_-]{20,128}$/;
 const MAX_DISPLAY_NAME_CHARS = 200;
 const BASE64URL_RE = /^[A-Za-z0-9_-]{1,1024}$/;
+// The name part is read back with the limit the writer allows: 200 code points of up to 4 UTF-8 bytes each, as unpadded base64url.
+const NAME_BASE64URL_RE = new RegExp(`^[A-Za-z0-9_-]{1,${Math.ceil((MAX_DISPLAY_NAME_CHARS * 4 * 4) / 3)}}$`);
 
 type Env = Readonly<Record<string, string | undefined>>;
 type Pending = { state: string; verifier: string; returnTo: string; expiresAt: number };
@@ -132,7 +134,7 @@ function nameFromCookie(header: string | null, userId: string): string | null {
   if (hasDuplicateCookie(header, EXPERIENCE_EDITOR_NAME_COOKIE)) return null;
   const raw = cookieValue(header, EXPERIENCE_EDITOR_NAME_COOKIE);
   const [encodedUser, encodedName, extra] = raw?.split(".") ?? [];
-  if (extra !== undefined || !encodedUser || !encodedName || !BASE64URL_RE.test(encodedUser) || !BASE64URL_RE.test(encodedName)) return null;
+  if (extra !== undefined || !encodedUser || !encodedName || !BASE64URL_RE.test(encodedUser) || !NAME_BASE64URL_RE.test(encodedName)) return null;
   if (Buffer.from(encodedUser, "base64url").toString("utf8") !== userId) return null;
   return displayNameOf(Buffer.from(encodedName, "base64url").toString("utf8"));
 }
