@@ -1083,15 +1083,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // 枠のシートとページの情報は、開いたときのページでだけ出す（ページが替わったら出さない）
   const sheetFor = frameSheet && railSummary && frameSheet.id === railSummary.id ? frameSheet.kind : null;
   const infoOpen = railSummary !== undefined && infoFor === railSummary.id;
-  // 文書ガイド（開いているページの手順の最新の run の写し。別のページの帯が残っているときは出さない）
-  const aiGuide = aiSteps && railSummary && aiSteps.ownerId === railSummary.id ? aiSteps.guide : null;
-  // AI の欄の「読むもの」（このページ・この録音について・文書ガイド・元の録音・同じフォルダの N ページ）
-  const aiReads = useMemo(() => {
-    if (!railSummary || railSummary.kind === "folder") return null;
-    const parent = railSummary.parent ? list.pages.find((page) => page.id === railSummary.parent) : undefined;
-    const folder = parent?.kind === "folder" ? { title: parent.title, others: list.pages.filter((page) => page.parent === parent.id && page.id !== railSummary.id).length } : null;
-    return { kind: railSummary.kind, folder, guide: aiGuide };
-  }, [railSummary, list.pages, aiGuide]);
   // フォルダを削除するときの確認の言葉（中のページの数。読み込んである分）。ヘッダーの「…」と一覧の行の「…」の両方で使う
   const folderDeleteInfo = (id: string): { title: string; count: number } | null => {
     const page = list.pages.find((item) => item.id === id);
@@ -1170,7 +1161,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 placement={narrow ? undefined : { at: layout.dockOf("ai") ?? "right", open: true, onOpenChange: noop }}
                 onClose={() => closePanel("ai")}
                 onPagesChanged={onAiPagesChanged}
-                reads={aiReads}
               />
             ) : undefined
           }

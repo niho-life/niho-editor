@@ -1384,7 +1384,7 @@ const DISCARD_RELATED_ROWS = [
   "page_recording_audios ra WHERE ra.page_id = p.id",
   "page_recording_candidates rc WHERE rc.page_id = p.id",
   "transcription_runs tr WHERE tr.page_id = p.id",
-  "ai_conversations ac WHERE ac.page_id = p.id",
+  // ai_conversations・ai_messages は利用者のもの（#312）。page_id は「始めた・開いていたページ」の印で FK でなく、ページを捨てても会話は残る（trigger が外す）
   "ai_message_changes am WHERE am.page_id = p.id",
   "page_fields pf WHERE pf.owner = p.owner AND pf.page_id = p.id",
   "page_translation_relations tl WHERE tl.source_page_id = p.id OR tl.target_page_id = p.id",

@@ -141,14 +141,16 @@ const AI_WORK_FALLBACK = "作業しています…";
 /** 書きかけの AI の発言（SSE・CLI の出来事を足していく）。`split` は次の文を新しい段落にする（道具をまたいだ）。 */
 export type AiLiveTurn = {
   input: string;
+  /** 頼んだページの題名（「◯◯ で」。無ければ null）。 */
+  at: string | null;
   paragraphs: { kind: "text" | "thinking"; text: string }[];
   work: string | null;
   workEnded: boolean;
   split: boolean;
 };
 
-export function liveTurn(input: string): AiLiveTurn {
-  return { input, paragraphs: [], work: null, workEnded: false, split: false };
+export function liveTurn(input: string, at: string | null = null): AiLiveTurn {
+  return { input, at, paragraphs: [], work: null, workEnded: false, split: false };
 }
 
 /** 出来事を書きかけの発言に足す。段落は道具の前後と、思考と返答の切り替わりで分ける。 */
@@ -241,11 +243,13 @@ function messageError(error: unknown): string {
   return code === "aiUnavailable" ? AI_BLOCKED_TEXT.aiUnavailable : AI_ERROR_TEXT[code];
 }
 
-function appendTurn(current: readonly AiChatMessage[], input: string, answer: AiChatResult): AiChatMessage[] {
+/** 1 回の依頼を会話に足す。`at` は頼んだときに開いていたページ（サーバーの記録と同じく、両方の発言に残す）。 */
+function appendTurn(current: readonly AiChatMessage[], input: string, answer: AiChatResult, at: { id: string; title: string } | null): AiChatMessage[] {
   const seq = (current.at(-1)?.seq ?? 0) + 1;
+  const page = at ? { pageId: at.id, pageTitle: at.title } : { pageId: null, pageTitle: null };
   return [
     ...current,
-    { id: `ask-${seq}`, seq, role: "user", text: input, preset: null, hasProposal: false, version: null, result: null, items: [], changes: [] },
+    { id: `ask-${seq}`, seq, role: "user", text: input, preset: null, hasProposal: false, version: null, result: null, items: [], changes: [], ...page },
     {
       id: answer.conversation?.messageId ?? `result-${seq + 1}`,
       seq: seq + 1,
@@ -257,6 +261,7 @@ function appendTurn(current: readonly AiChatMessage[], input: string, answer: Ai
       result: answer.result,
       items: answer.items,
       changes: answer.changes,
+      ...page,
     },
   ];
 }
@@ -291,35 +296,14 @@ export type AiPanelProps = {
   placement?: AiPanelPlacement;
   /** AI がページを書き換えた・元に戻した（右に並べたページを読み直すため）。直したページの id。 */
   onPagesChanged?: (pageIds: readonly string[]) => void;
-  /** 入力欄の上の「読むもの」（このページ・この録音について・文書ガイド・元の録音・同じフォルダの N ページ）。無ければ出さない。 */
-  reads?: AiReads | null;
 };
 
 /**
- * AI が読むもの（モック editor-folders-v1 の「読むもの」）。録音ページは「この録音について」、工程のサブページは元の録音と
- * ほかの段階、同じフォルダの直下に自分以外のページがあれば「◯◯ の N ページ」（参考として自動で読まれる）。
+ * 「AIと作る」の常設の AI（アプリ全体で 1 つ。#312）。パネルを閉じても EditorShell が unmount しないため draft と実行状態を保つ。
+ * ページ（タブ）を移っても会話・送信待ち・CLI session・書きかけは残る（捨てるのは「新しい会話」のときだけ）。
+ * 依頼は今開いているページで頼み（`/api/pages/{今のページ}/ai/chat`）、発言にそのページが残る（「◯◯ で」）。
  */
-export type AiReads = {
-  kind: "note" | "rec" | "step" | "article" | "page";
-  folder: { title: string; others: number } | null;
-  /** 最新の run に文書ガイドがあれば、その手順の名前。チャットの指示に文書ガイドが入るときだけ札を出す（無ければ null）。 */
-  guide?: string | null;
-};
-
-/** 「読むもの」の札（文字で出す。色だけにしない）。 */
-export function aiReadsTags(reads: AiReads): { icon: "doc" | "mic" | "spark" | "folder"; text: string }[] {
-  const tags: { icon: "doc" | "mic" | "spark" | "folder"; text: string }[] = [{ icon: "doc", text: "このページ" }];
-  // 録音ページと、録音の下の段階のページ（記事本文など）には、録音の欄（この録音について）が指示に入る
-  if (reads.kind === "rec" || reads.kind === "step") tags.push({ icon: "mic", text: "この録音について" });
-  if (reads.kind === "step") tags.push({ icon: "mic", text: "元の録音" }, { icon: "spark", text: "ほかの段階 · 読むだけ" });
-  // 文書ガイド（手順の run の写し）。無いものは出さない（執筆だけのページには出ない）
-  if ((reads.kind === "rec" || reads.kind === "step") && reads.guide) tags.push({ icon: "doc", text: `文書ガイド（${reads.guide}）` });
-  if (reads.kind !== "step" && reads.folder && reads.folder.others > 0) tags.push({ icon: "folder", text: `${reads.folder.title || "無題"} の ${reads.folder.others} ページ` });
-  return tags;
-}
-
-/** 右レール下半分の常設 AI。レールを閉じても EditorShell が unmount しないため draft と実行状態を保つ。 */
-export function AiPanel({ pageId, context, steps, placement, onPagesChanged, reads = null }: AiPanelProps) {
+export function AiPanel({ pageId, context, steps, placement, onPagesChanged }: AiPanelProps) {
   const [thread, setThread] = useState<AiChatMessage[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<AiChatSummary[]>([]);
@@ -367,13 +351,25 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
   const editedRef = useRef(false);
   const diffForRef = useRef<{ messageId: string; pageId: string } | null>(null);
   const lastDiffRef = useRef<AiDiffState | null>(null);
-  // 依頼の途中で置き場所・右のページが替わっても、終わったときの今の値に知らせる
+  // 依頼の途中で置き場所・右のページ・開いているページが替わっても、終わったときの今の値に知らせる・載せ替える
   const placementRef = useRef(placement);
   const pagesChangedRef = useRef(onPagesChanged);
+  const pageRef = useRef(pageId);
+  const contextRef = useRef(context);
   useEffect(() => {
     placementRef.current = placement;
     pagesChangedRef.current = onPagesChanged;
+    pageRef.current = pageId;
+    contextRef.current = context;
   });
+  /**
+   * 依頼で変わった本文を、頼んだページ（`turnPage`）をまだ開いているときだけ載せ替える
+   * （別のページへ移っていたら載せ替えない。そのページは開き直したときにサーバーから読む）。
+   */
+  const replaceIfOpen = async (page: NonNullable<AiChatResult["page"]>, options: { saved: boolean }, turnPage: string | null) => {
+    const now = contextRef.current;
+    if (now && turnPage !== null && turnPage === pageRef.current) await now.bridge.replace(page, options);
+  };
   const floating = placement?.at === "float";
   const floatBar = floating && !placement.open;
   /** 浮かせて 1 行にしているときは、送ったら上へ広げて返答を見せる。 */
@@ -444,45 +440,44 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     });
   }, [diff]);
 
-  // ページ/owner が替わったら古い要求を止め、古い会話・undo・CLI session を新ページへ混ぜない。
+  // ページ（タブ）を移っても会話は続く（#312）: thread・会話の id・送信待ち・CLI session・書きかけ・進行中の依頼は保つ。
+  // ページに属するもの（選んだ工程・「変更を見る」の行・開いているメニュー）だけ閉じる
   useEffect(() => {
-    const generation = ++generationRef.current;
-    controllerRef.current?.abort();
-    sessionControllerRef.current?.abort();
-    flightRef.current = false;
-    // owner の変更は、同じ URL の reopen でも古い返信を混ぜないため state も同時に切り離す。
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- external owner identity changed
-    setThread([]);
-    setConversationId(null);
-    setSessions([]);
-    setText("");
-    // 待ちは開いていたページの指示。別のページへ持ち越さない
-    queueRef.current = [];
-    setQueue([]);
-    setQueueOpen(false);
-    setCountdown(false);
+    editedRef.current = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the page the panel is attached to changed
     setSelectedStep(null);
-    setStatus("");
-    setSessionError(null);
-    setFailedSessionId(null);
-    setNearLimit(false);
-    setBusy(null);
-    setResumeSession(null);
     setHistoryOpen(false);
     setMenuOpen(false);
-    setLive(null);
+    setEngineOpen(false);
     setDiffFor(null);
     diffForRef.current = null;
-    setRevertedNotes({});
-    if (!pageId || !context?.bridge) {
-      setHistoryState("idle");
-      setSessionLoading(false);
-      return;
-    }
+  }, [pageId, context?.bridge]);
+
+  // 外れるときだけ、進行中の要求を止める
+  useEffect(
+    () => () => {
+      generationRef.current += 1;
+      controllerRef.current?.abort();
+      sessionControllerRef.current?.abort();
+    },
+    [],
+  );
+
+  // 会話の履歴は利用者のもの。最初に（と「再試行」で）いちばん新しい会話を開く。ページが無い間（下書きを読んでいる・作る前）は待ち、
+  // ページが決まってから読む。読んでいる途中でページが替わったら、次のページで読み直す。読み終えたあとは、ページを移っても
+  // 読み直さない（履歴で選んだ会話・「新しい会話」の下書きをそのまま続ける）
+  const loadedForRef = useRef(-1);
+  useEffect(() => {
+    if (!pageId || !context?.bridge || loadedForRef.current === retry) return;
+    loadedForRef.current = retry;
+    const generation = generationRef.current;
     const controller = new AbortController();
     sessionControllerRef.current = controller;
+    // 読み終えた（成功・失敗・ほかの操作での中断のどれでも）。cleanup で「読んでいる途中にページが替わった」と見分ける
+    let settled = false;
     setHistoryState("loading");
     setSessionLoading(true);
+    setHistoryOpen(false);
     void (async () => {
       try {
         const listed = await listAiChats(pageId, { signal: controller.signal });
@@ -501,14 +496,15 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
         setHistoryState("error");
         setStatus(`会話履歴を読み込めませんでした。${messageError(error)}`);
       } finally {
-        if (generationRef.current === generation) setSessionLoading(false);
+        settled = true;
+        if (generationRef.current === generation && !controller.signal.aborted) setSessionLoading(false);
       }
     })();
     return () => {
-      generationRef.current = generation + 1;
+      // 読み終える前にページが替わった（か外れた）: 次のページで読み直す。読み終えていれば今の会話のまま
+      if (settled || controller.signal.aborted) return;
       controller.abort();
-      controllerRef.current?.abort();
-      sessionControllerRef.current?.abort();
+      if (loadedForRef.current === retry) loadedForRef.current = -1;
     };
   }, [pageId, context?.bridge, retry]);
 
@@ -735,15 +731,16 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     }
   };
 
-  const fail = useCallback(async (error: unknown, generation: number) => {
+  /** 依頼の失敗。`turnPage` は頼んだページ（版の競合で届いた今の本文は、そのページを開いているときだけ載せ替える）。 */
+  const fail = async (error: unknown, generation: number, turnPage: string | null) => {
     if (generation !== generationRef.current) return;
     if (error instanceof AiConflictError) {
       setStatus("ページが更新されました。もう一度お試しください");
-      await context?.bridge.replace(error.page, { saved: false });
+      await replaceIfOpen(error.page, { saved: false }, turnPage);
       return;
     }
     setStatus(messageError(error));
-  }, [context?.bridge]);
+  };
 
   /** 通常の依頼と会話の要約は、利用者が選んだ同じ実行先・保存経路を使う。 */
   const executeChat = async (
@@ -852,7 +849,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     setStatus("");
     if (fromBox) setText("");
     if (pick) context.editor?.commands.clearAiSelection();
-    setLive(liveTurn(value));
+    setLive(liveTurn(value, context.title));
     // 書きかけの発言へ途中の文・道具を足す（別のページへ移ったあとの出来事は捨てる）
     const onEvent = (event: AiChatEvent) => {
       if (generation === generationRef.current && !controller.signal.aborted) setLive((current) => current && addLiveEvent(current, event));
@@ -878,7 +875,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
       if (!executed || generation !== generationRef.current) return;
       const { answer, nextResume } = executed;
       if (native && macRoute !== "server" && !answer.conversation) {
-        if (answer.page) await context.bridge.replace(answer.page, { saved: true });
+        if (answer.page) await replaceIfOpen(answer.page, { saved: true }, target.pageId);
         setConversationId(null);
         setResumeSession(null);
         setThread([]);
@@ -889,10 +886,10 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
       setNearLimit(answer.usage.nearLimit);
       setConversationId(answer.conversation?.id ?? null);
       if (native && macRoute !== "server") setResumeSession(nextResume);
-      setThread((current) => appendTurn(current, value, answer));
+      setThread((current) => appendTurn(current, value, answer, { id: target.pageId, title: context.title }));
       recorded = true;
       pagesChanged(answer.changes.map((change) => change.pageId));
-      if (answer.page) await context.bridge.replace(answer.page, { saved: true });
+      if (answer.page) await replaceIfOpen(answer.page, { saved: true }, target.pageId);
       if (generation !== generationRef.current) return;
       setStatus(answer.resultCode === "revision_conflict" ? "ページが更新されました。もう一度お試しください" :
         native && macRoute !== "server" && answer.resultCode === "write_refused" ? (sent ? AI_TEXT.nativeRefusedSelection : AI_TEXT.nativeRefused) :
@@ -903,7 +900,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
         setSessions((current) => [summary, ...current.filter((item) => item.id !== summary.id)]);
       }
     } catch (error) {
-      await fail(error, generation);
+      await fail(error, generation, pageId);
     } finally {
       if (controllerRef.current === controller) controllerRef.current = null;
       if (generation === generationRef.current) {
@@ -952,16 +949,16 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
       const { answer } = executed;
       setNearLimit(answer.usage.nearLimit);
       if (native && macRoute !== "server" && !answer.conversation) {
-        if (answer.page) await context.bridge.replace(answer.page, { saved: true });
+        if (answer.page) await replaceIfOpen(answer.page, { saved: true }, target.pageId);
         if (generation !== generationRef.current) return;
         setText(keptDraft);
         setStatus(answer.page ? AI_TEXT.nativeHistoryMissing : AI_TEXT.nativeReplyMissing);
         return;
       }
       if (answer.page || answer.changes.length > 0) {
-        setThread((current) => appendTurn(current, COMPACT_PROMPT, answer));
+        setThread((current) => appendTurn(current, COMPACT_PROMPT, answer, { id: target.pageId, title: context.title }));
         pagesChanged(answer.changes.map((change) => change.pageId));
-        if (answer.page) await context.bridge.replace(answer.page, { saved: true });
+        if (answer.page) await replaceIfOpen(answer.page, { saved: true }, target.pageId);
         if (generation !== generationRef.current) return;
         setText(keptDraft);
         setStatus("本文の変更を伴ったため、会話は軽量化しませんでした。変更内容を確認し、必要なら元に戻してください。");
@@ -989,7 +986,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     } catch (error) {
       if (generation !== generationRef.current) return;
       setText(keptDraft);
-      await fail(error, generation);
+      await fail(error, generation, pageId);
     } finally {
       if (controllerRef.current === controller) controllerRef.current = null;
       if (generation === generationRef.current) {
@@ -1016,7 +1013,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
       if (controller.signal.aborted || target.pageId !== pageId || generation !== generationRef.current) return;
       const answer = await undoAiChat(target.pageId, messageId, { signal: controller.signal });
       if (generation !== generationRef.current) return;
-      if (answer.page) await context.bridge.replace(answer.page, { saved: true });
+      if (answer.page) await replaceIfOpen(answer.page, { saved: true }, target.pageId);
       if (generation !== generationRef.current) return;
       setThread((current) => current.map((item) => item.id === messageId
         ? { ...item, changes: item.changes.map((change) => answer.undone.includes(change.pageId) ? { ...change, undoneAt: new Date().toISOString() } : change) }
@@ -1024,7 +1021,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
       setStatus(answer.undone.length > 0 ? AI_TEXT.undone : AI_TEXT.undoKept);
       pagesChanged(answer.undone);
     } catch (error) {
-      await fail(error, generation);
+      await fail(error, generation, pageId);
     } finally {
       if (controllerRef.current === controller) controllerRef.current = null;
       if (generation === generationRef.current) {
@@ -1110,7 +1107,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
       if (result.ok) setSelectedStep(null);
       // 工程は保存したページから実行する。入力中の文章は次の依頼に残す。
     } catch (error) {
-      await fail(error, generation);
+      await fail(error, generation, pageId);
     } finally {
       if (controllerRef.current === controller) controllerRef.current = null;
       if (generation === generationRef.current) {
@@ -1305,7 +1302,15 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
         )}
         <div ref={threadRef} className="es-ai-thread" role="log" aria-label="AIとの会話" aria-live="polite">
           {thread.map((message) => message.role === "user" ? (
-            <div key={message.id} className="es-ai-message es-ai-message--user">{message.text}</div>
+            <div key={message.id} className="es-ai-message es-ai-message--user">
+              {message.pageTitle !== null && (
+                <span className="es-ai-at">
+                  <Icon name="doc" />
+                  {message.pageTitle || "無題"} で
+                </span>
+              )}
+              {message.text}
+            </div>
           ) : (
             <div key={message.id} className="es-ai-message es-ai-message--assistant">
               {message.items.map((item, index) => item.kind === "narration" && item.text.trim() ? <p key={index}>{item.text}</p> : null)}
@@ -1328,7 +1333,15 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
           ))}
           {live && (
             <>
-              <div className="es-ai-message es-ai-message--user">{live.input}</div>
+              <div className="es-ai-message es-ai-message--user">
+                {live.at !== null && (
+                  <span className="es-ai-at">
+                    <Icon name="doc" />
+                    {live.at || "無題"} で
+                  </span>
+                )}
+                {live.input}
+              </div>
               <div className="es-ai-message es-ai-message--assistant es-ai-message--live" aria-busy="true">
                 {live.paragraphs.map((paragraph, index) => <p key={index} className={paragraph.kind === "thinking" ? "es-ai-thinking" : undefined}>{paragraph.text}</p>)}
                 {live.work && <p className="es-ai-work"><span className="es-ai-spin" aria-hidden="true" />{live.work}</p>}
@@ -1339,17 +1352,6 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
           {nearLimit && <p className="es-ai-status">{AI_TEXT.nearLimit}</p>}
         </div>
         <div className="es-ai-composer">
-          {reads && (
-            <div className="es-ai-reads" role="group" aria-label="読むもの">
-              <span>読むもの</span>
-              {aiReadsTags(reads).map((tag) => (
-                <span key={tag.text} className="es-ai-read">
-                  <Icon name={tag.icon} />
-                  {tag.text}
-                </span>
-              ))}
-            </div>
-          )}
           {selectedStep && <div className="es-ai-chip"><Icon name="play" /><span>{selectedStep.label}</span><button type="button" aria-label={`${selectedStep.label}を外す`} disabled={busy !== null} onClick={() => setSelectedStep(null)}>×</button></div>}
           {queue.length > 0 && (
             <div className="es-ai-queue" role="group" aria-label="送信待ち">

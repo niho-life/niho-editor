@@ -3,16 +3,18 @@ import { isPageId } from "./store.ts";
 import type { Database, OwnerId, Queryable } from "./types.ts";
 
 /**
- * AI チャット（会話）の層（表 ai_conversations・ai_messages。migration 0022）。
+ * AI チャット（会話）の層（表 ai_conversations・ai_messages。migration 0022・0025・20261107011826）。
  * 旧アプリ（packages/docs-core の conversation.ts）がファイルに持っていた会話を、サーバーの正本に置き換えたもの。
  *
- * - 会話はページに紐づき、読み書きはすべて owner とページで絞る（他人の会話・無いページはどちらも null＝同じ 404）。
+ * - 会話は**利用者（owner）に属する**（#312。ページを移っても続く）。`page_id` は始めたページを覚えるだけで、読み書きは owner と会話の id で絞る
+ *   （他人の会話・無い会話はどちらも null＝同じ 404）。ページの id を受ける口は、そのページが本人のものかを確かめるためだけに使う。
+ * - 発言には、その turn で開いていたページ（タブ）を残す（`pageId`・`pageTitle`。画面の「◯◯ で」）。消えたページは NULL。
  * - 1 回のやりとり（人の頼み → AI の提案）は 1 transaction で 2 つの発言として足す（途中の片方だけが残らない）。
  * - 採用は提案の発言に後から書く（採用した中身と、採用の前の本文が残った版の番号）。採用しなければ何も書かない。
  * - 持つのは頼んだことと提案の中身だけ（鍵・プロンプト・モデルへ送った文は持たない）。
  */
 
-/** ページの会話の一覧で返す数の上限（新しい順）。 */
+/** 利用者の会話の一覧で返す数の上限（新しい順）。 */
 export const CONVERSATION_LIST_LIMIT = 50;
 /** 1 つの会話で返す発言の数の上限（古い順。超えた分は新しいものだけを返す）。 */
 export const CONVERSATION_MESSAGE_LIMIT = 200;
@@ -27,7 +29,8 @@ export type AiMessageRole = "user" | "assistant";
 
 export type AiConversationSummary = {
   id: string;
-  pageId: string;
+  /** 始めたページ（消えていれば null）。会話はこのページに縛られない。 */
+  pageId: string | null;
   createdAt: string;
   updatedAt: string;
   /** 発言の数（人の頼みと AI の返事の合計）。 */
@@ -76,6 +79,10 @@ export type AiMessage = {
   engine: string | null;
   /** その依頼で直した・作ったページ。 */
   changes: AiMessageChange[];
+  /** その turn で開いていたページ（タブ）。古い記録・消えたページは null。 */
+  pageId: string | null;
+  /** そのページの今の題名（画面の「◯◯ で」）。ページが無ければ null。 */
+  pageTitle: string | null;
   createdAt: string;
 };
 
@@ -102,8 +109,9 @@ export type AiConversation = { conversation: AiConversationSummary; messages: Ai
 
 /** 1 回のやりとり。`request` は人が頼んだこと、`result` は AI の結果の一言とそのときの提案。 */
 export type AiTurnInput = {
+  /** 頼んだときに開いていたページ（タブ）。本人の生きているページでなければ null を返す。新しい会話はこのページで始まる。 */
   pageId: string;
-  /** 続ける会話（無ければ新しい会話を始める）。他人の会話・このページでない会話は null を返す。 */
+  /** 続ける会話（無ければ新しい会話を始める）。他人の会話・無い会話は null を返す。 */
   conversationId?: string | null;
   request: { text: string; preset?: string | null };
   result: { text: string; proposal: unknown };
@@ -140,7 +148,7 @@ export function isMessageJson(value: unknown): boolean {
   return new TextEncoder().encode(text).byteLength <= MESSAGE_JSON_MAX_BYTES;
 }
 
-type ConversationRow = { id: string; page_id: string; created_at: Date; updated_at: Date; messages: string | number; last_text: string | null };
+type ConversationRow = { id: string; page_id: string | null; created_at: Date; updated_at: Date; messages: string | number; last_text: string | null };
 type MessageRow = {
   id: string;
   seq: number;
@@ -156,6 +164,8 @@ type MessageRow = {
   result_code: string | null;
   route: AiRoute | null;
   engine: string | null;
+  page_id: string | null;
+  page_title?: string | null;
   created_at: Date;
 };
 
@@ -212,6 +222,8 @@ function toMessage(row: MessageRow, changes: readonly ChangeRow[] = []): AiMessa
     route: row.route,
     engine: row.engine,
     changes: changes.filter((change) => change.message_id === row.id).map(toChange),
+    pageId: row.page_id,
+    pageTitle: row.page_id ? (row.page_title ?? null) : null,
     createdAt: row.created_at.toISOString(),
   };
 }
@@ -221,8 +233,13 @@ const SUMMARY_SELECT = `SELECT c.id, c.page_id, c.created_at, c.updated_at,
          (SELECT m.text FROM ai_messages m WHERE m.conversation_id = c.id ORDER BY m.seq DESC LIMIT 1) AS last_text
     FROM ai_conversations c`;
 
-const MESSAGE_COLUMNS = "id, seq, role, text, preset, proposal, adopted, version, adopted_at, items, result, result_code, route, engine, created_at";
-const MESSAGE_SELECT = `SELECT ${MESSAGE_COLUMNS} FROM ai_messages`;
+const MESSAGE_COLUMNS = "id, seq, role, text, preset, proposal, adopted, version, adopted_at, items, result, result_code, route, engine, page_id, created_at";
+/** 発言と、その turn で開いていたページの今の題名（消えたページは NULL）。 */
+const MESSAGE_SELECT = `SELECT ${MESSAGE_COLUMNS.split(", ")
+  .map((column) => `m.${column}`)
+  .join(", ")}, p.title AS page_title
+    FROM ai_messages m
+    LEFT JOIN pages p ON p.id = m.page_id`;
 
 /** 発言に紐づく「直した・作ったページ」（題名は今の題名。消えたページの行は無い）。 */
 const CHANGES_SELECT = `SELECT c.message_id, c.page_id, p.title, c.change, c.version, c.revision, c.chars, c.delta, c.undone_at
@@ -234,27 +251,27 @@ async function pageExists(db: Queryable, owner: OwnerId, pageId: string): Promis
   return result.rows.length > 0;
 }
 
-/** ページの会話の一覧（新しい順）。ページが本人のものでない・無い・ゴミ箱の中なら null。 */
+/**
+ * 利用者の会話の一覧（新しい順。どのページで始めたかによらない）。`pageId` は開いているページ（本人のものでない・無い・ゴミ箱の中なら null＝404）。
+ */
 export async function listConversations(db: Queryable, owner: OwnerId, pageId: string): Promise<AiConversationSummary[] | null> {
   assertOwner(owner);
   if (!isPageId(pageId)) return null;
   if (!(await pageExists(db, owner, pageId))) return null;
-  const result = await db.query<ConversationRow>(
-    `${SUMMARY_SELECT} WHERE c.owner = $1 AND c.page_id = $2 ORDER BY c.updated_at DESC, c.id DESC LIMIT $3`,
-    [owner, pageId, CONVERSATION_LIST_LIMIT],
-  );
+  const result = await db.query<ConversationRow>(`${SUMMARY_SELECT} WHERE c.owner = $1 ORDER BY c.updated_at DESC, c.id DESC LIMIT $2`, [owner, CONVERSATION_LIST_LIMIT]);
   return result.rows.map(toSummary);
 }
 
-/** 1 つの会話とその発言（古い順。CONVERSATION_MESSAGE_LIMIT を超えたら新しい方だけ）。本人のこのページの会話でなければ null。 */
+/** 本人の会話を 1 つ読む（古い順。CONVERSATION_MESSAGE_LIMIT を超えたら新しい方だけ）。`pageId` は開いているページ（本人のものでなければ null）。 */
 export async function getConversation(db: Queryable, owner: OwnerId, pageId: string, conversationId: string): Promise<AiConversation | null> {
   assertOwner(owner);
   if (!isPageId(pageId) || !isPageId(conversationId)) return null;
-  const found = await db.query<ConversationRow>(`${SUMMARY_SELECT} WHERE c.owner = $1 AND c.page_id = $2 AND c.id = $3`, [owner, pageId, conversationId]);
+  if (!(await pageExists(db, owner, pageId))) return null;
+  const found = await db.query<ConversationRow>(`${SUMMARY_SELECT} WHERE c.owner = $1 AND c.id = $2`, [owner, conversationId]);
   const row = found.rows[0];
   if (!row) return null;
   const messages = await db.query<MessageRow>(
-    `SELECT * FROM (${MESSAGE_SELECT} WHERE conversation_id = $1 ORDER BY seq DESC LIMIT $2) AS recent ORDER BY seq`,
+    `SELECT * FROM (${MESSAGE_SELECT} WHERE m.conversation_id = $1 ORDER BY m.seq DESC LIMIT $2) AS recent ORDER BY seq`,
     [conversationId, CONVERSATION_MESSAGE_LIMIT],
   );
   const ids = messages.rows.map((message) => message.id);
@@ -262,16 +279,16 @@ export async function getConversation(db: Queryable, owner: OwnerId, pageId: str
   return { conversation: toSummary(row), messages: messages.rows.map((message) => toMessage(message, changes.rows)) };
 }
 
-/** 本人のこのページの提案の発言（採用の前に確かめる）。無ければ null。 */
+/** 本人の提案の発言（採用の前に確かめる）。`pageId` は開いているページ（本人のものでなければ null）。無ければ null。 */
 export async function getAssistantMessage(db: Queryable, owner: OwnerId, pageId: string, messageId: string): Promise<AiMessage | null> {
   assertOwner(owner);
   if (!isPageId(pageId) || !isPageId(messageId)) return null;
+  if (!(await pageExists(db, owner, pageId))) return null;
   const result = await db.query<MessageRow>(
-    `SELECT ${MESSAGE_COLUMNS.split(", ").map((column) => `m.${column}`).join(", ")}
-       FROM ai_messages m
-      WHERE m.id = $3 AND m.role = 'assistant'
-        AND EXISTS (SELECT 1 FROM ai_conversations c WHERE c.id = m.conversation_id AND c.owner = $1 AND c.page_id = $2)`,
-    [owner, pageId, messageId],
+    `${MESSAGE_SELECT}
+      WHERE m.id = $2 AND m.role = 'assistant'
+        AND EXISTS (SELECT 1 FROM ai_conversations c WHERE c.id = m.conversation_id AND c.owner = $1)`,
+    [owner, messageId],
   );
   const row = result.rows[0];
   if (!row) return null;
@@ -298,8 +315,38 @@ async function inTransaction<T>(db: Database, work: (client: PoolClient) => Prom
 }
 
 /**
+ * 続ける会話を押さえる（無ければ新しい会話を始める）。同じ会話に同時に足しても seq がぶつからないよう、会話の行を FOR UPDATE で押さえる。
+ * 他人の会話・無い会話なら null。新しい会話は、頼んだときに開いていたページで始まる。
+ */
+async function holdConversation(client: PoolClient, owner: OwnerId, conversationId: string | null | undefined, pageId: string): Promise<string | null> {
+  if (conversationId == null) {
+    const created = await client.query<{ id: string }>("INSERT INTO ai_conversations (owner, page_id) VALUES ($1, $2) RETURNING id", [owner, pageId]);
+    return created.rows[0]!.id;
+  }
+  const existing = await client.query<{ id: string }>("SELECT id FROM ai_conversations WHERE owner = $1 AND id = $2 FOR UPDATE", [owner, conversationId]);
+  return existing.rows[0]?.id ?? null;
+}
+
+async function conversationSummary(client: PoolClient, conversationId: string): Promise<AiConversationSummary> {
+  const summary = await client.query<ConversationRow>(
+    `UPDATE ai_conversations SET updated_at = clock_timestamp() WHERE id = $1
+     RETURNING id, page_id, created_at, updated_at,
+               (SELECT count(*) FROM ai_messages m WHERE m.conversation_id = ai_conversations.id) AS messages,
+               (SELECT m.text FROM ai_messages m WHERE m.conversation_id = ai_conversations.id ORDER BY m.seq DESC LIMIT 1) AS last_text`,
+    [conversationId],
+  );
+  return toSummary(summary.rows[0]!);
+}
+
+/** 書いたばかりの発言を、ページの題名つきで読み直す。 */
+async function readMessage(client: PoolClient, messageId: string, changes: readonly ChangeRow[] = []): Promise<AiMessage> {
+  const row = await client.query<MessageRow>(`${MESSAGE_SELECT} WHERE m.id = $1`, [messageId]);
+  return toMessage(row.rows[0]!, changes);
+}
+
+/**
  * 1 回のやりとりを足す（人の頼み → AI の提案の 2 つの発言）。`conversationId` を渡せばその会話に続け、
- * 渡さなければ新しい会話を始める。ページが本人のものでない・無い、渡した会話がこのページのものでなければ null
+ * 渡さなければ新しい会話を始める。ページが本人のものでない・無い、渡した会話が本人のものでなければ null
  * （呼び出し側は 404。他人のものと無いものを見分けさせない）。
  */
 export async function appendTurn(db: Database, owner: OwnerId, input: AiTurnInput): Promise<AiTurn | null> {
@@ -316,66 +363,70 @@ export async function appendTurn(db: Database, owner: OwnerId, input: AiTurnInpu
     // ページを押さえてから書く（書き終えるまで削除させない）
     const page = await client.query<{ id: string }>("SELECT id FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL FOR SHARE", [owner, input.pageId]);
     if (page.rows.length === 0) return null;
-
-    let conversationId: string;
-    if (input.conversationId == null) {
-      const created = await client.query<{ id: string }>("INSERT INTO ai_conversations (owner, page_id) VALUES ($1, $2) RETURNING id", [owner, input.pageId]);
-      conversationId = created.rows[0]!.id;
-    } else {
-      // 同じ会話に同時に足しても seq がぶつからないよう、会話の行を押さえる
-      const existing = await client.query<{ id: string }>(
-        "SELECT id FROM ai_conversations WHERE owner = $1 AND page_id = $2 AND id = $3 FOR UPDATE",
-        [owner, input.pageId, input.conversationId],
-      );
-      if (existing.rows.length === 0) return null;
-      conversationId = existing.rows[0]!.id;
-    }
+    const conversationId = await holdConversation(client, owner, input.conversationId, input.pageId);
+    if (conversationId === null) return null;
 
     const next = await client.query<{ seq: number }>("SELECT coalesce(max(seq), 0) + 1 AS seq FROM ai_messages WHERE conversation_id = $1", [conversationId]);
     const seq = next.rows[0]!.seq;
-    const request = await client.query<MessageRow>(
-      `INSERT INTO ai_messages (conversation_id, seq, role, text, preset) VALUES ($1, $2, 'user', $3, $4)
-       RETURNING ${MESSAGE_COLUMNS}`,
-      [conversationId, seq, input.request.text, preset],
+    const request = await client.query<{ id: string }>(
+      "INSERT INTO ai_messages (conversation_id, seq, role, text, preset, page_id) VALUES ($1, $2, 'user', $3, $4, $5) RETURNING id",
+      [conversationId, seq, input.request.text, preset, input.pageId],
     );
-    const result = await client.query<MessageRow>(
-      `INSERT INTO ai_messages (conversation_id, seq, role, text, proposal, route, engine) VALUES ($1, $2, 'assistant', $3, $4::jsonb, $5, $6)
-       RETURNING ${MESSAGE_COLUMNS}`,
-      [conversationId, seq + 1, input.result.text, JSON.stringify(input.result.proposal), input.author?.route ?? null, input.author?.engine ?? null],
+    const result = await client.query<{ id: string }>(
+      `INSERT INTO ai_messages (conversation_id, seq, role, text, proposal, route, engine, page_id) VALUES ($1, $2, 'assistant', $3, $4::jsonb, $5, $6, $7)
+       RETURNING id`,
+      [conversationId, seq + 1, input.result.text, JSON.stringify(input.result.proposal), input.author?.route ?? null, input.author?.engine ?? null, input.pageId],
     );
-    const summary = await client.query<ConversationRow>(
-      `UPDATE ai_conversations SET updated_at = clock_timestamp() WHERE id = $1
-       RETURNING id, page_id, created_at, updated_at,
-                 (SELECT count(*) FROM ai_messages m WHERE m.conversation_id = ai_conversations.id) AS messages,
-                 (SELECT m.text FROM ai_messages m WHERE m.conversation_id = ai_conversations.id ORDER BY m.seq DESC LIMIT 1) AS last_text`,
-      [conversationId],
-    );
-    return { conversation: toSummary(summary.rows[0]!), request: toMessage(request.rows[0]!), result: toMessage(result.rows[0]!) };
+    return {
+      conversation: await conversationSummary(client, conversationId),
+      request: await readMessage(client, request.rows[0]!.id),
+      result: await readMessage(client, result.rows[0]!.id),
+    };
   });
 }
 
 /** AI チャットが読み書きできるページ（作業場）。 */
 export type ChatWorkspacePage = { id: string; title: string; kind: string; parent: string | null; open: boolean };
 
-/** 作業場に入れるページの数の上限（開いているページ・その親・そのサブページ）。 */
+/** 作業場に入れるページの数の上限（開いているページのフォルダの中のページ）。 */
 export const CHAT_WORKSPACE_LIMIT = 50;
 
 /**
- * AI チャットが読み書きできるページ（開いているページ・その親・そのサブページ）。
+ * 開いているページ（タブ）が入っているフォルダ。タブはフォルダに直に並ぶ（`parent`）。録音の下の段階（kind = 'step'）は
+ * 親の録音のフォルダ。フォルダの外（一番上）のページは null。
+ */
+const FOLDER_OF = `SELECT CASE
+           WHEN me.kind = 'step' THEN (SELECT r.parent FROM pages r WHERE r.owner = me.owner AND r.id = me.parent AND r.deleted_at IS NULL)
+           ELSE me.parent
+         END
+    FROM pages me
+   WHERE me.owner = $1 AND me.id = $2 AND me.deleted_at IS NULL AND me.kind NOT IN ('folder', 'page')`;
+
+/**
+ * AI チャットが読み書きできるページ＝**開いているページのフォルダの中の全部**（#312。タブも、録音の下の段階も）。
+ * フォルダの外のページなら、そのページだけ。フォルダ（`kind = 'folder'`）と入れ物（`kind = 'page'`）は本文を持たないので入れない。
  * 旧アプリが会話ごとに作った「隔離した作業場」にあたるもので、ここに無いページは道具から触れない。
- * **フォルダ（`kind = 'folder'`）は入れない**: 本文を持たず書けない入れ物なので、親がフォルダでも一覧に出さない
- * （同じフォルダの直下のページは `listReferencePages` が読むだけで出す。#278・#285）。
- * ページが本人のものでない・無い・ゴミ箱の中・フォルダなら null。
+ * ページが本人のものでない・無い・ゴミ箱の中・フォルダ・入れ物なら null。
  */
 export async function listChatWorkspace(db: Queryable, owner: OwnerId, pageId: string): Promise<ChatWorkspacePage[] | null> {
   assertOwner(owner);
   if (!isPageId(pageId)) return null;
   const result = await db.query<{ id: string; title: string; kind: string; parent: string | null }>(
-    `SELECT id, title, kind, parent
-       FROM pages
-      WHERE owner = $1 AND deleted_at IS NULL AND kind <> 'folder' AND kind <> 'page'
-        AND (id = $2 OR parent = $2 OR id = (SELECT parent FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL))
-      ORDER BY (id = $2) DESC, created_at
+    `WITH folder AS (${FOLDER_OF})
+     SELECT p.id, p.title, p.kind, p.parent
+       FROM pages p
+      WHERE p.owner = $1 AND p.deleted_at IS NULL AND p.kind NOT IN ('folder', 'page')
+        AND (
+          p.id = $2
+          OR (
+            (SELECT * FROM folder) IS NOT NULL
+            AND (
+              p.parent = (SELECT * FROM folder)
+              OR p.parent IN (SELECT r.id FROM pages r WHERE r.owner = $1 AND r.deleted_at IS NULL AND r.kind = 'rec' AND r.parent = (SELECT * FROM folder))
+            )
+          )
+        )
+      ORDER BY (p.id = $2) DESC, p.created_at, p.id
       LIMIT $3`,
     [owner, pageId, CHAT_WORKSPACE_LIMIT],
   );
@@ -383,11 +434,63 @@ export async function listChatWorkspace(db: Queryable, owner: OwnerId, pageId: s
   return pages.some((page) => page.open) ? pages : null;
 }
 
+/** 開いているページの文脈の手がかり（指示の文脈を turn ごとに組み直すため。#312）。 */
+export type ChatContextOf = {
+  /** このページが元にしている録音（録音そのもの・録音の下の段階・文字起こしや手順から作られたタブの系譜をたどる）。無ければ null。 */
+  recordingId: string | null;
+  /** 入っているフォルダの手順（`pages.recipe`）。フォルダの外・手順が無ければ null。 */
+  folderRecipe: string | null;
+};
+
+/** 系譜をたどる回数の上限（複製の複製の…を無限には追わない）。 */
+const LINEAGE_HOPS = 8;
+
+/**
+ * 開いているページの文脈の手がかり: 元の録音（`kind = 'rec'` は自分、`step` は親、タブは `made_from` の系譜
+ * （文字起こし → 録音、段階 → 入力のタブ、複製 → 元のタブ）を録音に当たるまでたどる）と、フォルダの手順。
+ * ページが本人のものでない・無い・ゴミ箱の中なら null。
+ */
+export async function chatContextOf(db: Queryable, owner: OwnerId, pageId: string): Promise<ChatContextOf | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId)) return null;
+  type Row = { id: string; kind: string; parent: string | null; made_from: unknown };
+  const read = async (id: string): Promise<Row | null> => {
+    if (!isPageId(id)) return null;
+    const found = await db.query<Row>("SELECT id, kind, parent, made_from FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL", [owner, id]);
+    return found.rows[0] ?? null;
+  };
+  const me = await read(pageId);
+  if (!me || me.kind === "folder" || me.kind === "page") return null;
+  const folder = await db.query<{ folder: string | null }>(`SELECT (${FOLDER_OF}) AS folder`, [owner, pageId]);
+  const folderId = folder.rows[0]?.folder ?? null;
+  const recipe = folderId ? await db.query<{ recipe: string | null }>("SELECT recipe FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL AND kind = 'folder'", [owner, folderId]) : null;
+
+  let recordingId: string | null = null;
+  let at: Row | null = me;
+  for (let hop = 0; at && hop < LINEAGE_HOPS; hop++) {
+    if (at.kind === "rec") {
+      recordingId = at.id;
+      break;
+    }
+    if (at.kind === "step") {
+      const parent = at.parent ? await read(at.parent) : null;
+      recordingId = parent?.kind === "rec" ? parent.id : null;
+      break;
+    }
+    const from = at.made_from;
+    if (typeof from !== "object" || from === null) break;
+    const link = from as { kind?: unknown; recording?: unknown; input?: unknown; from?: unknown };
+    const next = link.kind === "transcript" ? link.recording : link.kind === "step" ? link.input : link.kind === "dup" ? link.from : null;
+    at = typeof next === "string" ? await read(next) : null;
+  }
+  return { recordingId, folderRecipe: recipe?.rows[0]?.recipe ?? null };
+}
+
 /** 自動で参考に入れるページ（同じフォルダの直下。開いているページとサブページは入らない）。 */
 export type ReferencePage = { id: string; title: string; kind: string; blocks: unknown };
 
 /**
- * 自動参考ページ（旧アプリの「同じ場所の独立文書を参考に入れる」。設計 §6）。
+ * 同じフォルダの直下のほかのページ（手順の段階が参考として読む。設計 §6）。AI チャットはもう使わない（作業場がフォルダ全体。#312）。
  * **開いているページと同じ親（フォルダ）の直下にある、ほかのページ**だけを返す。サブページ（孫）は入れない
  * （手順の成果物なので、参考に混ぜると AI の入力が二重になる）。親が無い（一番上の）ページは空。
  *
@@ -425,6 +528,7 @@ export type ChatChangeInput = {
  * 提案（appendTurn）と違い、ページは依頼の中で既に書き換わっている（ここは記録だけ）。
  */
 export type ChatTurnInput = {
+  /** 頼んだときに開いていたページ（タブ）。発言に残り、新しい会話はこのページで始まる。 */
   pageId: string;
   conversationId?: string | null;
   input: string;
@@ -439,7 +543,7 @@ export type ChatTurnInput = {
 
 /**
  * 依頼を会話に足す（人の発言と AI の発言、直した・作ったページ）。ページが本人のものでない・無い、
- * 渡した会話がこのページのものでなければ null。同じページを何度書いても 1 行で、版は最初の 1 つ（依頼の前の本文）。
+ * 渡した会話が本人のものでなければ null。同じページを何度書いても 1 行で、版は最初の 1 つ（依頼の前の本文）。
  */
 export async function appendChatTurn(db: Database, owner: OwnerId, input: ChatTurnInput): Promise<AiTurn | null> {
   assertOwner(owner);
@@ -464,29 +568,18 @@ export async function appendChatTurn(db: Database, owner: OwnerId, input: ChatTu
   return inTransaction(db, async (client) => {
     const page = await client.query<{ id: string }>("SELECT id FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL FOR SHARE", [owner, input.pageId]);
     if (page.rows.length === 0) return null;
-
-    let conversationId: string;
-    if (input.conversationId == null) {
-      const created = await client.query<{ id: string }>("INSERT INTO ai_conversations (owner, page_id) VALUES ($1, $2) RETURNING id", [owner, input.pageId]);
-      conversationId = created.rows[0]!.id;
-    } else {
-      const existing = await client.query<{ id: string }>(
-        "SELECT id FROM ai_conversations WHERE owner = $1 AND page_id = $2 AND id = $3 FOR UPDATE",
-        [owner, input.pageId, input.conversationId],
-      );
-      if (existing.rows.length === 0) return null;
-      conversationId = existing.rows[0]!.id;
-    }
+    const conversationId = await holdConversation(client, owner, input.conversationId, input.pageId);
+    if (conversationId === null) return null;
 
     const next = await client.query<{ seq: number }>("SELECT coalesce(max(seq), 0) + 1 AS seq FROM ai_messages WHERE conversation_id = $1", [conversationId]);
     const seq = next.rows[0]!.seq;
-    const request = await client.query<MessageRow>(
-      `INSERT INTO ai_messages (conversation_id, seq, role, text) VALUES ($1, $2, 'user', $3) RETURNING ${MESSAGE_COLUMNS}`,
-      [conversationId, seq, input.input],
+    const request = await client.query<{ id: string }>(
+      "INSERT INTO ai_messages (conversation_id, seq, role, text, page_id) VALUES ($1, $2, 'user', $3, $4) RETURNING id",
+      [conversationId, seq, input.input, input.pageId],
     );
-    const answer = await client.query<MessageRow>(
-      `INSERT INTO ai_messages (conversation_id, seq, role, text, items, result, result_code, route, engine)
-       VALUES ($1, $2, 'assistant', $3, $4::jsonb, $5, $6, $7, $8) RETURNING ${MESSAGE_COLUMNS}`,
+    const answer = await client.query<{ id: string }>(
+      `INSERT INTO ai_messages (conversation_id, seq, role, text, items, result, result_code, route, engine, page_id)
+       VALUES ($1, $2, 'assistant', $3, $4::jsonb, $5, $6, $7, $8, $9) RETURNING id`,
       [
         conversationId,
         seq + 1,
@@ -496,6 +589,7 @@ export async function appendChatTurn(db: Database, owner: OwnerId, input: ChatTu
         code,
         input.author?.route ?? null,
         input.author?.engine ?? null,
+        input.pageId,
       ],
     );
     const messageId = answer.rows[0]!.id;
@@ -511,34 +605,28 @@ export async function appendChatTurn(db: Database, owner: OwnerId, input: ChatTu
         [messageId, change.pageId, change.change, change.change === "edited" ? change.version : null, change.revision, change.chars, change.delta],
       );
     }
-    const summary = await client.query<ConversationRow>(
-      `UPDATE ai_conversations SET updated_at = clock_timestamp() WHERE id = $1
-       RETURNING id, page_id, created_at, updated_at,
-                 (SELECT count(*) FROM ai_messages m WHERE m.conversation_id = ai_conversations.id) AS messages,
-                 (SELECT m.text FROM ai_messages m WHERE m.conversation_id = ai_conversations.id ORDER BY m.seq DESC LIMIT 1) AS last_text`,
-      [conversationId],
-    );
     const written = await client.query<ChangeRow>(`${CHANGES_SELECT} WHERE c.message_id = $1 ORDER BY c.created_at`, [messageId]);
     return {
-      conversation: toSummary(summary.rows[0]!),
-      request: toMessage(request.rows[0]!),
-      result: toMessage(answer.rows[0]!, written.rows),
+      conversation: await conversationSummary(client, conversationId),
+      request: await readMessage(client, request.rows[0]!.id),
+      result: await readMessage(client, messageId, written.rows),
     };
   });
 }
 
 /**
- * 依頼で直した・作ったページ（「元に戻す」が読む）。本人のこのページの会話の依頼でなければ null。
+ * 依頼で直した・作ったページ（「元に戻す」が読む）。本人の会話の依頼でなければ null。`pageId` は開いているページ（本人のものでなければ null）。
  * まだ戻していないものだけを返す（`undone` を渡すと戻したものも含む）。
  */
 export async function getChatChanges(db: Queryable, owner: OwnerId, pageId: string, messageId: string, options: { undone?: boolean } = {}): Promise<AiMessageChange[] | null> {
   assertOwner(owner);
   if (!isPageId(pageId) || !isPageId(messageId)) return null;
+  if (!(await pageExists(db, owner, pageId))) return null;
   const found = await db.query<{ id: string }>(
     `SELECT m.id FROM ai_messages m
-      WHERE m.id = $3 AND m.role = 'assistant'
-        AND EXISTS (SELECT 1 FROM ai_conversations c WHERE c.id = m.conversation_id AND c.owner = $1 AND c.page_id = $2)`,
-    [owner, pageId, messageId],
+      WHERE m.id = $2 AND m.role = 'assistant'
+        AND EXISTS (SELECT 1 FROM ai_conversations c WHERE c.id = m.conversation_id AND c.owner = $1)`,
+    [owner, messageId],
   );
   if (found.rows.length === 0) return null;
   const changes = await db.query<ChangeRow>(
@@ -568,6 +656,7 @@ export async function markChangesUndone(db: Queryable, owner: OwnerId, messageId
 }
 
 export type AdoptionInput = {
+  /** 開いているページ（本人のものでなければ書かない）。 */
   pageId: string;
   /** 採用した提案の発言。 */
   messageId: string;
@@ -578,7 +667,7 @@ export type AdoptionInput = {
 };
 
 /**
- * 採用を提案の発言に書く（採用した中身・版の番号・時刻）。本人のこのページの提案の発言で、まだ採用を書いていないものだけ。
+ * 採用を提案の発言に書く（採用した中身・版の番号・時刻）。本人の会話の提案の発言で、まだ採用を書いていないものだけ。
  * 書けなければ false（ページの保存そのものは済んでいるので、呼び出し側は 200 のまま続ける）。
  */
 export async function recordAdoption(db: Queryable, owner: OwnerId, input: AdoptionInput): Promise<boolean> {
@@ -586,12 +675,13 @@ export async function recordAdoption(db: Queryable, owner: OwnerId, input: Adopt
   if (!isPageId(input.pageId) || !isPageId(input.messageId)) return false;
   if (!Number.isSafeInteger(input.version) || input.version < 1) throw new RangeError("editor-store: version must be a positive integer");
   if (!isMessageJson(input.adopted)) throw new TypeError("editor-store: adopted must be a small JSON object");
+  if (!(await pageExists(db, owner, input.pageId))) return false;
   const result = await db.query(
     `UPDATE ai_messages AS m
-        SET adopted = $4::jsonb, version = $5, adopted_at = clock_timestamp()
-      WHERE m.id = $3 AND m.role = 'assistant' AND m.proposal IS NOT NULL AND m.adopted IS NULL
-        AND EXISTS (SELECT 1 FROM ai_conversations c WHERE c.id = m.conversation_id AND c.owner = $1 AND c.page_id = $2)`,
-    [owner, input.pageId, input.messageId, JSON.stringify(input.adopted), input.version],
+        SET adopted = $3::jsonb, version = $4, adopted_at = clock_timestamp()
+      WHERE m.id = $2 AND m.role = 'assistant' AND m.proposal IS NOT NULL AND m.adopted IS NULL
+        AND EXISTS (SELECT 1 FROM ai_conversations c WHERE c.id = m.conversation_id AND c.owner = $1)`,
+    [owner, input.messageId, JSON.stringify(input.adopted), input.version],
   );
   return (result.rowCount ?? 0) > 0;
 }
