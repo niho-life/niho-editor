@@ -799,7 +799,8 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
   };
 
   const compactConversation = async (draft = text) => {
-    if (!pageId || !context || !conversationId || thread.length === 0 || busy || sessionLoading || flightRef.current) return;
+    // 送信待ちがあるあいだは要約を始めない（待ちを入力欄へ戻す先の文を、要約が上書きしてしまう）
+    if (!pageId || !context || !conversationId || thread.length === 0 || busy || sessionLoading || flightRef.current || queueRef.current.length > 0) return;
     const keptDraft = draft;
     const generation = generationRef.current;
     const controller = new AbortController();
@@ -961,7 +962,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
   };
 
   const runStep = async () => {
-    if (!pageId || !context || !selectedStep || !steps || busy || sessionLoading || flightRef.current) return;
+    if (!pageId || !context || !selectedStep || !steps || busy || sessionLoading || flightRef.current || queueRef.current.length > 0) return;
     const generation = generationRef.current;
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -1061,7 +1062,8 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
 
   const onInput = (value: string, caret: number) => {
     setText(value);
-    const token = busy === null ? slashToken(value, caret) : null;
+    // 作業中と、送信待ちがあるあいだは、工程・要約のメニューを開かない（どちらも今は始められない）
+    const token = busy === null && queue.length === 0 ? slashToken(value, caret) : null;
     if (token) {
       setMenuQuery(token.query);
       setMenuIndex(0);
@@ -1275,7 +1277,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
                 <Icon name="grip" />
               </span>
             )}
-            <button type="button" className="es-ib es-ib--sm" aria-label="工程とスキルを開く" aria-expanded={menuOpen} disabled={unavailable || busy !== null} onClick={() => {
+            <button type="button" className="es-ib es-ib--sm" aria-label="工程とスキルを開く" aria-expanded={menuOpen} disabled={unavailable || busy !== null || queue.length > 0} onClick={() => {
               setMenuOpen((open) => !open);
               setMenuQuery("");
               setMenuIndex(0);

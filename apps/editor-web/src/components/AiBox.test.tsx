@@ -1104,6 +1104,24 @@ describe("AiPanel: 作業中の指示を送信待ちに積む（#282）", () => 
     expect(chatCalls(server.calls)).toEqual(["最初の依頼"]);
   });
 
+  it("送信待ちがあるあいだは、要約・工程のメニューを開けない（待ちを戻す先の文を、要約が上書きしないため）", async () => {
+    fakeDelay();
+    const { held, server } = await startHeldTurn();
+    setValue("待ちの指示");
+    await press("Enter");
+    expect(button("工程とスキルを開く").disabled).toBe(true);
+    held.resolve(chatResponse("最初の返答"));
+    await until(() => queueRow()?.textContent?.includes("1 秒後") === true);
+    expect(button("工程とスキルを開く").disabled).toBe(true);
+    setValue("/");
+    expect(container!.querySelector(".es-ai-skills")).toBeNull();
+    // 取り消して待ちを欄へ戻すと、メニューをまた開ける
+    await click([...queueRow()!.querySelectorAll("button")].find((item) => item.textContent === "取り消す")!);
+    expect(field().value).toBe("待ちの指示\n\n/");
+    expect(button("工程とスキルを開く").disabled).toBe(false);
+    expect(chatCalls(server.calls)).toEqual(["最初の依頼"]);
+  });
+
   it("待ちの中身を開いて見られ、1 件ずつ消せる。消した分は送らない", async () => {
     fakeDelay();
     const { held, server } = await startHeldTurn();
