@@ -70,14 +70,27 @@ function canonical(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
+/** 範囲の外の段落の数（前＝範囲より前の段落、後ろ＝範囲より後ろの段落）。 */
+export type OutsideEdges = { head: number; tail: number };
+
 /**
- * 選択範囲の外の段落が、書く前と同じか。範囲の前の `startParagraph - 1` 段落と、後ろの `before.length - endParagraph`
- * 段落がそのまま（範囲の中は段落の数が増減してよい）。範囲が本文の外なら false。
+ * 選んだときの本文（段落が `blockCount` 個）での、範囲の外の段落の数。範囲が本文の外なら null。
+ * **依頼のあいだ固定して使う**: 範囲の中を書き換えると段落の数が変わるので、書くたびに今の本文から数え直すと、
+ * 範囲の外だった段落が範囲の中に見えてしまう（#280。複数回の書き込みで範囲の外を守るため）。
  */
-export function keepsOutsideSelection(before: readonly Block[], after: readonly Block[], selection: Pick<ChatSelection, "startParagraph" | "endParagraph">): boolean {
+export function outsideEdgesOf(blockCount: number, selection: Pick<ChatSelection, "startParagraph" | "endParagraph">): OutsideEdges | null {
   const head = selection.startParagraph - 1;
-  const tail = before.length - selection.endParagraph;
-  if (head < 0 || tail < 0 || after.length < head + tail) return false;
+  const tail = blockCount - selection.endParagraph;
+  return head < 0 || tail < 0 ? null : { head, tail };
+}
+
+/**
+ * 範囲の外の段落が、書く前と同じか。範囲の前の `head` 段落と、後ろの `tail` 段落がそのまま
+ * （範囲の中は段落の数が増減してよい）。`before` は書く前の本文、`after` は書いたあとの本文。
+ */
+export function keepsOutsideEdges(before: readonly Block[], after: readonly Block[], edges: OutsideEdges): boolean {
+  const { head, tail } = edges;
+  if (before.length < head + tail || after.length < head + tail) return false;
   for (let index = 0; index < head; index++) {
     if (canonical(before[index]) !== canonical(after[index])) return false;
   }
@@ -85,4 +98,10 @@ export function keepsOutsideSelection(before: readonly Block[], after: readonly 
     if (canonical(before[before.length - index]) !== canonical(after[after.length - index])) return false;
   }
   return true;
+}
+
+/** 選択範囲の外の段落が、書く前と同じか（`before` が選んだときの本文のとき）。範囲が本文の外なら false。 */
+export function keepsOutsideSelection(before: readonly Block[], after: readonly Block[], selection: Pick<ChatSelection, "startParagraph" | "endParagraph">): boolean {
+  const edges = outsideEdgesOf(before.length, selection);
+  return edges !== null && keepsOutsideEdges(before, after, edges);
 }

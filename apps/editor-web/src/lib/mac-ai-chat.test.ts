@@ -35,6 +35,21 @@ describe("Mac CLI chat turn", () => {
     }, expect.any(Function));
   });
 
+  it("passes the context files (guide, recording, …) before the selection, and sends no context when there is none", async () => {
+    const aiTurn = vi.fn().mockResolvedValue(DONE);
+    const shell = { aiTurn, aiStop: vi.fn() } as unknown as ShellBridge;
+    const base = { shell, engine: "cli:codex" as const, model: "gpt-6", page: PAGE, instruction: "短くして", conversationId: null, resumeSession: null, signal: new AbortController().signal };
+    const guide = { name: "guide", title: "文書ガイド", markdown: "## 文書ガイド" };
+    await runMacAiTurn({ ...base, selection: "選択文", context: [guide] });
+    expect(aiTurn.mock.calls[0]?.[1]).toMatchObject({ context: [guide, { name: "selection", title: "選択範囲", markdown: "選択文" }] });
+    await runMacAiTurn({ ...base, selection: null, context: [guide] });
+    expect(aiTurn.mock.calls[1]?.[1]).toMatchObject({ context: [guide] });
+    await runMacAiTurn({ ...base, selection: null });
+    expect(aiTurn.mock.calls[2]?.[1]).not.toHaveProperty("context");
+    await runMacAiTurn({ ...base, selection: null, context: [] });
+    expect(aiTurn.mock.calls[3]?.[1]).not.toHaveProperty("context");
+  });
+
   it.each([
     [{ ...DONE, finalEvent: { ...DONE.finalEvent, stop_reason: "MaxTokens" } }, "incomplete"],
     [{ ...DONE, pageRemoved: true }, "page_removed"],

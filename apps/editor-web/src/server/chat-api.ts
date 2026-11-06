@@ -24,8 +24,9 @@ import {
   type SaveResult,
 } from "@niho/editor-store";
 // 画面の部品に触れない Markdown の往復（docs-ui。Mac の保管庫と同じ変換を使う）
-import { blocksToMarkdown, markdownToBlocks } from "niho-docs-ui/page/markdown";
+import { markdownToBlocks } from "niho-docs-ui/page/markdown";
 import { blockText, diffBlocks, markAiInserted } from "../ai/block-diff";
+import { PARTS_TEXT, blockToPartsMarkdown, checkParts, finishParts, pageParagraphs, parsePartsMarkdown, parseRemoveImages, partsMarkdownToBlocks } from "../ai/page-parts";
 import type { AiComposeBackend } from "../ai/config";
 import {
   MAX_CHAT_INPUT_CHARS,
@@ -33,9 +34,13 @@ import {
   WEB_SEARCH_COST_MICRO_USD,
   buildChatMessages,
   buildChatSystem,
+  chatContextSections,
   isChatToolName,
   runChatTurn,
+  type ChatContextSection,
   type ChatEvent,
+  type ChatGuide,
+  type ChatRecordingInfo,
   type ChatHistoryTurn,
   type ChatItem,
   type ChatRun,
@@ -44,7 +49,7 @@ import {
   paragraphLabel,
   webSearchTool,
 } from "../ai/chat";
-import { keepsOutsideSelection, parseChatSelection, selectionParagraphLabel, type ChatSelection } from "../ai/chat-selection";
+import { keepsOutsideEdges, outsideEdgesOf, parseChatSelection, selectionParagraphLabel, type ChatSelection, type OutsideEdges } from "../ai/chat-selection";
 import { wrapUntrusted } from "../ai/prompt";
 import type { AiUsageReport } from "../ai/model";
 import type { AuthProvider } from "../auth/types";
@@ -84,8 +89,10 @@ export type ChatConversationStore = {
   references?: (owner: OwnerId, pageId: string) => Promise<ReferencePage[] | null>;
   /** 録音ページの文字起こし（search_transcript。渡さなければ探せない）。他人の・無いページは null。 */
   recording?: (owner: OwnerId, pageId: string) => Promise<Recording | null>;
-  /** 録音ページの「この録音について」（背景・登場人物・固有名詞）。開いているのが録音ページのとき、指示の文脈に入れる。 */
+  /** 録音ページの「この録音について」（背景・登場人物・固有名詞）。開いているのが録音ページ・録音の下の段階のページのとき、指示の文脈に入れる。 */
   fields?: (owner: OwnerId, pageId: string) => Promise<PageFields>;
+  /** 最新の run の文書ガイドと手順の固有名詞（録音ページ・録音の下の段階のページで。run が無ければ null）。指示の文脈に入れる。 */
+  guide?: (owner: OwnerId, pageId: string) => Promise<ChatGuide | null>;
   history: (owner: OwnerId, pageId: string, conversationId: string) => Promise<{ messages: AiMessage[] } | null>;
   append: (owner: OwnerId, input: ChatTurnInput) => Promise<{ conversation: { id: string }; result: AiMessage } | null>;
   changes: (owner: OwnerId, pageId: string, messageId: string) => Promise<AiMessageChange[] | null>;
@@ -170,13 +177,18 @@ function toolJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-const PAGE_HAS_PARTS = "このページの本文には、文字だけにできないもの（画像・録音）が入っています。この会話では直せません。";
+/** 入れ子の中（箇条書き・引用・囲み・表）に画像・録音がある（最上位の画像・録音は niho-asset: の行で読み書きできる。#281）。 */
+const PAGE_HAS_PARTS = PARTS_TEXT.nested;
 /** 読んだ版（base_revision）が今の版と違う（AI は読み直して書き直せる）。 */
 const PAGE_CHANGED = "本文が変わっています。read_page で読み直してください。";
 /** search_transcript が返す一致の数の上限（それより多い分は数だけ返す）。 */
 const TRANSCRIPT_MATCHES_MAX = 20;
 /** search_transcript の一致の前後に付ける文字数。 */
 const TRANSCRIPT_CONTEXT_CHARS = 200;
+/** read_page が一度に返す文字起こしの区間の数の上限。 */
+const TRANSCRIPT_READ_SEGMENTS_MAX = 60;
+/** read_page が一度に返す文字起こしの本文の字数の上限（最初の 1 区間はこれを超えても返す）。 */
+const TRANSCRIPT_READ_CHARS_MAX = 12_000;
 
 /**
  * 道具を実行する側。触れるのは作業場のページだけで、書いたページは `changes` に積む
@@ -222,22 +234,6 @@ function matchesOf(text: string, find: string): number[] {
 }
 
 /**
- * 部分置換（edit_page）の材料: 段落（ブロック）ごとの Markdown（read_page が返すのと同じ形）と、それを空行でつないだ本文。
- * `find` はつないだ本文で探し、**一致した段落だけ**を Markdown から組み直す。ほかの段落は元のブロックをそのまま保つ
- * （本文の全体を Markdown に書き出して読み直すと、空の段落や段落末尾の改行（hardBreak）が落ち、頼んでいない段落まで変わる）。
- * 書き出せないブロック（画像・録音など）があれば null。
- */
-function paragraphsOf(blocks: readonly Block[]): { parts: string[]; joined: string } | null {
-  const parts: string[] = [];
-  for (const block of blocks) {
-    const one = blocksToMarkdown([block]);
-    if (!one.ok) return null;
-    parts.push(one.markdown.replace(/\n+$/u, ""));
-  }
-  return { parts, joined: parts.join("\n\n") };
-}
-
-/**
  * つないだ本文の中の位置 `at` から `length` 字が掛かる段落の範囲（添字は 0 始まり、両端を含む）と、先頭の段落の開始位置。
  * 段落と段落の間の空行（2 字）は、前の段落に付けて数える（どの位置もちょうど 1 つの段落に落ちる）。
  */
@@ -256,6 +252,36 @@ function paragraphRange(parts: readonly string[], at: number, length: number): {
     offset = next;
   }
   return { from, to: Math.max(from, to), start };
+}
+
+/** 区間の話者の名前（名前が無ければ「話者 N」。話者が無ければ null）。 */
+function speakerOf(recording: Recording, segment: Recording["segments"][number]): string | null {
+  return segment.speaker === null ? null : recording.speakerNames[String(segment.speaker)]?.trim() || `話者 ${segment.speaker}`;
+}
+
+/** 区間の時刻（`hh:mm:ss`。無ければ null）。 */
+function timeOf(segment: Recording["segments"][number]): string | null {
+  return segment.start === null ? null : clock(segment.start);
+}
+
+type TranscriptRead = { total: number; from: number; to: number; segments: { n: number; time: string | null; speaker: string | null; text: string }[] };
+
+/**
+ * read_page に添える文字起こし（読み取り専用。本文の paragraphs とは別）。`from`〜`to` は 1 始まりの区間の番号。
+ * 一度に返すのは TRANSCRIPT_READ_SEGMENTS_MAX 区間・合計 TRANSCRIPT_READ_CHARS_MAX 字まで（`to` は実際に返した最後の区間）。
+ */
+function readTranscript(recording: Recording, from: number, to: number): TranscriptRead {
+  const total = recording.segments.length;
+  const segments: TranscriptRead["segments"] = [];
+  let chars = 0;
+  for (let index = from - 1; index < Math.min(to, total) && segments.length < TRANSCRIPT_READ_SEGMENTS_MAX; index++) {
+    const segment = recording.segments[index]!;
+    const length = Array.from(segment.text).length;
+    if (segments.length > 0 && chars + length > TRANSCRIPT_READ_CHARS_MAX) break;
+    chars += length;
+    segments.push({ n: index + 1, time: timeOf(segment), speaker: speakerOf(recording, segment), text: segment.text });
+  }
+  return { total, from, to: segments.length > 0 ? segments.at(-1)!.n : from - 1, segments };
 }
 
 type TranscriptMatch = { page_id: string; title: string; time: string | null; speaker: string | null; before: string; match: string; after: string };
@@ -280,12 +306,11 @@ function searchRecording(page: { id: string; title: string }, recording: Recordi
     let index = 0;
     while (index + 1 < offsets.length && offsets[index + 1]! <= at) index += 1;
     const segment = recording.segments[index]!;
-    const speaker = segment.speaker === null ? null : recording.speakerNames[String(segment.speaker)]?.trim() || `話者 ${segment.speaker}`;
     matches.push({
       page_id: page.id,
       title: page.title || "（題名なし）",
-      time: segment.start === null ? null : clock(segment.start),
-      speaker,
+      time: timeOf(segment),
+      speaker: speakerOf(recording, segment),
       before: Array.from(text.slice(0, at)).slice(-TRANSCRIPT_CONTEXT_CHARS).join(""),
       match: text.slice(at, at + needle.length),
       after: Array.from(text.slice(at + needle.length)).slice(0, TRANSCRIPT_CONTEXT_CHARS).join(""),
@@ -311,6 +336,8 @@ function createToolRunner(deps: {
 }): (call: { name: string; input: unknown }) => Promise<ToolOutcome & { conflict?: true }> {
   const { store, owner } = deps;
   const find = (id: unknown) => (typeof id === "string" ? deps.workspace.find((page) => page.id === id) : undefined);
+  // 選択範囲の外の段落の数。最初の書き込みで一度だけ決めて、依頼のあいだ固定する（#280）
+  let outsideEdges: OutsideEdges | null = null;
 
   /**
    * 書き込みの共通の道（write_page・edit_page）: 読んだ版の確認 → 本文の検査 → 版を残す → 保存 → `changes` に積む。
@@ -324,6 +351,7 @@ function createToolRunner(deps: {
     blocks: { value: Block[] },
     base: number,
     device: boolean,
+    removeImages: readonly string[],
   ): Promise<{ ok: false; outcome: ToolOutcome & { conflict?: true } } | { ok: true; saved: Page; blocks: Block[]; chars: number; delta: number }> => {
     // 選択範囲があるときは、その範囲の外が変わる書き込みを版を残す前に断る（プロンプトだけに頼らない。#280）
     if (deps.selection) {
@@ -331,10 +359,22 @@ function createToolRunner(deps: {
       if (target.id !== pageId) {
         return { ok: false, outcome: { ok: false, result: "選択範囲があるので、開いているページの範囲の外は書き換えられません（ほかのページも同じ）。範囲の外に手を入れないと頼みが果たせないときは、書かずに人に伝えてください。", page: current.title } };
       }
-      if (!keepsOutsideSelection(current.blocks, blocks.value, value)) {
+      if (outsideEdges === null) {
+        // 最初の書き込み: 本文が範囲を選んだときの版のままなら、範囲の外の段落の数をここで決めて、依頼のあいだ固定する
+        // （範囲の中を書き換えて段落の数が変わっても、2 回目以降の書き込みで範囲の外を守れるように）
+        const edges = current.revision === value.revision ? outsideEdgesOf(current.blocks.length, value) : null;
+        if (edges === null) {
+          return { ok: false, outcome: { ok: false, result: `選択範囲（${selectionParagraphLabel(value)}）を選んだあとに本文が変わったので、番号がずれていて書けません。書かずに、範囲を選び直してもらうよう人に伝えてください。`, page: current.title } };
+        }
+        outsideEdges = edges;
+      }
+      if (!keepsOutsideEdges(current.blocks, blocks.value, outsideEdges)) {
         return { ok: false, outcome: { ok: false, result: `選択範囲（${selectionParagraphLabel(value)}）の外が変わる書き込みは断られます。範囲の中だけを edit_page で直してください（全体を書き直すと、範囲の外が少しでも変わるので断られます）。範囲の外に手を入れないと頼みが果たせないときは、書かずに人に伝えてください。`, page: current.title } };
       }
     }
+    // 画像が消える・録音が変わる書き込みは、版も残さず保存もしない（画像は AI から見えず作り直せない。#281）
+    const parts = checkParts(current.blocks, blocks.value, removeImages);
+    if (!parts.ok) return { ok: false, outcome: { ok: false, result: parts.reason, page: current.title } };
     // 書く前の本文を版に残す（人が元に戻せる）
     const version = await store.createVersion(owner, target.id, "ai");
     if (!version) return { ok: false, outcome: { ok: false, result: "そのページはもうありません。", page: current.title } };
@@ -360,12 +400,14 @@ function createToolRunner(deps: {
     return { ok: true, saved: saved.page, blocks: blocks.value, chars, delta };
   };
 
-  /** 書いたあとの本文（Markdown）を保存できる blocks にする。 */
-  const parseNext = (next: string, title: string): { ok: true; value: Block[] } | { ok: false; outcome: ToolOutcome } => {
-    // AI は記事の先頭に `#` の題名を付けがちなので、見出しの段階は 2・3 にそろえる（画像などの対応外は断る）
-    const parsed = markdownToBlocks(next, { headings: "clamp" });
-    if (!parsed.ok) return { ok: false, outcome: { ok: false, result: `本文を読めませんでした: ${parsed.reason}`, page: title } };
-    const blocks = parseBlocks(parsed.blocks);
+  /**
+   * 書いたあとの本文（Markdown）を保存できる blocks にする。`niho-asset:` の行は元のページ（`originals`）の画像・録音に戻す（#281）。
+   * AI は記事の先頭に `#` の題名を付けがちなので、見出しの段階は 2・3 にそろえる（ほかの対応外の記法は断る）。
+   */
+  const parseNext = (next: string, title: string, originals: readonly Block[], removeImages: readonly string[]): { ok: true; value: Block[] } | { ok: false; outcome: ToolOutcome } => {
+    const parsed = partsMarkdownToBlocks(next, originals, removeImages);
+    if (!parsed.ok) return { ok: false, outcome: { ok: false, result: parsed.parseFailed ? `本文を読めませんでした: ${parsed.reason}` : parsed.reason, page: title } };
+    const blocks = parseBlocks(parsed.value);
     if (!blocks.ok) return { ok: false, outcome: { ok: false, result: "本文が大きすぎるか、保存できない形です。", page: title } };
     return { ok: true, value: blocks.value };
   };
@@ -387,9 +429,9 @@ function createToolRunner(deps: {
     if (current.revision !== base) {
       return { ok: false, outcome: { ok: false, result: device ? "別の画面で保存されたので書けませんでした。" : PAGE_CHANGED, page: current.title, conflict: true } };
     }
-    const before = blocksToMarkdown(current.blocks);
+    const before = pageParagraphs(current.blocks);
     if (!before.ok) return { ok: false, outcome: { ok: false, result: PAGE_HAS_PARTS, page: current.title } };
-    return { ok: true, target, current, before: before.markdown, base, device };
+    return { ok: true, target, current, before: before.value.joined, base, device };
   };
 
   return async (call: { name: string; input: unknown }) => {
@@ -411,10 +453,10 @@ function createToolRunner(deps: {
       if (!target) return { ok: false, result: "そのページは、この会話では開けません。list_pages の id を使ってください。" };
       const page = await store.getPage(owner, target.id);
       if (!page) return { ok: false, result: "そのページはもうありません。", page: target.title };
-      const markdown = blocksToMarkdown(page.blocks);
-      if (!markdown.ok) return { ok: false, result: PAGE_HAS_PARTS, page: page.title };
+      // 最上位の画像・録音は niho-asset: の行で読む（入れ子の中にあれば読めない）
+      if (!pageParagraphs(page.blocks).ok) return { ok: false, result: PAGE_HAS_PARTS, page: page.title };
       const total = page.blocks.length;
-      for (const key of ["from", "to"] as const) {
+      for (const key of ["from", "to", "transcript_from", "transcript_to"] as const) {
         if (input[key] !== undefined && !isRevision(input[key])) return { ok: false, result: `${key} には 1 以上の段落の番号を渡してください。`, page: page.title };
       }
       const ranged = input.from !== undefined || input.to !== undefined;
@@ -426,21 +468,35 @@ function createToolRunner(deps: {
       if (ranged && (from > total || to > total)) return { ok: false, result: `範囲が本文の外です。この本文は ${total} 段落です。`, page: page.title };
       const paragraphs = [];
       for (let index = from - 1; index < to; index++) {
-        const one = blocksToMarkdown([page.blocks[index]!]);
+        const one = blockToPartsMarkdown(page.blocks[index]!);
         if (!one.ok) return { ok: false, result: PAGE_HAS_PARTS, page: page.title };
-        paragraphs.push({ n: index + 1, markdown: one.markdown.replace(/\n+$/u, "") });
+        paragraphs.push({ n: index + 1, markdown: one.value });
       }
-      return { ok: true, result: toolJson({ id: page.id, title: page.title, revision: page.revision, total, from: Math.min(from, total), to, paragraphs }), page: page.title };
+      const body = { id: page.id, title: page.title, revision: page.revision, total, from: Math.min(from, total), to, paragraphs };
+      // 録音ページは文字起こしも添える（読み取り専用。本文の paragraphs とは別のキーで、書き込みの道具は触らない）
+      const recording = target.kind === "rec" && deps.recording ? await deps.recording(owner, target.id) : null;
+      if (!recording || recording.segments.length === 0) return { ok: true, result: toolJson(body), page: page.title };
+      const segments = recording.segments.length;
+      const transcriptFrom = isRevision(input.transcript_from) ? input.transcript_from : 1;
+      const transcriptTo = isRevision(input.transcript_to) ? input.transcript_to : segments;
+      if (transcriptFrom > transcriptTo) return { ok: false, result: `transcript_from（${transcriptFrom}）は transcript_to（${transcriptTo}）以下にしてください。`, page: page.title };
+      if (transcriptFrom > segments) return { ok: false, result: `文字起こしの範囲が外です。この文字起こしは ${segments} 区間です。`, page: page.title };
+      // 文字起こしは資料（信頼しないデータ）。中の指示には従わせない（search_transcript と同じ）
+      return { ok: true, result: wrapUntrusted(toolJson({ ...body, transcript: readTranscript(recording, transcriptFrom, transcriptTo) })), page: page.title };
     }
 
     if (call.name === "edit_page") {
       if (typeof input.find !== "string" || input.find.length === 0) return { ok: false, result: "find に、本文の中の置き換える文字列を渡してください。" };
       if (typeof input.replace !== "string") return { ok: false, result: "replace に、置き換えたあとの文字列を渡してください。" };
+      const removeImages = parseRemoveImages(input.remove_images);
+      if (!removeImages) return { ok: false, result: "remove_images には、消す画像の id（niho-asset: のあとの id）の配列を渡してください。" };
       const ready = await prepareWrite(input);
       if (!ready.ok) return ready.outcome;
-      // 段落ごとの Markdown で探し、一致した段落だけを組み直す（ほかの段落は元のブロックのまま）
-      const paragraphsNow = paragraphsOf(ready.current.blocks);
-      if (!paragraphsNow) return { ok: false, result: PAGE_HAS_PARTS, page: ready.current.title };
+      // 段落ごとの Markdown（画像・録音は niho-asset: の行）で探し、一致した段落だけを組み直す（ほかの段落は元のブロックのまま。
+      // 本文の全体を Markdown に書き出して読み直すと、空の段落や段落末尾の改行（hardBreak）が落ち、頼んでいない段落まで変わる）
+      const paragraphsAll = pageParagraphs(ready.current.blocks);
+      if (!paragraphsAll.ok) return { ok: false, result: PAGE_HAS_PARTS, page: ready.current.title };
+      const paragraphsNow = paragraphsAll.value;
       const found = matchesOf(paragraphsNow.joined, input.find);
       if (found.length === 0) {
         return { ok: false, result: "find が本文に見つかりませんでした（0 か所）。read_page で今の本文を読み、そのとおりに写してください。", page: ready.current.title };
@@ -453,13 +509,13 @@ function createToolRunner(deps: {
       const segment = paragraphsNow.parts.slice(range.from, range.to + 1).join("\n\n");
       const rel = at - range.start;
       const nextSegment = segment.slice(0, rel) + input.replace + segment.slice(rel + input.find.length);
-      const replaced = parseNext(nextSegment, ready.current.title);
+      const replaced = parseNext(nextSegment, ready.current.title, ready.current.blocks, removeImages);
       if (!replaced.ok) return replaced.outcome;
       // 対象外の段落は元のブロックをそのまま継ぐ。ページ全体の大きさの上限はここで見る
       const checked = parseBlocks([...ready.current.blocks.slice(0, range.from), ...replaced.value, ...ready.current.blocks.slice(range.to + 1)]);
       if (!checked.ok) return { ok: false, result: "本文が大きすぎるか、保存できない形です。", page: ready.current.title };
       const next = [...paragraphsNow.parts.slice(0, range.from), nextSegment, ...paragraphsNow.parts.slice(range.to + 1)].join("\n\n");
-      const written = await commit(ready.target, ready.current, paragraphsNow.joined, next, { value: checked.value }, ready.base, ready.device);
+      const written = await commit(ready.target, ready.current, paragraphsNow.joined, next, { value: checked.value }, ready.base, ready.device, removeImages);
       if (!written.ok) return written.outcome;
       const paragraphs = changedParagraphs(ready.current.blocks, written.blocks);
       return {
@@ -477,11 +533,19 @@ function createToolRunner(deps: {
       if (!target) return { ok: false, result: "そのページは、この会話では書けません。list_pages の id を使ってください。" };
       if (!target.writable) return { ok: false, result: "そのページは読むだけです（同じフォルダのほかのページ）。書けるのは開いているページとその親・サブページだけです。", page: target.title };
       if (typeof input.markdown !== "string") return { ok: false, result: "markdown に本文の全体を渡してください。", page: target.title };
-      const blocks = parseNext(input.markdown, target.title);
-      if (!blocks.ok) return blocks.outcome;
+      const removeImages = parseRemoveImages(input.remove_images);
+      if (!removeImages) return { ok: false, result: "remove_images には、消す画像の id（niho-asset: のあとの id）の配列を渡してください。", page: target.title };
+      // 本文の形はページを読む前に見る。niho-asset: の行を元の画像・録音に戻すのは、今のページを読んだあと
+      const parsed = parsePartsMarkdown(input.markdown);
+      if (!parsed.ok) return { ok: false, result: parsed.parseFailed ? `本文を読めませんでした: ${parsed.reason}` : parsed.reason, page: target.title };
+      if (!parseBlocks(parsed.value.blocks).ok) return { ok: false, result: "本文が大きすぎるか、保存できない形です。", page: target.title };
       const ready = await prepareWrite(input);
       if (!ready.ok) return ready.outcome;
-      const written = await commit(ready.target, ready.current, ready.before, input.markdown, blocks, ready.base, ready.device);
+      const restored = finishParts(parsed.value, ready.current.blocks, removeImages);
+      if (!restored.ok) return { ok: false, result: restored.reason, page: ready.current.title };
+      const blocks = parseBlocks(restored.value);
+      if (!blocks.ok) return { ok: false, result: "本文が大きすぎるか、保存できない形です。", page: ready.current.title };
+      const written = await commit(ready.target, ready.current, ready.before, input.markdown, blocks, ready.base, ready.device, removeImages);
       if (!written.ok) return written.outcome;
       return { ok: true, result: toolJson({ id: ready.target.id, revision: written.saved.revision, chars: written.chars, delta: written.delta }), page: ready.current.title };
     }
@@ -627,8 +691,8 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
             affordable: async () => limitUsd === null || Math.round(limitUsd * 1e6) - (await usage.get(owner, month)).costMicroUsd >= WEB_SEARCH_COST_MICRO_USD,
           }
         : "off";
-    // 開いているのが録音ページなら「この録音について」（背景・登場人物・固有名詞）も指示の文脈に入れる（AI の欄の「読むもの」と同じ）
-    const recordingInfo = open.kind === "rec" && chats.fields ? await chats.fields(owner, open.id) : null;
+    // 「この録音について」（背景・登場人物・固有名詞）と文書ガイドも指示の文脈に入れる（AI の欄の「読むもの」と同じもの）
+    const context = await loadChatContext(chats, owner, open);
     const respond = async (onEvent?: (event: ChatEvent) => void): Promise<unknown> => {
       const changes = new Map<string, ChatChangeInput & { title: string }>();
       const run = await runChatTurn({
@@ -637,7 +701,7 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
           glossary: settings.glossary,
           about: { name: settings.aboutName, text: settings.about },
           ...(settings.aiLang === "same" ? {} : { lang: settings.aiLang }),
-          ...(recordingInfo ? { recording: recordingInfo } : {}),
+          ...context,
           ...(selection ? { selection } : {}),
           ...(webSearch !== undefined && webSearch !== "off" ? { webSearch: true } : {}),
         }),
@@ -696,6 +760,48 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
     // 画面が `Accept: text/event-stream` で頼んだときだけ、途中の文と道具を流す（最後の done は 200 の JSON と同じ本文）
     if (wantsEventStream(request)) return chatEventStream(route, request.signal, respond);
     return jsonResponse(200, await respond());
+  });
+}
+
+/**
+ * 指示の文脈にする「この録音について」と文書ガイド（サーバー経路の指示と Mac の `context/*.md` が同じものを使う）。
+ * 録音ページは自分の欄と最新の run のガイド、録音の下の段階のページ（記事本文など）は親の録音のものを読む。
+ * ほかのページには渡さない（執筆だけのページに録音の背景やガイドは出さない）。
+ */
+async function loadChatContext(
+  chats: ChatConversationStore,
+  owner: OwnerId,
+  open: ChatWorkspacePage,
+): Promise<{ recording?: ChatRecordingInfo; guide?: ChatGuide }> {
+  const recordingId = open.kind === "rec" ? open.id : open.kind === "step" ? open.parent : null;
+  if (!recordingId) return {};
+  const [recording, guide] = await Promise.all([chats.fields ? chats.fields(owner, recordingId) : null, chats.guide ? chats.guide(owner, open.id) : null]);
+  return { ...(recording ? { recording } : {}), ...(guide ? { guide } : {}) };
+}
+
+/**
+ * GET /api/pages/{id}/ai/context — この Mac の CLI に渡す `context/*.md`（あなたについて・この録音について・文書ガイド・固有名詞）。
+ * サーバー経路が指示に入れる節と同じもの（`chatContextSections`）を、ファイルの形（name・title・markdown）で返す。
+ * 未認証は 401、他人のページ・無いページ・フォルダは同じ 404。
+ */
+export function getAiChatContext(request: Request, id: string, deps: ChatApiDeps): Promise<Response> {
+  const route = "GET /api/pages/[id]/ai/context";
+  return guarded(route, async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    const chats = deps.conversations();
+    if (!chats) return errorResponse("unavailable");
+    const owner = session.userId;
+    const writable = await chats.workspace(owner, id);
+    const open = writable?.find((page) => page.open);
+    if (!open) return notFoundResponse();
+    const settings = (await deps.settings?.()?.(owner)) ?? DEFAULT_EDITOR_SETTINGS;
+    const sections = chatContextSections({
+      glossary: settings.glossary,
+      about: { name: settings.aboutName, text: settings.about },
+      ...(await loadChatContext(chats, owner, open)),
+    });
+    return jsonResponse(200, { context: sections.map((section: ChatContextSection) => ({ name: section.name, title: section.title, markdown: section.section })) });
   });
 }
 
@@ -852,7 +958,7 @@ export function recordDeviceChatTurn(request: Request, id: string, deps: ChatApi
       if (currentPage.revision !== currentWrite.baseRevision) return conflictResponse(currentPage);
     }
 
-    // 書き込みはチャットと同じ道具を通す（作業場の外・画像のあるページ・大きすぎる本文はここで断られる）
+    // 書き込みはチャットと同じ道具を通す（作業場の外・画像や録音が欠けた本文・大きすぎる本文はここで断られる。#281）
     const changes = new Map<string, ChatChangeInput & { title: string }>();
     const workspace: WorkspaceEntry[] = writable.map((page) => ({ ...page, writable: true }));
     const run = createToolRunner({

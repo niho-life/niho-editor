@@ -1,13 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import type { AiMessage, AiMessageChange, Block, ChatTurnInput, ChatWorkspacePage, CreatePageInput, Page } from "@niho/editor-store";
+import { DEFAULT_EDITOR_SETTINGS, type AiMessage, type AiMessageChange, type Block, type ChatTurnInput, type ChatWorkspacePage, type CreatePageInput, type Page } from "@niho/editor-store";
 import type { ConverseInput, Turn } from "../ai/anthropic";
 import { createFakeClient } from "../ai/fake-client";
-import { DEFAULT_EDITOR_SETTINGS } from "@niho/editor-store";
 import { diffBlocks } from "../ai/block-diff";
 import type { AiComposeBackend } from "../ai/config";
 import type { AuthProvider } from "../auth/types";
-import { recordDeviceChatTurn, runAiChat, undoAiChat, type ChatApiDeps, type ChatConversationStore, type ChatPagesStore, type ChatUsageStore } from "./chat-api";
+import { getAiChatContext, recordDeviceChatTurn, runAiChat, undoAiChat, type ChatApiDeps, type ChatConversationStore, type ChatPagesStore, type ChatUsageStore } from "./chat-api";
 
 const ORIGIN = "http://editor.test";
 const NOW = new Date("2026-11-01T03:00:00Z");
@@ -1095,10 +1094,10 @@ describe("edit_page と読んだ版（#278）", () => {
     expect(plain(store.rows.get(page.id)!.blocks)).toEqual([blocks[0], blocks[1], p("本文 B と C です。")]);
   });
 
-  it("edit_page でも見出しは 2〜3 段にそろえ、画像のあるページは断る", async () => {
+  it("edit_page でも見出しは 2〜3 段にそろえ、引用の中に画像があるページは断る", async () => {
     const store = memoryStore();
     const page = store.add("user-a", { title: "合成の記事", blocks: [p("合成の見出しにする行")] });
-    const photo = store.add("user-a", { title: "写真のページ", blocks: [p("本文"), { type: "image", attrs: { assetId: randomUUID() } }] });
+    const photo = store.add("user-a", { title: "写真のページ", blocks: [p("本文"), { type: "blockquote", content: [{ type: "image", attrs: { assetId: randomUUID() } }] }] });
     const ai = recordingBackend([
       tool("t1", "edit_page", { page_id: page.id, find: "合成の見出しにする行", replace: "# 合成の見出し", base_revision: 1 }),
       tool("t2", "edit_page", { page_id: photo.id, find: "本文", replace: "直した", base_revision: 1 }),
@@ -1115,7 +1114,7 @@ describe("edit_page と読んだ版（#278）", () => {
     await chat(page.id, { text: "直して" }, deps("user-a", store, { ai, conversations: both }));
     expect(plain(store.rows.get(page.id)!.blocks)).toEqual([{ type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "合成の見出し" }] }]);
     expect(ai.results[1]).toMatchObject({ isError: true });
-    expect(ai.results[1]!.content).toContain("画像・録音");
+    expect(ai.results[1]!.content).toContain("引用・囲み・表の中に画像や録音があり");
     expect(store.rows.get(photo.id)!.blocks).toEqual(photo.blocks);
   });
 
@@ -1222,6 +1221,98 @@ describe("この録音について（録音ページの背景・登場人物・�
     await chat(note.id, { text: "直して" }, deps("user-a", store, { ai: ai2, conversations: chats }));
     expect(fields).not.toHaveBeenCalled();
     expect(ai2.systems[0]).not.toContain("この録音について");
+  });
+});
+
+describe("文書ガイドを指示の文脈に入れる（#279）", () => {
+  const GUIDE = { recipeName: "合成の手順", guide: "常体でそろえる。見出しは短く。", terms: [{ term: "円覚寺", reading: "えんがくじ", variants: ["円学寺"], note: "" }] };
+  const fieldsOf = async () => ({
+    entities: [{ name: "佐藤", reading: "", role: "店主", note: "" }],
+    terms: [{ term: "北鎌倉", reading: "", variants: [], note: "" }],
+    background: "北鎌倉の珈琲店主に聞いた。",
+  });
+
+  function recWithStep() {
+    const store = memoryStore();
+    const rec = store.add("user-a", { title: "合成の録音", kind: "rec" });
+    const step = store.add("user-a", { title: "記事本文", kind: "step", parent: rec.id });
+    const note = store.add("user-a", { title: "合成のメモ" });
+    const guide = vi.fn(async (_owner: string, pageId: string) => (pageId === note.id ? null : GUIDE));
+    const fields = vi.fn(fieldsOf);
+    const chats: ChatConversationStore = { ...memoryConversations(store), fields, guide };
+    return { store, rec, step, note, guide, fields, chats };
+  }
+
+  it("手順の成果物のページ（録音の下の段階）で頼むと、親の録音の欄と最新の run のガイドが system に入る", async () => {
+    const { store, rec, step, fields, guide, chats } = recWithStep();
+    const ai = recordingBackend([turn({ text: "読みました。" })]);
+    await chat(step.id, { text: "推敲して" }, deps("user-a", store, { ai, conversations: chats }));
+    // 欄は親の録音のもの、ガイドは開いているページから引く（run は録音の下にある）
+    expect(fields).toHaveBeenCalledWith("user-a", rec.id);
+    expect(guide).toHaveBeenCalledWith("user-a", step.id);
+    const system = ai.systems[0]!;
+    expect(system).toContain("## 文書ガイド（お手本。文体・構成の指示。事実の根拠にはしない）\n<untrusted_data>\n手順: 合成の手順\n\n常体でそろえる。見出しは短く。\n</untrusted_data>");
+    expect(system).toContain("- 佐藤: 店主");
+    // 固有名詞は 録音 → 手順（run の写し）の順で並ぶ
+    expect(system.indexOf("- 北鎌倉")).toBeGreaterThan(-1);
+    expect(system.indexOf("- 北鎌倉")).toBeLessThan(system.indexOf("- 円覚寺（えんがくじ）"));
+  });
+
+  it("録音ページでも入り、ふつうのページには文書ガイドも録音の欄も出さない", async () => {
+    const { store, rec, note, fields, guide, chats } = recWithStep();
+    const onRec = recordingBackend([turn({ text: "読みました。" })]);
+    await chat(rec.id, { text: "要約して" }, deps("user-a", store, { ai: onRec, conversations: chats }));
+    expect(onRec.systems[0]).toContain("## 文書ガイド");
+
+    fields.mockClear();
+    guide.mockClear();
+    const onNote = recordingBackend([turn({ text: "読みました。" })]);
+    await chat(note.id, { text: "直して" }, deps("user-a", store, { ai: onNote, conversations: chats }));
+    expect(fields).not.toHaveBeenCalled();
+    expect(guide).not.toHaveBeenCalled();
+    expect(onNote.systems[0]).not.toContain("文書ガイド（お手本");
+    expect(onNote.systems[0]).not.toContain("この録音について");
+  });
+
+  it("run が無いとき（ガイドが null）は文書ガイドを出さず、録音の欄だけ入る", async () => {
+    const { store, rec, chats } = recWithStep();
+    const none: ChatConversationStore = { ...chats, guide: async () => null };
+    const ai = recordingBackend([turn({ text: "読みました。" })]);
+    await chat(rec.id, { text: "要約して" }, deps("user-a", store, { ai, conversations: none }));
+    expect(ai.systems[0]).not.toContain("文書ガイド（お手本");
+    expect(ai.systems[0]).toContain("## この録音について");
+  });
+
+  describe("GET /api/pages/{id}/ai/context（Mac の CLI に渡す context/*.md）", () => {
+    const settings: NonNullable<ChatApiDeps["settings"]> = () => async () => ({ ...DEFAULT_EDITOR_SETTINGS, glossary: [{ term: "材木座", reading: "", variants: [], note: "" }], aboutName: "合成の呼び名", about: "合成の自己紹介" });
+    const get = (id: string, d: ChatApiDeps) => getAiChatContext(new Request(`${ORIGIN}/api/pages/${id}/ai/context`, { headers: { host: "editor.test" } }), id, d);
+
+    it("サーバー経路の system と同じ節を、ファイル名・題名つきで返す", async () => {
+      const { store, step, chats } = recWithStep();
+      const base = deps("user-a", store, { conversations: chats });
+      const response = await get(step.id, { ...base, settings });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { context: { name: string; title: string; markdown: string }[] };
+      expect(body.context.map((file) => [file.name, file.title])).toEqual([
+        ["about", "あなたについて"],
+        ["recording", "この録音について"],
+        ["guide", "文書ガイド"],
+        ["glossary", "固有名詞と誤りやすい表記"],
+      ]);
+      const ai = recordingBackend([turn({ text: "読みました。" })]);
+      await chat(step.id, { text: "推敲して" }, { ...base, ai: () => ai, settings });
+      // 札と中身が一致する: ファイルの中身は、指示（system）にそのまま入っている節
+      for (const file of body.context) expect(ai.systems[0]).toContain(file.markdown);
+    });
+
+    it("未認証は 401、他人のページ・無いページは 404、何も無いページは空の一覧", async () => {
+      const { store, note, chats } = recWithStep();
+      expect((await get(note.id, deps(null, store, { conversations: chats }))).status).toBe(401);
+      expect((await get(note.id, deps("user-b", store, { conversations: chats }))).status).toBe(404);
+      expect((await get(randomUUID(), deps("user-a", store, { conversations: chats }))).status).toBe(404);
+      const empty = await get(note.id, deps("user-a", store, { conversations: chats }));
+      expect(await empty.json()).toEqual({ context: [] });
+    });
   });
 });
 
@@ -1410,6 +1501,49 @@ describe("選択範囲（#280）: AI はその範囲だけ直す", () => {
     expect(plain(store.rows.get(page.id)!.blocks)).toEqual([four[0], p("二つをまとめた段落です。"), four[3]]);
   });
 
+  it("範囲の段落の数を変えた書き込みのあとも、範囲の外は守られる（範囲の外の段落の数は依頼のあいだ固定）", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成の記事", blocks: four });
+    const ai = recordingBackend([
+      // 範囲（第 2〜3 段落）の 2 段落を 1 つにまとめる → 4 段落が 3 段落になる
+      tool("t1", "edit_page", { page_id: page.id, find: "合成の二段落目は、少し長めに書いてあります。\n\n合成の三段落目も、少し長めに書いてあります。", replace: "二つをまとめた段落です。", base_revision: 1 }),
+      // 次の書き込みで、元は範囲の外だった末尾の段落（第 4 段落）を変える。今の本文で数え直すと、末尾の段落が範囲の中に見えて通ってしまう
+      tool("t2", "edit_page", { page_id: page.id, find: "合成の四段落目です。", replace: "書き換えた四段落目です。", base_revision: 2 }),
+      // まとめた段落（範囲の中）はもう一度直せる
+      tool("t3", "edit_page", { page_id: page.id, find: "二つをまとめた段落です。", replace: "短くまとめた段落です。", base_revision: 2 }),
+      turn({ text: "直しました。" }),
+    ]);
+    await chat(page.id, { text: "まとめて", selection }, deps("user-a", store, { ai }));
+    expect(ai.results[0]!.isError).toBe(false);
+    expect(ai.results[1]!.isError).toBe(true);
+    expect(ai.results[1]!.content).toContain("選択範囲（第 2〜3 段落）の外が変わる書き込みは断られます");
+    expect(ai.results[2]!.isError).toBe(false);
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([four[0], p("短くまとめた段落です。"), four[3]]);
+  });
+
+  it("最初の書き込みの時点で本文が選んだときの版と違えば（依頼の途中で別の画面が保存した）、番号がずれるので書かずに断る", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成の記事", blocks: four });
+    const ai = recordingBackend([
+      tool("t1", "edit_page", { page_id: page.id, find: "合成の二段落目は、少し長めに書いてあります。", replace: "短い二段落目です。", base_revision: 2 }),
+      turn({ text: "書けませんでした。" }),
+    ]);
+    // モデルの最初の返事のあいだに、別の画面が保存した（版が 1 つ進む。本文は同じ）
+    const converse = ai.client.converse.bind(ai.client);
+    Object.assign(ai.client, {
+      converse: async (input: Parameters<typeof converse>[0]) => {
+        store.rows.get(page.id)!.revision = 2;
+        return converse(input);
+      },
+    });
+    const response = await chat(page.id, { text: "短くして", selection }, deps("user-a", store, { ai }));
+    expect(response.status).toBe(200);
+    expect(ai.results[0]!.isError).toBe(true);
+    expect(ai.results[0]!.content).toContain("選んだあとに本文が変わったので");
+    expect(store.versions).toHaveLength(0);
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual(four);
+  });
+
   it("選んだあとに本文が変わっていたら（版が違う）、モデルを呼ばずに 409 で最新の本文を返す", async () => {
     const store = memoryStore();
     const page = store.add("user-a", { title: "合成の記事", blocks: four });
@@ -1470,6 +1604,210 @@ describe("選択範囲（#280）: AI はその範囲だけ直す", () => {
     // 版が違う選択範囲は 409
     const stale = await deviceTurn(page.id, { ...write("x"), selection: { ...selection, revision: 1 } }, d);
     expect(stale.status).toBe(409);
+  });
+});
+
+describe("画像・録音を含むページ（#281）", () => {
+  const ids = [randomUUID(), randomUUID(), randomUUID()];
+  const image = (index: number, attrs: Record<string, unknown> = {}): Block => ({ type: "image", attrs: { assetId: ids[index]!, ...attrs } });
+  const photos = (): Block[] => [
+    p("合成の書き出しだ。"),
+    image(0, { alt: "合成の海", caption: "合成の朝", credit: "合成の撮影者", consent: true }),
+    p("合成の二段落目だ。"),
+    image(1, { alt: "合成の山" }),
+    p("合成の三段落目だ。"),
+    image(2),
+  ];
+  const line = (index: number) => [`![合成の海](niho-asset:${ids[0]} "合成の朝")`, `![合成の山](niho-asset:${ids[1]})`, `![](niho-asset:${ids[2]})`][index]!;
+
+  it("read_page は画像を niho-asset: の 1 行の段落で返す（段落の番号は最上位のブロックのまま）", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "写真の記事", blocks: photos() });
+    const ai = recordingBackend([tool("t1", "read_page", { page_id: page.id }), turn({ text: "読みました。" })]);
+    await chat(page.id, { text: "読んで" }, deps("user-a", store, { ai }));
+    const read = JSON.parse(ai.results[0]!.content) as { total: number; paragraphs: { n: number; markdown: string }[] };
+    expect(read.total).toBe(6);
+    expect(read.paragraphs.map((item) => item.markdown)).toEqual(["合成の書き出しだ。", line(0), "合成の二段落目だ。", line(1), "合成の三段落目だ。", line(2)]);
+    expect(read.paragraphs.map((item) => item.n)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("edit_page で文章だけ直すと、画像は同じ位置・同じ attrs で残る（ai mark も画像を壊さない）", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "写真の記事", blocks: photos() });
+    const ai = recordingBackend([
+      tool("t1", "edit_page", { page_id: page.id, find: "合成の二段落目だ。", replace: "合成の二段落目です。", base_revision: 1 }),
+      turn({ text: "直しました。" }),
+    ]);
+    await chat(page.id, { text: "ですます調に" }, deps("user-a", store, { ai }));
+    expect(ai.results[0]!.isError).toBe(false);
+    const saved = store.rows.get(page.id)!.blocks;
+    expect(plain(saved)).toEqual([p("合成の書き出しだ。"), photos()[1], p("合成の二段落目です。"), photos()[3], p("合成の三段落目だ。"), photos()[5]]);
+    // 画像のブロックは mark を持たず、attrs がそのまま
+    expect([saved[1], saved[3], saved[5]]).toEqual([photos()[1], photos()[3], photos()[5]]);
+    expect(store.versions).toHaveLength(1);
+  });
+
+  it("edit_page で画像の行に掛かる置き換えは、代替文を変えられ、行を消すと保存しない", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "写真の記事", blocks: photos() });
+    const ai = recordingBackend([
+      tool("t1", "edit_page", { page_id: page.id, find: `合成の二段落目だ。\n\n${line(1)}`, replace: "合成の二段落目です。", base_revision: 1 }),
+      tool("t2", "edit_page", { page_id: page.id, find: "![合成の山]", replace: "![合成の高い山]", base_revision: 1 }),
+      turn({ text: "直しました。" }),
+    ]);
+    await chat(page.id, { text: "直して" }, deps("user-a", store, { ai }));
+    expect(ai.results[0]).toMatchObject({ isError: true });
+    expect(ai.results[0]!.content).toContain(`画像 ${ids[1]}（合成の山）が消えるので保存しませんでした`);
+    expect(ai.results[1]!.isError).toBe(false);
+    expect(store.rows.get(page.id)!.blocks[3]).toEqual(image(1, { alt: "合成の高い山" }));
+    expect(store.versions).toHaveLength(1);
+  });
+
+  it("write_page で全体を書き直しても、画像は残り、位置の移動と代替文・キャプションの変更だけが効く（credit・consent は元のまま）", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "写真の記事", blocks: photos() });
+    const markdown = [`![合成の青い海](niho-asset:${ids[0]} "合成の早朝")`, "合成の書き出しです。", "合成の二段落目です。", line(1), "合成の三段落目です。", line(2)].join("\n\n");
+    const ai = recordingBackend(writeTurn(page.id, markdown));
+    await chat(page.id, { text: "ですます調にそろえて" }, deps("user-a", store, { ai }));
+    expect(ai.results[0]!.isError).toBe(false);
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([
+      image(0, { alt: "合成の青い海", caption: "合成の早朝", credit: "合成の撮影者", consent: true }),
+      p("合成の書き出しです。"),
+      p("合成の二段落目です。"),
+      photos()[3],
+      p("合成の三段落目です。"),
+      photos()[5],
+    ]);
+  });
+
+  it("画像を落とした write_page は保存されず版も増えない（PAGE_CHANGED とは別の文）。AI が画像を残して書き直すと通る", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "写真の記事", blocks: photos() });
+    const dropped = ["合成の書き出しです。", line(0), "合成の二段落目です。", "合成の三段落目です。", line(2)].join("\n\n");
+    const kept = ["合成の書き出しです。", line(0), "合成の二段落目です。", line(1), "合成の三段落目です。", line(2)].join("\n\n");
+    const ai = recordingBackend([
+      tool("t1", "write_page", { page_id: page.id, markdown: dropped, base_revision: 1 }),
+      tool("t2", "write_page", { page_id: page.id, markdown: kept, base_revision: 1 }),
+      turn({ text: "直しました。" }),
+    ]);
+    await chat(page.id, { text: "ですます調に" }, deps("user-a", store, { ai }));
+    expect(ai.results[0]).toMatchObject({ isError: true });
+    expect(ai.results[0]!.content).toContain(`画像 ${ids[1]}（合成の山）が消えるので保存しませんでした`);
+    expect(ai.results[0]!.content).toContain("remove_images");
+    expect(ai.results[0]!.content).not.toContain("本文が変わっています");
+    expect(ai.results[1]!.isError).toBe(false);
+    expect(store.versions).toHaveLength(1);
+    expect(store.rows.get(page.id)!.revision).toBe(2);
+    expect(store.rows.get(page.id)!.blocks.filter((block) => block.type === "image")).toEqual([photos()[1], photos()[3], photos()[5]]);
+  });
+
+  it("remove_images で明示した画像だけが消える（行が残っていても外す）", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "写真の記事", blocks: photos() });
+    const markdown = ["合成の書き出しだ。", line(0), "合成の二段落目だ。", line(1), "合成の三段落目だ。", line(2)].join("\n\n");
+    const ai = recordingBackend([
+      tool("t1", "write_page", { page_id: page.id, markdown, base_revision: 1, remove_images: [ids[1]] }),
+      tool("t2", "write_page", { page_id: page.id, markdown, base_revision: 2, remove_images: [ids[2]] }),
+      turn({ text: "消しました。" }),
+    ]);
+    await chat(page.id, { text: "2 枚目と 3 枚目の写真を消して" }, deps("user-a", store, { ai }));
+    expect(ai.results.map((result) => result.isError)).toEqual([false, true]);
+    // 2 回目: 元のページ（2 枚目はもう無い）に無い画像の行は足せない
+    expect(ai.results[1]!.content).toContain("このページに無い画像・録音は足せません");
+    expect(store.rows.get(page.id)!.blocks.filter((block) => block.type === "image")).toEqual([photos()[1], photos()[5]]);
+  });
+
+  it("元のページに無い assetId・remove_images の見知らぬ id・同じ画像の 2 回目は断る", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "写真の記事", blocks: photos() });
+    const all = ["合成の書き出しだ。", line(0), line(1), line(2)].join("\n\n");
+    const ai = recordingBackend([
+      tool("t1", "write_page", { page_id: page.id, markdown: `${all}\n\n![](niho-asset:${randomUUID()})`, base_revision: 1 }),
+      tool("t2", "write_page", { page_id: page.id, markdown: all, base_revision: 1, remove_images: [randomUUID()] }),
+      tool("t3", "write_page", { page_id: page.id, markdown: `${all}\n\n${line(0)}`, base_revision: 1 }),
+      tool("t4", "edit_page", { page_id: page.id, find: "合成の三段落目だ。", replace: line(0), base_revision: 1 }),
+      turn({ text: "できませんでした。" }),
+    ]);
+    await chat(page.id, { text: "直して" }, deps("user-a", store, { ai }));
+    expect(ai.results.map((result) => result.isError)).toEqual([true, true, true, true]);
+    expect(ai.results[0]!.content).toContain("このページに無い画像・録音は足せません");
+    expect(ai.results[1]!.content).toContain("remove_images に、このページの画像ではない id");
+    expect(ai.results[2]!.content).toContain("2 回出ています");
+    expect(ai.results[3]!.content).toContain("2 回出ています");
+    expect(store.rows.get(page.id)!.blocks).toEqual(photos());
+    expect(store.versions).toEqual([]);
+  });
+
+  it("録音ブロックは位置だけ動かせて、消せない（remove_images でも消せない）", async () => {
+    const store = memoryStore();
+    const recordingId = randomUUID();
+    const rec: Block = { type: "recording", attrs: { assetId: recordingId } };
+    const page = store.add("user-a", { title: "合成の録音", blocks: [rec, p("合成のメモだ。")] });
+    const ai = recordingBackend([
+      tool("t1", "write_page", { page_id: page.id, markdown: "合成のメモです。", base_revision: 1 }),
+      tool("t2", "write_page", { page_id: page.id, markdown: "合成のメモです。", base_revision: 1, remove_images: [recordingId] }),
+      tool("t3", "write_page", { page_id: page.id, markdown: `合成のメモです。\n\n[録音](niho-asset:${recordingId})`, base_revision: 1 }),
+      turn({ text: "直しました。" }),
+    ]);
+    await chat(page.id, { text: "直して" }, deps("user-a", store, { ai }));
+    expect(ai.results.map((result) => result.isError)).toEqual([true, true, false]);
+    expect(ai.results[0]!.content).toContain("録音は書き換えも削除もできません");
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([p("合成のメモです。"), rec]);
+    expect(store.versions).toHaveLength(1);
+  });
+
+  it("録音ページの read_page には文字起こし（transcript）が別のキーで付き、<untrusted_data> で包まれ、write_page は文字起こしに触れない", async () => {
+    const store = memoryStore();
+    const recordingId = randomUUID();
+    const page = store.add("user-a", { title: "合成の録音", kind: "rec", blocks: [{ type: "recording", attrs: { assetId: recordingId } }, p("合成のメモ")] });
+    const segments = Array.from({ length: 70 }, (_, index) => ({ start: index * 61, end: null, text: `合成の区間 ${index + 1}`, speaker: index % 2 === 0 ? 1 : null }));
+    const rec = { revision: 1, source: "vtt" as const, language: "ja" as const, engine: null, durationSec: null, sourceName: null, sourceSha256: null, segments, speakerNames: { "1": "合成の聞き手" }, audio: null, createdAt: NOW.toISOString(), updatedAt: NOW.toISOString() };
+    const before = structuredClone(rec);
+    const chats = memoryConversations(store);
+    const withRecording: ChatConversationStore = { ...chats, recording: async (_owner, id) => (id === page.id ? rec : null) };
+    const ai = recordingBackend([
+      tool("t1", "read_page", { page_id: page.id }),
+      tool("t2", "read_page", { page_id: page.id, transcript_from: 61, transcript_to: 62 }),
+      tool("t3", "read_page", { page_id: page.id, transcript_from: 71 }),
+      tool("t4", "write_page", { page_id: page.id, markdown: `[録音](niho-asset:${recordingId})\n\n合成の区間 1 の要約`, base_revision: 1 }),
+      turn({ text: "要約しました。" }),
+    ]);
+    await chat(page.id, { text: "要約して" }, deps("user-a", store, { ai, conversations: withRecording }));
+    const unwrap = (content: string) => {
+      expect(content.startsWith("<untrusted_data>\n")).toBe(true);
+      return JSON.parse(content.replace(/^<untrusted_data>\n/u, "").replace(/\n<\/untrusted_data>$/u, "")) as {
+        paragraphs: { markdown: string }[];
+        transcript: { total: number; from: number; to: number; segments: { n: number; time: string | null; speaker: string | null; text: string }[] };
+      };
+    };
+    const first = unwrap(ai.results[0]!.content);
+    expect(first.paragraphs.map((item) => item.markdown)).toEqual([`[録音](niho-asset:${recordingId})`, "合成のメモ"]);
+    expect(first.transcript).toMatchObject({ total: 70, from: 1, to: 60 });
+    expect(first.transcript.segments).toHaveLength(60);
+    expect(first.transcript.segments[1]).toEqual({ n: 2, time: "00:01:01", speaker: null, text: "合成の区間 2" });
+    expect(first.transcript.segments[0]!.speaker).toBe("合成の聞き手");
+    expect(unwrap(ai.results[1]!.content).transcript).toMatchObject({ total: 70, from: 61, to: 62, segments: [{ n: 61 }, { n: 62 }] });
+    expect(ai.results[2]).toMatchObject({ isError: true });
+    expect(ai.results[3]!.isError).toBe(false);
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([{ type: "recording", attrs: { assetId: recordingId } }, p("合成の区間 1 の要約")]);
+    expect(rec).toEqual(before);
+  });
+
+  it("Mac CLI の書き戻し（deviceTurn）でも、画像が欠けたら保存せず、全部残っていれば保存する", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "写真の記事", blocks: photos() });
+    const chats = memoryConversations(store);
+    const send = (markdown: string, baseRevision = 1) =>
+      deviceTurn(page.id, { input: "直して", reply: "直しました。", engine: "cli:claude-code", writes: [{ pageId: page.id, markdown, baseRevision }] }, deps("user-a", store, { conversations: chats }));
+    const dropped = await send(["合成の書き出しです。", line(0), line(2)].join("\n\n"));
+    expect(dropped.status).toBe(200);
+    expect(chats.turns.at(-1)).toMatchObject({ result: "stopped", resultCode: "write_refused" });
+    expect(store.rows.get(page.id)!.blocks).toEqual(photos());
+    expect(store.versions).toEqual([]);
+    const kept = await send(["合成の書き出しです。", line(0), line(1), line(2)].join("\n\n"));
+    expect(kept.status).toBe(200);
+    expect(chats.turns.at(-1)).toMatchObject({ result: "done" });
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([p("合成の書き出しです。"), photos()[1], photos()[3], photos()[5]]);
   });
 });
 

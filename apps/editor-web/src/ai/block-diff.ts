@@ -69,6 +69,14 @@ export function blockText(block: Block): string {
   return "";
 }
 
+/**
+ * 「変更を見る」で、文字を持たないブロックの位置を示す語（画像は「（画像）」、録音は「（録音）」。#281）。それ以外は null。
+ */
+export function partLabel(block: Block): string | null {
+  const type = typeOf(block);
+  return type === "image" ? "（画像）" : type === "recording" ? "（録音）" : null;
+}
+
 /** 鍵の順に依らない JSON（Markdown の往復で attrs の鍵の順が変わっても同じ値にする）。 */
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;

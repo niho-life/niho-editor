@@ -1,6 +1,6 @@
 import type { Block } from "@niho/editor-store";
 import { describe, expect, it } from "vitest";
-import { alignBlocks, blockText, diffBlocks, markAiInserted, stripAiMarks } from "./block-diff";
+import { alignBlocks, blockText, diffBlocks, markAiInserted, partLabel, stripAiMarks } from "./block-diff";
 
 const t = (text: string, ...marks: string[]): Block => (marks.length > 0 ? { type: "text", text, marks: marks.map((type) => ({ type })) } : { type: "text", text });
 const p = (...content: Block[]): Block => ({ type: "paragraph", content });
@@ -166,5 +166,13 @@ describe("stripAiMarks", () => {
     expect(stripAiMarks([p(t("a"), t("b", "ai"), t("c", "bold", "ai"), t("d", "bold"))])).toEqual([p(t("ab"), t("cd", "bold"))]);
     const plainBody = [ul("one"), p(t("x"), { type: "hardBreak" }, t("y"))];
     expect(stripAiMarks(plainBody)).toEqual(plainBody);
+  });
+});
+
+describe("partLabel（#281）", () => {
+  it("画像は「（画像）」、録音は「（録音）」、それ以外は null", () => {
+    expect(partLabel({ type: "image", attrs: { assetId: "11111111-1111-4111-8111-111111111111" } })).toBe("（画像）");
+    expect(partLabel({ type: "recording", attrs: { assetId: "11111111-1111-4111-8111-111111111111" } })).toBe("（録音）");
+    expect(partLabel({ type: "paragraph", content: [] })).toBeNull();
   });
 });

@@ -13,6 +13,7 @@ import {
   createRun,
   failAttempt,
   finalStepPageNames,
+  getRunGuide,
   heartbeatAttempt,
   isIdempotencyKey,
   isStepErrorCode,
@@ -269,6 +270,29 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
       );
     }
     assert.deepEqual(await listRun(pool, OWNER, parent), { run });
+  });
+
+  it("reads the latest run's guide and terms for the recording and for a page under it — and for nobody else", async () => {
+    const owner = "synthetic-guide-owner";
+    const recipe = { ...RECIPE, revision: 1, name: "合成の手順", guide: "合成のガイド: 常体でそろえる", terms: [{ term: "円覚寺", reading: "えんがくじ", variants: ["円学寺"], note: "" }], steps: RECIPE.steps.map((step) => ({ ...step, profile: "standard" })) };
+    await pool.query("INSERT INTO recipes(owner,id,name,guide,steps,terms) VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb)", [owner, recipe.id, recipe.name, recipe.guide, JSON.stringify(recipe.steps), JSON.stringify(recipe.terms)]);
+    const parent = (await store.createPage(owner, { kind: "rec", title: "合成の録音", blocks: TRANSCRIPT })).id;
+    // run が無いあいだは何も返さない
+    assert.equal(await getRunGuide(pool, owner, parent), null);
+    const first = await createRun(pool, owner, parent, { recipe });
+    assert.equal(first.status, "created");
+    const expected = { recipeName: "合成の手順", guide: "合成のガイド: 常体でそろえる", terms: recipe.terms };
+    assert.deepEqual(await getRunGuide(pool, owner, parent), expected);
+    // 録音の下の段階のページ（kind = 'step'）からも、同じ録音の run のものが読める
+    const stepPage = first.status === "created" ? first.run.steps[0]!.pageId : "";
+    assert.deepEqual(await getRunGuide(pool, owner, stepPage), expected);
+    // ふつうのページ・他人・ゴミ箱の録音・形の悪い id は null
+    const note = await store.createPage(owner, { title: "合成のメモ" });
+    assert.equal(await getRunGuide(pool, owner, note.id), null);
+    assert.equal(await getRunGuide(pool, "synthetic-other-owner", parent), null);
+    assert.equal(await getRunGuide(pool, owner, "not-a-page-id"), null);
+    assert.equal(await store.deletePage(owner, parent), "deleted");
+    assert.equal(await getRunGuide(pool, owner, parent), null);
   });
 
   it("pins the parent/recipe design across runs and changes it only on explicit update", async () => {

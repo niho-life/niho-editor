@@ -167,7 +167,7 @@ describe("/api/pages/{id}/steps", () => {
       [1, "r4t8wz3c", "記事方針", "pending", "wait", 0, null],
       [2, "h2n6v5pe", "記事本文", "pending", "wait", 0, null],
     ]);
-    expect(run).toMatchObject({ recipeName: "記事制作", recipeRevision: 1, currentRevision: 1, designChanges: [] });
+    expect(run).toMatchObject({ recipeName: "記事制作", hasGuide: true, recipeRevision: 1, currentRevision: 1, designChanges: [] });
     expect(queue.drain()).toEqual([{ name: taskName(run.id, 0, 0), runId: run.id, stepIndex: 0 }]);
   });
 
