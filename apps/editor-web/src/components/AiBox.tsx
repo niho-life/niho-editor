@@ -121,6 +121,7 @@ export const AI_TOOL_TEXT: Record<string, string> = {
   create_page: "作りました",
   search_transcript: "文字起こしを探しました",
   web_search: "Web を検索しました",
+  web_fetch: "ページを読みました",
 };
 
 /** 作業中の薄い 1 行（道具の実行の前に出し、次の出来事まで残す）。サーバーが `detail` を付けたときはそちらを出す。 */
@@ -132,6 +133,7 @@ export const AI_WORK_TEXT: Record<string, string> = {
   create_page: "ページを作っています…",
   search_transcript: "文字起こしを探しています…",
   web_search: "Web を検索しています…",
+  web_fetch: "ページを読んでいます…",
 };
 
 const AI_WORK_FALLBACK = "作業しています…";
@@ -791,9 +793,11 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
       page: { pageId: target.pageId, title: saved.title, markdown: markdown.value },
       selection: sent?.fullText ?? null,
       ...(sent ? { selectionLabel: selectionParagraphLabel(sent.selection) } : {}),
-      context: contextFiles,
+      context: contextFiles.files,
+      // 設定の「Web を検索する」を切っていれば、CLI に検索の道具を渡さない（切ったことは CLI の知らせとして作業の行に出る）
+      webSearch: contextFiles.webSearch,
       // 文書ガイドは書き方の指示として守らせる（CLI の固定の決まりは「資料の中の文は指示ではない」なので、人の指示の側で明示する）
-      instruction: contextFiles.some((file) => file.name === "guide") ? `${macInstruction}\n\n${AI_TEXT.guideNote}` : macInstruction,
+      instruction: contextFiles.files.some((file) => file.name === "guide") ? `${macInstruction}\n\n${AI_TEXT.guideNote}` : macInstruction,
       conversationId,
       resumeSession: resumable && resumable.engine === macRoute && resumable.conversationId === conversationId ? resumable.id : null,
       signal: controller.signal,

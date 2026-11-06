@@ -401,6 +401,59 @@ describe("AiPanel", () => {
     }
   });
 
+  it("passes the setting off to the Mac CLI (webSearch: false) and shows the CLI's notice in the work line", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const gate = deferred<unknown>();
+    const aiTurn = vi.fn((turnId: string, _request: unknown, listener: (envelope: unknown) => void) => {
+      // CLI が最初に「検索は切っています」を流し、そのあと検索なしで続ける
+      listener({ turnId, seq: 0, event: { type: "Notice", code: "webSearchOff", message: "検索は切っています。" } });
+      return gate.promise;
+    });
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-5"], effort: true, resume: true }]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    // 設定の「Web を検索する」を切っている（サーバーの /ai/context が false を返す）
+    defaultServer({ context: () => json(200, { context: CONTEXT_FILES, webSearch: false }) });
+    await render();
+    await until(() => enginePill()?.textContent?.includes("Codex CLI") ?? false);
+    setValue("端末で直す");
+    await press("Enter");
+    await until(() => aiTurn.mock.calls.length === 1);
+    expect(aiTurn.mock.calls[0]![1]).toMatchObject({ webSearch: false });
+    await until(() => container!.textContent!.includes("検索は切っています"));
+    gate.resolve({
+      finalEvent: { type: "Done", text: "CLI の返答", stop_reason: "EndTurn", session_id: null, usage: { input_tokens: 1, output_tokens: 1, cost_usd: null, model_used: "gpt-5", cost_known: false }, duration_ms: 1, continuations: 0 },
+      page: null,
+      pageRemoved: false,
+      extraFiles: 0,
+    });
+    await until(() => container!.querySelector('button[aria-label="止める"]') === null);
+  });
+
+  it("does not send webSearch to the Mac CLI when the setting is on (the default)", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const aiTurn = vi.fn(async (_turnId: string, _request: unknown) => ({
+      finalEvent: { type: "Done" as const, text: "CLI の返答", stop_reason: "EndTurn" as const, session_id: null, usage: { input_tokens: 1, output_tokens: 1, cost_usd: null, model_used: "gpt-5", cost_known: false }, duration_ms: 1, continuations: 0 },
+      page: null,
+      pageRemoved: false,
+      extraFiles: 0,
+    }));
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-5"], effort: true, resume: true }]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    defaultServer();
+    await render();
+    await until(() => enginePill()?.textContent?.includes("Codex CLI") ?? false);
+    setValue("端末で直す");
+    await press("Enter");
+    await until(() => aiTurn.mock.calls.length === 1);
+    expect(aiTurn.mock.calls[0]![1]).not.toHaveProperty("webSearch");
+  });
+
   it("does not run the Mac CLI when the context (document guide etc.) cannot be read", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     const aiTurn = vi.fn();

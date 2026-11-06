@@ -330,7 +330,7 @@ impl ApiAiRunner {
           &mut on_event,
         )
       }
-      ToolPolicy::ProjectFolder { dir, writable } => (
+      ToolPolicy::ProjectFolder { dir, writable, .. } => (
         None,
         Some(api::FolderTools {
           dir: dir.clone(),

@@ -118,11 +118,30 @@ function errorFromShell(error: unknown): MacAiError {
   return new MacAiError("failed");
 }
 
+/** CLI の Web の道具の名前 → サーバー経路の作業の行と同じ名前（画面の文言は AiBox の AI_TOOL_TEXT / AI_WORK_TEXT）。 */
+const WEB_TOOLS: Readonly<Record<string, string>> = { WebSearch: "web_search", WebFetch: "web_fetch" };
+
+/** 知らせの文（Rust から来た `message` は使わず、コードごとに画面側で決めた文だけを出す）。 */
+const NOTICE_TEXT: Readonly<Record<string, string>> = {
+  webSearchOff: "検索は切っています",
+  webSearchUnsupported: "この CLI の版では検索できません",
+};
+
+/** 自分のキーだけを引く（CLI 由来の文字列が `constructor` などの継承されたプロパティに当たらないように）。 */
+function own<T>(table: Readonly<Record<string, T>>, key: unknown): T | undefined {
+  return typeof key === "string" && Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
+/** ページを読む道具の `summary`（ホスト名だけが来る）。ホスト名の形のときだけ作業の行に出す。 */
+function hostOf(summary: unknown): string | null {
+  return typeof summary === "string" && /^[A-Za-z0-9.-]{1,60}$/.test(summary) ? summary : null;
+}
+
 function progressText(event: ShellAiEvent): string | null {
   switch (event.type) {
     case "ThinkingDelta": return "CLI が考えています…";
     case "TextDelta": return "CLI が返答を作っています…";
-    case "ToolUse": return "CLI がページを確認・編集しています…";
+    case "ToolUse": return own(WEB_TOOLS, event.name) ? "CLI が Web を調べています…" : "CLI がページを確認・編集しています…";
     case "ToolResult": return event.ok ? "CLI がページを確認しました…" : "CLI がページの操作を確認しています…";
     default: return null;
   }
@@ -133,8 +152,17 @@ export function macChatEvent(event: ShellAiEvent): AiChatEvent | null {
   switch (event.type) {
     case "TextDelta": return typeof event.text === "string" && event.text ? { type: "text", text: event.text, kind: "text" } : null;
     case "ThinkingDelta": return typeof event.text === "string" && event.text ? { type: "text", text: event.text, kind: "thinking" } : null;
-    case "ToolUse": return { type: "tool", tool: event.name, page: null, ok: null, phase: "start" };
-    case "ToolResult": return { type: "tool", tool: event.name, page: null, ok: event.ok === true, phase: "end" };
+    case "ToolUse": {
+      const web = own(WEB_TOOLS, event.name);
+      const host = web === "web_fetch" ? hostOf(event.summary) : null;
+      return { type: "tool", tool: web ?? event.name, page: null, ok: null, phase: "start", ...(host ? { detail: `${host} を読んでいます` } : {}) };
+    }
+    case "ToolResult": return { type: "tool", tool: own(WEB_TOOLS, event.name) ?? event.name, page: null, ok: event.ok === true, phase: "end" };
+    // 検索を切った・この版では検索できない。サーバー経路の「検索は切っています」と同じ、作業の行の 1 句
+    case "Notice": {
+      const detail = own(NOTICE_TEXT, event.code);
+      return detail ? { type: "tool", tool: "web_search", page: null, ok: null, phase: "end", detail } : null;
+    }
     default: return null;
   }
 }
@@ -174,6 +202,8 @@ export async function runMacAiTurn(input: {
   selectionLabel?: string;
   /** 読むだけの文脈（`context/<name>.md`。あなたについて・この録音について・文書ガイド・固有名詞）。サーバー経路が指示に入れるものと同じ。 */
   context?: readonly { name: string; title: string; markdown: string }[];
+  /** Web の検索を許すか（設定の「Web を検索する」）。省くと許す。false なら CLI に検索の道具を渡さない。 */
+  webSearch?: boolean;
   instruction: string;
   conversationId: string | null;
   resumeSession: string | null;
@@ -209,6 +239,7 @@ export async function runMacAiTurn(input: {
       instruction: instructionOf(input),
       page: input.page,
       ...(files.length === 0 ? {} : { context: files }),
+      ...(input.webSearch === false ? { webSearch: false } : {}),
     }, (envelope) => {
       if (!envelope || envelope.turnId !== turnId || !Number.isSafeInteger(envelope.seq) || envelope.seq <= lastSeq) return;
       lastSeq = envelope.seq;

@@ -52,6 +52,9 @@ pub enum ToolPolicy {
   ProjectFolder {
     dir: PathBuf,
     writable: Vec<String>,
+    /// Web の検索を許すか（#283。Claude Code・Codex・Antigravity の CLI だけ。API の経路は見ない）。false なら CLI へ
+    /// 検索の道具を渡さず、最初に `TurnEvent::Notice`（`webSearchOff`）で知らせて検索なしで続ける。
+    web_search: bool,
   },
   ReadFile {
     file: PathBuf,
@@ -130,6 +133,12 @@ pub enum TurnEvent {
     name: String,
     ok: bool,
   },
+  /// 知らせ（Web の検索を切った・この CLI の版では検索できない。#283）。検索なしで続ける。`code` は
+  /// "webSearchOff" | "webSearchUnsupported"、`message` は画面に出す文。終端ではない。
+  Notice {
+    code: String,
+    message: String,
+  },
   Done {
     text: String,
     stop_reason: StopReason,
@@ -159,6 +168,7 @@ impl TurnEvent {
         json!({ "type": "ToolUse", "id": id, "name": name, "summary": summary })
       }
       TurnEvent::ToolResult { id, name, ok } => json!({ "type": "ToolResult", "id": id, "name": name, "ok": ok }),
+      TurnEvent::Notice { code, message } => json!({ "type": "Notice", "code": code, "message": message }),
       TurnEvent::Done {
         text,
         stop_reason,
@@ -357,6 +367,16 @@ mod tests {
       ok: false
     }
     .is_terminal());
+    // 知らせ（Web の検索を切った。#283）は終端ではなく、契約の名前のまま流れる
+    let notice = TurnEvent::Notice {
+      code: "webSearchOff".into(),
+      message: "検索は切っています。".into(),
+    };
+    assert_eq!(
+      notice.to_wire(),
+      json!({ "type": "Notice", "code": "webSearchOff", "message": "検索は切っています。" })
+    );
+    assert!(!notice.is_terminal());
     assert_eq!(
       serde_json::to_value(ReasonCode::ModelNotFound).unwrap(),
       json!("ModelNotFound")

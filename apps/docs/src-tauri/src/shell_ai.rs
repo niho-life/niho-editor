@@ -295,6 +295,14 @@ pub struct ShellAiTurnRequest {
   pub page: ShellAiDocument,
   #[serde(default)]
   pub context: Vec<ShellAiContext>,
+  /// Web の検索を許すか（設定の「Web を検索する」。#283）。省くと許す（既定 ON）。false なら 3 つの CLI とも検索の道具を
+  /// 渡さず、`Notice`（`webSearchOff`）を流して検索なしで続ける。
+  #[serde(default = "default_web_search")]
+  pub web_search: bool,
+}
+
+fn default_web_search() -> bool {
+  true
 }
 
 /// 依頼を検査した結果（一時置き場に書く前に全部決める）。
@@ -309,6 +317,8 @@ pub(crate) struct Checked {
   pub(crate) system_prompt: String,
   /// 標準入力で渡す中身（人の指示。ファイルを読めない CLI には、今の本文と参照も同封する）。
   pub(crate) user_prompt: String,
+  /// Web の検索を許すか（依頼の `webSearch`）。
+  pub(crate) web_search: bool,
 }
 
 /// 依頼の形・大きさを検査し、システムプロンプトを組む。何も書かない。
@@ -357,6 +367,7 @@ pub(crate) fn check(request: &ShellAiTurnRequest) -> CommandResult<Checked> {
     staging_id: request.conversation_id.as_deref().map(conversation_staging_id),
     system_prompt: system_prompt(provider, request),
     user_prompt,
+    web_search: request.web_search,
   })
 }
 
@@ -499,6 +510,7 @@ pub(crate) fn turn_request(checked: &Checked, prepared: &Prepared) -> TurnReques
     tool_policy: ToolPolicy::ProjectFolder {
       dir,
       writable: vec![PAGE_DIR.to_string()],
+      web_search: checked.web_search,
     },
   }
 }
@@ -717,6 +729,7 @@ mod tests {
         title: "文書ガイド".to_string(),
         markdown: "- です・ます\n".to_string(),
       }],
+      web_search: true,
     }
   }
 
@@ -1001,6 +1014,38 @@ mod tests {
   }
 
   #[test]
+  fn web_search_defaults_on_and_follows_the_request_into_the_tool_policy() {
+    // JSON の `webSearch` を省くと許す。false は検査を通って、起動の形（tool_policy）まで届く
+    let omitted: ShellAiTurnRequest = serde_json::from_value(serde_json::json!({
+      "engine": "cli:claude-code",
+      "model": "claude-sonnet-4-5",
+      "instruction": "短くして",
+      "page": { "pageId": "page_01", "title": "t", "markdown": "本文" },
+    }))
+    .unwrap();
+    assert!(omitted.web_search);
+    let off: ShellAiTurnRequest = serde_json::from_value(serde_json::json!({
+      "engine": "cli:claude-code",
+      "model": "claude-sonnet-4-5",
+      "instruction": "短くして",
+      "page": { "pageId": "page_01", "title": "t", "markdown": "本文" },
+      "webSearch": false,
+    }))
+    .unwrap();
+    assert!(!off.web_search);
+    let checked = check(&off).unwrap();
+    assert!(!checked.web_search);
+    let data_dir = temp_data_dir();
+    let staging = Staging::new(&data_dir);
+    let prepared = prepare(&staging, &checked, &off).unwrap();
+    let turn = turn_request(&checked, &prepared);
+    assert!(matches!(
+      turn.tool_policy,
+      ToolPolicy::ProjectFolder { web_search: false, .. }
+    ));
+  }
+
+  #[test]
   fn conversation_staging_ids_are_stable_and_valid() {
     let first = conversation_staging_id("conv_01");
     assert_eq!(first, conversation_staging_id("conv_01"));
@@ -1050,7 +1095,7 @@ mod tests {
     let turn = turn_request(&checked, &prepared);
     assert_eq!(turn.workdir, root);
     assert!(
-      matches!(&turn.tool_policy, ToolPolicy::ProjectFolder { dir, writable } if *dir == root && writable == &vec!["page".to_string()])
+      matches!(&turn.tool_policy, ToolPolicy::ProjectFolder { dir, writable, web_search: true } if *dir == root && writable == &vec!["page".to_string()])
     );
     assert_eq!(turn.model, "claude-sonnet-4-5");
     assert_eq!(turn.user_prompt, request.instruction);
@@ -1155,6 +1200,7 @@ mod tests {
         TurnEvent::TextDelta(_) => "TextDelta".to_string(),
         TurnEvent::ToolUse { name, .. } => format!("ToolUse:{name}"),
         TurnEvent::ToolResult { name, ok, .. } => format!("ToolResult:{name}:{ok}"),
+        TurnEvent::Notice { code, .. } => format!("Notice:{code}"),
         TurnEvent::Done { .. } => "Done".to_string(),
         TurnEvent::Error { .. } => "Error".to_string(),
       };

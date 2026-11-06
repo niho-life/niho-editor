@@ -1311,7 +1311,17 @@ describe("文書ガイドを指示の文脈に入れる（#279）", () => {
       expect((await get(note.id, deps("user-b", store, { conversations: chats }))).status).toBe(404);
       expect((await get(randomUUID(), deps("user-a", store, { conversations: chats }))).status).toBe(404);
       const empty = await get(note.id, deps("user-a", store, { conversations: chats }));
-      expect(await empty.json()).toEqual({ context: [] });
+      // 設定が無ければ Web の検索は ON（既定）
+      expect(await empty.json()).toEqual({ context: [], webSearch: true });
+    });
+
+    it("設定の「Web を検索する」を、Mac の CLI の依頼に載せられるよう返す（切っていれば false）", async () => {
+      const { store, note, chats } = recWithStep();
+      const base = deps("user-a", store, { conversations: chats });
+      const off = await get(note.id, { ...base, settings: () => async () => ({ ...DEFAULT_EDITOR_SETTINGS, webSearch: false }) });
+      expect(await off.json()).toMatchObject({ webSearch: false });
+      const on = await get(note.id, { ...base, settings: () => async () => ({ ...DEFAULT_EDITOR_SETTINGS, webSearch: true }) });
+      expect(await on.json()).toMatchObject({ webSearch: true });
     });
   });
 });
