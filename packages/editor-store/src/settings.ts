@@ -4,7 +4,8 @@ import type { OwnerId, Queryable } from "./types.ts";
  * アカウントの設定（表 editor_settings。migration 0013。Issue #108）。owner ごとに 1 行で、行が無ければ既定値。
  *
  * - 持つのは画面から変えられるものだけ: AI の提案の言語、固有名詞と誤りやすい表記、手順（段階の名前・指示・お手本）、
- *   AI チャットの Web 検索の可否（`web_search`。#283）、「あなたについて」（旧アプリの about.json。AI に渡す本人の説明と書き方の希望。**公開のときの著者情報とは別物**）。
+ *   AI チャットの Web 検索の可否（`web_search`。#283）、「あなたについて」（旧アプリの about.json。AI に渡す本人の説明と書き方の希望。**公開のときの著者情報とは別物**）、
+ *   公開用の著者紹介（`author_role`・`author_bio`。公開のとき公開版の `authorProfile` に固定する。AI には渡さない）。
  * - 文字起こしのエンジンはサーバーの設定（`EDITOR_TRANSCRIBE_ENGINE`）、保存先は NIHO から毎回読む（設計 §2.1）ので、
  *   どちらもここには無い。
  * - 書き込みは項目ごとに全部入れ替える（部分的な継ぎ足しをしない）。同時の保存は後から来たものが勝つ。
@@ -47,6 +48,10 @@ export type EditorSettings = {
   about: string;
   /** AI チャットが Web を検索してよいか（設定 › AI の「Web を検索する」。既定 ON。#283）。 */
   webSearch: boolean;
+  /** 公開用の著者紹介の肩書（1 行。空なら null）。公開のとき公開版の `authorProfile.role` に固定する。 */
+  authorRole: string | null;
+  /** 公開用の著者紹介の紹介文（1 行にそろえて保存する。空なら null）。公開版の `authorProfile.bio`。 */
+  authorBio: string | null;
 };
 
 /** 変える項目だけを渡す（渡した項目は全部入れ替える）。 */
@@ -68,6 +73,9 @@ export const SETTINGS_LIMITS = Object.freeze({
   aboutChars: 2_000,
   /** 呼び名は短い1行にする。 */
   aboutNameChars: 80,
+  /** 公開用の著者紹介（公開 API v1 の PUBLISHED_LIMITS.maxAuthorRoleChars・maxAuthorBioChars と同じ。表の CHECK も同じ）。 */
+  authorRoleChars: 120,
+  authorBioChars: 600,
 });
 
 /** 手順と段階の id（既定の手順の `tpl-1`、足したものの `r-…` のどちらも通る形）。 */
@@ -80,10 +88,15 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = Object.freeze({
   aboutName: "",
   about: "",
   webSearch: true,
+  authorRole: null,
+  authorBio: null,
 }) as EditorSettings;
 
 /** 検証が断る理由（API はこれをそのまま 400 の理由にしない。短い code だけを返す）。 */
-export type SettingsProblem = "ai_lang" | "glossary" | "recipes" | "about" | "about_name" | "web_search";
+export type SettingsProblem = "ai_lang" | "glossary" | "recipes" | "about" | "about_name" | "web_search" | "author_role" | "author_bio";
+
+/** 設定の PATCH が持てる項目。 */
+export const SETTINGS_PATCH_KEYS = ["aiLang", "glossary", "recipes", "about", "aboutName", "webSearch", "authorRole", "authorBio"] as const;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -137,7 +150,7 @@ export function isSettingsRecipe(value: unknown): value is SettingsRecipe {
 
 /** 設定の変更に通らないところがあれば、その項目を返す（無ければ null）。 */
 export function settingsProblem(patch: unknown): SettingsProblem | null {
-  if (!isPlainObject(patch) || !hasOnlyKeys(patch, ["aiLang", "glossary", "recipes", "about", "aboutName", "webSearch"])) return "ai_lang";
+  if (!isPlainObject(patch) || !hasOnlyKeys(patch, SETTINGS_PATCH_KEYS)) return "ai_lang";
   if (patch.aiLang !== undefined && !isSettingsAiLang(patch.aiLang)) return "ai_lang";
   if (patch.glossary !== undefined) {
     const { glossary } = patch;
@@ -154,7 +167,17 @@ export function settingsProblem(patch: unknown): SettingsProblem | null {
   if (patch.about !== undefined && !isSettingsText(patch.about, SETTINGS_LIMITS.aboutChars, true)) return "about";
   if (patch.aboutName !== undefined && !isSettingsText(patch.aboutName, SETTINGS_LIMITS.aboutNameChars, true)) return "about_name";
   if (patch.webSearch !== undefined && typeof patch.webSearch !== "boolean") return "web_search";
+  // 公開用の著者紹介は null（空）か文字。改行は保存のときに空白へまとめる（公開版の文字は 1 行）
+  if (patch.authorRole !== undefined && patch.authorRole !== null && !isSettingsText(patch.authorRole, SETTINGS_LIMITS.authorRoleChars, true)) return "author_role";
+  if (patch.authorBio !== undefined && patch.authorBio !== null && !isSettingsText(patch.authorBio, SETTINGS_LIMITS.authorBioChars, true)) return "author_bio";
   return null;
+}
+
+/** 公開用の著者紹介の 1 つの欄: 空白をまとめて 1 行にし、空なら null。 */
+function authorText(value: string | null): string | null {
+  if (value === null) return null;
+  const line = value.replace(/\s+/gu, " ").trim();
+  return line === "" ? null : line;
 }
 
 /** 前後の空白を落として整える（保存の直前に 1 回だけ通す）。 */
@@ -172,6 +195,8 @@ export function cleanSettingsPatch(patch: EditorSettingsPatch): EditorSettingsPa
   if (patch.about !== undefined) cleaned.about = patch.about.trim();
   if (patch.aboutName !== undefined) cleaned.aboutName = patch.aboutName.replace(/\s+/gu, " ").trim();
   if (patch.webSearch !== undefined) cleaned.webSearch = patch.webSearch;
+  if (patch.authorRole !== undefined) cleaned.authorRole = authorText(patch.authorRole);
+  if (patch.authorBio !== undefined) cleaned.authorBio = authorText(patch.authorBio);
   if (patch.recipes !== undefined) {
     cleaned.recipes = patch.recipes.map((recipe) => ({
       id: recipe.id,
@@ -190,7 +215,21 @@ function assertOwner(owner: OwnerId): void {
   }
 }
 
-type SettingsRow = { ai_lang: string; glossary: unknown; recipes: unknown; about_name: string | null; about: string | null; web_search: boolean | null };
+type SettingsRow = {
+  ai_lang: string;
+  glossary: unknown;
+  recipes: unknown;
+  about_name: string | null;
+  about: string | null;
+  web_search: boolean | null;
+  author_role: string | null;
+  author_bio: string | null;
+};
+
+/** 保存した著者紹介の欄（形が違う・空なら null）。 */
+function storedAuthorText(value: unknown, max: number): string | null {
+  return typeof value === "string" && value.trim() !== "" && isSettingsText(value, max) ? value : null;
+}
 
 /** 保存した値が今の形に合わなければ既定値として読む（古い行・手で直した行で画面を壊さない）。 */
 function toSettings(row: SettingsRow | undefined): EditorSettings {
@@ -204,10 +243,12 @@ function toSettings(row: SettingsRow | undefined): EditorSettings {
     aboutName: typeof row.about_name === "string" ? row.about_name : "",
     about: typeof row.about === "string" ? row.about : "",
     webSearch: typeof row.web_search === "boolean" ? row.web_search : DEFAULT_EDITOR_SETTINGS.webSearch,
+    authorRole: storedAuthorText(row.author_role, SETTINGS_LIMITS.authorRoleChars),
+    authorBio: storedAuthorText(row.author_bio, SETTINGS_LIMITS.authorBioChars),
   };
 }
 
-const COLUMNS = "ai_lang, glossary, recipes, about_name, about, web_search";
+const COLUMNS = "ai_lang, glossary, recipes, about_name, about, web_search, author_role, author_bio";
 
 /** その人の設定（行が無ければ既定値）。 */
 export async function getEditorSettings(db: Queryable, owner: OwnerId): Promise<EditorSettings> {
@@ -231,9 +272,10 @@ export async function saveEditorSettings(db: Queryable, owner: OwnerId, patch: E
   const aboutName = value.aboutName ?? null;
   const about = value.about ?? null;
   const webSearch = value.webSearch ?? null;
+  // 著者紹介は null（空にする）を値として送るので、「変えるか」を別に渡す
   const result = await db.query<SettingsRow>(
-    `INSERT INTO editor_settings (owner, ai_lang, glossary, recipes, about_name, about, web_search)
-     VALUES ($1, COALESCE($2, 'same'), COALESCE($3::jsonb, '[]'::jsonb), COALESCE($4::jsonb, '[]'::jsonb), COALESCE($5, ''), COALESCE($6, ''), COALESCE($7::boolean, true))
+    `INSERT INTO editor_settings (owner, ai_lang, glossary, recipes, about_name, about, web_search, author_role, author_bio)
+     VALUES ($1, COALESCE($2, 'same'), COALESCE($3::jsonb, '[]'::jsonb), COALESCE($4::jsonb, '[]'::jsonb), COALESCE($5, ''), COALESCE($6, ''), COALESCE($7::boolean, true), $9::text, $11::text)
      ON CONFLICT (owner) DO UPDATE
         SET ai_lang = COALESCE($2, editor_settings.ai_lang),
             glossary = COALESCE($3::jsonb, editor_settings.glossary),
@@ -241,9 +283,11 @@ export async function saveEditorSettings(db: Queryable, owner: OwnerId, patch: E
             about_name = COALESCE($5, editor_settings.about_name),
             about = COALESCE($6, editor_settings.about),
             web_search = COALESCE($7::boolean, editor_settings.web_search),
+            author_role = CASE WHEN $8::boolean THEN $9::text ELSE editor_settings.author_role END,
+            author_bio = CASE WHEN $10::boolean THEN $11::text ELSE editor_settings.author_bio END,
             updated_at = clock_timestamp()
      RETURNING ${COLUMNS}`,
-    [owner, aiLang, glossary, recipes, aboutName, about, webSearch],
+    [owner, aiLang, glossary, recipes, aboutName, about, webSearch, value.authorRole !== undefined, value.authorRole ?? null, value.authorBio !== undefined, value.authorBio ?? null],
   );
   const row = result.rows[0];
   if (!row) throw new Error("editor-store: settings upsert returned no row");

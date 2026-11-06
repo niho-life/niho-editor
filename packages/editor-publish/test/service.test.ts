@@ -65,6 +65,28 @@ describe("publish", () => {
     });
   });
 
+  it("fixes the author's public introduction at publish time, apart from the strict author object", async () => {
+    const world = createWorld();
+    world.authors.set(ACTOR, { name: "Example Writer", handle: null, url: null, profile: { role: "Coastal walk guide", bio: "Writes about mornings by the sea." } });
+    ok(await world.service.publish(world.input("exp")));
+    const [v1] = world.store.versions(PAGE_ID);
+    expect(v1?.snapshot.author).toEqual({ name: "Example Writer", handle: null, url: null });
+    expect(v1?.snapshot.authorProfile).toEqual({ role: "Coastal walk guide", bio: "Writes about mornings by the sea." });
+    // A later edit of the settings changes neither the published version nor 「更新あり」.
+    world.authors.set(ACTOR, { name: "Example Writer", handle: null, url: null, profile: { role: "Editor", bio: null } });
+    expect(world.store.versions(PAGE_ID)[0]).toEqual(v1);
+    expect(await statusOf(world)).toBe("published");
+    ok(await world.service.update(world.input("exp")));
+    expect(world.store.versions(PAGE_ID)[1]?.snapshot.authorProfile).toEqual({ role: "Editor", bio: null });
+  });
+
+  it("publishes without authorProfile when the author has none", async () => {
+    const world = createWorld();
+    world.authors.set(ACTOR, { name: "Example Writer", handle: null, url: null, profile: { role: null, bio: null } });
+    ok(await world.service.publish(world.input("exp")));
+    expect("authorProfile" in (world.store.versions(PAGE_ID)[0]?.snapshot ?? {})).toBe(false);
+  });
+
   it("passes the related experiences to the facts source", async () => {
     const world = createWorld();
     ok(await world.service.publish(world.input("exp")));

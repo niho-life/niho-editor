@@ -78,14 +78,14 @@ export const IMAGE_CACHE_CONTROL = "private, max-age=86400, immutable";
 export const SHARED_IMAGE_CACHE_CONTROL = "private, no-store";
 
 const START_KEYS = ["contentType", "sizeBytes", "sha256"] as const;
-const META_KEYS = ["alt", "credit", "consent"] as const;
+const META_KEYS = ["alt", "credit", "consent", "share"] as const;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** alt・クレジットは 1 行の値（制御文字を入れない。DB の CHECK と store の検査に合わせる）。 */
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const ALT_MAX_CHARS = 1000;
 const CREDIT_MAX_CHARS = 500;
 
-export type ImageBadRequestReason = "body" | "idempotency_key" | "too_many" | "alt" | "credit" | "consent" | ImageStartRejection;
+export type ImageBadRequestReason = "body" | "idempotency_key" | "too_many" | "alt" | "credit" | "consent" | "share" | ImageStartRejection;
 
 type ImageErrorCode = "storage_unavailable" | "storage_failed" | "idempotency_conflict" | "incomplete";
 
@@ -153,6 +153,7 @@ function publicImage(asset: ImageAsset) {
     alt: asset.alt,
     credit: asset.credit,
     consent: asset.consent,
+    share: asset.share,
   };
 }
 
@@ -294,7 +295,7 @@ export function deleteImageRoute(request: Request, pageId: string, assetId: stri
 
 /**
  * GET /api/pages/{id}/images — このページの写真（パネル）。200 `{ images }`。済んだ画像だけを新しい順に最大 100 枚。
- * 返すのは id・大きさ・種類・alt・クレジット・掲載許諾・上げた時刻だけ（object の場所・sha256・owner は出さない）。
+ * 返すのは id・大きさ・種類・alt・クレジット・掲載許諾・共有画像の許諾・上げた時刻だけ（object の場所・sha256・owner は出さない）。
  */
 export function listImagesRoute(request: Request, pageId: string, deps: ImageApiDeps): Promise<Response> {
   return guarded("GET /api/pages/[id]/images", async () => {
@@ -312,6 +313,7 @@ export function listImagesRoute(request: Request, pageId: string, deps: ImageApi
         alt: image.alt,
         credit: image.credit,
         consent: image.consent,
+        share: image.share,
         createdAt: image.createdAt,
       })),
     });
@@ -344,11 +346,16 @@ function readMetaPatch(value: unknown): MetaResult {
     if (typeof value.consent !== "boolean") return { ok: false, reason: "consent" };
     patch.consent = value.consent;
   }
+  // 共有画像（SNS・検索結果）にも使ってよい許諾。掲載許諾とは別の欄で、同じく真偽値だけ
+  if ("share" in value) {
+    if (typeof value.share !== "boolean") return { ok: false, reason: "share" };
+    patch.share = value.share;
+  }
   return { ok: true, patch };
 }
 
 /**
- * PATCH /api/assets/{assetId} — alt・クレジット・掲載許諾を直す（指定したものだけ）。200 `{ image }`。
+ * PATCH /api/assets/{assetId} — alt・クレジット・掲載許諾・共有画像の許諾を直す（指定したものだけ）。200 `{ image }`。
  * 本文（AST）にも同じ値が入るが、正本はこの行（共有リンクの描画はこの行から読む）。
  */
 export function updateImageRoute(request: Request, assetId: string, deps: ImageApiDeps): Promise<Response> {

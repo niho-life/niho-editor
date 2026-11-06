@@ -176,6 +176,53 @@ describe("stored snapshots", () => {
     expect(JSON.parse(document.body ?? "null")).toMatchObject({ category: "walks", categoryDisplay });
     expect(JSON.parse(preview.body ?? "null")).toMatchObject({ category: "walks", categoryDisplay });
   });
+
+  it("projects coverShareable and authorProfile only when the version has them, leaving other responses and ETags as they were", async () => {
+    const cover = { id: "asset-cover-01", url: "https://assets.example.com/a/cover-01.jpg", contentType: "image/jpeg" as const, bytes: 1200, sha256: "a".repeat(64), alt: "Shoreline at sunrise", credit: null };
+    const authorProfile = { role: "合成の案内人", bio: "海辺の朝を書きます。" };
+    const world: ReferenceWorld = {
+      ...fixture.world,
+      publications: fixture.world.publications.map((item) => item.pageId !== fixture.ids.expLive ? item : {
+        ...item,
+        snapshot: { ...item.snapshot, cover, coverShareable: true, authorProfile },
+      }),
+    };
+    const source = worldSource(world);
+    const basePreview = source.previewDraft.bind(source);
+    const server = createPublicApi({
+      source: {
+        ...source,
+        previewDraft: async (binding) => {
+          const draft = await basePreview(binding);
+          return draft ? { ...draft, content: { ...draft.content, cover, coverShareable: true } } : null;
+        },
+      },
+      faces: worldFaces(world),
+      clock: { now: () => world.now },
+    });
+    const plain = api(fixture.world);
+
+    const list = JSON.parse((await server.handle(get(listPath("exp"), fixture.keys.exp))).body ?? "null") as { items: Record<string, unknown>[] };
+    const item = list.items.find((entry) => entry.id === fixture.ids.expLive);
+    expect(item).toMatchObject({ cover, coverShareable: true, authorProfile });
+    // The other items of the same list carry neither field (never `false` or an empty profile)
+    for (const other of list.items.filter((entry) => entry.id !== fixture.ids.expLive)) {
+      expect(Object.keys(other)).not.toContain("coverShareable");
+      expect(Object.keys(other)).not.toContain("authorProfile");
+    }
+    const document = await server.handle(get(docPath("exp", fixture.ids.expLive), fixture.keys.exp));
+    expect(document.status).toBe(200);
+    expect(JSON.parse(document.body ?? "null")).toMatchObject({ coverShareable: true, authorProfile, author: expect.not.objectContaining({ role: expect.anything() }) });
+    const preview = await server.handle(get(previewPath(fixture.keys.previewExp), fixture.keys.exp));
+    expect(JSON.parse(preview.body ?? "null")).toMatchObject({ cover, coverShareable: true });
+
+    // A version without the fields has no such keys in its answer (its body and ETag are what they were)
+    const before = await plain.handle(get(docPath("exp", fixture.ids.expLive), fixture.keys.exp));
+    const beforeBody = JSON.parse(before.body ?? "null") as Record<string, unknown>;
+    expect(Object.keys(beforeBody)).not.toContain("coverShareable");
+    expect(Object.keys(beforeBody)).not.toContain("authorProfile");
+    expect(document.headers.etag).not.toBe(before.headers.etag);
+  });
 });
 
 describe("cursor", () => {

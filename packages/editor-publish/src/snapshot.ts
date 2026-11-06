@@ -22,6 +22,7 @@ import {
   renderMarkdown,
   sha256Hex,
   type Author,
+  type AuthorProfile,
   type CategoryDisplay,
   type Block,
   type Dest,
@@ -493,6 +494,8 @@ export interface ContentFingerprintInput {
   readonly lang: Lang;
   readonly lead: string | null;
   readonly cover: AssetDigest | null;
+  /** Only when true, so drafts and versions without the share permission keep the fingerprint they always had. */
+  readonly coverShareable?: true;
   readonly blocks: readonly Block[];
   readonly figures: readonly AssetDigest[];
   /** Problems found while converting (only drafts have them). */
@@ -509,8 +512,22 @@ function digest(id: string, asset: AssetRecord | undefined, alt: string): AssetD
   return { id, sha256: asset.sha256, contentType: asset.contentType, bytes: asset.bytes, alt, credit: cleanLine(asset.credit) };
 }
 
-function publishedAlt(ref: FigureRef | null, asset: AssetRecord | undefined): string {
+/**
+ * The alt text an image gets in the published version: the figure node's alt, else the asset's, else "".
+ * Readiness (`images` with `alt`) counts empty alts with this same function, so "met" never publishes an empty alt.
+ */
+export function publishedAlt(ref: FigureRef | null, asset: AssetRecord | undefined): string {
   return ref?.alt ?? cleanLine(asset?.alt) ?? "";
+}
+
+/**
+ * The cover may also be the share image: it is usable, has 掲載許諾, and the author confirmed sharing too.
+ * The published version says `coverShareable: true` only then (and leaves the field out otherwise).
+ */
+export function coverShareable(page: Pick<DraftPage, "coverAssetId">, assets: ReadonlyMap<string, AssetRecord>): boolean {
+  if (page.coverAssetId === null) return false;
+  const asset = assets.get(page.coverAssetId);
+  return asset !== undefined && assetState(asset) === "ok" && asset.share === true;
 }
 
 function fingerprintInput(page: DraftPage, assets: ReadonlyMap<string, AssetRecord>, conversion: Conversion): ContentFingerprintInput {
@@ -520,6 +537,7 @@ function fingerprintInput(page: DraftPage, assets: ReadonlyMap<string, AssetReco
     lang: page.lang,
     lead: cleanLine(page.lead),
     cover,
+    ...(coverShareable(page, assets) ? { coverShareable: true as const } : {}),
     blocks: conversion.blocks,
     figures: conversion.figures.map((ref) => digest(ref.assetId, assets.get(ref.assetId), publishedAlt(ref, assets.get(ref.assetId)))),
     unresolved: conversion.problems.map((problem) => `${problem.id}:${problem.node ?? ""}`).sort(),
@@ -546,6 +564,11 @@ export interface SnapshotInput {
   readonly categoryDisplay?: CategoryDisplay;
   readonly related: readonly string[];
   readonly author: Author;
+  /**
+   * The author's public introduction (肩書・紹介文) at publish time. Blank values become null; when both are null the
+   * published version has no `authorProfile`. Not part of the content fingerprint (like the author's name).
+   */
+  readonly authorProfile?: { readonly role: string | null; readonly bio: string | null } | null;
   readonly version: number;
   readonly publishedAt: string;
   readonly updatedAt: string;
@@ -563,6 +586,13 @@ export interface SnapshotIssue {
 export type SnapshotResult =
   | { readonly ok: true; readonly snapshot: Snapshot }
   | { readonly ok: false; readonly reason: "snapshot_invalid"; readonly issues: readonly SnapshotIssue[] };
+
+function authorProfileOf(value: SnapshotInput["authorProfile"]): AuthorProfile | null {
+  if (value === undefined || value === null) return null;
+  const role = cleanLine(value.role);
+  const bio = cleanLine(value.bio);
+  return role === null && bio === null ? null : { role, bio };
+}
 
 function invalid(issues: readonly SnapshotIssue[]): SnapshotResult {
   return { ok: false, reason: "snapshot_invalid", issues };
@@ -620,6 +650,7 @@ export async function buildSnapshot(input: SnapshotInput): Promise<SnapshotResul
     else cover = publishedAsset(asset, publishedAlt(null, asset), input.assetUrls, "$.cover", issues);
   }
   if (issues.length > 0) return invalid(issues);
+  const authorProfile = authorProfileOf(input.authorProfile);
 
   const doc = {
     contractVersion: CONTRACT_VERSION,
@@ -630,9 +661,12 @@ export async function buildSnapshot(input: SnapshotInput): Promise<SnapshotResul
     title: cleanLine(input.page.title) ?? "",
     lead: cleanLine(input.page.lead),
     cover,
+    // Left out (not false) when not confirmed: published versions from before the field keep their shape and ETag.
+    ...(cover !== null && coverShareable(input.page, index) ? { coverShareable: true as const } : {}),
     category: cleanLine(input.category),
     ...(input.categoryDisplay === undefined ? {} : { categoryDisplay: input.categoryDisplay }),
     author: input.author,
+    ...(authorProfile === null ? {} : { authorProfile }),
     range: input.range,
     version: input.version,
     publishedAt: input.publishedAt,

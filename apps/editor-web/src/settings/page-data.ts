@@ -7,7 +7,7 @@ import { requireSession } from "@/server/session";
 import { settingsDto, type SettingsDto } from "@/server/settings-api";
 
 /**
- * 設定のページ（一覧・あなたについて・固有名詞・手順。オーナー決定 2026-11-05）が最初に描く値。
+ * 設定のページ（一覧・あなたについて・公開用の著者紹介・固有名詞・手順。オーナー決定 2026-11-05）が最初に描く値。
  * ログインを確かめ、本人の設定と効いている手順を読む。DB が無ければ null（画面は StoreUnavailable）。
  * 1 回の描画の中では 1 度だけ読む（手順のページは題名と本文の両方で使う）。
  */

@@ -42,14 +42,23 @@ describe("公開の設定（環境変数）", () => {
 });
 
 describe("dev の宣言", () => {
-  it("どちらも editor-publish の検証を通り、条件は本文で直せるもの（見出し・未確認の印）だけ", () => {
+  it("どちらも editor-publish の検証を通り、条件は本文で直せるもの（見出し・未確認の印・題名の長さ・写真の代替テキスト）だけ", () => {
     for (const declaration of Object.values(DEV_DECLARATIONS)) {
       const parsed = parseDestinationDeclaration(declaration);
       expect(parsed.ok).toBe(true);
       if (!parsed.ok) continue;
-      expect(parsed.value.requires.map((condition) => condition.kind).every((kind) => kind === "headings" || kind === "noConfirm")).toBe(true);
+      expect(parsed.value.requires.map((condition) => condition.kind).every((kind) => ["headings", "noConfirm", "title", "images"].includes(kind))).toBe(true);
       expect(parsed.value.requires.every((condition) => condition.fix === "body")).toBe(true);
     }
+  });
+
+  it("NIHO Experience は題名 110 字以内と写真の代替テキストを求める", () => {
+    const parsed = parseDestinationDeclaration(DEV_DECLARATIONS.exp);
+    if (!parsed.ok) throw new Error("rejected");
+    expect(parsed.value.requires.filter((condition) => condition.kind === "title" || condition.kind === "images")).toEqual([
+      { id: "title", kind: "title", max: 110, message: "題名を 110 字以内にしてください", fix: "body" },
+      { id: "image-alt", kind: "images", alt: true, message: "写真に代替テキスト（alt）を入れてください", fix: "body" },
+    ]);
   });
 
   it("faceDeclarations: dev は同梱の宣言（呼ぶたびに別の複製）、none は null", async () => {
@@ -74,6 +83,22 @@ describe("ポート", () => {
     expect(await sessionAuthors(SESSION).read("user-a")).toEqual({ name: "合成の書き手", handle: null, url: null });
     await expect(sessionAuthors({ userId: "user-a", mode: "niho" }).read("user-a")).rejects.toThrow();
     await expect(sessionAuthors(SESSION).read("user-b")).rejects.toThrow();
+  });
+
+  it("著者: 公開用の著者紹介を読めれば profile として添える（無ければ名前だけ。読めなければ公開は失敗）", async () => {
+    const profile = async () => ({ role: "合成の案内人", bio: null });
+    expect(await sessionAuthors(SESSION, profile).read("user-a")).toEqual({ name: "合成の書き手", handle: null, url: null, profile: { role: "合成の案内人", bio: null } });
+    expect(await sessionAuthors(SESSION, async () => null).read("user-a")).toEqual({ name: "合成の書き手", handle: null, url: null });
+    await expect(sessionAuthors(SESSION, async () => {
+      throw new Error("settings unavailable");
+    }).read("user-a")).rejects.toThrow();
+    // 本人でなければ紹介文を読みに行かない
+    const reads: string[] = [];
+    await expect(sessionAuthors(SESSION, async (actor) => {
+      reads.push(actor);
+      return null;
+    }).read("user-b")).rejects.toThrow();
+    expect(reads).toEqual([]);
   });
 
   it("写真の URL: `${origin}/assets/${sha256}.${ext}`。origin が無ければ例外", () => {

@@ -123,6 +123,7 @@ export async function toReferenceWorld(store: MemoryPublishStore, options: Refer
       title: snapshot.title,
       lead: snapshot.lead,
       cover: snapshot.cover,
+      ...(snapshot.coverShareable === undefined ? {} : { coverShareable: snapshot.coverShareable }),
       category: snapshot.category,
       ...(snapshot.categoryDisplay === undefined ? {} : { categoryDisplay: snapshot.categoryDisplay }),
       author: snapshot.author,

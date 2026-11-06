@@ -408,3 +408,93 @@ describe("category display snapshot", () => {
     expect(parsePublishedDoc(result.snapshot).ok).toBe(true);
   });
 });
+
+describe("cover share permission (coverShareable)", () => {
+  it("is true only when the cover has both 掲載許諾 and the share permission", async () => {
+    const shared = await build(readyPage(), {}, [{ ...COVER, share: true }, FIGURE, AUDIO]);
+    if (!shared.ok) throw new Error("expected ok");
+    expect(shared.snapshot.coverShareable).toBe(true);
+    expect(parsePublishedDoc(shared.snapshot, { requireProjection: true }).ok).toBe(true);
+  });
+
+  it.each([
+    ["share is false", [{ ...COVER, share: false }, FIGURE, AUDIO]],
+    ["share was never set (an asset from before the field)", [COVER, FIGURE, AUDIO]],
+    ["only a body figure has share", [COVER, { ...FIGURE, share: true }, AUDIO]],
+  ] as const)("leaves the field out (never false) when %s", async (_name, assets) => {
+    const result = await build(readyPage(), {}, assets);
+    if (!result.ok) throw new Error("expected ok");
+    expect("coverShareable" in result.snapshot).toBe(false);
+  });
+
+  it("leaves the field out without a cover", async () => {
+    const result = await build(readyPage({ coverAssetId: null }), {}, [{ ...COVER, share: true }, FIGURE, AUDIO]);
+    if (!result.ok) throw new Error("expected ok");
+    expect("coverShareable" in result.snapshot).toBe(false);
+  });
+
+  it("keeps the fingerprint of pages without the permission exactly as before, and marks a change when it is given", async () => {
+    const page = readyPage();
+    const assets = [COVER, FIGURE, AUDIO];
+    const before = await draftFingerprint(page, assets);
+    // The fingerprint input without the field is the one used before `share` existed.
+    const conversion = toPublishedBlocks(page.content);
+    const legacy = await contentFingerprint({
+      title: "A morning walk along the coast",
+      lang: "en",
+      lead: "Start early, follow the shoreline, and stop for tea.",
+      cover: { id: COVER.id, sha256: COVER.sha256, contentType: COVER.contentType, bytes: COVER.bytes, alt: "Shoreline at sunrise", credit: "Example Photo Studio" },
+      blocks: conversion.blocks,
+      figures: [{ id: FIGURE.id, sha256: FIGURE.sha256, contentType: FIGURE.contentType, bytes: FIGURE.bytes, alt: "Fishing boats in the harbor", credit: null }],
+      unresolved: [],
+    });
+    expect(before).toBe(legacy);
+    expect(await draftFingerprint(page, [{ ...COVER, share: false }, FIGURE, AUDIO])).toBe(before);
+    // Share without 掲載許諾 is not a share permission (and not a content change).
+    expect(await draftFingerprint(page, [{ ...COVER, consent: false, share: true }, FIGURE, AUDIO])).toBe(before);
+    const shared = await draftFingerprint(page, [{ ...COVER, share: true }, FIGURE, AUDIO]);
+    expect(shared).not.toBe(before);
+    const published = await build(page, {}, [{ ...COVER, share: true }, FIGURE, AUDIO]);
+    if (!published.ok) throw new Error("expected ok");
+    expect(published.snapshot.fingerprint).toBe(shared);
+  });
+});
+
+describe("author profile snapshot (authorProfile)", () => {
+  it("fixes the role and bio at the top level, cleaned to single lines", async () => {
+    const result = await build(readyPage(), { authorProfile: { role: "  Coastal walk guide ", bio: "Writes about\nmornings by the sea." } });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.snapshot.authorProfile).toEqual({ role: "Coastal walk guide", bio: "Writes about mornings by the sea." });
+    expect(result.snapshot.author).toEqual({ name: "Example Writer", handle: "example-writer", url: "https://writer.example.com/" });
+    expect(parsePublishedDoc(result.snapshot, { requireProjection: true }).ok).toBe(true);
+  });
+
+  it("keeps a lone role or a lone bio, with the other null", async () => {
+    const result = await build(readyPage(), { authorProfile: { role: null, bio: "Writes about the sea." } });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.snapshot.authorProfile).toEqual({ role: null, bio: "Writes about the sea." });
+  });
+
+  it.each([
+    ["no profile", undefined],
+    ["a null profile", null],
+    ["both null", { role: null, bio: null }],
+    ["both blank", { role: "  ", bio: "\n" }],
+  ] as const)("leaves the field out for %s", async (_name, authorProfile) => {
+    const result = await build(readyPage(), authorProfile === undefined ? {} : { authorProfile });
+    if (!result.ok) throw new Error("expected ok");
+    expect("authorProfile" in result.snapshot).toBe(false);
+  });
+
+  it("is not content: the fingerprint does not change with the profile", async () => {
+    const plain = await build(readyPage());
+    const profiled = await build(readyPage(), { authorProfile: { role: "Guide", bio: null } });
+    if (!plain.ok || !profiled.ok) throw new Error("expected ok");
+    expect(profiled.snapshot.fingerprint).toBe(plain.snapshot.fingerprint);
+  });
+
+  it("fails rather than truncating a profile over the contract's limits", async () => {
+    const result = await build(readyPage(), { authorProfile: { role: "r".repeat(121), bio: null } });
+    expect(result.ok).toBe(false);
+  });
+});

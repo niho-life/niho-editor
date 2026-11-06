@@ -120,6 +120,20 @@ describe("GET /api/settings", () => {
     expect((await settingsOf(await write({ webSearch: true }, deps(OWNER, store)))).webSearch).toBe(true);
   });
 
+  it("saves the public author introduction as one line, null clearing a field, and refuses one over the limit", async () => {
+    const store = memoryStore();
+    const d = deps(OWNER, store);
+    expect(await settingsOf(await read(d))).toMatchObject({ authorRole: null, authorBio: null });
+    const saved = await settingsOf(await write({ authorRole: " 合成の案内人 ", authorBio: "海辺の朝を\n書きます。" }, d));
+    expect([saved.authorRole, saved.authorBio]).toEqual(["合成の案内人", "海辺の朝を 書きます。"]);
+    const cleared = await settingsOf(await write({ authorBio: null }, d));
+    expect([cleared.authorRole, cleared.authorBio]).toEqual(["合成の案内人", null]);
+    expect((await write({ authorRole: "あ".repeat(SETTINGS_LIMITS.authorRoleChars + 1) }, d)).status).toBe(400);
+    expect((await write({ authorBio: "あ".repeat(SETTINGS_LIMITS.authorBioChars + 1) }, d)).status).toBe(400);
+    expect((await write({ authorRole: 7 }, d)).status).toBe(400);
+    expect((await settingsOf(await read(d))).authorRole).toBe("合成の案内人");
+  });
+
   it("does not answer with another person's settings", async () => {
     const store = memoryStore();
     await write({ aiLang: "en" }, deps(OWNER, store));
@@ -346,7 +360,7 @@ describe("PATCH /api/settings", () => {
 
   it("never hands the response a key the screen does not need", async () => {
     const dto = await settingsOf(await read(deps(OWNER, memoryStore())));
-    expect(Object.keys(dto).sort()).toEqual(["about", "aboutName", "aiLang", "glossary", "limits", "recipes", "webSearch"]);
+    expect(Object.keys(dto).sort()).toEqual(["about", "aboutName", "aiLang", "authorBio", "authorRole", "glossary", "limits", "recipes", "webSearch"]);
     expect(Object.keys(dto.recipes[0]!).sort()).toEqual(["defaults", "guide", "id", "isDefault", "modified", "name", "samples", "steps", "terms", "unusableReason"]);
   });
 });
