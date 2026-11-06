@@ -83,6 +83,10 @@ scripts/editor-deploy/deploy.sh --no-build # いま動いている image のま�
 
 migration は expand → contract（列の削除は配備の 1 つ後）。適用済みのファイルは書き換えない（書き換えると migrate が止まる）。
 
+**jsonb の中の形を増やす migration（`recipes.steps[]` の `chunked` など）は、そのキーを読めるコードが動いている revision に載ってから流す。**
+migrate ジョブはサービスの入れ替えより先に走るので、古い revision は知らないキーを持つ段階を読み落とす（`isRecipeStep` が段階ごと捨てる）。
+キーを読むコードの配備と、キーを書き込む migration の配備は分ける（#277 の `chunked` は先に配備し、`20261106225704_recipes_chunked_default` はそのあと）。
+
 **新しい migration の名前は自分で決めない。** `npm -C packages/editor-store run new-migration -- <名前>` が
 `YYYYMMDDHHMMSS_<名前>.sql` を作る（雛形つき）。連番（`0001`〜）を人が選ぶと並行作業で同じ番号を取り合うため
 （実際に #90 と #93 が 0008、#100 と #93 が 0009 で衝突した）。適用は辞書順で、`"0" < "2"` なので
