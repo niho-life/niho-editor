@@ -22,8 +22,6 @@ function mount(node: React.ReactNode): HTMLElement {
   return host;
 }
 
-const ME = { onOpen: () => undefined };
-
 /** ページ（入れ物）の行: タブの id を持ち、開いているタブがその中なら今の行（#308）。 */
 describe("一覧のページ（入れ物）の行とタブ（#308）", () => {
   it("開いているタブを持つ行が今の行（太字）。押すとそのタブ（一覧をしまうだけ）、ほかの行は行の id。タブの数は 2 つ以上で印", () => {
@@ -37,7 +35,6 @@ describe("一覧のページ（入れ物）の行とタブ（#308）", () => {
         ]}
         currentId="t2"
         onSelect={onSelect}
-        me={ME}
       />,
     );
     const rows = [...host.querySelectorAll<HTMLButtonElement>(".es-di")];
@@ -63,7 +60,6 @@ describe("一覧のページ（入れ物）の行とタブ（#308）", () => {
         currentId="t1"
         onSelect={() => undefined}
         side={{ id: "t3", onOpen: onOpenSide }}
-        me={ME}
       />,
     );
     const rows = [...host.querySelectorAll<HTMLButtonElement>(".es-di")];
