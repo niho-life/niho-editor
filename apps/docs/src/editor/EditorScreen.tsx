@@ -369,10 +369,10 @@ export function EditorScreen({ bridge }: { bridge: DocsHost; me: { name: string;
               onClose: () => setSearch({ open: false, value: "" }),
               onChange: (value) => setSearch({ open: true, value }),
             }}
-            // 左下は「設定」の直リンク（shell の決まり）。Mac の殻にはまだ設定の画面が無いので、今までのメニューと同じく何もしない
-            me={{ onOpen: () => undefined }}
           />
         }
+        // 左下は「設定」の直リンク（shell の決まり。枠が左下に固定して出す）。Mac の殻にはまだ設定の画面が無いので、今までのメニューと同じく何もしない
+        settings={{ onOpen: () => undefined }}
         header={
           <ShellHeader
             title={opened ? title : ""}
