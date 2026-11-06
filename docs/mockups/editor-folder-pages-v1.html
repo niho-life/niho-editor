@@ -15,11 +15,13 @@
     - 機能の出力はフォルダの中へ。同じ役割のページがあればそのページに**タブ**が増え、無ければページができる。
     - 本文の中にも、ページ名の下にも、ボタンや帯を置かない。
     - **AI チャットはアプリ全体で 1 つ。** ページを移っても会話は残る（Cursor の composer と同じ）。探す範囲は、今開いているページの
-      入っているフォルダ。パネルの上に「範囲」と「今のタブ」が出て、ページを移ると範囲だけ変わる。
+      入っているフォルダ（固定なので、範囲や「今のタブ」の表示は置かない）。
     - **パネルは全部動かせる**（Cursor の感じ）: 一覧・AIと作る・ページ・写真 を、左右のレールの上／下へドラッグで置ける。
       同じレールに 2 つ以上あれば上下に分かれ、境目をドラッグして高さを変える。× で閉じ、ヘッダーのボタンで出す。配置は localStorage に残る。
       中央のエディタ（タブの帯 › 題名 › 本文）だけは固定。
-    - **設定はいつでも画面の最下端**（左下。パネルの配置に関係なく）。
+    - **アプリ名・アイコンはいつでも画面の左上端**（左レールの一番上の左端）。**設定はいつでも画面の最下端**（左下）。どちらもパネルの配置に関係なく。
+    - 「ページ」パネルは「流れ」だけ。役割・タブ・字数は帯と右下にあるので置かない。今の行には「◯◯ から」を 1 行添える。
+      作り直す・同じ入力でもう 1 つ はタブの ▾。
     - 比べる＝並べて開く（分割ビュー）。差分は出さない。要らないタブ・ページ＝ゴミ箱。
     - フォルダの外の録音で「作成」を押したら、録音の題名でフォルダを作って中に入れる。
 
@@ -27,10 +29,10 @@
     1. 録音ページ: 本文は 録音ブロック・「この録音について」・見出し「文字起こし」の下にタブの一覧だけ。文字起こしは「流れ」の行の「作成 ▾」（エンジン）。
     2. 文字起こしページ: 上の帯に Gemini · Deepgram のタブ。再生バー・話者と時刻つきの本文。次の段階は「流れ」の行の「作成」。
     3. 記事本文: タブが 1 つなら題名と本文だけ（帯は罫線と ＋ だけ）。2 つになると帯にタブ（1 · 2）。
-    4. 「ページ」パネル: 流れ（手順の全段階。あるページは名前とタブ、無い段階は「（まだ）」。今のページを強調。右端に 作成／済み）›
-       このタブ（役割・何から・ここから・タブ・字数・AI で作ったタブなら 作り直す）。
+    4. 「ページ」パネル: 流れ（手順の全段階。あるページは名前とタブ、無い段階は「（まだ）」。今のページを強調して「◯◯ から」を添える。
+       右端に 作成／済み）。
     5. 記事方針のタブ 2: 流れの「記事本文」の「作成」で、この方針から記事本文のタブができる（済みになる）。
-    6. AI チャット: 文字起こし修正で相談した会話が、記事本文に移っても残る。範囲はフォルダ。
+    6. AI チャット: 文字起こし修正で相談した会話が、記事本文に移っても残る。会話だけ（範囲の表示は無い）。
     7. ふつうのページ（コラム）のタブ: 下書き · 英語版。役割が無くても流れの「作成」で手順を当てられる。
     8. フォルダを開いた画面: 中身の一覧だけ。
     9. パネルの配置: 既定は 左＝一覧、右＝ページ（上）＋AIと作る（下）。見出しをつかんで置き場へ落とす。
@@ -139,7 +141,11 @@ kbd{font:12px var(--mono);color:var(--faint)}
 /* ===== shell: 左レール › 中央 › 右レール。レールにはパネルが縦に並ぶ ===== */
 .ws{display:grid;grid-template-columns:auto minmax(0,1fr) auto;min-height:calc(100vh - var(--bar))}
 .rail{position:sticky;top:var(--bar);height:calc(100vh - var(--bar));display:flex;flex-direction:column;min-width:0;width:var(--sbw);background:var(--shell);border-right:1px solid var(--line)}
-#rail-left{padding-bottom:48px}
+#rail-left{padding:52px 0 48px}
+/* アプリ名・アイコン: いつでも画面の左上端（左レールの一番上の左端）。左レールが無いときは中央のヘッダーの左を空ける */
+.brandbar{position:fixed;left:0;top:var(--bar);height:52px;z-index:17;display:flex;align-items:center;padding:0 10px 0 12px;pointer-events:none}
+.brandbar .brand{pointer-events:auto;text-decoration:none}
+.ws.noleft .dt{padding-left:116px}
 #rail-right{width:var(--aiw);background:var(--canvas);border-right:0;border-left:1px solid var(--line)}
 .panel{display:flex;flex-direction:column;min-height:0;flex:1 1 0;overflow:hidden;background:inherit}
 .ph{display:flex;align-items:center;gap:4px;height:38px;padding:0 6px 0 8px;font-size:12.5px;font-weight:600;color:var(--ink2);flex:none;user-select:none;cursor:grab}
@@ -334,13 +340,8 @@ body.dragging .ph{cursor:grabbing}
 .cols .tt{font-size:24px}
 .cols .bd{font-size:15px;min-height:0}
 
-/* AI のパネル: アプリ全体で 1 つの会話。上に範囲（今のページのフォルダ）と今のタブ */
-.scope{display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:4px 14px 8px;font-size:12px;color:var(--faint);flex:none}
-.scope .tag{font-weight:500;color:var(--mute);background:var(--sand)}
-.scope .tag.now{color:var(--moss);background:var(--pale)}
-.scope .tag .ico{color:var(--faint)}
-.scope .tag.now .ico{color:var(--moss)}
-.thread{flex:1;overflow:auto;padding:2px 14px 6px}
+/* AI のパネル: アプリ全体で 1 つの会話。範囲はフォルダで固定なので表示しない */
+.thread{flex:1;overflow:auto;padding:6px 14px 6px}
 .msg{font-size:13px;line-height:1.65;margin:8px 0}
 .msg.me{margin-left:28px;padding:8px 11px;border-radius:12px 12px 4px 12px;background:var(--sand)}
 .msg.ai{padding:0 2px}
@@ -368,7 +369,8 @@ body.dragging .ph{cursor:grabbing}
 .sec h3 .fn{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
 .fl{display:flex;flex-direction:column;gap:1px}
 .fl li{display:flex;align-items:center;gap:4px;min-width:0}
-.fl li .go{display:flex;align-items:center;gap:8px;flex:1;min-width:0;min-height:34px;padding:4px 8px;border-radius:8px;color:var(--ink2);font-weight:500}
+.fl li .go{display:flex;align-items:center;gap:8px;flex:1;min-width:0;min-height:34px;padding:4px 8px;border-radius:8px;color:var(--ink2);font-weight:500;flex-wrap:wrap}
+.fl li .go .src{flex-basis:100%;font-size:12px;font-style:normal;font-weight:500;color:var(--mute);padding-left:22px;margin-top:-3px}
 .fl li .go:hover{background:var(--sand)}
 .fl li .go .ico{width:14px;height:14px;color:var(--moss);stroke-width:2.2}
 .fl li .go .ki{color:var(--mute);stroke-width:1.7}
@@ -421,13 +423,15 @@ body.dragging .ph{cursor:grabbing}
 @media (max-width:720px){
   .ws{grid-template-columns:minmax(0,1fr)}
   .rail{display:none}
-  .ws[data-screen="list"] #rail-left{display:flex;position:static;height:auto;min-height:calc(100vh - var(--bar));width:auto;border:0}
+  .ws[data-screen="list"] #rail-left{display:flex;position:static;height:auto;min-height:calc(100vh - var(--bar));width:auto;border:0;padding-top:52px}
   .ws[data-screen="list"] .doc{display:none}
+  .brandbar{display:none}
+  .ws[data-screen="list"] + .brandbar{display:flex}
+  .ws.noleft .dt{padding-left:8px}
   #rail-right.mob{display:flex;position:fixed;top:var(--bar);left:0;right:0;bottom:0;height:auto;width:auto;z-index:90;border:0;padding-bottom:0}
   .ph{cursor:default}
   .ph .grip{display:none}
   .split{display:none}
-  .dt .brand{display:none}
   .dt .ins{display:none}
   .dt .crumbs{display:none}
   .dt .tg{padding-left:4px;margin-left:2px}
@@ -479,7 +483,6 @@ body.dragging .ph{cursor:grabbing}
   <main class="doc" id="doc">
     <header class="dt">
       <button class="ib tip-l" id="btn-list" data-tip="一覧" aria-label="一覧へ" hidden></button>
-      <div class="brand" id="brand-hd"></div>
       <nav class="crumbs" id="crumbs" aria-label="場所"></nav>
       <div class="ins" id="ins">
         <button class="ib" data-tip="ブロック" aria-label="ブロックを挿入" data-toast="ブロックの一覧（モック）"><span data-ic="plus"></span></button>
@@ -507,6 +510,8 @@ body.dragging .ph{cursor:grabbing}
   <div class="rail" id="rail-right" aria-label="右のレール"></div>
 </div>
 
+<!-- アプリ名・アイコン: いつでも画面の左上端（左レールの一番上の左端）。設定: いつでも左下 -->
+<div class="brandbar" id="brandbar"><a class="brand" href="#" data-toast="ホーム（モック）" aria-label="NIHO Editor"></a></div>
 <a class="setbtn" href="#" data-toast="設定（モック）" aria-label="設定"><span data-ic="gear"></span>設定</a>
 
 <!-- パネル（レールへ移して使う。ここは置き場） -->
@@ -526,7 +531,6 @@ body.dragging .ph{cursor:grabbing}
       <button class="ib tip-r" data-close-panel="ai" data-tip="閉じる" aria-label="AIと作るを閉じる"><span data-ic="x"></span></button>
     </div>
     <div class="pb">
-      <div class="scope" id="scope" aria-label="AI の範囲"></div>
       <div class="thread" id="thread" aria-label="会話"></div>
       <div class="composer">
         <div class="box">
@@ -622,7 +626,7 @@ const LOGO = `<svg class="logo" viewBox="0 0 256 256" aria-hidden="true"><rect w
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
-$("#brand-hd").innerHTML = `${LOGO}<span>Editor</span>`;
+$("#brandbar .brand").innerHTML = `${LOGO}<span>Editor</span>`;
 $("#btn-search").innerHTML = svg("search");
 $("#btn-new").innerHTML = svg("plus");
 $("#btn-list").innerHTML = svg("side");
@@ -842,7 +846,9 @@ function flowHtml(p, tab) {
   const role = p.role;
   const pos = role === "rec" ? -1 : role === "transcript" ? -0.5 : typeof role === "number" ? role : -0.5; /* 役割の無いページは文字起こしの位置（段階の入力になれる） */
   const rows = [];
-  const rowHtml = (page, label, icon, mk, cur) => `<li class="${cur ? "cur" : page ? "" : "none"}">${page ? `<button class="go" data-open="${page.id}"${cur ? ' aria-current="page"' : ""}>${icon}<span>${page.t}</span>${tabsOf(page).length > 1 || page.role === "transcript" ? `<small>${tabsOf(page).map(tl).join(" · ")}</small>` : ""}</button>` : `<span class="go">${icon}<span>${label}（まだ）</span></span>`}${mk}</li>`;
+  /* 今の行には、このタブが何から作られたかを 1 行添える（記事方針 2 から）。入力の見分けがつくのはここだけ */
+  const from = madeFrom(tab);
+  const rowHtml = (page, label, icon, mk, cur) => `<li class="${cur ? "cur" : page ? "" : "none"}">${page ? `<button class="go" data-open="${page.id}"${cur ? ' aria-current="page"' : ""}>${icon}<span>${page.t}</span>${tabsOf(page).length > 1 || page.role === "transcript" ? `<small>${tabsOf(page).map(tl).join(" · ")}</small>` : ""}${cur && from ? `<em class="src">${fullLabel(from)} から</em>` : ""}</button>` : `<span class="go">${icon}<span>${label}（まだ）</span></span>`}${mk}</li>`;
   const mkBtn = (state, attrs = "") => state === "done" ? `<button class="mk" disabled aria-disabled="true">${svg("check")}済み</button>` : state === "go" ? `<button class="mk" ${attrs}>${svg("plus")}作成</button>` : "";
   /* 録音 */
   const rec = kids.find((k) => k.role === "rec") || (role === "rec" ? p : null);
@@ -865,23 +871,10 @@ function flowHtml(p, tab) {
   return `<section class="sec"><h3><button class="wf" data-menu="flow" aria-haspopup="menu">${RECIPE.name}${svg("down")}</button><span class="fn">· ${f ? f.t : "（フォルダの外。作成するとフォルダに入ります）"}</span></h3><ol class="fl" aria-label="流れ">${rows.join("")}</ol></section>`;
 }
 
-/* 「ページ」パネル（オーナーの言う「エディタパネル」）: 流れ › このタブ */
-function infoHtml(p, tab) {
-  const role = p.role;
-  const roleTxt = role === "rec" ? "録音" : role === "transcript" ? `文字起こし${tab.engine ? ` · ${tab.engine}` : ""}` : typeof role === "number" ? `${RECIPE.name} › ${RECIPE.steps[role]}（${role + 1} / ${RECIPE.steps.length}）` : '<span class="none">なし</span>';
-  const up = []; for (let a = madeFrom(tab); a; a = madeFrom(a)) up.unshift(a);
-  const down = madeHere(tab);
-  const ts = tabsOf(p);
-  const rows = [["役割", roleTxt]];
-  if (up.length) rows.push(["何から", `<ol class="lineage">${up.map((a) => `<li><button class="lk" data-open="${a.id}"><span>${fullLabel(a)}</span></button></li>`).join("")}<li><span class="cur">このタブ</span></li></ol>`]);
-  if (down.length) rows.push(["ここから", down.map((d) => `<button class="lk" data-open="${d.id}">${d.st === "run" ? '<i class="spin"></i>' : ""}<span>${fullLabel(d)}</span></button>`).join('<span class="sep">·</span>')]);
-  rows.push(["タブ", ts.length > 1 ? ts.map((t) => `<button class="lk${t === tab ? " cur" : ""}" data-open="${t.id}"${t === tab ? ' aria-current="true"' : ""}><span>${tl(t)}</span></button>`).join('<span class="sep">·</span>') : '<span class="none">1 つ（帯の右端の ＋ で足す）</span>']);
-  rows.push(["字数", `${countOf(tab)} · ${tab.when ?? "今"}`]);
-  if (tab.from) rows.push(["AI", `<button class="lk" data-toast="このタブを作り直します。前の本文は版に残ります（モック）">${svg("redo")}<span>作り直す</span></button><span class="sep">·</span><button class="lk" data-make="sibling">${svg("copy")}<span>同じ入力でもう 1 つ</span></button>`]);
-  return `${flowHtml(p, tab)}<section class="sec"><h3>このタブ</h3><dl>${rows.map(([k, v]) => `<div class="ir"><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl></section>`;
-}
+/* 「ページ」パネル（オーナーの言う「エディタパネル」）: 流れだけ。役割・タブ・字数は帯と右下にあるので置かない */
+function infoHtml(p, tab) { return flowHtml(p, tab); }
 
-/* AI チャット: アプリ全体で 1 つ。会話は作り置きで、ページを移っても残る。上の「範囲」と「今のタブ」だけ変わる */
+/* AI チャット: アプリ全体で 1 つ。会話は作り置きで、ページを移っても残る（範囲はフォルダで固定。表示しない） */
 const THREAD = [
   { me: true, at: "文字起こし修正", text: "佐藤さんの発言の「二十年」を「20年」にそろえて。" },
   { me: false, text: "文字起こし修正の 3 か所を「20年」にしました。「二十年の習慣」「二十年の散歩」も同じです。", did: "文字起こし修正を書き換え" },
@@ -891,16 +884,6 @@ const THREAD = [
 function renderThread() {
   $("#thread").innerHTML = THREAD.map((m) => `<div class="msg ${m.me ? "me" : "ai"}">${m.me && m.at ? `<span class="at">${svg("doc")}${m.at} で</span>` : ""}${m.text}${m.did ? `<br><span class="did">${svg("check")}${m.did}</span>` : ""}</div>`).join("");
 }
-function scopeHtml(p, tab) {
-  const f = folderOf(p);
-  const tags = [];
-  tags.push(f ? `<span class="tag">${svg("folder")}範囲: ${f.t}（${kidsOf(f).length} ページ）</span>` : `<span class="tag">${svg("doc")}範囲: このページだけ</span>`);
-  if (p.kind !== "folder") tags.push(`<span class="tag now">${svg("doc")}今: ${tabsOf(p).length > 1 ? `${p.t} ${tl(tab)}` : p.t}</span>`);
-  if (p.role !== undefined) tags.push(`<span class="tag">${svg("mic")}この録音について</span>`);
-  if (typeof p.role === "number") tags.push(`<span class="tag">${svg("spark")}文書ガイド</span>`);
-  return tags.join("");
-}
-
 /* パンくずは場所（親のフォルダ）だけ。 */
 function crumbsHtml(p) {
   const f = p.kind === "folder" ? null : folderOf(p);
@@ -928,7 +911,6 @@ function open(id) {
   $("#ins").hidden = folder || (p.role === "transcript" && !tab.blank);
   $("#pubbtn").hidden = folder;
   $("#count").hidden = folder;
-  $("#scope").innerHTML = scopeHtml(p, tab);
   $("#info-body").innerHTML = folder ? `<section class="sec"><p class="none">フォルダには操作がありません。ページを開くと、流れとタブが出ます。</p></section>` : infoHtml(p, tab);
   $("#count").textContent = countOf(tab);
   $("#menu-dots").innerHTML = folder
@@ -951,7 +933,6 @@ function openSplit(a, b) {
   $("#crumbs").innerHTML = crumbsHtml(A.page);
   $("#loc").innerHTML = crumbsHtml(A.page);
   $("#ins").hidden = true; $("#pubbtn").hidden = true; $("#count").hidden = true;
-  $("#scope").innerHTML = scopeHtml(A.page, A);
   $("#info-body").innerHTML = infoHtml(A.page, A);
   $("#url").textContent = `/p/${a}?with=${b}`;
   renderList();
@@ -973,7 +954,7 @@ const MENUS = {
   tab: () => {
     const t = BY.get(curTab);
     const others = tabsOf(t.page).filter((x) => x !== t);
-    return `<button data-rename="${t.id}">${svg("edit")}名前を変える</button><button data-make="dup">${svg("copy")}複製</button>${t.from ? `<button data-make="sibling">${svg("spark")}同じ入力でもう 1 つ<small>AI</small></button>` : ""}${others.length ? `<button data-split="${others[0].id}">${svg("cols")}並べて開く<small>${tl(others[0])}</small></button>` : ""}<button data-toast="別のページへ移します（モック）">${svg("move")}別のページへ移す</button><hr><button class="danger" data-del="${t.id}">${svg("trash")}削除<small>ゴミ箱に 30 日</small></button>`;
+    return `<button data-rename="${t.id}">${svg("edit")}名前を変える</button><button data-make="dup">${svg("copy")}複製</button>${t.from ? `<hr><button data-toast="このタブを作り直します。前の本文は版に残ります（モック）">${svg("redo")}作り直す<small>AI</small></button><button data-make="sibling">${svg("spark")}同じ入力でもう 1 つ<small>AI</small></button><hr>` : ""}${others.length ? `<button data-split="${others[0].id}">${svg("cols")}並べて開く<small>${tl(others[0])}</small></button>` : ""}<button data-toast="別のページへ移します（モック）">${svg("move")}別のページへ移す</button><hr><button class="danger" data-del="${t.id}">${svg("trash")}削除<small>ゴミ箱に 30 日</small></button>`;
   },
 };
 
@@ -1098,6 +1079,7 @@ function renderLayout() {
     rail.hidden = ids.length === 0;
     rail.classList.toggle("mob", mob && side === "right" && ids.length > 0);
   }
+  $("#ws").classList.toggle("noleft", !mob && layout.left.length === 0);
   document.documentElement.style.setProperty("--rw", !mob && layout.right.length ? getComputedStyle(document.documentElement).getPropertyValue("--aiw") : "0px");
   for (const id of Object.keys(PANELS)) {
     const b = $("#tg-" + id); if (!b) continue;
