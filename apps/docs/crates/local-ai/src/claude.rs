@@ -11,6 +11,9 @@
 //!   `--permission-mode dontAsk` ＋ `Edit(./<場所>/**)` でそこ以外への書き込みも断られる）。init の一覧がこの 5 つの
 //!   部分集合でなければ止め、ほかのツール・サブエージェントの気配も止める（fail closed）。ツールの呼び出しと結果は
 //!   `ToolUse`・`ToolResult`（ファイル名と成否だけ）で流し、`Done.text` は最後のツールの後の文（返答）にする。
+//! - 修正の会話で `web_search` が true なら、Web の WebSearch・WebFetch も足す（#283。Bash は足さない）。init の一覧に
+//!   Web の道具が無ければ（この版・この契約では使えない）`Notice { WebSearchUnsupported }` を出して検索なしで続け、
+//!   WebSearch が 1 依頼で 5 回を超えたら止める。
 
 use crate::classify::{
   classify_claude_process_failure, classify_claude_result, error_event, is_usage_limit_notice_only,
@@ -18,8 +21,8 @@ use crate::classify::{
 };
 use crate::merge::merge_continuation;
 use crate::process::{run_child, ChildExit, PrivateDir, TURN_DIR_PREFIX};
-use crate::turn::{Breach, FolderAccess, SessionArg, StreamHandler, TurnCtx};
-use crate::types::{Effort, Provider, ReasonCode, StopReason, TurnEvent, Usage};
+use crate::turn::{Breach, FolderAccess, SessionArg, StreamHandler, TurnCtx, WebSearchCount};
+use crate::types::{Effort, NoticeCode, Provider, ReasonCode, StopReason, TurnEvent, Usage};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -27,6 +30,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 修正の会話で許すツール（Claude Code の組み込み。シェル・Web・サブエージェント・MCP は含めない）。
 pub(crate) const FILE_TOOLS: [&str; 5] = ["Read", "Edit", "Write", "Glob", "Grep"];
+/// 修正の会話で `web_search` のときだけ足す Web の道具（Claude Code の組み込み。Bash・Task・MCP は足さない。#283）。
+pub(crate) const WEB_TOOLS: [&str; 2] = ["WebSearch", "WebFetch"];
+/// 回数を数える検索の道具（WebFetch はページを読むだけなので数えない）。
+const WEB_SEARCH_TOOL: &str = "WebSearch";
 /// ツールの入力（input_json_delta）を貯める上限。Write の本文で大きくなるので、ファイル名が読めれば足りる分だけ持ち、
 /// 超えたら assistant のメッセージ（入力の全体が入る）から読む。
 const TOOL_INPUT_MAX_BYTES: usize = 256 * 1024;
@@ -70,12 +77,27 @@ pub(crate) fn is_unknown_thinking_display_option(stderr: &str) -> bool {
 
 /// 修正の会話の `--allowedTools`。書ける場所が無ければ 5 つ全部、あれば読むツールと `Edit(./<場所>/**)`（Edit の規則は
 /// Write にも効く。dontAsk なので、この規則に合わない書き込みは確認なしで断られる）。
+/// `folder.web` なら Web の道具（WebSearch・WebFetch）を後ろに足す。
 pub(crate) fn allowed_file_tools(folder: &FolderAccess) -> String {
-  if folder.writable.is_empty() {
-    return FILE_TOOLS.join(",");
+  let mut tools: Vec<String> = if folder.writable.is_empty() {
+    FILE_TOOLS.iter().map(|tool| tool.to_string()).collect()
+  } else {
+    let mut tools: Vec<String> = ["Read", "Glob", "Grep"].iter().map(|tool| tool.to_string()).collect();
+    tools.extend(folder.writable.iter().map(|dir| format!("Edit(./{dir}/**)")));
+    tools
+  };
+  if folder.web {
+    tools.extend(WEB_TOOLS.iter().map(|tool| tool.to_string()));
   }
-  let mut tools: Vec<String> = ["Read", "Glob", "Grep"].iter().map(|tool| tool.to_string()).collect();
-  tools.extend(folder.writable.iter().map(|dir| format!("Edit(./{dir}/**)")));
+  tools.join(",")
+}
+
+/// 修正の会話の `--tools`（使える道具の一覧）。ファイルの 5 つと、`folder.web` なら Web の 2 つ。
+fn folder_tools(folder: &FolderAccess) -> String {
+  let mut tools: Vec<&str> = FILE_TOOLS.to_vec();
+  if folder.web {
+    tools.extend(WEB_TOOLS);
+  }
   tools.join(",")
 }
 
@@ -121,7 +143,7 @@ pub(crate) fn build_args(
   match folder {
     None => args.push(String::new()),
     Some(folder) => {
-      args.push(FILE_TOOLS.join(","));
+      args.push(folder_tools(folder));
       args.push("--allowedTools".to_string());
       args.push(allowed_file_tools(folder));
     }
@@ -260,10 +282,18 @@ struct ToolBlock {
 
 /// ツールの入力のうち、画面に出してよいファイル名（パスの最後の部分）だけ。Read・Edit・Write は `file_path`、
 /// Glob・Grep は `path`（無ければ空。検索語・パターン・本文は出さない）。
+/// WebFetch は読むページのホスト名だけ（パス・クエリは出さない）、WebSearch は空（検索語は出さない）。
 pub(crate) fn tool_summary(name: &str, input: &Value) -> String {
   let key = match name {
     "Read" | "Edit" | "Write" => "file_path",
     "Glob" | "Grep" => "path",
+    "WebFetch" => {
+      return input
+        .get("url")
+        .and_then(Value::as_str)
+        .map(host_only)
+        .unwrap_or_default()
+    }
     _ => return String::new(),
   };
   input
@@ -271,6 +301,22 @@ pub(crate) fn tool_summary(name: &str, input: &Value) -> String {
     .and_then(Value::as_str)
     .map(file_name_only)
     .unwrap_or_default()
+}
+
+/// URL のホスト名だけ（`http(s)://` の後ろから、`/`・`?`・`#` の前まで。利用者情報とポートは除く）。URL でなければ空。
+pub(crate) fn host_only(url: &str) -> String {
+  let lower = url.trim().to_ascii_lowercase();
+  let Some(rest) = lower.strip_prefix("https://").or_else(|| lower.strip_prefix("http://")) else {
+    return String::new();
+  };
+  let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+  let host = authority.rsplit('@').next().unwrap_or("");
+  let host = host.split(':').next().unwrap_or("");
+  host
+    .chars()
+    .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-'))
+    .take(SUMMARY_MAX_CHARS)
+    .collect()
 }
 
 /// パスの最後の部分（制御文字を除き、長すぎる名前は切る）。
@@ -289,6 +335,10 @@ pub(crate) struct ClaudeConverter {
   session_id: String,
   /// ファイルのツール（FILE_TOOLS）を許すか（ToolPolicy::ProjectFolder）
   file_tools: bool,
+  /// Web の道具（WEB_TOOLS）も許すか（修正の会話で `web_search` のとき）
+  web_tools: bool,
+  /// WebSearch の回数
+  searches: WebSearchCount,
   init_seen: bool,
   /// init の `model`（message_start が来なかったときの代わり）
   init_model: Option<String>,
@@ -315,6 +365,8 @@ impl ClaudeConverter {
     Self {
       session_id: session_id.to_string(),
       file_tools: false,
+      web_tools: false,
+      searches: WebSearchCount::default(),
       init_seen: false,
       init_model: None,
       segments: Vec::new(),
@@ -340,8 +392,36 @@ impl ClaudeConverter {
     }
   }
 
+  /// 修正の会話で Web の道具も許した起動（`--tools` に WebSearch・WebFetch を足した）の出力を読む。
+  pub(crate) fn with_file_and_web_tools(session_id: &str) -> Self {
+    Self {
+      web_tools: true,
+      ..Self::with_file_tools(session_id)
+    }
+  }
+
+  /// 許したツールの名前か（init の一覧と呼び出しの両方に使う）。
+  fn is_permitted_name(&self, name: &str) -> bool {
+    self.file_tools && (FILE_TOOLS.contains(&name) || (self.web_tools && WEB_TOOLS.contains(&name)))
+  }
+
   fn permits_tool(&self, block_type: &str, name: &str) -> bool {
-    self.file_tools && block_type == "tool_use" && FILE_TOOLS.contains(&name)
+    block_type == "tool_use" && self.is_permitted_name(name)
+  }
+
+  /// ツールの呼び出しを通すか。許していないツールと、上限を超えた検索は止める（breach を立てて false）。
+  fn admit_tool(&mut self, block_type: &str, name: &str, id: &str) -> bool {
+    if !self.permits_tool(block_type, name) {
+      self.tool_breach(block_type);
+      return false;
+    }
+    if name == WEB_SEARCH_TOOL {
+      if let Some(breach) = self.searches.record(id) {
+        self.breach = Some(breach);
+        return false;
+      }
+    }
+    true
   }
 
   /// ツールの呼び出しより前の文は実況。`Done.text` は最後のツールの呼び出しより後の文（返答）だけにする。
@@ -453,21 +533,34 @@ impl ClaudeConverter {
     }
   }
 
-  fn check_init(&mut self, value: &Value) {
+  fn check_init(&mut self, value: &Value, events: &mut Vec<TurnEvent>) {
     self.init_model = non_empty_str(value, "model");
     let is_empty = |key: &str| value.get(key).and_then(Value::as_array).is_some_and(Vec::is_empty);
-    // 修正の会話: ツールの一覧が許した 5 つの部分集合（一覧が無い・名前でないものがあれば違反）
+    // 修正の会話: ツールの一覧が許したもの（ファイルの 5 つと、許したときは Web の 2 つ）の部分集合
+    // （一覧が無い・名前でないものがあれば違反）
+    let tools = value.get("tools").and_then(Value::as_array);
     let tools_ok = if self.file_tools {
-      value.get("tools").and_then(Value::as_array).is_some_and(|tools| {
+      tools.is_some_and(|tools| {
         tools
           .iter()
-          .all(|tool| tool.as_str().is_some_and(|name| FILE_TOOLS.contains(&name)))
+          .all(|tool| tool.as_str().is_some_and(|name| self.is_permitted_name(name)))
       })
     } else {
       is_empty("tools")
     };
     if tools_ok && is_empty("mcp_servers") {
       self.init_seen = true;
+      // Web を頼んだのに一覧に Web の道具が 1 つも無い（この版・この契約では使えない）。黙って落とさず、検索なしで続ける
+      let has_web = tools.is_some_and(|tools| {
+        tools
+          .iter()
+          .any(|tool| tool.as_str().is_some_and(|name| WEB_TOOLS.contains(&name)))
+      });
+      if self.web_tools && !has_web {
+        events.push(TurnEvent::Notice {
+          code: NoticeCode::WebSearchUnsupported,
+        });
+      }
     } else {
       self.breach = Some(Breach {
         kind: "init".to_string(),
@@ -523,16 +616,15 @@ impl ClaudeConverter {
             .and_then(|block| block.get("name"))
             .and_then(Value::as_str)
             .unwrap_or("");
-          if !self.permits_tool(block_type, name) {
-            self.tool_breach(block_type);
-            return;
-          }
-          self.cut_narration();
           let id = block
             .and_then(|block| block.get("id"))
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
+          if !self.admit_tool(block_type, name, &id) {
+            return;
+          }
+          self.cut_narration();
           self.tool_blocks.insert(
             u64_field(event, "index").unwrap_or(0),
             ToolBlock {
@@ -644,11 +736,10 @@ impl ClaudeConverter {
         continue;
       }
       let name = block.get("name").and_then(Value::as_str).unwrap_or("");
-      if !self.permits_tool(block_type, name) {
-        self.tool_breach(block_type);
+      let id = block.get("id").and_then(Value::as_str).unwrap_or("");
+      if !self.admit_tool(block_type, name, id) {
         return;
       }
-      let id = block.get("id").and_then(Value::as_str).unwrap_or("");
       if !self.announced.contains(id) {
         self.cut_narration();
       }
@@ -685,7 +776,7 @@ impl StreamHandler for ClaudeConverter {
     }
     match value.get("type").and_then(Value::as_str) {
       Some("system") => match value.get("subtype").and_then(Value::as_str) {
-        Some("init") => self.check_init(&value),
+        Some("init") => self.check_init(&value, &mut events),
         Some("api_retry") if value.get("error").and_then(Value::as_str) == Some("authentication_failed") => {
           self.auth_failed = true;
         }
@@ -806,7 +897,8 @@ pub(crate) fn run(ctx: &TurnCtx, emit: &mut dyn FnMut(TurnEvent)) -> TurnEvent {
   let stdin = stdin_for(&ctx.req.user_prompt).into_bytes();
   let mut thinking_display = thinking_display_supported();
   loop {
-    let mut converter = match ctx.folder {
+    let mut converter = match &ctx.folder {
+      Some(folder) if folder.web => ClaudeConverter::with_file_and_web_tools(session.id()),
       Some(_) => ClaudeConverter::with_file_tools(session.id()),
       None => ClaudeConverter::new(session.id()),
     };
@@ -1471,7 +1563,249 @@ mod tests {
       dir: PathBuf::from("/private/tmp/p"),
       given: PathBuf::from("/tmp/p"),
       writable: writable.iter().map(|dir| dir.to_string()).collect(),
+      web: false,
     }
+  }
+
+  fn web_folder(writable: &[&str]) -> FolderAccess {
+    FolderAccess {
+      web: true,
+      ..folder(writable)
+    }
+  }
+
+  #[test]
+  fn args_with_web_search_add_only_web_search_and_web_fetch() {
+    let path = PathBuf::from("/tmp/p.txt");
+    let session = SessionArg::New(SESSION.into());
+    let args = build_args(
+      "sonnet",
+      None,
+      None,
+      &path,
+      &session,
+      false,
+      Some(&web_folder(&["artifacts"])),
+    );
+    assert_eq!(
+      arg_after(&args, "--tools"),
+      Some("Read,Edit,Write,Glob,Grep,WebSearch,WebFetch")
+    );
+    assert_eq!(
+      arg_after(&args, "--allowedTools"),
+      Some("Read,Glob,Grep,Edit(./artifacts/**),WebSearch,WebFetch")
+    );
+    assert_eq!(arg_after(&args, "--permission-mode"), Some("dontAsk"));
+    let anywhere = build_args("sonnet", None, None, &path, &session, false, Some(&web_folder(&[])));
+    assert_eq!(
+      arg_after(&anywhere, "--allowedTools"),
+      Some("Read,Edit,Write,Glob,Grep,WebSearch,WebFetch")
+    );
+    // コマンド実行・サブエージェントは、Web を許しても足さない
+    for args in [&args, &anywhere] {
+      for tool in ["--tools", "--allowedTools"] {
+        let value = arg_after(args, tool).unwrap();
+        for denied in ["Bash", "Task", "NotebookEdit", "mcp__"] {
+          assert!(!value.contains(denied), "{tool} {value}");
+        }
+      }
+    }
+    // web_search が false なら Web の道具は無い（今までどおり）
+    let off = build_args(
+      "sonnet",
+      None,
+      None,
+      &path,
+      &session,
+      false,
+      Some(&folder(&["artifacts"])),
+    );
+    assert_eq!(arg_after(&off, "--tools"), Some("Read,Edit,Write,Glob,Grep"));
+    assert!(!arg_after(&off, "--allowedTools").unwrap().contains("Web"));
+  }
+
+  const WEB_INIT: &str = r#"{"type":"system","subtype":"init","session_id":"s","tools":["Edit","Glob","Grep","Read","Write","WebSearch","WebFetch"],"mcp_servers":[],"model":"claude-sonnet-5"}"#;
+
+  #[test]
+  fn web_tools_become_tool_events_without_queries_or_paths() {
+    let mut converter = ClaudeConverter::with_file_and_web_tools(SESSION);
+    let events = feed(
+      &mut converter,
+      &[
+        WEB_INIT.to_string(),
+        message_start(10),
+        tool_start(0, "toolu_s", "WebSearch"),
+        tool_input(0, r#"{"query": "秘密の検索語 営業時間"}"#),
+        tool_stop(0),
+        message_delta("tool_use", 5),
+        tool_result("toolu_s", false),
+        message_start(20),
+        tool_start(0, "toolu_f", "WebFetch"),
+        tool_input(
+          0,
+          r#"{"url": "https://user:pw@Shop.Example.jp:8443/menu/hours?id=1", "prompt": "営業時間を抜き出す"}"#,
+        ),
+        tool_stop(0),
+        message_delta("tool_use", 5),
+        tool_result("toolu_f", false),
+        message_start(30),
+        text("営業時間を確かめました。"),
+        message_delta("end_turn", 7),
+        result(json!({"result":"営業時間を確かめました。"})),
+      ],
+    );
+    assert_eq!(
+      events,
+      vec![
+        TurnEvent::ToolUse {
+          id: "toolu_s".into(),
+          name: "WebSearch".into(),
+          summary: String::new()
+        },
+        TurnEvent::ToolResult {
+          id: "toolu_s".into(),
+          name: "WebSearch".into(),
+          ok: true
+        },
+        TurnEvent::ToolUse {
+          id: "toolu_f".into(),
+          name: "WebFetch".into(),
+          summary: "shop.example.jp".into()
+        },
+        TurnEvent::ToolResult {
+          id: "toolu_f".into(),
+          name: "WebFetch".into(),
+          ok: true
+        },
+        TurnEvent::TextDelta("営業時間を確かめました。".into()),
+      ]
+    );
+    let shown = format!("{events:?}");
+    for hidden in ["秘密の検索語", "menu", "hours", "pw", "8443", "営業時間を抜き出す"] {
+      assert!(!shown.contains(hidden), "{hidden}");
+    }
+    assert!(converter.breach().is_none());
+    match converter.conclude("", 0) {
+      TurnEvent::Done { text, .. } => assert_eq!(text, "営業時間を確かめました。"),
+      other => panic!("unexpected {other:?}"),
+    }
+  }
+
+  #[test]
+  fn with_web_tools_other_tools_are_still_breaches() {
+    // init に Web 以外の許していないツール（Bash）がある
+    let mut converter = ClaudeConverter::with_file_and_web_tools(SESSION);
+    feed(
+      &mut converter,
+      &[r#"{"type":"system","subtype":"init","tools":["Read","WebSearch","Bash"],"mcp_servers":[]}"#.to_string()],
+    );
+    assert_eq!(converter.breach().map(|breach| breach.kind.as_str()), Some("init"));
+    // 呼び出し（シェル・サブエージェント・MCP・サーバーのツール）
+    for (block_type, name) in [
+      ("tool_use", "Bash"),
+      ("tool_use", "Task"),
+      ("tool_use", "mcp__x__y"),
+      ("server_tool_use", "web_search"),
+      ("server_tool_use", "WebSearch"),
+    ] {
+      let mut converter = ClaudeConverter::with_file_and_web_tools(SESSION);
+      let events = feed(
+        &mut converter,
+        &[
+          WEB_INIT.to_string(),
+          message_start(1),
+          stream(
+            json!({"type":"content_block_start","index":0,"content_block":{"type":block_type,"id":"toolu_x","name":name,"input":{}}}),
+          ),
+        ],
+      );
+      assert!(events.is_empty(), "{name}");
+      assert_eq!(
+        converter.breach().map(|breach| breach.message.as_str()),
+        Some(FILE_TOOL_USE_MESSAGE),
+        "{block_type} {name}"
+      );
+    }
+    let mut converter = ClaudeConverter::with_file_and_web_tools(SESSION);
+    feed(
+      &mut converter,
+      &[
+        WEB_INIT.to_string(),
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]}}"#
+          .to_string(),
+      ],
+    );
+    assert!(converter.breach().is_some());
+    // Web を切った起動では、WebSearch の init も呼び出しも違反
+    let mut converter = ClaudeConverter::with_file_tools(SESSION);
+    feed(&mut converter, &[WEB_INIT.to_string()]);
+    assert_eq!(converter.breach().map(|breach| breach.kind.as_str()), Some("init"));
+    let mut converter = ClaudeConverter::with_file_tools(SESSION);
+    feed(
+      &mut converter,
+      &[
+        FILE_INIT.to_string(),
+        message_start(1),
+        tool_start(0, "toolu_s", "WebSearch"),
+      ],
+    );
+    assert_eq!(
+      converter.breach().map(|breach| breach.message.as_str()),
+      Some(FILE_TOOL_USE_MESSAGE)
+    );
+  }
+
+  #[test]
+  fn web_tools_missing_from_init_are_a_notice_and_the_turn_goes_on() {
+    let mut converter = ClaudeConverter::with_file_and_web_tools(SESSION);
+    let events = feed(
+      &mut converter,
+      &[FILE_INIT.to_string(), message_start(1), text("検索なしで直します。")],
+    );
+    assert_eq!(
+      events,
+      vec![
+        TurnEvent::Notice {
+          code: NoticeCode::WebSearchUnsupported
+        },
+        TurnEvent::TextDelta("検索なしで直します。".into()),
+      ]
+    );
+    assert!(converter.breach().is_none());
+    // Web の道具が 1 つでもあれば知らせない
+    let mut converter = ClaudeConverter::with_file_and_web_tools(SESSION);
+    let events = feed(&mut converter, &[WEB_INIT.to_string()]);
+    assert!(events.is_empty());
+  }
+
+  #[test]
+  fn the_sixth_web_search_stops_the_turn() {
+    let mut converter = ClaudeConverter::with_file_and_web_tools(SESSION);
+    let mut lines = vec![WEB_INIT.to_string()];
+    for index in 1..=5 {
+      let id = format!("toolu_{index}");
+      lines.push(message_start(1));
+      lines.push(tool_start(0, &id, "WebSearch"));
+      // 同じ呼び出しが assistant のメッセージにも出る（2 回と数えない）
+      lines.push(
+        json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":id,"name":"WebSearch","input":{"query":"q"}}]},"parent_tool_use_id":null})
+          .to_string(),
+      );
+      lines.push(tool_stop(0));
+      lines.push(tool_result(&id, false));
+    }
+    // 取得（WebFetch）は数えない
+    lines.push(message_start(1));
+    lines.push(tool_start(0, "toolu_f", "WebFetch"));
+    feed(&mut converter, &lines);
+    assert!(converter.breach().is_none());
+    feed(
+      &mut converter,
+      &[message_start(1), tool_start(0, "toolu_6", "WebSearch")],
+    );
+    let breach = converter.breach().expect("the sixth search must stop the turn");
+    assert_eq!(breach.kind, "web_search_limit");
+    assert_eq!(breach.code, ReasonCode::TransientFailure);
   }
 
   #[test]
@@ -1728,6 +2062,12 @@ mod tests {
     );
     assert_eq!(tool_summary("Glob", &json!({"pattern":"**/*.md"})), "");
     assert_eq!(tool_summary("Bash", &json!({"command":"cat /etc/passwd"})), "");
+    assert_eq!(tool_summary("WebSearch", &json!({"query":"秘密の語"})), "");
+    assert_eq!(
+      tool_summary("WebFetch", &json!({"url":"http://example.com"})),
+      "example.com"
+    );
+    assert_eq!(tool_summary("WebFetch", &json!({"url":"file:///etc/passwd"})), "");
     assert_eq!(file_name_only("a/b\u{7}c.md"), "bc.md");
     assert_eq!(file_name_only("/p/dir/"), "dir");
     assert_eq!(file_name_only(&"名".repeat(200)).chars().count(), SUMMARY_MAX_CHARS);

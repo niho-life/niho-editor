@@ -240,8 +240,10 @@ fn app_usage(provider: local::Provider, usage: local::Usage, model: &str) -> Usa
   }
 }
 
-pub(crate) fn app_event(provider: local::Provider, model: &str, event: local::TurnEvent) -> TurnEvent {
-  match event {
+/// 画面に流す形。crate の知らせ（`Notice`。Web の検索を切った・この版では検索できない）は、画面の表示を足すまで流さない
+/// （None。#283 の画面側で契約に足す）。
+pub(crate) fn app_event(provider: local::Provider, model: &str, event: local::TurnEvent) -> Option<TurnEvent> {
+  Some(match event {
     local::TurnEvent::ThinkingDelta(text) => TurnEvent::ThinkingDelta(text),
     local::TurnEvent::TextDelta(text) => TurnEvent::TextDelta(text),
     local::TurnEvent::ToolUse { id, name, summary } => TurnEvent::ToolUse { id, name, summary },
@@ -270,7 +272,8 @@ pub(crate) fn app_event(provider: local::Provider, model: &str, event: local::Tu
       };
       TurnEvent::Error { reason_code, message }
     }
-  }
+    local::TurnEvent::Notice { .. } => return None,
+  })
 }
 
 pub(crate) fn app_status(status: local::ProviderStatus) -> ProviderStatus {
@@ -377,13 +380,17 @@ impl LlmRunner for LocalAiRunner {
       timeout: request.timeout,
       max_budget_usd: request.max_budget_usd,
       tool_policy: local_tool_policy(request.tool_policy),
+      // Web の検索は既定で許す（#283）。設定の「Web を検索する」は別の変更でここへつなぐ
+      web_search: true,
     };
     let mut edges = StreamEdges::default();
     let handle = local::run_turn_with(&self.runtime, turn, move |event| {
       if let local::TurnEvent::TextDelta(delta) = &event {
         edges.push(delta);
       }
-      let mut event = app_event(provider, &model, event);
+      let Some(mut event) = app_event(provider, &model, event) else {
+        return;
+      };
       // Codex は最後のメッセージだけが本文で、差分（途中のメッセージも流れる）と一致しないので戻さない
       if let (local::Provider::ClaudeCode, true, TurnEvent::Done { text, .. }) = (provider, restore_edges, &mut event) {
         *text = edges.restore(std::mem::take(text));

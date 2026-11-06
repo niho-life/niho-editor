@@ -19,11 +19,16 @@
 //!   apply_patch は code mode の中にあるので code_mode_host だけは切らない（シェル・exec_command は切ったまま。
 //!   code mode の JS は fs もネットワークも持たない。0.154.0 で確認）。file_change は `ToolUse`・`ToolResult`
 //!   （ファイル名と成否）で流し、書ける場所の外のパスが出たら止める（sandbox が先に断る想定の、もう一段の守り）。
+//! - 修正の会話で `web_search` が true なら、Web 検索だけを開ける（#283）: `-c web_search="live"` にし、Web 検索の機能
+//!   （[`WEB_SEARCH_FEATURES`]）を切る一覧から外し、web_search の item を止めずに `ToolUse`・`ToolResult`（検索語は出さない）
+//!   で流す。1 依頼で 5 回を超えた検索は止める。sandbox は workspace-write のまま、command_execution などは今まで通り止める。
+//!   Codex は Web 検索を持たない版を事前に見分けられない（設定の値なので `features list` に出ない）ので、知らせは出さない。
 
 use crate::classify::{classify_codex_failure, error_event};
 use crate::claude::file_name_only;
+use crate::claude::host_only;
 use crate::process::{is_uuid, run_child, run_child_within, ChildExit, PrivateDir, TURN_DIR_PREFIX};
-use crate::turn::{Breach, FolderAccess, StreamHandler, TurnCtx};
+use crate::turn::{Breach, FolderAccess, StreamHandler, TurnCtx, WebSearchCount};
 use crate::types::{Effort, Provider, ReasonCode, StopReason, TurnEvent, Usage};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -52,6 +57,10 @@ pub(crate) const DISABLED_FEATURES: [&str; 18] = [
   "workspace_dependencies",
   "skill_mcp_dependency_install",
 ];
+
+/// Web 検索の機能（0.163.0 の `codex features list` では deprecated で false。Web 検索そのものは設定 `web_search` で開ける）。
+/// 版によって有効なら、修正の会話で Web を許したときだけ切る一覧から外す（ほかの機能は切ったまま）。
+pub(crate) const WEB_SEARCH_FEATURES: [&str; 2] = ["web_search_request", "web_search_cached"];
 
 /// `codex features list` を待つ時間（この子だけの上限。停止・ターンの時間切れ・アプリの終了では先に止まる）・残す出力の大きさ・
 /// 読む機能の数の上限。
@@ -92,13 +101,18 @@ pub(crate) fn enabled_features(list: &str) -> Option<Vec<String>> {
 }
 
 /// 切る機能（名前の順）: crate が知っている一覧と、今の版で有効な機能の全部。修正の会話（`folder`）だけ、apply_patch の
-/// ある `code_mode_host` を残す。
-pub(crate) fn features_off(enabled: &[String], folder: bool) -> Vec<String> {
+/// ある `code_mode_host` を残し、Web を許したとき（`web`）は Web 検索の機能（[`WEB_SEARCH_FEATURES`]）も残す。
+pub(crate) fn features_off(enabled: &[String], folder: bool, web: bool) -> Vec<String> {
   let mut off: std::collections::BTreeSet<String> =
     DISABLED_FEATURES.iter().map(|feature| feature.to_string()).collect();
   off.extend(enabled.iter().filter(|feature| is_feature_name(feature)).cloned());
   if folder {
     off.remove(PROJECT_FOLDER_KEPT_FEATURE);
+    if web {
+      for feature in WEB_SEARCH_FEATURES {
+        off.remove(feature);
+      }
+    }
   }
   off.into_iter().collect()
 }
@@ -200,8 +214,14 @@ pub(crate) fn build_args(
     args.push("-c".to_string());
     args.push(format!("features.{feature}=false"));
   }
+  // Web 検索は修正の会話で許したときだけ（live＝その場で検索する。cached は古い索引で、事実確認に向かない）
+  let web_search = if folder.is_some_and(|folder| folder.web) {
+    "web_search=\"live\""
+  } else {
+    "web_search=\"disabled\""
+  };
   args.extend(
-    ["-c", "web_search=\"disabled\"", "-c", "project_doc_max_bytes=0"]
+    ["-c", web_search, "-c", "project_doc_max_bytes=0"]
       .iter()
       .map(|v| v.to_string()),
   );
@@ -265,6 +285,11 @@ pub(crate) struct CodexConverter {
   errors: Vec<String>,
   warnings: Vec<String>,
   breach: Option<Breach>,
+  /// 知らせた web_search の item（ID → 画面の名前 WebSearch・WebFetch）と、ToolResult を送ったもの
+  web_items: std::collections::HashMap<String, &'static str>,
+  web_finished: HashSet<String>,
+  /// 検索（ページを開く・ページの中を探すは除く）の回数
+  searches: WebSearchCount,
 }
 
 impl CodexConverter {
@@ -280,6 +305,9 @@ impl CodexConverter {
       errors: Vec::new(),
       warnings: Vec::new(),
       breach: None,
+      web_items: std::collections::HashMap::new(),
+      web_finished: HashSet::new(),
+      searches: WebSearchCount::default(),
     }
   }
 
@@ -344,6 +372,62 @@ impl CodexConverter {
     }
   }
 
+  /// Web を許した修正の会話か。
+  fn permits_web(&self) -> bool {
+    self.folder.as_ref().is_some_and(|folder| folder.web)
+  }
+
+  /// web_search の item を `ToolUse`・`ToolResult` にする。`action.type` が open_page・find_in_page ならページを読む
+  /// （WebFetch。ホスト名だけ出す）、それ以外（search・無し）は検索（WebSearch。検索語は出さない）。検索は終わった
+  /// item で数え、上限を超えたら止める。
+  fn handle_web_search(&mut self, completed: bool, item: &Value, events: &mut Vec<TurnEvent>) {
+    let id = item.get("id").and_then(Value::as_str).unwrap_or("item").to_string();
+    let action = item.get("action");
+    let action_type = action
+      .and_then(|action| action.get("type"))
+      .and_then(Value::as_str)
+      .unwrap_or("search");
+    let reads_page = matches!(action_type, "open_page" | "find_in_page");
+    if !self.web_items.contains_key(&id) {
+      let (name, summary) = if reads_page {
+        let url = action
+          .and_then(|action| action.get("url"))
+          .and_then(Value::as_str)
+          .unwrap_or("");
+        ("WebFetch", host_only(url))
+      } else {
+        ("WebSearch", String::new())
+      };
+      self.web_items.insert(id.clone(), name);
+      events.push(TurnEvent::ToolUse {
+        id: id.clone(),
+        name: name.to_string(),
+        summary,
+      });
+    }
+    if !completed {
+      return;
+    }
+    if !reads_page {
+      if let Some(breach) = self.searches.record(&id) {
+        self.breach = Some(breach);
+        return;
+      }
+    }
+    if self.web_finished.insert(id.clone()) {
+      let name = self.web_items.get(&id).copied().unwrap_or("WebSearch");
+      let ok = !matches!(
+        item.get("status").and_then(Value::as_str),
+        Some("failed" | "declined" | "error")
+      );
+      events.push(TurnEvent::ToolResult {
+        id,
+        name: name.to_string(),
+        ok,
+      });
+    }
+  }
+
   fn handle_item(&mut self, phase: &str, item: &Value, events: &mut Vec<TurnEvent>) {
     let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
     let completed = phase == "item.completed";
@@ -375,7 +459,8 @@ impl CodexConverter {
       }
       "todo_list" | "user_message" => {}
       "file_change" if self.folder.is_some() => self.handle_file_change(completed, item, events),
-      // command_execution・file_change・mcp_tool_call・web_search・知らない type
+      "web_search" if self.permits_web() => self.handle_web_search(completed, item, events),
+      // command_execution・file_change・mcp_tool_call・web_search（Web を許していない回）・知らない type
       other => {
         let kind = if other.is_empty() { "unknown" } else { other };
         self.breach = Some(Breach {
@@ -596,7 +681,11 @@ pub(crate) fn run(ctx: &TurnCtx, emit: &mut dyn FnMut(TurnEvent)) -> TurnEvent {
     ctx.log("features_unreadable", serde_json::json!({}));
     return ctx.error(ReasonCode::NotConfigured, Some(FEATURES_UNREADABLE_MESSAGE));
   };
-  let off = features_off(&enabled, ctx.folder.is_some());
+  let off = features_off(
+    &enabled,
+    ctx.folder.is_some(),
+    ctx.folder.as_ref().is_some_and(|folder| folder.web),
+  );
   let args = build_args(
     &ctx.req.model,
     ctx.req.effort,
@@ -845,7 +934,7 @@ mod tests {
   #[test]
   fn args_for_new_and_resume_differ_only_in_the_head_and_sandbox() {
     let instructions = Path::new(INSTRUCTIONS);
-    let off = features_off(&[], false);
+    let off = features_off(&[], false, false);
     let new = build_args("gpt-5.5", None, Some(instructions), None, None, &off);
     assert_eq!(
       &new[..4],
@@ -905,7 +994,12 @@ mod tests {
       dir: std::path::PathBuf::from("/private/tmp/p"),
       given: std::path::PathBuf::from("/tmp/p"),
       writable: vec!["artifacts".into()],
+      web: false,
     }
+  }
+
+  fn web_folder() -> FolderAccess {
+    FolderAccess { web: true, ..folder() }
   }
 
   #[test]
@@ -913,7 +1007,7 @@ mod tests {
     let folder = folder();
     let after =
       |args: &[String], flag: &str, value: &str| args.windows(2).any(|pair| pair[0] == flag && pair[1] == value);
-    let off = features_off(&[], true);
+    let off = features_off(&[], true, false);
     let new = build_args(
       "gpt-5.6-luna",
       None,
@@ -1035,7 +1129,7 @@ web_search_cached                        deprecated         false
   fn features_off_adds_every_enabled_feature_of_this_version() {
     let enabled = enabled_features(FEATURES_0_163).unwrap();
     // 知らない新しい機能（remote_plugin・realtime_conversation・worktrees など）も切る
-    let off = features_off(&enabled, false);
+    let off = features_off(&enabled, false, false);
     for feature in [
       "remote_plugin",
       "realtime_conversation",
@@ -1054,13 +1148,147 @@ web_search_cached                        deprecated         false
     sorted.dedup();
     assert_eq!(off, sorted);
     // 修正の会話だけ code_mode_host を残す（apply_patch がある）
-    let folder_off = features_off(&enabled, true);
+    let folder_off = features_off(&enabled, true, false);
     assert!(!folder_off.contains(&"code_mode_host".to_string()));
     assert!(folder_off.contains(&"remote_plugin".to_string()));
     // 設定のキーにならない名前は渡さない
-    let odd = features_off(&["ok".to_string(), "a=b".to_string(), "x.y".to_string()], false);
+    let odd = features_off(&["ok".to_string(), "a=b".to_string(), "x.y".to_string()], false, false);
     assert!(odd.contains(&"ok".to_string()));
     assert!(!odd.iter().any(|feature| feature.contains('=') || feature.contains('.')));
+  }
+
+  #[test]
+  fn web_search_opens_only_live_search_and_its_features_in_the_folder() {
+    let after =
+      |args: &[String], flag: &str, value: &str| args.windows(2).any(|pair| pair[0] == flag && pair[1] == value);
+    let enabled: Vec<String> = [
+      "web_search_request",
+      "web_search_cached",
+      "shell_tool",
+      "unified_exec",
+      "remote_plugin",
+    ]
+    .map(String::from)
+    .to_vec();
+    let off = features_off(&enabled, true, true);
+    for kept in WEB_SEARCH_FEATURES.iter().chain([&PROJECT_FOLDER_KEPT_FEATURE]) {
+      assert!(!off.contains(&kept.to_string()), "{kept}");
+    }
+    // コマンド実行（shell_tool・unified_exec）や新しい機能は、Web を許しても切ったまま
+    for feature in [
+      "shell_tool",
+      "unified_exec",
+      "remote_plugin",
+      "multi_agent",
+      "browser_use",
+      "computer_use",
+    ] {
+      assert!(off.contains(&feature.to_string()), "{feature}");
+    }
+    // Web を切った修正の会話・ツール無しの工程では、Web 検索の機能も切る
+    for off in [features_off(&enabled, true, false), features_off(&enabled, false, true)] {
+      for feature in WEB_SEARCH_FEATURES {
+        assert!(off.contains(&feature.to_string()), "{feature}");
+      }
+    }
+    let web = web_folder();
+    let args = build_args("gpt-5.6-luna", None, None, None, Some(&web), &off);
+    assert!(after(&args, "-c", "web_search=\"live\""));
+    assert!(!args.iter().any(|arg| arg == "web_search=\"disabled\""));
+    assert!(after(&args, "--sandbox", "workspace-write"));
+    assert!(after(&args, "-c", "features.shell_tool=false"));
+    assert!(after(&args, "-c", "features.unified_exec=false"));
+    assert!(!args.iter().any(|arg| arg.starts_with("features.web_search")));
+    let resume = build_args("gpt-5.6-luna", None, None, Some(THREAD), Some(&web), &off);
+    assert!(after(&resume, "-c", "web_search=\"live\""));
+    assert!(after(&resume, "-c", "sandbox_mode=\"workspace-write\""));
+    // web_search が false の修正の会話は今までどおり disabled
+    let plain = build_args("gpt-5.6-luna", None, None, None, Some(&folder()), &off);
+    assert!(after(&plain, "-c", "web_search=\"disabled\""));
+  }
+
+  #[test]
+  fn web_search_items_become_tool_events_and_other_tools_still_stop() {
+    let mut converter = CodexConverter::with_folder(None, web_folder());
+    let events = feed(
+      &mut converter,
+      &[
+        r#"{"type":"item.started","item":{"id":"ws_1","type":"web_search","query":""}}"#,
+        r#"{"type":"item.completed","item":{"id":"ws_1","type":"web_search","query":"秘密の検索語","action":{"type":"search","query":"秘密の検索語"}}}"#,
+        r#"{"type":"item.completed","item":{"id":"ws_2","type":"web_search","action":{"type":"open_page","url":"https://www.Example.jp/shop/hours?x=1"}}}"#,
+        r#"{"type":"item.completed","item":{"id":"item_9","type":"agent_message","text":"営業時間を確かめました。"}}"#,
+        r#"{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#,
+      ],
+    );
+    assert_eq!(
+      events,
+      vec![
+        TurnEvent::ToolUse {
+          id: "ws_1".into(),
+          name: "WebSearch".into(),
+          summary: String::new()
+        },
+        TurnEvent::ToolResult {
+          id: "ws_1".into(),
+          name: "WebSearch".into(),
+          ok: true
+        },
+        TurnEvent::ToolUse {
+          id: "ws_2".into(),
+          name: "WebFetch".into(),
+          summary: "www.example.jp".into()
+        },
+        TurnEvent::ToolResult {
+          id: "ws_2".into(),
+          name: "WebFetch".into(),
+          ok: true
+        },
+        TurnEvent::TextDelta("営業時間を確かめました。".into()),
+      ]
+    );
+    let shown = format!("{events:?}");
+    for hidden in ["秘密の検索語", "shop", "hours"] {
+      assert!(!shown.contains(hidden), "{hidden}");
+    }
+    assert!(converter.breach().is_none());
+    // Web を許しても、コマンド実行・MCP・サブエージェント・知らない item は止める
+    for item_type in [
+      "command_execution",
+      "mcp_tool_call",
+      "collab_tool_call",
+      "something_new",
+    ] {
+      let mut converter = CodexConverter::with_folder(None, web_folder());
+      let line = serde_json::json!({"type":"item.started","item":{"id":"item_1","type":item_type}}).to_string();
+      assert!(feed(&mut converter, &[&line]).is_empty());
+      assert_eq!(converter.breach().map(|breach| breach.kind.as_str()), Some(item_type));
+    }
+  }
+
+  #[test]
+  fn the_sixth_codex_web_search_stops_the_turn() {
+    let mut converter = CodexConverter::with_folder(None, web_folder());
+    for index in 1..=5 {
+      let started =
+        serde_json::json!({"type":"item.started","item":{"id":format!("ws_{index}"),"type":"web_search"}}).to_string();
+      let done = serde_json::json!({"type":"item.completed","item":{"id":format!("ws_{index}"),"type":"web_search","action":{"type":"search"}}}).to_string();
+      feed(&mut converter, &[&started, &done, &done]);
+    }
+    // ページを開く・ページの中を探すは数えない
+    feed(
+      &mut converter,
+      &[
+        r#"{"type":"item.completed","item":{"id":"ws_p","type":"web_search","action":{"type":"open_page","url":"https://a.example/"}}}"#,
+        r#"{"type":"item.completed","item":{"id":"ws_q","type":"web_search","action":{"type":"find_in_page","url":"https://a.example/","pattern":"x"}}}"#,
+      ],
+    );
+    assert!(converter.breach().is_none());
+    feed(
+      &mut converter,
+      &[r#"{"type":"item.completed","item":{"id":"ws_6","type":"web_search","action":{"type":"search"}}}"#],
+    );
+    let breach = converter.breach().expect("the sixth search must stop the turn");
+    assert_eq!(breach.kind, "web_search_limit");
   }
 
   #[test]
