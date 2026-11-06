@@ -51,7 +51,7 @@
 ### 5.1 データ（案）
 
 - `step_runs`: id・owner・親ページ（録音ページ）・テンプレート（recipe）・状態（queued／running／succeeded／failed／canceled）・開始の段階（`from_step`）・作成と終了の時刻。
-- `step_attempts`: run・段階の index・**世代（generation）**・状態・lease の期限・生存確認の時刻・エラーの種類（短い code だけ）・結果のページ・入力の基準（hash）。
+- `step_attempts`: run・段階の index・**世代（generation）**・状態・lease の期限・生存確認の時刻・エラーの種類（短い code だけ）・結果のページ・入力の基準（hash）・資料を上限で切ったときに使った字数（`input_used_chars`。切っていなければ NULL。#277）。
 - `pages.step_status` に `failed` を足す（migration）。`pages.parent`・`pages.recipe` は既にある。
 
 ### 5.2 実行（案）
