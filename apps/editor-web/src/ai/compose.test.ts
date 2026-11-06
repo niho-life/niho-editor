@@ -254,3 +254,28 @@ describe("partialComposeBlocks（出力の上限で切れた答えから、書�
     expect(partialComposeBlocks('{"blocks":[{"kind":"image","text":"x"}')).toEqual([]);
   });
 });
+
+describe("buildComposePrompt with a chunk (#277)", () => {
+  it("says which chunk it is, to rewrite only this chunk, and wraps the previous tail as untrusted data", () => {
+    const prompt = buildComposePrompt({
+      ...base,
+      sources: [{ label: "録音ページの本文（区切り 2/3）", text: "合成の区切り 2" }],
+      chunk: { number: 2, count: 3, target: "録音ページの本文（区切り 2/3）", previousTail: "話者A: 合成の末尾" },
+    });
+    expect(prompt.user).toContain("## 区切り");
+    expect(prompt.user).toContain("全 3 区切りのうちの 2 番目");
+    expect(prompt.user).toContain("資料「録音ページの本文（区切り 2/3）」は、この区切りの分だけを渡している。この区切りだけを書き直して返す。");
+    expect(prompt.user).toContain("ほかの区切りの内容は書かない");
+    expect(prompt.user).toContain("話者名・表記・文体をそろえる");
+    expect(prompt.user).toContain("### 前の区切りの出力の末尾\n<untrusted_data>\n話者A: 合成の末尾\n</untrusted_data>");
+    // 固定の決まりはそのまま
+    expect(buildComposePrompt(base).system).toBe(prompt.system);
+  });
+
+  it("has no previous tail on the first chunk, and no chunk section without a chunk", () => {
+    const first = buildComposePrompt({ ...base, chunk: { number: 1, count: 3, target: "前の段階の結果", previousTail: "  " } });
+    expect(first.user).toContain("全 3 区切りのうちの 1 番目");
+    expect(first.user).not.toContain("前の区切りの出力の末尾");
+    expect(buildComposePrompt(base).user).not.toContain("## 区切り");
+  });
+});

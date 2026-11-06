@@ -18,8 +18,11 @@ import { SETTINGS_ID_PATTERN, type RecipeInput, type RecipeSample, type Settings
 export const DEFAULT_RECIPE_IDS = ["tpl-1", "tpl-2", "tpl-3", "tpl-4"] as const;
 export type DefaultRecipeId = (typeof DEFAULT_RECIPE_IDS)[number];
 
-/** 1 つの工程。`profile` は AI の設定のプロファイル（標準・高性能・軽量）、`provider` は指す AI。 */
-export type RecipeStep = { id: string; name: string; instruction: string; profile: string; provider?: string };
+/**
+ * 1 つの工程。`profile` は AI の設定のプロファイル（標準・高性能・軽量）、`provider` は指す AI。
+ * `chunked` は「長い入力は区切って処理する（全文を書き直す段階）」（#277。無い古い行は false）。
+ */
+export type RecipeStep = { id: string; name: string; instruction: string; profile: string; provider?: string; chunked?: boolean };
 
 export type RecipeDef = {
   id: string;
@@ -48,6 +51,7 @@ function fromTemplate(id: DefaultRecipeId): RecipeDef {
       instruction: step.instruction,
       profile: step.profile,
       ...(step.provider === undefined ? {} : { provider: step.provider }),
+      ...(step.chunked === true ? { chunked: true } : {}),
     })),
     terms: [],
     samples: [],
@@ -101,6 +105,7 @@ export function recipeFromSettings(saved: SettingsRecipe, base: RecipeDef | unde
         instruction: step.instruction,
         profile: known?.profile ?? STANDARD_PROFILE_ID,
         ...(known?.provider === undefined ? {} : { provider: known.provider }),
+        ...(known?.chunked === true ? { chunked: true } : {}),
       };
     }),
     terms: base?.terms.map((term) => ({ ...term, variants: [...term.variants] })) ?? [],

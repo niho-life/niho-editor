@@ -86,15 +86,24 @@ function overLimit(totals: AiUsageTotals, limitUsd: number | null): boolean {
   return limitUsd !== null && totals.costMicroUsd >= Math.round(limitUsd * 1e6);
 }
 
-/** 原文と上流の全結果。録音の背景は独立した info section に渡す。 */
+/**
+ * 原文と上流の全結果。録音の背景は独立した info section に渡す。
+ * 区切って処理しているとき（#277）は、書き直す対象（段階 0 は録音ページの本文、段階 1 以降は直前の段階の結果）だけを
+ * 今の区切りのテキストに置き換える。ほかの資料は区切らず、今の予算規則で添える。
+ */
 function sourcesOf(input: StepExecutorInput): ComposeSource[] {
-  return [
+  const sources: ComposeSource[] = [
     { label: "録音ページの本文", text: stepBlocksText(input.parentBlocks) },
     ...input.recipe.steps.slice(0, input.stepIndex).map((step, index) => ({
       label: `工程 ${index + 1} の結果`,
       text: stepBlocksText(input.materials?.upstream.find((item) => item.id === step.id)?.blocks ?? (index === input.stepIndex - 1 ? input.previousBlocks ?? [] : [])),
     })),
   ];
+  if (input.chunk) {
+    const target = sources[input.stepIndex]!;
+    sources[input.stepIndex] = { label: `${target.label}（区切り ${input.chunk.index + 1}/${input.chunk.count}）`, text: input.chunk.text };
+  }
+  return sources;
 }
 
 /**
@@ -126,6 +135,7 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
       const references = input.materials
         ? input.materials.refs.map((ref) => stepReferenceText(ref.blocks).trim()).filter(Boolean).map((text, index) => ({ title: `参考 ${index + 1}`, text }))
         : referencesFrom((await deps.references?.()?.(owner, input.parentPageId ?? "")) ?? []).map((ref, index) => ({ ...ref, title: `参考 ${index + 1}` }));
+      const sources = sourcesOf(input);
       const composeInput: ComposeInput = {
         recipeName: input.recipe.name,
         guide: input.recipe.guide,
@@ -133,7 +143,7 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
         instruction: step.instruction,
         stepNumber: input.stepIndex + 1,
         stepCount: input.recipe.steps.length,
-        sources: sourcesOf(input),
+        sources,
         background: input.background.trim(),
         // 「書いた言語のまま」は日本語（段階の資料は録音の文字起こしで、設計 §7.2 の手順はどれも日本語）
         lang: settings.aiLang === "en" ? "en" : "ja",
@@ -141,6 +151,9 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
         entities: input.materials?.fields.entities ?? [],
         about: { name: settings.aboutName, text: settings.about },
         references,
+        ...(input.chunk
+          ? { chunk: { number: input.chunk.index + 1, count: input.chunk.count, target: sources[input.stepIndex]!.label, previousTail: input.chunk.previousTail } }
+          : {}),
       };
       const prompt = buildComposePrompt(composeInput);
 

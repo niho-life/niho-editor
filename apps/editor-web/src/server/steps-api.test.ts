@@ -2,13 +2,13 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Block } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
-import { fakeExecutor } from "../steps/executor";
+import { StepError, fakeExecutor } from "../steps/executor";
 import { MemoryStepRunStore } from "../steps/memory-store";
 import { MemoryTaskQueue, taskName, type TaskQueue } from "../steps/queue";
 import { DEFAULT_RECIPES, recipesOf, type RecipeDef } from "../steps/recipes";
 import { runAttempt } from "../steps/runner";
 import { MAX_BODY_BYTES } from "./http";
-import { cancelStepRun, createStepRun, getStepPartialOutput, getSteps, updateStepRunRecipe, type RunView, type StepsApiDeps } from "./steps-api";
+import { cancelStepRun, createStepRun, getStepPartialOutput, getSteps, resumeStepRun, updateStepRunRecipe, type RunView, type StepsApiDeps } from "./steps-api";
 
 const ORIGIN = "http://editor.test";
 const INLINE = { EDITOR_STEPS_MODE: "inline" };
@@ -470,3 +470,73 @@ describe("/api/pages/{id}/steps", () => {
     }
   });
 });
+
+describe("POST /api/pages/{id}/steps/runs/{runId}/resume (#277)", () => {
+  const longTranscript = Array.from({ length: 40 }, (_, index) => ({ type: "paragraph", content: [{ type: "text", text: `段落${index}`.padEnd(1000, "話") }] }));
+  const resume = (id: string, runId: string, d: StepsApiDeps, headers?: Record<string, string>) =>
+    resumeStepRun(request("POST", `/api/pages/${id}/steps/runs/${runId}/resume`, undefined, headers), id, runId, d);
+
+  /** 区切り 2 で失敗した run を作る（区切り 1 は終えている）。 */
+  async function failedAtSecondChunk() {
+    const store = new MemoryStepRunStore();
+    const recording = store.addPage("user-a", { kind: "rec", blocks: longTranscript });
+    const queue = new MemoryTaskQueue();
+    const d = deps("user-a", store, { queue });
+    const run = await runOf(await start(recording, { recipe: "tpl-1" }, d));
+    let calls = 0;
+    const executor = { run: async (input: Parameters<typeof fakeExecutor.run>[0]) => {
+      calls += 1;
+      if (calls === 2) throw new StepError("invalid_output", false);
+      return fakeExecutor.run(input);
+    } };
+    for (let tasks = queue.drain(); tasks.length > 0; tasks = queue.drain()) {
+      for (const task of tasks) await runAttempt({ store, executor, queue }, task);
+    }
+    return { store, recording, queue, d, run };
+  }
+
+  it("shows the chunk progress on the band and resumes from the failed chunk, queueing it", async () => {
+    const { recording, queue, d, run } = await failedAtSecondChunk();
+    const failed = await runOf(await read(recording, d));
+    expect(failed.state).toBe("failed");
+    expect(failed.steps[0]).toMatchObject({ state: "failed", errorCode: "invalid_output", chunk: { index: 1, count: 3 } });
+    const response = await resume(recording, run.id, d);
+    expect(response.status).toBe(202);
+    const resumed = await runOf(response);
+    expect(resumed.state).toBe("queued");
+    expect(resumed.steps.map((step) => step.state)).toEqual(["queued", "pending", "pending"]);
+    expect(queue.drain().map((task) => [task.stepIndex, task.name])).toEqual([[0, taskName(run.id, 0, 3)]]);
+    // 2 度目は進行中なので断る
+    const again = await resume(recording, run.id, d);
+    expect(again.status).toBe(409);
+    expect(await again.json()).toEqual({ error: "run_in_progress" });
+  });
+
+  it("refuses with 409 input_changed after the transcript was edited, and 404 for another owner", async () => {
+    const { store, recording, d, run } = await failedAtSecondChunk();
+    store.pages.get(recording)!.blocks = transcript;
+    const response = await resume(recording, run.id, d);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "input_changed" });
+    expect((await resume(recording, run.id, deps("user-b", store))).status).toBe(404);
+    expect((await resume(recording, randomUUID(), d)).status).toBe(404);
+  });
+
+  it("answers 401 without a session, 403 from another origin, and 409 not_resumable for a step that never chunked", async () => {
+    const { store, recording, d, run } = await failedAtSecondChunk();
+    expect((await resume(recording, run.id, deps(null, store))).status).toBe(401);
+    expect((await resume(recording, run.id, d, { origin: "https://evil.example" })).status).toBe(403);
+
+    const plain = setup();
+    const queue = new MemoryTaskQueue();
+    const pd = deps("user-a", plain.store, { queue });
+    const short = await runOf(await start(plain.recording, { recipe: "tpl-1" }, pd));
+    const claimed = await plain.store.claimAttempt(short.id, 0);
+    if (!claimed.ok) throw new Error("claim");
+    await plain.store.failAttempt({ runId: short.id, stepIndex: 0, generation: claimed.claim.generation, code: "invalid_output", retryable: false });
+    const response = await resume(plain.recording, short.id, pd);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "not_resumable" });
+  });
+});
+

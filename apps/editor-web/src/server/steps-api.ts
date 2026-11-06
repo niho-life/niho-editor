@@ -43,12 +43,16 @@ export type RunView = {
     hasPartialOutput?: boolean;
     /** 資料を上限で切ったときだけ、実際に使った字数（#277）。 */
     inputUsedChars?: number;
+    /** 区切って処理している段階の進み（`index` は終えた区切りの数。待ち・実行中・失敗のときだけ。#277）。 */
+    chunk?: { index: number; count: number };
   }[];
 };
 
 /** http.ts の code に無いもの（http.ts は変えず、共通の header はそのまま使う）。 */
-type StepsErrorCode = "steps_unavailable" | "run_in_progress" | "invalid_from_step" | "recipe_changed" | "recipe_unusable";
-const STEPS_ERROR_STATUS: Record<StepsErrorCode, number> = { steps_unavailable: 503, run_in_progress: 409, invalid_from_step: 400, recipe_changed: 409, recipe_unusable: 409 };
+type StepsErrorCode = "steps_unavailable" | "run_in_progress" | "invalid_from_step" | "recipe_changed" | "recipe_unusable" | "not_resumable" | "input_changed";
+const STEPS_ERROR_STATUS: Record<StepsErrorCode, number> = {
+  steps_unavailable: 503, run_in_progress: 409, invalid_from_step: 400, recipe_changed: 409, recipe_unusable: 409, not_resumable: 409, input_changed: 409,
+};
 
 function stepsError(code: StepsErrorCode): Response {
   return jsonResponse(STEPS_ERROR_STATUS[code], { error: code });
@@ -86,6 +90,7 @@ function designChanges(run: StepRunView, current: RecipeDef | undefined): string
       if (old.name !== step.name) changes.push(`名前: ${old.name} → ${step.name}`);
       if (old.instruction !== step.instruction) changes.push(`指示: ${step.name}`);
       if (old.profile !== step.profile) changes.push(`プロファイル: ${step.name}`);
+      if ((old.chunked === true) !== (step.chunked === true)) changes.push(`区切り: ${step.name}`);
     }
   }
   for (const step of before.steps) if (!newIds.includes(step.id)) changes.push(`削除: ${step.name}`);
@@ -116,6 +121,7 @@ function toRunView(run: StepRunView, recipes: readonly RecipeDef[], reasons: Rec
       errorCode: step.errorCode,
       ...(step.hasPartialOutput ? { hasPartialOutput: true } : {}),
       ...(step.inputUsedChars === undefined ? {} : { inputUsedChars: step.inputUsedChars }),
+      ...(step.chunk === undefined ? {} : { chunk: { index: step.chunk.index, count: step.chunk.count } }),
     })),
   };
 }
@@ -288,5 +294,39 @@ export function updateStepRunRecipe(request: Request, id: string, runId: string,
     await steps.refreshStale(session.userId, id, result.run.recipeSnapshot);
     const updated = (await steps.listRun(session.userId, id))?.run ?? result.run;
     return jsonResponse(200, { run: toRunView(updated, recipes) });
+  });
+}
+
+/**
+ * POST /api/pages/{id}/steps/runs/{runId}/resume — 失敗した run を、失敗した区切りからやり直す（#277）。
+ * 入力が最初の区切りを始めたときと同じなら、同じ run・同じ attempt を queued に戻して次の区切りを積む（終えた区切りは再利用）。
+ * 入力が変わっていれば 409 `input_changed`（最初から作り直す）、進行中の run があれば 409 `run_in_progress`、
+ * 最新の run でない・区切っていない段階の失敗は 409 `not_resumable`。
+ */
+export function resumeStepRun(request: Request, id: string, runId: string, deps: StepsApiDeps): Promise<Response> {
+  return guarded("POST /api/pages/[id]/steps/runs/[runId]/resume", async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const steps = deps.steps();
+    const readRecipes = deps.recipes();
+    if (!steps || !readRecipes) return errorResponse("unavailable");
+    if (!resolveStepsMode(deps.env ?? process.env)) return stepsError("steps_unavailable");
+    const queue = deps.queue();
+    if (!queue) return stepsError("steps_unavailable");
+    const result = await steps.resumeRun(session.userId, id, runId);
+    switch (result.status) {
+      case "not_found":
+        return notFoundResponse();
+      case "run_in_progress":
+      case "not_resumable":
+      case "input_changed":
+        return stepsError(result.status);
+      case "resumed":
+        break;
+    }
+    // 積めなくても attempt は queued のまま残る（定期の掃除が世代を進めて積み直す）。取消すと区切りをやり直せなくなるので取消さない
+    await queue.enqueue({ name: taskName(result.run.id, result.stepIndex, result.generation), runId: result.run.id, stepIndex: result.stepIndex });
+    return jsonResponse(202, { run: toRunView(result.run, await readRecipes(session.userId)) });
   });
 }

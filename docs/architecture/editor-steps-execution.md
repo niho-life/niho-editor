@@ -51,7 +51,7 @@
 ### 5.1 データ（案）
 
 - `step_runs`: id・owner・親ページ（録音ページ）・テンプレート（recipe）・状態（queued／running／succeeded／failed／canceled）・開始の段階（`from_step`）・作成と終了の時刻。
-- `step_attempts`: run・段階の index・**世代（generation）**・状態・lease の期限・生存確認の時刻・エラーの種類（短い code だけ）・結果のページ・入力の基準（hash）・資料を上限で切ったときに使った字数（`input_used_chars`。切っていなければ NULL。#277）。
+- `step_attempts`: run・段階の index・**世代（generation）**・状態・lease の期限・生存確認の時刻・エラーの種類（短い code だけ）・結果のページ・入力の基準（hash）・資料を上限で切ったときに使った字数（`input_used_chars`。切っていなければ NULL。#277）・区切りの状態（`chunk_count`・`chunk_index`・`chunk_blocks`・`chunk_basis`。区切らない段階は `chunk_count` が NULL。§5.7）。
 - `pages.step_status` に `failed` を足す（migration）。`pages.parent`・`pages.recipe` は既にある。
 
 ### 5.2 実行（案）
@@ -80,6 +80,54 @@ Cloud Tasks は月 100 万回まで無料。worker は Cloud Run の min 0 で�
 
 - 1 つの段階は続きの要求も含めて動く。Cloud Tasks の上限は 30 分だが、実行器は 24 分で新しい AI 要求を止め、残り 6 分を結果保存と終了処理に確保する（#225、未マージ・未配備）。長い録音の文字起こしは #36 の別経路（音声の取り込みと文字起こしの状態）で、この基盤の段階には含めない。
 - B には**予算・許可の仕組みが無い**。上限を超えた利用を止めるのは #38 の使用量の判定だけ。
+- 長い入力の全文を書き直す段階は、1 区切りを 1 回の claim で処理する（§5.7）ので、1 回の task は区切り 1 つ分（約 1.6 万字の書き直し）に収まる。
+
+### 5.7 長い入力の区切り（#277）
+
+全文を書き直す段階（手順の段階の `chunked` が ON）で、書き直す対象が 18,000 字を超えたときの進み方（区切り方そのものは
+[editor-steps-recipes.md](editor-steps-recipes.md) §2.8「長い入力を区切る」）。**段階の attempt は 1 つのまま**（`step_attempts` の
+主キーは変えない）で、attempt が区切りを順に進む。**1 区切り = 1 回の要求 = 1 回の claim**。既存の世代・lease・CAS・取消・掃除の保証を
+そのまま使う。
+
+**列**（migration `20261106211229_steps_chunks`。追加だけ）:
+
+| 列 | 意味 |
+| --- | --- |
+| `chunk_count` | 区切りの数（1〜60）。区切らないなら NULL |
+| `chunk_index` | 終えた区切りの数（＝次に処理する区切りの番号。0 始まり。`chunk_count` 未満） |
+| `chunk_blocks` | 終えた区切りごとの出力ブロックの配列の配列（長さ = `chunk_index`）。入りかけの出力に `partial_blocks` は使わない |
+| `chunk_basis` | 最初の区切りを始めたときの入力の基準（`computeStepBasis` 全体の sha256） |
+
+**状態遷移**（runner。`apps/editor-web/src/steps/runner.ts`）:
+
+1. claim（世代 +1・lease。`chunk_*` は消さない）→ `readStepInput`。
+2. 段階が `chunked` で対象が 18,000 字超なら区切りの道。最初（`chunk_count` が NULL）は区切りを計算して `startChunks`
+   （世代と `chunk_count IS NULL` で fence）で数と基準を記録する。60 を超えれば非再試行の `input_too_long`。
+3. 2 つ目以降は、今の入力の基準が `chunk_basis` と違えば（文字起こしの編集など）**次の区切りの前に止めて**非再試行の `input_changed`。
+4. 区切り `i` を実行器へ（`chunk: { index, count, text, previousTail }`）。
+5. 途中の区切りは `commitChunk`: 世代・状態・`chunk_index` の CAS で `chunk_blocks` に追記して `chunk_index` を進め、attempt を
+   `queued` に戻して lease を外す（`tries` は 0 に戻す。再試行の上限は区切りごと）。runner が `<run>-<段階>-<今の世代>` の名前で
+   同じ段階の次の区切りを積む。サブページの本文は書かない。
+6. 最後の区切りは、終えた区切りの出力と順につないで**既存の `commitAttempt`** で 1 版にする（`inputBasis` は今まで通り `computeStepBasis`）。
+
+**失敗**: 既存の `failAttempt`（`tries`・再試行の間隔・`MAX_TRIES`）のまま。**失敗した区切りだけを繰り返し**、終えた区切りは保つ。
+lease 切れの掃除（`sweepExpiredLeases`）・積み直し（`requeueAttempt`）も `chunk_*` を消さない。attempt が**最終的に失敗**したとき
+（再試行を使い切った・非再試行・lease 切れで使い切った）は、`chunk_blocks` をつないだもの＋今の区切りの書けたところまでを
+`partial_blocks` にも残す（既存の「途中までの出力を確認」がそのまま効く）。
+
+**やり直し（resume）**: `POST /api/pages/{id}/steps/runs/{runId}/resume`（認可・same-origin 検査は他の steps API と同じ）。
+`resumeRun`（`packages/editor-store/src/step-runs.ts`）が親 → run の順に lock し、1 transaction で次を確かめてから戻す。
+
+- 本人のその親ページの run でなければ 404。進行中の run があれば 409 `run_in_progress`（`step_runs_active_idx` の競合も同じ）。
+- 最新の run でない・失敗していない・失敗した段階が `chunked` でない（区切りを始めていない）・結果のページが無いなら 409 `not_resumable`。
+- 入力の基準が `chunk_basis` と違えば 409 `input_changed`（最初から作り直す）。
+- 通れば同じ run・同じ attempt を `failed → queued`（`tries` 0・世代 +1・`chunk_*` は保つ・`partial_blocks` は消す）、後続の
+  `canceled` を `pending`、run を `queued` に戻し、`<run>-<段階>-<新しい世代>` で積む。積めなくても attempt は `queued` のまま残り、
+  定期の掃除が積み直す（取消すと続きからやり直せなくなるので取消さない）。
+
+**帯**: `RunView.steps[].chunk = { index, count }`（待ち・実行中・失敗のときだけ。`index` は終えた数）。区切りの合間の `queued` も
+作成中として「作成中 3/5」（分子は今処理中の番号）。失敗は「区切り 3 で失敗」と「区切り 3 からやり直す」（`input_changed`・
+`input_too_long` では出さない）。
 
 手順の定義（`recipes`）をどこに置くか・手順を作る画面・旧 NIHO docs の工程設計から引き継ぐ振る舞いは
 [editor-steps-recipes.md](editor-steps-recipes.md)（#37 T4）。

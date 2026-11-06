@@ -905,6 +905,8 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-ttl h2{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-body--fill{display:flex;flex-direction:column;gap:12px;padding:10px 22px 12px;min-width:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-meta{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-switch-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-cnt--start{text-align:left}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-area--big{flex:1;min-height:280px;resize:none;line-height:1.75}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-area--mid{min-height:180px;resize:vertical;line-height:1.7}
 @media (prefers-reduced-motion:reduce){:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-toggle::after{transition:none}}

@@ -9,6 +9,9 @@ import {
   canonicalJson,
   claimAttempt,
   commitAttempt,
+  commitChunk,
+  resumeRun,
+  startChunks,
   computeBasis,
   createRun,
   failAttempt,
@@ -35,7 +38,7 @@ import { EditorStore } from "../src/store.ts";
 import { parseRecipeSnapshot, snapshotOf } from "../src/recipe-snapshot.ts";
 import { RECIPE_LIMITS } from "../src/recipes.ts";
 import type { Block } from "../src/types.ts";
-import { computeStepBasis } from "../src/step-basis.ts";
+import { computeChunkBasis, computeStepBasis } from "../src/step-basis.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 
@@ -1022,5 +1025,236 @@ describe("PostgreSQL queued attempts for the sweep", { skip: databaseUrl === und
     assert.equal(await requeueAttempt(pool, { runId: "not-a-uuid", stepIndex: 0, generation: 0 }), null);
     await assert.rejects(() => requeueAttempt(pool, { ...ref, generation: -1 }), TypeError);
     await assert.rejects(() => requeueAttempt(pool, { ...ref, stepIndex: 1.5, generation: 0 }), TypeError);
+  });
+});
+
+describe("recipe snapshot chunked flag (#277)", () => {
+  it("keeps chunked only when true, reads old snapshots as false, and rejects a non-boolean", () => {
+    const snapshot = snapshotOf({
+      id: "tpl-synthetic", name: "合成", guide: "",
+      steps: [
+        { id: "aaaa1111", name: "書き直す", instruction: "指示", profile: "light", chunked: true },
+        { id: "bbbb2222", name: "まとめる", instruction: "指示", profile: "standard", chunked: false },
+      ],
+      terms: [], samples: [],
+    });
+    assert.equal(parseRecipeSnapshot(snapshot)?.steps[0]?.chunked, true);
+    assert.equal("chunked" in snapshot.steps[1]!, false, "false is not written (old snapshots stay byte-identical)");
+    assert.equal(parseRecipeSnapshot({ ...snapshot, steps: [{ id: "aaaa1111", name: "書き直す", instruction: "指示", profile: "light", chunked: "yes" }] }), null);
+  });
+
+  it("derives the chunk basis from the whole step basis, independent of artifact key order", () => {
+    const basis = { source: "a".repeat(64), artifacts: { x: "b".repeat(64), y: "c".repeat(64) }, refs: "d".repeat(64), info: "e".repeat(64), guide: "f".repeat(64), step: "0".repeat(64) };
+    const reordered = { ...basis, artifacts: { y: "c".repeat(64), x: "b".repeat(64) } };
+    assert.match(computeChunkBasis(basis), /^[0-9a-f]{64}$/);
+    assert.equal(computeChunkBasis(basis), computeChunkBasis(reordered));
+    assert.notEqual(computeChunkBasis(basis), computeChunkBasis({ ...basis, source: "1".repeat(64) }));
+  });
+});
+
+describe("PostgreSQL chunked steps (#277)", { skip: databaseUrl === undefined }, () => {
+  const schema = `editor_steps_chunks_${randomUUID().replaceAll("-", "")}`;
+  const CHUNKED: StepRecipe = {
+    id: "tpl-chunked",
+    steps: [
+      { id: "aaaa1111", name: "合成の書き直し", instruction: "合成の指示 1", chunked: true },
+      { id: "bbbb2222", name: "合成のまとめ", instruction: "合成の指示 2" },
+    ],
+  };
+  let pool: PgPool;
+  let store: EditorStore;
+
+  before(async () => {
+    const { Pool } = await import("pg");
+    pool = new Pool({ connectionString: databaseUrl, max: 5, options: `-c search_path=${schema}` });
+    await pool.query(`CREATE SCHEMA "${schema}"`);
+    const client = await pool.connect();
+    try {
+      await applyMigrations(client);
+      await client.query("INSERT INTO recipes (owner,id,name,steps) VALUES ($1,$2,$3,$4::jsonb)", [OWNER, CHUNKED.id, CHUNKED.id, JSON.stringify(CHUNKED.steps.map((step) => ({ ...step, profile: "standard" })))]);
+    } finally {
+      client.release();
+    }
+    store = new EditorStore(pool);
+  });
+
+  after(async () => {
+    await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await pool.end();
+  });
+
+  async function setup() {
+    const parent = (await store.createPage(OWNER, { kind: "rec", title: "合成の録音", blocks: TRANSCRIPT })).id;
+    const result = await createRun(pool, OWNER, parent, { recipe: CHUNKED });
+    assert.ok(result.status === "created");
+    return { parent, run: result.run };
+  }
+
+  async function claimOk(runId: string, stepIndex = 0): Promise<StepClaim> {
+    const result = await claimAttempt(pool, runId, stepIndex);
+    assert.ok(result.ok, result.ok ? "" : result.reason);
+    return result.claim;
+  }
+
+  async function basisOf(claim: StepClaim): Promise<string> {
+    const input = await readStepInput(pool, claim);
+    assert.ok(input);
+    return computeChunkBasis(computeStepBasis(claim.recipeSnapshot!, claim.stepIndex, input));
+  }
+
+  const refOf = (claim: StepClaim) => ({ runId: claim.runId, stepIndex: claim.stepIndex, generation: claim.generation });
+
+  async function chunkRow(runId: string) {
+    return (await pool.query<{ state: string; tries: number; generation: number; chunk_count: number | null; chunk_index: number; chunk_blocks: unknown; chunk_basis: string | null; partial_blocks: unknown }>(
+      "SELECT state, tries, generation, chunk_count, chunk_index, chunk_blocks, chunk_basis, partial_blocks FROM step_attempts WHERE run_id = $1 AND step_index = 0",
+      [runId],
+    )).rows[0]!;
+  }
+
+  it("pins the chunked flag into the run snapshot and starts chunks once per attempt, fenced by the generation", async () => {
+    const { run } = await setup();
+    assert.equal(run.recipeSnapshot.steps[0]?.chunked, true);
+    assert.equal(run.recipeSnapshot.steps[1]?.chunked, undefined);
+    const claim = await claimOk(run.id);
+    assert.deepEqual(claim.chunk, { count: null, index: 0, basis: null, blocks: [] });
+    const basis = await basisOf(claim);
+    assert.equal(await startChunks(pool, { ...refOf(claim), generation: claim.generation - 1, count: 3, basis }), false, "an old generation cannot start");
+    assert.equal(await startChunks(pool, { ...refOf(claim), count: 3, basis }), true);
+    assert.equal(await startChunks(pool, { ...refOf(claim), count: 4, basis }), false, "only once");
+    await assert.rejects(() => startChunks(pool, { ...refOf(claim), count: 61, basis }), RangeError);
+    await assert.rejects(() => startChunks(pool, { ...refOf(claim), count: 2, basis: "nope" }), TypeError);
+  });
+
+  it("commits a middle chunk only with the current generation and index, queues the attempt, and finishes with commitAttempt", async () => {
+    const { parent, run } = await setup();
+    const first = await claimOk(run.id);
+    const basis = await basisOf(first);
+    assert.ok(await startChunks(pool, { ...refOf(first), count: 3, basis }));
+    assert.deepEqual(await commitChunk(pool, { ...refOf(first), generation: first.generation - 1, chunkIndex: 0, blocks: paragraph("区切り 1") }), { ok: false, reason: "stale_generation" });
+    assert.deepEqual(await commitChunk(pool, { ...refOf(first), chunkIndex: 1, blocks: paragraph("区切り 1") }), { ok: false, reason: "stale_generation" });
+    assert.deepEqual(await commitChunk(pool, { ...refOf(first), chunkIndex: 0, blocks: paragraph("区切り 1") }), { ok: true, generation: first.generation });
+    assert.deepEqual(await commitChunk(pool, { ...refOf(first), chunkIndex: 1, blocks: paragraph("二重") }), { ok: false, reason: "stale_generation" }, "the attempt is no longer running");
+    let row = await chunkRow(run.id);
+    assert.equal(row.state, "queued");
+    assert.equal(row.tries, 0, "tries restart for each chunk");
+    assert.equal(row.chunk_index, 1);
+    assert.deepEqual(row.chunk_blocks, [paragraph("区切り 1")]);
+    const view = (await listRun(pool, OWNER, parent))?.run;
+    assert.deepEqual(view?.steps[0]?.chunk, { index: 1, count: 3 });
+
+    const second = await claimOk(run.id);
+    assert.equal(second.generation, first.generation + 1);
+    assert.deepEqual(second.chunk, { count: 3, index: 1, basis, blocks: [paragraph("区切り 1")] });
+    assert.ok((await commitChunk(pool, { ...refOf(second), chunkIndex: 1, blocks: paragraph("区切り 2") })).ok);
+    const third = await claimOk(run.id);
+    assert.deepEqual(await commitChunk(pool, { ...refOf(third), chunkIndex: 2, blocks: paragraph("区切り 3") }), { ok: false, reason: "stale_generation" }, "the last chunk goes through commitAttempt");
+    const input = await readStepInput(pool, third);
+    assert.ok(input);
+    const all = [...third.chunk.blocks.flat(), ...paragraph("区切り 3")];
+    const committed = await commitAttempt(pool, { ...refOf(third), blocks: all, inputBasis: computeStepBasis(CHUNKED, 0, input) });
+    assert.deepEqual(committed, { ok: true, next: 1 });
+    row = await chunkRow(run.id);
+    assert.equal(row.state, "succeeded");
+    assert.equal((await listRun(pool, OWNER, parent))?.run?.steps[0]?.chunk, undefined, "a finished step shows no progress");
+  });
+
+  it("keeps finished chunks through a retry and a lease sweep, and joins them into partial_blocks on the final failure", async () => {
+    const { parent, run } = await setup();
+    const first = await claimOk(run.id);
+    assert.ok(await startChunks(pool, { ...refOf(first), count: 3, basis: await basisOf(first) }));
+    assert.ok((await commitChunk(pool, { ...refOf(first), chunkIndex: 0, blocks: paragraph("区切り 1") })).ok);
+    // 区切り 2 で一時的に失敗 → 積み直し（終えた区切りは残る）
+    const retry = await claimOk(run.id);
+    assert.equal((await failAttempt(pool, { ...refOf(retry), code: "ai_timeout", retryable: true })).ok, true);
+    assert.deepEqual((await chunkRow(run.id)).chunk_blocks, [paragraph("区切り 1")]);
+    // lease 切れの掃除でも残る
+    const swept = await claimOk(run.id);
+    await pool.query("UPDATE step_attempts SET lease_until = clock_timestamp() - interval '1 second' WHERE run_id = $1 AND state = 'running'", [run.id]);
+    assert.equal((await sweepExpiredLeases(pool)).filter((ref) => ref.runId === run.id).length, 1);
+    let row = await chunkRow(run.id);
+    assert.equal(row.state, "queued");
+    assert.equal(row.chunk_index, 1);
+    assert.deepEqual(row.chunk_blocks, [paragraph("区切り 1")]);
+    assert.equal(swept.chunk.index, 1);
+    // 最後の失敗: 終えた区切り + 今の区切りの書けたところまで
+    const last = await claimOk(run.id);
+    assert.deepEqual(await failAttempt(pool, { ...refOf(last), code: "output_too_long", retryable: false, partial: paragraph("区切り 2 の途中") }), { ok: true, outcome: "failed" });
+    row = await chunkRow(run.id);
+    assert.deepEqual(row.partial_blocks, [...paragraph("区切り 1"), ...paragraph("区切り 2 の途中")]);
+    assert.deepEqual(row.chunk_blocks, [paragraph("区切り 1")], "chunk_blocks stay for a resume");
+    assert.deepEqual(await readPartialOutput(pool, OWNER, parent, run.id, 0), [...paragraph("区切り 1"), ...paragraph("区切り 2 の途中")]);
+    const view = (await listRun(pool, OWNER, parent))?.run;
+    assert.deepEqual(view?.steps[0]?.chunk, { index: 1, count: 3 });
+    assert.equal(view?.steps[0]?.hasPartialOutput, true);
+  });
+
+  it("joins finished chunks into partial_blocks when the sweep fails the attempt", async () => {
+    const { run } = await setup();
+    const first = await claimOk(run.id);
+    assert.ok(await startChunks(pool, { ...refOf(first), count: 2, basis: await basisOf(first) }));
+    assert.ok((await commitChunk(pool, { ...refOf(first), chunkIndex: 0, blocks: paragraph("区切り 1") })).ok);
+    for (let tries = 1; tries <= MAX_TRIES; tries++) {
+      await claimOk(run.id);
+      await pool.query("UPDATE step_attempts SET lease_until = clock_timestamp() - interval '1 second' WHERE run_id = $1 AND state = 'running'", [run.id]);
+      await sweepExpiredLeases(pool);
+    }
+    const row = await chunkRow(run.id);
+    assert.equal(row.state, "failed");
+    assert.deepEqual(row.partial_blocks, paragraph("区切り 1"));
+  });
+
+  it("resumes a failed chunked run from the failed chunk only while the input is unchanged", async () => {
+    const { parent, run } = await setup();
+    const first = await claimOk(run.id);
+    assert.ok(await startChunks(pool, { ...refOf(first), count: 3, basis: await basisOf(first) }));
+    assert.ok((await commitChunk(pool, { ...refOf(first), chunkIndex: 0, blocks: paragraph("区切り 1") })).ok);
+    const second = await claimOk(run.id);
+    assert.ok((await commitChunk(pool, { ...refOf(second), chunkIndex: 1, blocks: paragraph("区切り 2") })).ok);
+    const third = await claimOk(run.id);
+    assert.equal(await resumeRun(pool, OWNER, parent, run.id).then((result) => result.status), "run_in_progress");
+    await failAttempt(pool, { ...refOf(third), code: "invalid_output", retryable: false });
+
+    assert.equal((await resumeRun(pool, OTHER, parent, run.id)).status, "not_found");
+    assert.equal((await resumeRun(pool, OWNER, parent, randomUUID())).status, "not_found");
+    const resumed = await resumeRun(pool, OWNER, parent, run.id);
+    assert.ok(resumed.status === "resumed");
+    assert.equal(resumed.stepIndex, 0);
+    assert.equal(resumed.generation, third.generation + 1);
+    assert.equal(resumed.run.state, "queued");
+    assert.deepEqual(resumed.run.steps.map((step) => step.state), ["queued", "pending"]);
+    let row = await chunkRow(run.id);
+    assert.equal(row.tries, 0);
+    assert.equal(row.chunk_index, 2);
+    assert.equal(row.partial_blocks, null);
+    const again = await claimOk(run.id);
+    assert.equal(again.chunk.index, 2, "chunks 1 and 2 are reused");
+    assert.deepEqual(again.chunk.blocks, [paragraph("区切り 1"), paragraph("区切り 2")]);
+    await failAttempt(pool, { ...refOf(again), code: "invalid_output", retryable: false });
+
+    // 文字起こしを直すと、やり直せない（最初から作り直す）
+    const page = await store.getPage(OWNER, parent);
+    assert.ok(page);
+    assert.equal((await store.savePage(OWNER, parent, { blocks: paragraph("直した文字起こし") }, { baseRevision: page.revision }))?.status, "saved");
+    assert.equal((await resumeRun(pool, OWNER, parent, run.id)).status, "input_changed");
+    row = await chunkRow(run.id);
+    assert.equal(row.state, "failed", "a refused resume writes nothing");
+  });
+
+  it("refuses to resume a run that is not the latest, or whose failed step did not chunk", async () => {
+    const { parent, run } = await setup();
+    const claim = await claimOk(run.id);
+    await failAttempt(pool, { ...refOf(claim), code: "invalid_output", retryable: false });
+    assert.equal((await resumeRun(pool, OWNER, parent, run.id)).status, "not_resumable", "the step never chunked");
+
+    const other = await setup();
+    const started = await claimOk(other.run.id);
+    assert.ok(await startChunks(pool, { ...refOf(started), count: 2, basis: await basisOf(started) }));
+    await failAttempt(pool, { ...refOf(started), code: "invalid_output", retryable: false });
+    const newer = await createRun(pool, OWNER, other.parent, { recipe: CHUNKED });
+    assert.equal(newer.status, "created");
+    assert.equal((await resumeRun(pool, OWNER, other.parent, other.run.id)).status, "run_in_progress");
+    assert.ok(newer.status === "created");
+    await cancelRun(pool, OWNER, other.parent, newer.run.id);
+    assert.equal((await resumeRun(pool, OWNER, other.parent, other.run.id)).status, "not_resumable", "a newer run exists");
   });
 });

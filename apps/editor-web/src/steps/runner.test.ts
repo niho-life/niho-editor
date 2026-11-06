@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { stepBlocksText } from "@niho/editor-store";
 import { StepError, createFakeExecutor, fakeExecutor, type StepExecutor } from "./executor";
 import { MemoryStepRunStore } from "./memory-store";
 import { MemoryTaskQueue, taskName } from "./queue";
@@ -294,5 +295,127 @@ describe("runAttempt", () => {
     expect(await runAttempt(deps, task!)).toEqual({ status: "skipped" });
     expect((await view())?.steps[0]).toMatchObject({ state: "failed", errorCode: "invalid_output", stepStatus: "failed" });
     expect(run.state).toBe("queued");
+  });
+});
+
+describe("runAttempt with chunks (#277)", () => {
+  // 1 段落 1,000 字。15 段落で 1 区切り（約 1.6 万字）
+  const longTranscript = (paragraphs: number) =>
+    Array.from({ length: paragraphs }, (_, index) => ({ type: "paragraph", content: [{ type: "text", text: `段落${index}`.padEnd(1000, "話") }] }));
+
+  async function chunkSetup(executor: StepExecutor, paragraphs = 75) {
+    const ctx = await setup(executor);
+    ctx.store.pages.get(ctx.parent)!.blocks = longTranscript(paragraphs);
+    return ctx;
+  }
+
+  /** 実行器に渡った区切りを覚える偽物（`fail(index, call)` が投げるものを決める）。 */
+  function recordingExecutor(fail?: (chunkIndex: number, call: number) => unknown) {
+    const seen: { stepIndex: number; chunk?: { index: number; count: number; text: string; previousTail: string } }[] = [];
+    const executor: StepExecutor = {
+      run: async (input) => {
+        seen.push({ stepIndex: input.stepIndex, ...(input.chunk ? { chunk: { ...input.chunk } } : {}) });
+        if (input.chunk && fail) {
+          const calls = seen.filter((item) => item.chunk?.index === input.chunk!.index).length;
+          const error = fail(input.chunk.index, calls);
+          if (error) throw error;
+        }
+        return fakeExecutor.run(input);
+      },
+    };
+    return { executor, seen };
+  }
+
+  it("rewrites a long transcript chunk by chunk and commits the whole text as one version", async () => {
+    const { executor, seen } = recordingExecutor();
+    const { store, start, drainAll, view, parent } = await chunkSetup(executor);
+    await start();
+    expect(await drainAll()).toEqual([
+      { status: "chunk" }, { status: "chunk" }, { status: "chunk" }, { status: "chunk" },
+      { status: "completed", next: 1 },
+      { status: "completed", next: 2 },
+      { status: "completed" },
+    ]);
+    const chunks = seen.filter((item) => item.stepIndex === 0).map((item) => item.chunk!);
+    expect(chunks.map((chunk) => [chunk.index, chunk.count])).toEqual([[0, 5], [1, 5], [2, 5], [3, 5], [4, 5]]);
+    // 区切りをつなぐと元の全文（先頭だけにならない）
+    expect(chunks.map((chunk) => chunk.text).join("\n\n")).toBe(stepBlocksText(store.pages.get(parent)!.blocks));
+    // 次の区切りには直前の区切りの出力の末尾を添える
+    expect(chunks[0]!.previousTail).toBe("");
+    expect(chunks[1]!.previousTail).toContain("[fake] 文字起こし修正 区切り 1/5");
+    // まとめる段階は区切らない
+    expect(seen.filter((item) => item.stepIndex > 0).every((item) => item.chunk === undefined)).toBe(true);
+    const run = await view();
+    expect(run?.state).toBe("succeeded");
+    const page = JSON.stringify(store.pages.get(run!.steps[0]!.pageId)?.blocks);
+    for (let index = 1; index <= 5; index++) expect(page).toContain(`区切り ${index}/5`);
+    expect(page.indexOf("区切り 1/5")).toBeLessThan(page.indexOf("区切り 5/5"));
+    // 最後の区切り（後半）の結果も入っている
+    expect(page).toContain("区切り 5/5: 段落60");
+  });
+
+  it("does not chunk an input at or under 18,000 chars", async () => {
+    const { executor, seen } = recordingExecutor();
+    const { start, drainAll } = await chunkSetup(executor, 17);
+    await start();
+    expect((await drainAll())[0]).toEqual({ status: "completed", next: 1 });
+    expect(seen[0]?.chunk).toBeUndefined();
+  });
+
+  it("retries only the failed chunk and reuses the finished ones", async () => {
+    const { executor, seen } = recordingExecutor((index, call) => (index === 2 && call === 1 ? new StepError("ai_timeout", true) : undefined));
+    const { start, drainAll, view } = await chunkSetup(executor);
+    await start();
+    const outcomes = await drainAll();
+    expect(outcomes.slice(0, 4)).toEqual([{ status: "chunk" }, { status: "chunk" }, { status: "retry" }, { status: "chunk" }]);
+    expect((await view())?.state).toBe("succeeded");
+    expect(seen.filter((item) => item.chunk).map((item) => item.chunk!.index)).toEqual([0, 1, 2, 2, 3, 4]);
+  });
+
+  it("fails at chunk 3, then resumes from chunk 3 reusing 1 and 2", async () => {
+    const { executor, seen } = recordingExecutor((index, call) => (index === 2 && call === 1 ? new StepError("invalid_output", false) : undefined));
+    const { store, queue, start, drainAll, view, parent } = await chunkSetup(executor);
+    const run = await start();
+    await drainAll();
+    let current = await view();
+    expect(current?.state).toBe("failed");
+    expect(current?.steps[0]).toMatchObject({ state: "failed", errorCode: "invalid_output", chunk: { index: 2, count: 5 }, hasPartialOutput: true });
+    // 終えた区切りは「人が見て写す」用に partial にも残る
+    expect(JSON.stringify(store.partialOf(run.id, 0))).toContain("区切り 2/5");
+
+    const resumed = await store.resumeRun(OWNER, parent, run.id);
+    expect(resumed.status).toBe("resumed");
+    if (resumed.status !== "resumed") return;
+    await queue.enqueue({ name: taskName(run.id, resumed.stepIndex, resumed.generation), runId: run.id, stepIndex: resumed.stepIndex });
+    await drainAll();
+    current = await view();
+    expect(current?.state).toBe("succeeded");
+    expect(seen.filter((item) => item.chunk).map((item) => item.chunk!.index)).toEqual([0, 1, 2, 2, 3, 4]);
+    expect(JSON.stringify(store.pages.get(run.steps[0]!.pageId)?.blocks)).toContain("区切り 1/5");
+  });
+
+  it("stops before the next chunk when the transcript is edited mid-way, and refuses to resume", async () => {
+    const { executor, seen } = recordingExecutor();
+    const { store, queue, start, deps, view, parent } = await chunkSetup(executor);
+    const run = await start();
+    expect(await runAttempt(deps, queue.drain()[0]!)).toEqual({ status: "chunk" });
+    // 区切りの途中で文字起こしを直す
+    store.pages.get(parent)!.blocks = [...longTranscript(75).slice(0, 74), { type: "paragraph", content: [{ type: "text", text: "直した段落" }] }];
+    expect(await runAttempt(deps, queue.drain()[0]!)).toEqual({ status: "failed" });
+    expect(seen).toHaveLength(1);
+    const current = await view();
+    expect(current?.steps[0]).toMatchObject({ state: "failed", errorCode: "input_changed", chunk: { index: 1, count: 5 } });
+    expect(JSON.stringify(store.partialOf(run.id, 0))).toContain("区切り 1/5");
+    expect((await store.resumeRun(OWNER, parent, run.id)).status).toBe("input_changed");
+  });
+
+  it("fails without retrying when the input needs more than 60 chunks", async () => {
+    const { executor, seen } = recordingExecutor();
+    const { store, queue, start, deps, view, parent } = await chunkSetup(executor, 0);
+    store.pages.get(parent)!.blocks = Array.from({ length: 61 }, () => ({ type: "paragraph", content: [{ type: "text", text: "う".repeat(16_000) }] }));
+    await start();
+    expect(await runAttempt(deps, queue.drain()[0]!)).toEqual({ status: "failed" });
+    expect(seen).toHaveLength(0);
+    expect((await view())?.steps[0]).toMatchObject({ state: "failed", errorCode: "input_too_long" });
   });
 });

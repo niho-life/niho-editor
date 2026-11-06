@@ -68,6 +68,11 @@ export type ComposeInput = {
   about?: About;
   /** 自動参考ページ（同じフォルダの直下のほかのページ。無ければ入れない）。 */
   references?: readonly Reference[];
+  /**
+   * 長い資料を区切って処理しているときの今の区切り（#277。全文を書き直す段階）。`number` は 1 始まり。
+   * `target` は区切った資料の名前（`sources` の label と同じ）。`previousTail` は直前の区切りの出力の末尾（最初は空）。
+   */
+  chunk?: { number: number; count: number; target: string; previousTail: string };
 };
 
 /** 文字数（code point）。 */
@@ -179,6 +184,20 @@ export function buildComposePrompt(input: ComposeInput): AiPrompt {
   const references = referencesSection(input.references ?? []);
   const background = input.background.trim();
   const boundedBackground = clamp(background, MAX_COMPOSE_BACKGROUND_CHARS);
+  const chunk = input.chunk;
+  const previousTail = chunk?.previousTail.trim() ?? "";
+  const chunkSection = chunk
+    ? [
+        "",
+        "## 区切り",
+        `長い資料を区切って処理している。これは全 ${chunk.count} 区切りのうちの ${chunk.number} 番目。`,
+        `- 資料「${chunk.target}」は、この区切りの分だけを渡している。この区切りだけを書き直して返す。`,
+        "- ほかの区切りの内容は書かない（前の区切りの続きを繰り返さない・後ろを先取りしない）。",
+        ...(previousTail
+          ? ["- 前の区切りの終わり（下の「前の区切りの出力の末尾」）を参考に、話者名・表記・文体をそろえる。", "", "### 前の区切りの出力の末尾", wrapUntrusted(previousTail)]
+          : []),
+      ]
+    : [];
   const user = [
     "## 頼むこと",
     `手順「${input.recipeName}」の段階 ${input.stepNumber}/${input.stepCount}「${input.stepName}」の文書を作る。`,
@@ -188,6 +207,7 @@ export function buildComposePrompt(input: ComposeInput): AiPrompt {
     ...(guide ? ["", "### お手本（文書ガイド）", guide] : []),
     "",
     `出力の言語: ${input.lang}`,
+    ...chunkSection,
     ...(glossary ? ["", "## 固有名詞と誤りやすい表記", glossary] : []),
     ...(entities ? ["", "## 登場人物", wrapUntrusted(entities)] : []),
     ...(about ? ["", about] : []),

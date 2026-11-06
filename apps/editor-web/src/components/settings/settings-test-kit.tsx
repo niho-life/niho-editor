@@ -55,18 +55,18 @@ export function dto(patch: Partial<SettingsDto> = {}): SettingsDto {
 /** 足した手順（既定でない）。 */
 export function customRecipe(patch: Partial<SettingsDto["recipes"][number]> = {}): SettingsDto["recipes"][number] {
   return {
-    id: "r-talk", name: "対談", guide: "", steps: [{ id: "s-1", name: "まとめ", instruction: "まとめる。", profile: "standard" }],
+    id: "r-talk", name: "対談", guide: "", steps: [{ id: "s-1", name: "まとめ", instruction: "まとめる。", profile: "standard", chunked: false }],
     terms: [], samples: [], isDefault: false, modified: false, unusableReason: null, defaults: null, ...patch,
   };
 }
 
 /** PATCH の答え: 送った手順の並びを、そのまま画面の形にして返す。 */
-export function echoRecipes(recipes: { id: string; name: string; guide: string; steps: { id: string; name: string; instruction: string; profile?: string }[]; terms?: SettingsDto["glossary"]; samples?: SettingsDto["recipes"][number]["samples"] }[], patch: Partial<SettingsDto> = {}): SettingsDto {
+export function echoRecipes(recipes: { id: string; name: string; guide: string; steps: { id: string; name: string; instruction: string; profile?: string; chunked?: boolean }[]; terms?: SettingsDto["glossary"]; samples?: SettingsDto["recipes"][number]["samples"] }[], patch: Partial<SettingsDto> = {}): SettingsDto {
   return dto({
     ...patch,
     recipes: recipes.map((recipe) => {
       const base = Object.hasOwn(DEFAULTS, recipe.id) ? structuredClone(DEFAULTS[recipe.id]!) : null;
-      return { ...recipe, steps: recipe.steps.map((step) => ({ ...step, profile: step.profile ?? "standard" })), terms: recipe.terms ?? [], samples: recipe.samples ?? [], isDefault: base !== null, modified: false, unusableReason: null, defaults: base };
+      return { ...recipe, steps: recipe.steps.map((step) => ({ ...step, profile: step.profile ?? "standard", chunked: step.chunked === true })), terms: recipe.terms ?? [], samples: recipe.samples ?? [], isDefault: base !== null, modified: false, unusableReason: null, defaults: base };
     }),
   });
 }

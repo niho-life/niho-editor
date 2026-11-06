@@ -2,6 +2,7 @@ import {
   cancelRun,
   claimAttempt,
   commitAttempt,
+  commitChunk,
   createRun,
   updateRunRecipeSnapshot,
   failAttempt,
@@ -13,9 +14,13 @@ import {
   readStepStaleReasons,
   refreshStale,
   requeueAttempt,
+  resumeRun,
+  startChunks,
   sweepExpiredLeases,
   type AttemptRef,
   type ClaimResult,
+  type CommitChunkInput,
+  type CommitChunkResult,
   type CommitInput,
   type CommitResult,
   type CreateRunInput,
@@ -24,6 +29,8 @@ import {
   type FailResult,
   type Block,
   type OwnerId,
+  type ResumeRunResult,
+  type StartChunksInput,
   type StepClaim,
   type StepInput,
   type StepRecipe,
@@ -49,6 +56,12 @@ export type StepRunStore = {
   readStepInput(claim: StepClaim): Promise<StepInput | null>;
   commitAttempt(input: CommitInput): Promise<CommitResult>;
   failAttempt(input: FailInput): Promise<FailResult>;
+  /** 区切りを始める（#277。最初の区切りの前に 1 回だけ。世代で fence）。 */
+  startChunks(input: StartChunksInput): Promise<boolean>;
+  /** 途中の区切りを確定して attempt を queued に戻す（#277。最後の区切りは commitAttempt）。 */
+  commitChunk(input: CommitChunkInput): Promise<CommitChunkResult>;
+  /** 失敗した run を失敗した区切りからやり直す（#277。入力が変わっていなければ）。 */
+  resumeRun(owner: OwnerId, parentId: string, runId: string): Promise<ResumeRunResult>;
 };
 
 export function pgStepRunStore(db: StepRunsDb): StepRunStore {
@@ -65,6 +78,9 @@ export function pgStepRunStore(db: StepRunsDb): StepRunStore {
     readStepInput: (claim) => readStepInput(db, claim),
     commitAttempt: (input) => commitAttempt(db, input),
     failAttempt: (input) => failAttempt(db, input),
+    startChunks: (input) => startChunks(db, input),
+    commitChunk: (input) => commitChunk(db, input),
+    resumeRun: (owner, parentId, runId) => resumeRun(db, owner, parentId, runId),
   };
 }
 

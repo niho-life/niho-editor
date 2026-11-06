@@ -29,6 +29,8 @@ export type RecipeStep = {
   instruction: string;
   profile: string;
   provider?: string;
+  /** 長い入力を区切って処理する（全文を書き直す段階。#277）。無い古い行は false。 */
+  chunked?: boolean;
 };
 
 /** お手本の文書 1 つ（本文は資産として別に置く。docs-core の `FlowSample` と同じ形）。 */
@@ -107,7 +109,8 @@ export function isRecipeOrigin(value: unknown): value is RecipeOrigin {
 }
 
 export function isRecipeStep(value: unknown): value is RecipeStep {
-  if (!isPlainObject(value) || !hasOnlyKeys(value, ["id", "name", "instruction", "profile", "provider"])) return false;
+  if (!isPlainObject(value) || !hasOnlyKeys(value, ["id", "name", "instruction", "profile", "provider", "chunked"])) return false;
+  if (value.chunked !== undefined && typeof value.chunked !== "boolean") return false;
   if (typeof value.id !== "string" || !SETTINGS_ID_PATTERN.test(value.id)) return false;
   if (!isSettingsText(value.name, RECIPE_LIMITS.stepNameChars) || value.name.trim() === "") return false;
   if (!isSettingsText(value.instruction, RECIPE_LIMITS.instructionChars, true)) return false;
@@ -176,6 +179,7 @@ export function cleanRecipe(recipe: RecipeInput): Required<Omit<RecipeInput, "im
       instruction: step.instruction.trim(),
       profile: step.profile.trim(),
       ...(step.provider === undefined ? {} : { provider: step.provider.trim() }),
+      ...(step.chunked === true ? { chunked: true } : {}),
     })),
     terms: (recipe.terms ?? []).map((term) => ({
       term: term.term.trim(),

@@ -1,7 +1,7 @@
 /**
  * ブラウザから手順（#37）の受付 API を呼ぶ薄い関数（同じ origin。cookie・token は扱わない）。
  * 契約はサーバー側の src/server/steps-api.ts。実行の仕組み（Cloud Tasks の worker）はサーバーだけが持ち、
- * 画面は「始める」「状態を読む」「取消」「設計の写しを更新」の API を使う。
+ * 画面は「始める」「状態を読む」「取消」「設計の写しを更新」「区切りの続きからやり直す」の API を使う。
  *
  * - 状態は親（録音ページ）の id で読む（`GET /api/pages/{parent}/steps`）。サブページを開いているときも親で読む。
  * - 手順は設定（#108）で変えられるので、画面は静的な一覧を持たず、同じ答えに入っている `recipes` に従う。
@@ -36,6 +36,8 @@ export type StepRunStep = {
   hasPartialOutput?: boolean;
   /** 資料を上限で切ったときだけ、実際に使った字数（code point。#277）。無ければ切っていない（古い run も無い）。 */
   inputUsedChars?: number;
+  /** 区切って処理している段階の進み（`index` は終えた区切りの数。待ち・実行中・失敗のときだけ。#277）。 */
+  chunk?: { index: number; count: number };
 };
 
 export type StepRun = {
@@ -92,7 +94,7 @@ async function failure(response: Response): Promise<StepsRequestError> {
 
 function toStep(value: unknown): StepRunStep | null {
   if (!isPlainObject(value)) return null;
-  const { index, id, name, state, pageId, stepStatus, tries, errorCode, staleReasons, hasPartialOutput, inputUsedChars } = value;
+  const { index, id, name, state, pageId, stepStatus, tries, errorCode, staleReasons, hasPartialOutput, inputUsedChars, chunk } = value;
   if (typeof index !== "number" || !Number.isInteger(index) || index < 0) return null;
   if (typeof id !== "string" || typeof name !== "string" || typeof pageId !== "string") return null;
   if (typeof state !== "string" || !(ATTEMPT_STATES as readonly string[]).includes(state)) return null;
@@ -115,7 +117,17 @@ function toStep(value: unknown): StepRunStep | null {
     ...(hasPartialOutput === true ? { hasPartialOutput: true } : {}),
     // 形の合わない値は捨てる（帯の一言が出ないだけで、段階そのものは読める）
     ...(typeof inputUsedChars === "number" && Number.isInteger(inputUsedChars) && inputUsedChars >= 0 ? { inputUsedChars } : {}),
+    ...(toChunk(chunk) ?? {}),
   };
+}
+
+/** 区切りの進み（形の合わない値は捨てる。帯に分数が出ないだけ）。 */
+function toChunk(value: unknown): { chunk: { index: number; count: number } } | null {
+  if (!isPlainObject(value)) return null;
+  const { index, count } = value;
+  if (typeof index !== "number" || typeof count !== "number" || !Number.isInteger(index) || !Number.isInteger(count)) return null;
+  if (index < 0 || count < 1 || index >= count) return null;
+  return { chunk: { index, count } };
 }
 
 function toRun(value: unknown): StepRun | null {
@@ -212,6 +224,20 @@ export async function cancelStepRun(parentId: string, runId: string, fetchImpl: 
     cache: "no-store",
   });
   if (!response.ok) throw await failure(response);
+  const data = await readJson(response);
+  const run = isPlainObject(data) ? toRun(data.run) : null;
+  if (!run) throw new StepsRequestError(500);
+  return run;
+}
+
+/** 失敗した run を、失敗した区切りからやり直す（#277。202 は queued に戻した run）。 */
+export async function resumeStepRun(parentId: string, runId: string, fetchImpl: FetchLike = fetch): Promise<StepRun> {
+  const response = await fetchImpl(stepsPath(parentId, `/runs/${encodeURIComponent(runId)}/resume`), {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (response.status !== 202) throw await failure(response);
   const data = await readJson(response);
   const run = isPlainObject(data) ? toRun(data.run) : null;
   if (!run) throw new StepsRequestError(500);

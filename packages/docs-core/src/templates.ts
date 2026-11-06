@@ -78,6 +78,8 @@ export const FLOW_TEMPLATES: readonly FlowTemplate[] = [
         id: "k7m2q9xa",
         name: "文字起こし修正",
         profile: LIGHT_PROFILE_ID,
+        // 全文を書き直す段階なので、長い入力は区切って処理する（editor。#277）
+        chunked: true,
         instruction: `${TRANSCRIPT_FIX_HEAD}
 ${TRANSCRIPT_FIX_TAIL}`,
       },
@@ -199,6 +201,8 @@ ${TRANSCRIPT_FIX_TAIL}`,
         id: "c5v8n3qd",
         name: "文字起こし修正",
         profile: LIGHT_PROFILE_ID,
+        // 全文を書き直す段階なので、長い入力は区切って処理する（editor。#277）
+        chunked: true,
         instruction: `${TRANSCRIPT_FIX_HEAD}\n${COACHING_TRANSCRIPT_LINE}\n${TRANSCRIPT_FIX_TAIL}`,
       },
       {

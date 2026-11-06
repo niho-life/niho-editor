@@ -21,7 +21,15 @@ export type StepExecutorInput = {
   materials?: StepMaterials;
   /** lease を失った（取消・掃除）ときに止める合図。 */
   signal?: AbortSignal;
+  /**
+   * 区切って処理しているときの今の区切り（#277。全文を書き直す段階の長い入力）。あれば、書き直す対象の資料
+   * （段階 0 は録音ページの本文、段階 1 以降は直前の段階の結果）をこの `text` に置き換える。`index` は 0 始まり。
+   * `previousTail` は直前の区切りの出力の末尾（話者名・文体をそろえるため。最初の区切りは空）。
+   */
+  chunk?: StepChunkInput;
 };
+
+export type StepChunkInput = { index: number; count: number; text: string; previousTail: string };
 
 export type StepExecutorOutput = {
   blocks: Block[];
@@ -72,10 +80,15 @@ function textBlock(type: "heading" | "paragraph", text: string): Block {
 }
 
 /** 偽物の結果（決定的。`[fake]` の印・段階の名前・前の段階の先頭 30 文字を入れる）。 */
-export function fakeBlocks(input: Pick<StepExecutorInput, "recipe" | "stepIndex" | "parentBlocks" | "previousBlocks">): Block[] {
+export function fakeBlocks(input: Pick<StepExecutorInput, "recipe" | "stepIndex" | "parentBlocks" | "previousBlocks" | "chunk">): Block[] {
   const step = input.recipe.steps[input.stepIndex];
   if (!step) throw new StepError("unknown_step", false);
   const source = input.stepIndex === 0 ? input.parentBlocks : (input.previousBlocks ?? []);
+  if (input.chunk) {
+    // 区切りごとの偽の結果（区切りの番号と、その区切りの先頭 30 文字）
+    const chunkHead = Array.from(input.chunk.text.replace(/\s+/g, " ").trim()).slice(0, 30).join("") || "（入力なし）";
+    return [textBlock("paragraph", `[fake] ${step.name} 区切り ${input.chunk.index + 1}/${input.chunk.count}: ${chunkHead}`)];
+  }
   const head = Array.from(plainText(source).replace(/\s+/g, " ").trim()).slice(0, 30).join("") || "（入力なし）";
   return [
     textBlock("heading", `[fake] ${step.name}`),

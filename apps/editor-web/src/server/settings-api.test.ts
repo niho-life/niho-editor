@@ -310,6 +310,22 @@ describe("PATCH /api/settings", () => {
     expect(saved.recipes[0]?.steps[0]?.profile).toBe("light");
   });
 
+  it("saves the 区切り switch of a stage, keeps it when an older screen omits it, and refuses a non-boolean (#277)", async () => {
+    const store = memoryStore();
+    const d = deps(OWNER, store);
+    const current = effective(await settingsOf(await read(d)));
+    expect(current[0]?.steps.map((step) => step.chunked)).toEqual([true, false, false]);
+    const off = current.map((recipe) => recipe.id === "tpl-1" ? { ...recipe, steps: recipe.steps.map((step, index) => (index === 0 ? { ...step, chunked: false } : index === 1 ? { ...step, chunked: true } : step)) } : recipe);
+    const saved = await settingsOf(await write({ recipes: off }, d));
+    expect(saved.recipes[0]?.steps.map((step) => step.chunked)).toEqual([false, true, false]);
+    expect(saved.recipes[0]?.modified).toBe(true);
+    expect(store.recipeRows.get(OWNER)?.[0]?.steps.map((step) => step.chunked)).toEqual([undefined, true, undefined]);
+    const oldPayload = off.map(({ id, name, guide, steps }) => ({ id, name, guide, steps: steps.map(({ id: stepId, name: stepName, instruction }) => ({ id: stepId, name: stepName, instruction })) }));
+    expect((await settingsOf(await write({ recipes: oldPayload }, d))).recipes[0]?.steps.map((step) => step.chunked)).toEqual([false, true, false]);
+    const bad = off.map((recipe) => recipe.id === "tpl-1" ? { ...recipe, steps: recipe.steps.map((step) => ({ ...step, chunked: "yes" })) } : recipe);
+    expect((await write({ recipes: bad }, d)).status).toBe(400);
+  });
+
   it("changes only what was passed", async () => {
     const store = memoryStore();
     const d = deps(OWNER, store);
