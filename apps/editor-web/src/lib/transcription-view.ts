@@ -39,7 +39,9 @@ export type TranscriptionEvent =
   | { type: "startFailed"; message: string }
   | { type: "polled"; run: TranscriptionRun | null }
   | { type: "pollFailed" }
-  | { type: "resume" };
+  | { type: "resume" }
+  /** ほかの入口（流れの「文字起こし 作成 ▾」）で始めた: 読み直して拾う。 */
+  | { type: "startedElsewhere" };
 
 function phaseOf(run: TranscriptionRun | null): TranscriptionPhase {
   if (!run) return "idle";
@@ -69,6 +71,8 @@ export function transcriptionReducer(state: TranscriptionState, event: Transcrip
     }
     case "resume":
       return state.phase === "stalled" ? { ...state, phase: state.run && phaseOf(state.run) !== "active" ? phaseOf(state.run) : "active", failures: 0 } : state;
+    case "startedElsewhere":
+      return state.phase === "idle" || state.phase === "failed" || state.phase === "stalled" ? { ...state, phase: "loading", failures: 0, startError: null } : state;
   }
 }
 

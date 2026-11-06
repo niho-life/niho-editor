@@ -29,6 +29,8 @@ vi.mock("@/lib/transcription-client", async (original) => ({
   ...(await original<typeof import("@/lib/transcription-client")>()),
   startTranscription: (...args: unknown[]) => startTranscription(...(args as [])),
 }));
+const started = vi.fn<(pageId: string) => void>();
+vi.mock("@/lib/use-transcription", () => ({ notifyTranscriptionStarted: (pageId: string) => started(pageId) }));
 
 import { FlowWatcher } from "./FlowWatcher";
 
@@ -211,7 +213,9 @@ describe("FlowWatcher（流れの見張り。#309）", () => {
     await act(async () => {
       expect(await latestFlow()!.transcribe("gemini")).toMatchObject({ ok: true, message: "Gemini で文字起こしを始めました。" });
     });
-    expect(startTranscription).toHaveBeenCalledWith(recording, { engine: "gemini", replace: true });
+    // 置き換えは送らない（段落があればサーバーが has_transcript で断る。置き換えは本文の「もう一度」が確かめてから）
+    expect(startTranscription).toHaveBeenCalledWith(recording, { engine: "gemini" });
+    expect(started).toHaveBeenCalledWith(recording);
     await act(async () => {
       expect(await latestFlow()!.changeRecipe("tpl-2")).toMatchObject({ ok: true });
     });

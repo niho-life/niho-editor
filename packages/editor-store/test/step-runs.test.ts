@@ -1080,7 +1080,8 @@ describe("migration 20261107021307_step_runs_folder on existing runs", { skip: d
       assert.equal((await client.query("SELECT state FROM step_attempts WHERE run_id = $1", [olderActive])).rows[0]?.state, "canceled");
       for (const [index, page] of steps.entries()) {
         const row = (await client.query<{ kind: string; parent: string | null; page: string | null; made_from: unknown; sort_order: number; blocks: Block[] }>("SELECT kind, parent, page, made_from, sort_order, blocks FROM pages WHERE id = $1", [page])).rows[0]!;
-        assert.deepEqual([row.kind, row.parent, row.made_from, row.sort_order, row.blocks], ["note", folder, { kind: "step", run, input: rec, inputRevision: 0 }, 1, paragraph(`結果 ${index}`)]);
+        // 系譜: 最初の段階は録音から、後の段階は直前の段階の出力から（作り直し・もう 1 つがその入力を使う）
+        assert.deepEqual([row.kind, row.parent, row.made_from, row.sort_order, row.blocks], ["note", folder, { kind: "step", run, input: index === 0 ? rec : steps[index - 1], inputRevision: 0 }, 1, paragraph(`結果 ${index}`)]);
         const holderRow = (await client.query<{ kind: string; title: string; parent: string | null; role: unknown; last_tab: string | null }>("SELECT kind, title, parent, role, last_tab FROM pages WHERE id = $1", [row.page])).rows[0]!;
         assert.deepEqual(holderRow, { kind: "page", title: RECIPE.steps[index]!.name, parent: folder, role: { kind: "step", recipe: RECIPE.id, stepId: RECIPE.steps[index]!.id }, last_tab: page });
       }

@@ -25,6 +25,21 @@ export type TranscriptionWatcherDeps = {
   isHidden?: () => boolean;
 };
 
+/** ほかの入口（「ページ」パネルの流れの「文字起こし 作成 ▾」。#309）で文字起こしを始めたことを、その録音の watcher へ知らせる口。 */
+const startedListeners = new Set<(pageId: string) => void>();
+
+/** 流れなど、この hook の外で文字起こしを始めた。録音の画面の watcher が読み直して、進み・完了・新しい段落を映す。 */
+export function notifyTranscriptionStarted(pageId: string): void {
+  for (const listener of startedListeners) listener(pageId);
+}
+
+export function onTranscriptionStarted(listener: (pageId: string) => void): () => void {
+  startedListeners.add(listener);
+  return () => {
+    startedListeners.delete(listener);
+  };
+}
+
 /**
  * 1 つの録音ページの文字起こしの状態を読み続ける（#36 段 3b-1）。
  * - begin で最新の run を読み、待機中・文字起こし中なら 3 秒ごと（画面が見えていない間は 15 秒ごと）に読み直す。
@@ -72,6 +87,15 @@ export class TranscriptionWatcher {
       this.apply({ type: "startFailed", message: startErrorMessage(error) });
       if (error instanceof TranscriptionRequestError && error.status === 409 && error.reason === "has_transcript") this.deps.onHasTranscript?.();
     }
+  }
+
+  /** ほかの入口で始めた run を拾う（待機中・実行中でなければ、いま読み直して監視を始める）。 */
+  startedElsewhere(): void {
+    if (this.disposed || this.current.phase === "starting" || this.current.phase === "active" || this.current.phase === "loading") return;
+    this.clearTimer();
+    this.generation += 1;
+    this.apply({ type: "startedElsewhere" });
+    void this.poll();
   }
 
   /** 「更新できません」から読み直す。 */
@@ -160,7 +184,11 @@ export function useTranscription(
     watcher.begin();
     const onVisibility = () => watcher.visibilityChanged();
     document.addEventListener("visibilitychange", onVisibility);
+    const offStarted = onTranscriptionStarted((id) => {
+      if (id === pageId) watcher.startedElsewhere();
+    });
     return () => {
+      offStarted();
       document.removeEventListener("visibilitychange", onVisibility);
       watcher.dispose();
       if (watcherRef.current === watcher) watcherRef.current = null;

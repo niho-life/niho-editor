@@ -181,6 +181,30 @@ describe("TranscriptionWatcher", () => {
     instance.dispose();
   });
 
+  it("picks up a run started elsewhere (the flow's 文字起こし 作成 ▾): reads again, watches it, and reloads when it succeeds (#309)", async () => {
+    const { instance, deps, get } = watcher([null, run("queued"), run("succeeded")]);
+    instance.begin();
+    await tick(0);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(instance.state.phase).toBe("idle");
+    await tick(10_000);
+    expect(get).toHaveBeenCalledTimes(1);
+    instance.startedElsewhere();
+    await tick(0);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(instance.state.phase).toBe("active");
+    await tick(3_000);
+    expect(get).toHaveBeenCalledTimes(3);
+    expect(deps.onSucceeded).toHaveBeenCalledTimes(1);
+    // 動いている間の知らせは無視する（二重に読まない）
+    const busy = watcher([run("running")]);
+    busy.instance.begin();
+    await tick(0);
+    busy.instance.startedElsewhere();
+    await tick(0);
+    expect(busy.get).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves no timer after dispose and ignores answers that arrive late", async () => {
     let answer!: (value: TranscriptionRun) => void;
     const get = vi.fn(() => new Promise<TranscriptionRun>((resolve) => (answer = resolve)));

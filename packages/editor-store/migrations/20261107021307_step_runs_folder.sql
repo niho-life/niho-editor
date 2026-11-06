@@ -41,19 +41,27 @@ UPDATE step_runs r
  WHERE rec.owner = r.owner AND rec.id = r.parent AND rec.kind = 'rec';
 
 -- 段階のサブページ → 役割ページのタブ（生きているものだけ。ゴミ箱の中のサブページはそのまま）
+-- 系譜（made_from.input）: 最初の段階は録音、後の段階は同じ run の直前の段階の出力（生きていれば。無ければ録音）
 CREATE TEMP TABLE step_tab_map ON COMMIT DROP AS
-  SELECT p.id AS tab, p.owner, f.id AS folder, rec.id AS rec, p.recipe, p.title, p.lang, p.created_at, a.step_id, a.run_id
+  SELECT p.id AS tab, p.owner, f.id AS folder, rec.id AS rec, p.recipe, p.title, p.lang, p.created_at, a.step_id, a.run_id,
+         COALESCE(prev.page_id, rec.id) AS input
     FROM pages p
     JOIN pages rec ON rec.owner = p.owner AND rec.id = p.parent AND rec.kind = 'rec'
     JOIN pages f ON f.owner = rec.owner AND f.id = rec.parent AND f.kind = 'folder' AND f.deleted_at IS NULL
     JOIN LATERAL (
-      SELECT a.step_id, a.run_id
+      SELECT a.step_id, a.run_id, a.step_index
         FROM step_attempts a
         JOIN step_runs r ON r.id = a.run_id
        WHERE r.owner = p.owner AND a.page_id = p.id
        ORDER BY r.created_at DESC, r.id DESC
        LIMIT 1
     ) a ON true
+    LEFT JOIN LATERAL (
+      SELECT b.page_id
+        FROM step_attempts b
+        JOIN pages q ON q.id = b.page_id AND q.owner = p.owner AND q.deleted_at IS NULL
+       WHERE b.run_id = a.run_id AND b.step_index = a.step_index - 1
+    ) prev ON a.step_index > 0
    WHERE p.kind = 'step' AND p.deleted_at IS NULL AND p.recipe IS NOT NULL;
 
 CREATE TEMP TABLE step_holder_map ON COMMIT DROP AS
@@ -68,7 +76,7 @@ INSERT INTO pages (id, owner, kind, title, lang, blocks, parent, role, created_a
 
 UPDATE pages p
    SET kind = 'note', page = h.holder, parent = m.folder,
-       made_from = jsonb_build_object('kind', 'step', 'run', m.run_id, 'input', m.rec, 'inputRevision', 0),
+       made_from = jsonb_build_object('kind', 'step', 'run', m.run_id, 'input', m.input, 'inputRevision', 0),
        sort_order = (SELECT count(*) FROM step_tab_map o
                       WHERE o.owner = m.owner AND o.folder = m.folder AND o.recipe = m.recipe AND o.step_id = m.step_id
                         AND (o.created_at, o.tab) <= (m.created_at, m.tab))

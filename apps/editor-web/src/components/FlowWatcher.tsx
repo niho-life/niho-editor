@@ -9,6 +9,7 @@ import { getFlow, setFlowRecipe, startFlowRun, type FlowRow, type FlowState } fr
 import { StepsRequestError, cancelStepRun, isStepRunDone, resumeStepRun, type StepRun } from "@/lib/steps-client";
 import { isStepRunActive, stepBandNote, stepDoneMessage, stepRunActions } from "@/lib/steps-view";
 import { TranscriptionRequestError, startTranscription } from "@/lib/transcription-client";
+import { notifyTranscriptionStarted } from "@/lib/use-transcription";
 import { useEditorFrame, type FrameFlowPage } from "./EditorFrame";
 
 /**
@@ -41,6 +42,9 @@ function messageOf(error: unknown): string {
   }
   if (error instanceof TranscriptionRequestError) {
     if (error.status === 401) return "ログインが切れています。もう一度ログインしてください。";
+    if (error.status === 409 && (error.error === "has_transcript" || error.reason === "has_transcript")) {
+      return "この録音にはもう文字起こしがあります。置き換えるなら、本文の文字起こしの「もう一度」から確かめて進めてください。";
+    }
     if (error.status === 409) return "いま文字起こしが動いています。終わるまで待ってください。";
     if (error.status === 503) return "いま文字起こしを始められません。しばらくしてからもう一度。";
     return "文字起こしを始められませんでした。";
@@ -241,8 +245,9 @@ export function FlowWatcher({ pageId, kind, onBodyReplaced }: { pageId: string; 
   }), [pageId, send, open]);
 
   const transcribe = useCallback((engine: string) => send(async () => {
-    // #310 までは録音のタブ＝文字起こし。段落があれば置き換える（今の「もう一度」と同じ）
-    await startTranscription(pageId, { engine, replace: true });
+    // #310 までは録音のタブ＝文字起こし。段落があれば置き換えない（サーバーが has_transcript で断る。置き換えは本文の「もう一度」が確かめてから）
+    await startTranscription(pageId, { engine });
+    notifyTranscriptionStarted(pageId);
     return `${engineLabel(engine)} で文字起こしを始めました。`;
   }), [pageId, send]);
 
