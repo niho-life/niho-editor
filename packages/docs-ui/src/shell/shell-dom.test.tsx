@@ -64,7 +64,7 @@ describe("一覧のフォルダの行とアイコン（kind = 'folder'）", () =
           { id: "s1", title: "記事本文", when: "昨日", depth: 2, icon: "spark", sub: { text: "記事制作" } },
         ]}
         onToggleFolder={onToggle}
-        me={ME}
+       
       />,
     );
     const toggles = [...host.querySelectorAll<HTMLButtonElement>("button.es-ditw")];
@@ -103,9 +103,9 @@ describe("ヘッダーの場所（パンくず）", () => {
 });
 
 describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
-  function Sidebar({ onPick = vi.fn(), onSettings = vi.fn() }: { onPick?: (kind: string) => void; onSettings?: () => void }) {
+  function Sidebar({ onPick = vi.fn() }: { onPick?: (kind: string) => void }) {
     const [open, setOpen] = useState(false);
-    return <ShellSidebar items={[]} newMenu={{ open, onToggle: () => setOpen((v) => !v), onClose: () => setOpen(false), onPick }} me={{ onOpen: onSettings }} />;
+    return <ShellSidebar items={[]} newMenu={{ open, onToggle: () => setOpen((v) => !v), onClose: () => setOpen(false), onPick }} />;
   }
 
   it("＋で新しいページのメニュー（空のページ／録音から／フォルダ）が開き、先頭にフォーカス。Esc で閉じて＋へ戻る", () => {
@@ -132,7 +132,7 @@ describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
   it("フォルダの中では上に「『◯◯』の中に」の見出し。フォルダを選ぶと onPick（folder）。kinds で項目を絞れる（Mac）", () => {
     const onPick = vi.fn();
     const host = mount(
-      <ShellSidebar items={[]} me={ME} newMenu={{ open: true, onToggle: vi.fn(), onClose: vi.fn(), onPick, inside: { title: "鎌倉の取材" } }} />,
+      <ShellSidebar items={[]} newMenu={{ open: true, onToggle: vi.fn(), onClose: vi.fn(), onPick, inside: { title: "鎌倉の取材" } }} />,
     );
     const menu = host.querySelector('[role="menu"]')!;
     expect(menu.querySelector(".es-menu-hd")?.textContent).toBe("「鎌倉の取材」の中に");
@@ -140,7 +140,7 @@ describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
     act(() => [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent === "フォルダ")!.click());
     expect(onPick).toHaveBeenCalledWith("folder");
 
-    const mac = mount(<ShellSidebar items={[]} me={ME} newMenu={{ open: true, onToggle: vi.fn(), onClose: vi.fn(), onPick, kinds: ["blank", "recording"] }} />);
+    const mac = mount(<ShellSidebar items={[]} newMenu={{ open: true, onToggle: vi.fn(), onClose: vi.fn(), onPick, kinds: ["blank", "recording"] }} />);
     expect([...mac.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["空のページ⌘N", "録音から"]);
     expect(mac.querySelectorAll('[role="separator"]')).toHaveLength(0);
   });
@@ -153,10 +153,14 @@ describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
     expect(onPick).toHaveBeenCalledWith("recording");
   });
 
-  it("左下の「設定」はメニューを出さず、押すとすぐ onOpen（設定の一覧へ）", () => {
+  it("左下の「設定」（枠の settings）はメニューを出さず、押すとすぐ onOpen（設定の一覧へ）", () => {
     const onSettings = vi.fn();
-    const host = mount(<Sidebar onSettings={onSettings} />);
-    const settings = host.querySelector<HTMLButtonElement>(".es-sb-me")!;
+    const host = mount(
+      <EditorShell sidebar={<Sidebar />} header={null} sidebarOpen railOpen={false} settings={{ onOpen: onSettings }}>
+        x
+      </EditorShell>,
+    );
+    const settings = host.querySelector<HTMLButtonElement>(".es-setbar .es-sb-me")!;
     expect(settings.textContent).toBe("設定");
     expect(settings.hasAttribute("aria-haspopup")).toBe(false);
     act(() => settings.click());

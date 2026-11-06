@@ -47,7 +47,7 @@ function sidebar(over: Partial<Parameters<typeof ShellSidebar>[0]> = {}) {
       onCollapse={noop}
       newMenu={{ open: false, onToggle: noop, onClose: noop, onPick: noop }}
       search={{ open: false, value: "", onOpen: noop, onClose: noop, onChange: noop }}
-      me={{ badge: 1, onOpen: noop }}
+     
       {...over}
     />
   );
@@ -87,7 +87,26 @@ describe("EditorShell", () => {
   );
 
   it("root は es-root と data-editor-shell を持ち、状態を data 属性で出す", () => {
-    expect(html).toMatch(/^<div class="es-root" data-editor-shell="true" data-sidebar="open" data-rail="closed" data-view="list">/);
+    expect(html).toMatch(/^<div class="es-root" data-editor-shell="true" data-sidebar="open" data-rail="closed" data-view="list" data-left="dock">/);
+  });
+
+  it("アプリ名は枠の左上端（skip link の次）、「設定」は左下（settings を渡したときだけ。招待の数つき・メニューは無い・aria-current）", () => {
+    expect(html).toMatch(/本文へ移動<\/a><div class="es-brandbar"><span class="es-brand" role="img" aria-label="Editor">/);
+    expect(html).not.toContain("es-setbar");
+    const withSettings = renderToStaticMarkup(
+      <EditorShell sidebar={sidebar()} header={header()} sidebarOpen railOpen={false} settings={{ badge: 1, current: true, onOpen: noop }}>
+        x
+      </EditorShell>,
+    );
+    expect([...withSettings.matchAll(/class="es-sb-me/g)]).toHaveLength(1);
+    const foot = withSettings.slice(withSettings.indexOf('class="es-setbar"'));
+    expect(foot).toMatch(/^class="es-setbar"><button type="button" class="es-sb-me" aria-current="page"><svg/);
+    expect(foot).toContain("<b>設定</b>");
+    expect(foot).toContain('aria-label="未処理の招待 1 件"');
+    expect(foot).not.toContain("aria-haspopup");
+    // 設定の帯は本文（main）のあと（Tab の順も本文の後）
+    expect(withSettings.indexOf('class="es-setbar"')).toBeGreaterThan(withSettings.indexOf("</main>"));
+    expect(renderToStaticMarkup(<EditorShell sidebar={null} header={null} sidebarOpen={false} railOpen={false} settings={{ badge: 0, onOpen: noop }}>x</EditorShell>)).not.toContain("es-badge");
   });
 
   it("900px 未満の全画面の切り替えは props から決まる（一覧 > レール > ページ）", () => {
@@ -147,11 +166,11 @@ describe("ShellSidebar", () => {
     expect([...html.matchAll(/録音/g)]).toHaveLength(1);
   });
 
-  it("上は 1 行: アプリ名 Editor …… 検索・＋・一覧をしまう のアイコン（言葉は aria-label と title）", () => {
+  it("上は 1 行: …… 検索・＋・一覧をしまう のアイコン（言葉は aria-label と title）。アプリ名は枠が左上端に出すので、ここには無い", () => {
     const top = html.slice(html.indexOf('class="es-sb-top"'), html.indexOf("<nav"));
-    expect([...top.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1])).toEqual(["Editor", "検索（⌘K）", "新しいページ（⌘N）", "一覧をしまう"]);
+    expect([...top.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1])).toEqual(["検索（⌘K）", "新しいページ（⌘N）", "一覧をしまう"]);
     expect(top).toContain('title="検索（⌘K）"');
-    expect(top).toContain('class="es-brand" role="img"');
+    expect(html).not.toContain("es-brand");
     expect(html).not.toContain("es-sb-acts");
     expect(html).not.toContain("es-newbtn");
   });
@@ -181,16 +200,10 @@ describe("ShellSidebar", () => {
     expect([...closed.matchAll(/<ul>/g)]).toHaveLength(1);
   });
 
-  it("現在のページは aria-current=page、左下は「設定」の直リンクひとつ（招待の数つき・メニューは無い）", () => {
+  it("現在のページは aria-current=page。「設定」は一覧の中には無い（枠が左下に出す）", () => {
     expect([...html.matchAll(/aria-current="page"/g)]).toHaveLength(1);
-    expect(html).toContain('aria-label="未処理の招待 1 件"');
-    expect([...html.matchAll(/class="es-sb-me/g)]).toHaveLength(1);
-    const foot = html.slice(html.indexOf('class="es-sb-foot"'));
-    expect(foot).toContain("<b>設定</b>");
-    expect(foot).not.toContain("aria-haspopup");
-    expect(foot).not.toContain("es-av");
-    expect(renderToStaticMarkup(sidebar({ me: { current: true, onOpen: noop } }))).toMatch(/class="es-sb-me" aria-current="page"/);
-    expect(renderToStaticMarkup(sidebar({ me: { badge: 0, onOpen: noop } }))).not.toContain("es-badge");
+    expect(html).not.toContain("es-sb-me");
+    expect(html).not.toContain("es-sb-foot");
   });
 
   it("listEnd は一覧の <ul> の直後（<nav> の中）に出る。渡さなければ何も足さない", () => {
@@ -215,10 +228,15 @@ describe("ShellHeader", () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
-  it("一覧をしまったときだけ「一覧を出す」の右隣にアプリ名 Editor を出す", () => {
-    const html = renderToStaticMarkup(header());
-    expect(html).toMatch(/aria-label="一覧を出す"[\s\S]*?<\/button><span class="es-brand" role="img" aria-label="Editor">/);
-    expect(renderToStaticMarkup(header({ showListButton: false }))).not.toContain("es-brand");
+  it("アプリ名はヘッダーには出さない（枠が左上端に出す）", () => {
+    expect(renderToStaticMarkup(header())).not.toContain("es-brand");
+  });
+
+  it("右上の「出す」ボタンは閉じているパネルの分だけ（渡した順）。4 つとも開いていれば組ごと無い", () => {
+    const html = renderToStaticMarkup(header({ onToggleRail: undefined, panels: { closed: ["ai", "photos"], onOpen: noop } }));
+    const group = html.slice(html.indexOf('role="group" aria-label="パネル"'), html.indexOf('aria-label="その他"'));
+    expect([...group.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1])).toEqual(["パネル", "AIと作るを出す", "写真を出す"]);
+    expect(renderToStaticMarkup(header({ panels: { closed: [], onOpen: noop } }))).not.toContain("es-tg");
   });
 
   it("道具: ＋ テキスト B I リンク 見出し 箇条書き 画像 録音", () => {

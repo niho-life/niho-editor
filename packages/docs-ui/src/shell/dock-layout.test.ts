@@ -1,24 +1,34 @@
 import { describe, expect, it } from "vitest";
 import {
+  SHELL_DOCKS_DEFAULT,
   SHELL_DOCK_DEFAULT,
   SHELL_DOCK_MIN,
   SHELL_DOCK_STRIP,
   clampDockWidth,
+  closePanel,
   computeShellDock,
+  dockOf,
   dockPanels,
   dockWidthRange,
+  movePanel,
+  openPanel,
   panelDropTarget,
   panelGhostRect,
+  panelShares,
+  resizeDockPanels,
   type ShellDockInput,
+  type ShellDocks,
 } from "./dock-layout";
 
 const input = (over: Partial<ShellDockInput> = {}): ShellDockInput => ({
   width: 1680,
   widths: { ...SHELL_DOCK_DEFAULT },
-  docks: { left: ["list"], right: ["ai"] },
+  docks: { left: ["list"], right: ["page", "ai"] },
   side: false,
   ...over,
 });
+
+const ids = (docks: ShellDocks) => ({ left: docks.left.map((item) => item.id), right: docks.right.map((item) => item.id) });
 
 describe("幅の割り当て（computeShellDock）", () => {
   it("広ければ本人の幅のまま。メインは残り", () => {
@@ -65,7 +75,7 @@ describe("幅の割り当て（computeShellDock）", () => {
   });
 
   it("AI のドックが左にあるなら、右のドックから畳む（畳む順は場所でなく AI の有無で決まる）", () => {
-    const fit = computeShellDock(input({ width: 1440, side: true, docks: { left: ["list", "ai"], right: ["list"] } }));
+    const fit = computeShellDock(input({ width: 1440, side: true, docks: { left: ["list", "ai"], right: ["page"] } }));
     expect(fit.strip).toEqual({ left: false, right: true });
   });
 
@@ -114,51 +124,123 @@ describe("clampDockWidth・dockWidthRange", () => {
   });
 });
 
+describe("ドックの中身（movePanel・closePanel・openPanel・resizeDockPanels）", () => {
+  it("既定は 左＝一覧、右＝ページ（上）＋AI（下）。写真は閉じている", () => {
+    expect(ids(SHELL_DOCKS_DEFAULT)).toEqual({ left: ["list"], right: ["page", "ai"] });
+    expect(dockOf(SHELL_DOCKS_DEFAULT, "photos")).toBeNull();
+    expect(dockOf(SHELL_DOCKS_DEFAULT, "ai")).toBe("right");
+  });
+
+  it("落とし先（ドックの上か下）へ移す。高さの割合は持っていき、閉じていたパネルは 1", () => {
+    const moved = movePanel(SHELL_DOCKS_DEFAULT, "ai", { side: "left", at: "bottom" });
+    expect(ids(moved)).toEqual({ left: ["list", "ai"], right: ["page"] });
+    const sized = resizeDockPanels(moved, "left", 1, 0.25);
+    expect(sized.left.map((item) => item.size)).toEqual([0.5, 1.5]);
+    const back = movePanel(sized, "ai", { side: "right", at: "top" });
+    expect(ids(back)).toEqual({ left: ["list"], right: ["ai", "page"] });
+    expect(back.right[0]!.size).toBe(1.5);
+    const photos = movePanel(back, "photos", { side: "left", at: "top" });
+    expect(ids(photos)).toEqual({ left: ["photos", "list"], right: ["ai", "page"] });
+    expect(photos.left[0]!.size).toBe(1);
+  });
+
+  it("同じドックの中の上下の入れ替えもできる。並びが変わらなければ同じ値（保存しない）", () => {
+    const up = movePanel(SHELL_DOCKS_DEFAULT, "ai", { side: "right", at: "top" });
+    expect(ids(up)).toEqual({ left: ["list"], right: ["ai", "page"] });
+    expect(movePanel(SHELL_DOCKS_DEFAULT, "ai", { side: "right", at: "bottom" })).toBe(SHELL_DOCKS_DEFAULT);
+    expect(movePanel(SHELL_DOCKS_DEFAULT, "list", { side: "left", at: "top" })).toBe(SHELL_DOCKS_DEFAULT);
+  });
+
+  it("閉じるとどちらのドックからも外れ、出すと元のドックの下に戻る（既にあれば同じ値）", () => {
+    const closed = closePanel(SHELL_DOCKS_DEFAULT, "page");
+    expect(ids(closed)).toEqual({ left: ["list"], right: ["ai"] });
+    expect(closePanel(closed, "page")).toBe(closed);
+    expect(ids(openPanel(closed, "page"))).toEqual({ left: ["list"], right: ["ai", "page"] });
+    expect(ids(openPanel(closed, "photos"))).toEqual({ left: ["list"], right: ["ai", "photos"] });
+    expect(openPanel(closed, "list")).toBe(closed);
+    // 一覧を閉じて出すと左へ
+    const noList = closePanel(SHELL_DOCKS_DEFAULT, "list");
+    expect(ids(openPanel(noList, "list"))).toEqual({ left: ["list"], right: ["page", "ai"] });
+  });
+
+  it("境目: 2 つの割合の合計は変えず、0〜1 の外・無い位置は無視", () => {
+    const docks: ShellDocks = { left: [], right: [{ id: "page", size: 2 }, { id: "ai", size: 2 }, { id: "photos", size: 1 }] };
+    const next = resizeDockPanels(docks, "right", 2, 0.5);
+    expect(next.right.map((item) => item.size)).toEqual([2, 1.5, 1.5]);
+    expect(resizeDockPanels(docks, "right", 0, 0.5)).toBe(docks);
+    expect(resizeDockPanels(docks, "right", 3, 0.5)).toBe(docks);
+    expect(resizeDockPanels(docks, "right", 1, Number.NaN)).toBe(docks);
+    // 端に寄せても 0 にはしない
+    const edge = resizeDockPanels(docks, "right", 1, 2).right.map((item) => item.size);
+    expect(edge[0]).toBeCloseTo(3.96);
+    expect(edge[1]).toBeCloseTo(0.04);
+    expect(edge[2]).toBe(1);
+  });
+
+  it("panelShares: 上から順の位置と割合。合計 0 なら等分", () => {
+    expect(panelShares([{ id: "page", size: 1 }, { id: "ai", size: 3 }])).toEqual([
+      { id: "page", start: 0, share: 0.25 },
+      { id: "ai", start: 0.25, share: 0.75 },
+    ]);
+    expect(panelShares([{ id: "page", size: 0 }, { id: "ai", size: 0 }])).toEqual([
+      { id: "page", start: 0, share: 0.5 },
+      { id: "ai", start: 0.5, share: 0.5 },
+    ]);
+  });
+
+  it("dockPanels: 隠したパネルは入れない（並びと割合はそのまま）", () => {
+    const shown = { list: true, ai: true, page: false, photos: true };
+    expect(dockPanels(SHELL_DOCKS_DEFAULT, shown)).toEqual({ left: [{ id: "list", size: 1 }], right: [{ id: "ai", size: 1 }] });
+  });
+});
+
 describe("パネルを近づけた場所（panelDropTarget）", () => {
   const fit = computeShellDock(input({ side: true }));
   const H = 900;
+  const now = { left: ["list"] as const, right: ["page", "ai"] as const };
 
-  it("左右の端ならそのドック、真ん中では何もしない", () => {
-    expect(panelDropTarget("list", { x: 20, y: 400 }, fit, H)).toBe("left");
-    expect(panelDropTarget("list", { x: 250, y: 400 }, fit, H)).toBe("left");
-    expect(panelDropTarget("list", { x: 1670, y: 400 }, fit, H)).toBe("right");
-    expect(panelDropTarget("list", { x: 800, y: 400 }, fit, H)).toBeNull();
+  it("左右の端ならそのドック。ほかのパネルがあれば上半分は上・下半分は下、無ければ上。真ん中では何もしない", () => {
+    expect(panelDropTarget("ai", { x: 20, y: 400 }, fit, H, now)).toEqual({ side: "left", at: "top" });
+    expect(panelDropTarget("ai", { x: 250, y: 600 }, fit, H, now)).toEqual({ side: "left", at: "bottom" });
+    expect(panelDropTarget("list", { x: 1670, y: 400 }, fit, H, now)).toEqual({ side: "right", at: "top" });
+    expect(panelDropTarget("list", { x: 1670, y: 800 }, fit, H, now)).toEqual({ side: "right", at: "bottom" });
+    expect(panelDropTarget("list", { x: 800, y: 400 }, fit, H, now)).toBeNull();
+    // 空のドックへは、下半分でも「上」（ドック全体）
+    expect(panelDropTarget("list", { x: 1670, y: 800 }, fit, H, { left: ["list"], right: [] })).toEqual({ side: "right", at: "top" });
   });
 
-  it("AI だけはメインの下端で「浮かせる」。一覧はメインの下端でも何もしない", () => {
-    expect(panelDropTarget("ai", { x: 600, y: 850 }, fit, H)).toBe("float");
-    expect(panelDropTarget("list", { x: 600, y: 850 }, fit, H)).toBeNull();
-    // 右のページの下端は浮かせる場所ではない
-    expect(panelDropTarget("ai", { x: fit.left + fit.main + 10, y: 850 }, fit, H)).toBeNull();
+  it("今いる場所と同じなら何もしない（いちばん上にいて「上」、いちばん下にいて「下」）", () => {
+    expect(panelDropTarget("list", { x: 20, y: 100 }, fit, H, now)).toBeNull();
+    expect(panelDropTarget("ai", { x: 1670, y: 800 }, fit, H, now)).toBeNull();
+    // 上下の入れ替えはできる
+    expect(panelDropTarget("ai", { x: 1670, y: 100 }, fit, H, now)).toEqual({ side: "right", at: "top" });
+    expect(panelDropTarget("page", { x: 1670, y: 800 }, fit, H, now)).toEqual({ side: "right", at: "bottom" });
   });
 
   it("ドックが無い・細いときも、端の 140px ならそのドック", () => {
     const empty = computeShellDock(input({ docks: { left: [], right: ["ai"] } }));
-    expect(panelDropTarget("list", { x: 100, y: 300 }, empty, H)).toBe("left");
-    expect(panelDropTarget("list", { x: 160, y: 300 }, empty, H)).toBeNull();
+    expect(panelDropTarget("list", { x: 100, y: 300 }, empty, H, { left: [], right: ["ai"] })).toEqual({ side: "left", at: "top" });
+    expect(panelDropTarget("list", { x: 160, y: 300 }, empty, H, { left: [], right: ["ai"] })).toBeNull();
   });
 });
 
 describe("落とすと入る形（panelGhostRect）", () => {
   const fit = computeShellDock(input({ width: 1440, side: true }));
+  const now = { left: ["list"] as const, right: ["page", "ai"] as const };
 
-  it("浮かせる形はメインの下端の中央に、本文と同じ幅（最大 680px）", () => {
-    const rect = panelGhostRect("float", fit, 900, SHELL_DOCK_DEFAULT);
-    expect(rect.width).toBe(Math.min(680, fit.main - 48));
-    expect(rect.left).toBe(fit.left + (fit.main - rect.width) / 2);
-    expect(rect.top + rect.height).toBe(900 - 16);
+  it("ほかのパネルがあるドックは上半分・下半分、無ければドック全体", () => {
+    expect(panelGhostRect("ai", { side: "right", at: "top" }, fit, 900, SHELL_DOCK_DEFAULT, now)).toEqual({ left: 1440 - 340 - 6, top: 6, width: 340, height: 441 });
+    expect(panelGhostRect("list", { side: "right", at: "bottom" }, fit, 900, SHELL_DOCK_DEFAULT, now)).toEqual({ left: 1440 - 340 - 6, top: 453, width: 340, height: 441 });
+    // 右のドックにいる ai と page のうち page だけが残るなら半分
+    expect(panelGhostRect("ai", { side: "right", at: "bottom" }, fit, 900, SHELL_DOCK_DEFAULT, { left: [], right: ["ai"] })).toEqual({
+      left: 1440 - 340 - 6,
+      top: 6,
+      width: 340,
+      height: 888,
+    });
   });
 
   it("ドックの形は、細い列のときは本人の幅で出す", () => {
-    expect(panelGhostRect("left", fit, 900, SHELL_DOCK_DEFAULT)).toEqual({ left: 6, top: 6, width: 272, height: 888 });
-    expect(panelGhostRect("right", fit, 900, SHELL_DOCK_DEFAULT)).toEqual({ left: 1440 - 340 - 6, top: 6, width: 340, height: 888 });
-  });
-});
-
-describe("dockPanels", () => {
-  it("同じドックに 2 つなら一覧が上。隠したパネルと浮かせた AI は入れない", () => {
-    expect(dockPanels({ list: "left", ai: "left" }, { list: true, ai: true })).toEqual({ left: ["list", "ai"], right: [] });
-    expect(dockPanels({ list: "right", ai: "float" }, { list: true, ai: true })).toEqual({ left: [], right: ["list"] });
-    expect(dockPanels({ list: "left", ai: "right" }, { list: false, ai: true })).toEqual({ left: [], right: ["ai"] });
+    expect(panelGhostRect("ai", { side: "left", at: "top" }, fit, 900, SHELL_DOCK_DEFAULT, { left: [], right: ["page", "ai"] })).toEqual({ left: 6, top: 6, width: 272, height: 888 });
   });
 });

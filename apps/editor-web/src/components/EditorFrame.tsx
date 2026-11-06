@@ -8,6 +8,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageKind, PageLang, PageSummary, StepStatus } from "@niho/editor-store";
 import {
   EditorShell,
+  SHELL_PANELS,
   ShellHeader,
   ShellMobileToolbar,
   ShellSheet,
@@ -15,10 +16,11 @@ import {
   ShellTools,
   type NewPageKind,
   type ShellDropTarget,
+  type ShellPanelId,
   type ShellToolAction,
 } from "niho-docs-ui/shell";
 import type { PageChromeTools } from "niho-docs-ui/page/PageChrome";
-import { PAGE_PHOTOS_MIN_HEIGHT, PagePhotos } from "niho-docs-ui/page/PagePhotos";
+import { PagePhotos } from "niho-docs-ui/page/PagePhotos";
 import { pagePhotosBody } from "niho-docs-ui/page/page-photos";
 import { imageAssetPath } from "@/image/image-paths";
 import { pageImages } from "@/lib/image-upload-client";
@@ -51,6 +53,7 @@ import { useShellLayout } from "@/lib/use-shell-layout";
 import { useRowDelete } from "@/lib/use-row-delete";
 import { HistorySheet } from "./HistorySheet";
 import { InfoPanel } from "./InfoPanel";
+import { PagePanel } from "./PagePanel";
 import { SidePage } from "./SidePage";
 import { PageInfo } from "./PageInfo";
 import { usePagePublish } from "./PagePublish";
@@ -131,7 +134,7 @@ export type EditorFrameApi = {
   registerAiSteps: (steps: AttachedAiSteps) => () => void;
   /** 公開のシートを開く（ページを開いている画面だけで出る）。 */
   openPublish: () => void;
-  /** 左下の「このページの写真」で写真を上げている途中か（何も足していないページを捨てる判定に使う）。 */
+  /** 「写真」のパネルで写真を上げている途中か（何も足していないページを捨てる判定に使う）。 */
   photosUploading?: () => boolean;
   /** 一覧に読み込んである行（フォルダを開いた画面の中身・AI の「読むもの」の数に使う）。 */
   pages?: readonly PageSummary[];
@@ -417,15 +420,17 @@ type FrameSheet = { kind: "move" | "capacity"; id: string };
  *   [フォルダの背景…]・ページの情報・削除。src/lib/use-page-menu.ts・use-page-share.ts・use-page-history.ts）。
  *   まだ作っていないページでは「…」を出さない。削除の確認・共有・履歴・移動・フォルダの背景は ShellSheet で overlay に出す。
  * - ショートカット（設計 §11）: ⌘N 新しいページ、⌘K 検索、⌘⇧P 公開のシート（⌘S はページ、⌘/ は本文が持つ）。
- * - ヘッダーの「AIと作る」で右のレール（./InfoPanel.tsx。AI だけ）を出す。保存したページ（`/p/{id}`）だけで、
- *   まだ作っていないページ（`/p/new`）・録音から・設定系の画面ではボタンを出さない。デスクトップではページを替えても開いたまま
- *   （モック v6 と同じ。画面の移動でレールを閉じない）、狭い画面（900px 以下）は全画面のレールで、開いたページでだけ出す
- *   （一覧から別のページを開いたら閉じる。閉じるのはヘッダーの同じボタン）。
+ * - パネル（#311）: 一覧・AIと作る（./InfoPanel.tsx）・ページ（./PagePanel.tsx）・写真（PagePhotos）を左右のドックに置く。
+ *   AI・ページ・写真は保存したページ（`/p/{id}`。フォルダ以外）だけで、まだ作っていないページ（`/p/new`）・録音から・設定系の画面では無い。
+ *   ヘッダー右上のボタンは閉じているパネルの分だけ（押すと元のドックの下に戻る）。開いているパネルは × で閉じる。
+ *   デスクトップではページを替えても配置はそのまま（端末に覚える。src/lib/use-shell-layout.ts）。狭い画面（900px 以下）は
+ *   パネルを 1 つずつ全画面で、開いたページでだけ出す（一覧から別のページを開いたら閉じる）。
+ *   アプリ名はいつも画面の左上端、「設定」はいつも左下（EditorShell）。
  * - 公開に関する欄（リード・カバー画像・言語・英語版）は公開のシートの中だけ。文字数とページの情報は本文の列の右下（./PageInfo.tsx）。
  * - フォルダへの出し入れと並びは、左の一覧のドラッグ（キーボード・スマホは「…」の「移動…」）。
  * - 分割ビュー（設計 §5.5。900px 以上だけ）: `/p/{メイン}?side={右}` で右に読むだけのページ（./SidePage.tsx）を並べる。付け外しは
- *   `history.replaceState`（履歴に積まない）、入れ替えはメインの移動（push）。一覧と AI の置き場所・幅・浮かせた AI は
- *   src/lib/use-shell-layout.ts が端末ごとに覚え、EditorShell の dock に渡す（一覧と AI は作り直さない）。
+ *   `history.replaceState`（履歴に積まない）、入れ替えはメインの移動（push）。パネルの配置と幅は src/lib/use-shell-layout.ts が
+ *   端末ごとに覚え、EditorShell の dock に渡す（パネルは作り直さない）。
  */
 export function EditorFrame({ initial, children }: { initial: FrameInitial; children: ReactNode }) {
   const router = useRouter();
@@ -440,7 +445,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     listNow.current = list;
   });
   const [now, setNow] = useState(initial.now);
-  const [collapsed, setCollapsed] = useState(false);
   // 閉じているフォルダ（木の段。開いているのが既定）
   const [closedFolders, setClosedFolders] = useState<ReadonlySet<string>>(() => new Set());
   // フォルダへ入れられなかったときの一言（「移動…」のフォルダの下、閉じていればヘッダー）
@@ -450,9 +454,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const [ordering, setOrdering] = useState(false);
   // 狭い画面で一覧を出している path（path が変われば閉じる）
   const [listFor, setListFor] = useState<string | null>(null);
-  // 右のレール（AIと作る）: デスクトップで開いているか（ページを替えても持つ）と、狭い画面で開いている path（path が変われば閉じる）
-  const [railOpenWide, setRailOpenWide] = useState(true);
-  const [railFor, setRailFor] = useState<string | null>(null);
+  // 狭い画面で全画面に出しているパネル（AI・ページ・写真のどれか 1 つ）と、その path（path が変われば閉じる）。デスクトップの配置は use-shell-layout
+  const [panelFor, setPanelFor] = useState<{ id: Exclude<ShellPanelId, "list">; path: string } | null>(null);
   // 「⋯」の移動・フォルダの背景と、ページの情報の ⓘ のシート
   const [frameSheet, setFrameSheet] = useState<FrameSheet | null>(null);
   // 右下のページの情報を開いているページ
@@ -481,9 +484,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const aiStepsRef = useRef<AttachedAiSteps | null>(null);
   // 版に戻して開き直したページ。そのページが登録し直したとき、フォーカスが外れていたら「…」へ戻す
   const refocusRef = useRef<string | null>(null);
-  // 左下の「このページの写真」: 開いているか・高さ（このタブのメモリだけ。保存しない。既定は閉じる）と、上げている途中か
-  const [photosOpen, setPhotosOpen] = useState(false);
-  const [photosHeight, setPhotosHeight] = useState(320);
+  // 「写真」のパネルで上げている途中か
   const photosUploadingRef = useRef(false);
   const setPhotosUploading = useCallback((uploading: boolean) => {
     photosUploadingRef.current = uploading;
@@ -496,11 +497,52 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
 
   const currentId = PAGE_PATH.exec(pathname)?.[1];
   const settings = SETTINGS_ROUTES.find((route) => pathname === route.path || pathname.startsWith(`${route.path}/`));
-  const sidebarOpen = narrow ? pathname === "/" || listFor === pathname : !collapsed;
   // 右に並べたページ（設計 §5.5。`/p/{メイン}?side={右}`）。デスクトップで、ページを開いていて、UUID の形で、メインと違うときだけ出す。
   // 900px 未満では出さない（URL はそのまま）
   const sideParam = searchParams.get("side")?.toLowerCase() ?? null;
   const sideId = !narrow && currentId && sideParam && SIDE_ID.test(sideParam) && sideParam !== currentId.toLowerCase() ? sideParam : null;
+
+  // AI・ページ・右下のページの情報のページ: 開いているエディタのページ（作ったばかりで URL がまだ `/p/new` のときも）か、URL のページ。
+  // 一覧の行（作成・更新）が分かり、エディタが画面にあるときだけ出す（`/p/new` の作る前・設定系・ページが無い 404 では出さない）。
+  // エディタが下書きを読み終えるまでは、パネルは出したまま中のボタンは何もしない（ページを替えるたびにパネルが消えて戻らないように）
+  const railId = attached?.id ?? (attached ? currentId : undefined);
+  const railSummary = railId
+    ? (list.pages.find((page) => page.id === railId) ?? (list.opened?.id === railId ? list.opened : undefined))
+    : undefined;
+  const railPage = attached && attached.id !== null && attached.id === railId ? attached : null;
+  // フォルダ（kind = 'folder'）では「…」を「書き出し（.zip）」「削除」だけにし、AI・ページ・写真・公開・挿入の道具・ページの情報を出さない
+  const railIsFolder = railSummary?.kind === "folder";
+  const aiAvailable = railSummary !== undefined && !railIsFolder;
+  // 「写真」のパネル: ページを開いていて（作ってあり、エディタが下書きを読み終えた）、設定などの画面でないときだけ。
+  // 本文との橋渡し（✓・本文に入れる・外したら本文とカバーから消す）は、開いているページのエディタで行う
+  const photoEditor = attached?.ai?.editor ?? null;
+  const photoClearCover = attached?.clearCover;
+  const photosBody = useMemo(() => (photoEditor ? pagePhotosBody(photoEditor, { clearCover: photoClearCover }) : null), [photoEditor, photoClearCover]);
+  const photoPageId = attached?.id ?? null;
+  const photosAvailable = Boolean(photoPageId && photosBody && !settings);
+  // パネルの配置（#311）: 中身のあるパネルのうちドックに置いてあるものを出す。端末ごとに覚える（src/lib/use-shell-layout.ts）。
+  // 900px 未満は 1 つずつ全画面（EditorShell が 1 枚表示にする。覚えた配置は使わない）
+  const available: Record<ShellPanelId, boolean> = { list: true, ai: aiAvailable, page: aiAvailable, photos: photosAvailable };
+  const layout = useShellLayout({ wide: !narrow, available, side: sideId !== null });
+  const narrowPanel = (id: ShellPanelId) => panelFor !== null && panelFor.id === id && panelFor.path === pathname;
+  const shownPanel = (id: ShellPanelId) =>
+    narrow ? (id === "list" ? pathname === "/" || listFor === pathname : available[id] && narrowPanel(id)) : layout.shown[id];
+  const sidebarOpen = shownPanel("list");
+  const railShown = shownPanel("ai");
+  const pageShown = shownPanel("page");
+  const photosShown = shownPanel("photos");
+  const openPanel = (id: ShellPanelId) => {
+    if (!narrow) layout.open(id);
+    else if (id === "list") setListFor(pathname);
+    else setPanelFor({ id, path: pathname });
+  };
+  const closePanel = (id: ShellPanelId) => {
+    if (!narrow) layout.close(id);
+    else if (id === "list") setListFor(null);
+    else setPanelFor(null);
+  };
+  // ヘッダー右上に出す、閉じているパネル（順は 一覧・AI・ページ・写真）。狭い画面の一覧は左の「一覧を出す」が持つ
+  const closedPanels = SHELL_PANELS.filter((id) => available[id] && (narrow ? id !== "list" && !narrowPanel(id) : !layout.shown[id]));
   // AI が書き換えたのが右のページなら読み直す（AI の依頼は終わるまでに右のページが替わることがあるので、今の id で比べる）
   const [sideRefresh, setSideRefresh] = useState(0);
   const sideIdRef = useRef(sideId);
@@ -1000,7 +1042,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const openSearch = () => {
     if (sheetShown) return;
     if (narrow) setListFor(pathname);
-    else setCollapsed(false);
+    else layout.open("list");
     setSearch((current) => (current.open ? current : { open: true, value: "" }));
     setSearchFocus((count) => count + 1);
   };
@@ -1030,25 +1072,11 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   });
 
   // 一覧をしまう: デスクトップでは列を閉じ、狭い画面ではページへ戻る（`/` では一覧がその画面なので出さない）
-  const collapse = narrow ? (pathname === "/" ? undefined : () => setListFor(null)) : () => setCollapsed(true);
+  const collapse = narrow ? (pathname === "/" ? undefined : () => setListFor(null)) : () => layout.close("list");
 
-  // レール・右下のページの情報のページ: 開いているエディタのページ（作ったばかりで URL がまだ `/p/new` のときも）か、URL のページ。
-  // 一覧の行（作成・更新）が分かり、エディタが画面にあるときだけボタンを出す（`/p/new` の作る前・設定系・ページが無い 404 では出さない）。
-  // エディタが下書きを読み終えるまでは、レールは出したまま中のボタンは何もしない（ページを替えるたびにレールが消えて戻らないように）
-  const railId = attached?.id ?? (attached ? currentId : undefined);
-  const railSummary = railId
-    ? (list.pages.find((page) => page.id === railId) ?? (list.opened?.id === railId ? list.opened : undefined))
-    : undefined;
-  const railPage = attached && attached.id !== null && attached.id === railId ? attached : null;
-  const railShown = railSummary !== undefined && railSummary.kind !== "folder" && (narrow ? railFor === pathname : railOpenWide);
-  // 分割ビュー（設計 §5.5）: 一覧・AI の置き場所と幅、浮かせた AI。端末ごとに覚える（src/lib/use-shell-layout.ts）。
-  // 900px 未満は今のまま（EditorShell が従来の 1 枚表示にする。覚えた配置は使わない）
-  const layout = useShellLayout({ wide: !narrow, list: sidebarOpen, ai: railShown, side: sideId !== null });
   // 入れられるフォルダ（読み込んである上の段のページ）。入れ先が無く、いま上の段にいるなら「移動…」の「フォルダ」を出さない
   const railFolders = useMemo(() => (railSummary ? folderOptions(list.pages, railSummary.id) : []), [railSummary, list.pages]);
   const canFolder = railSummary !== undefined && (railFolders.length > 0 || railSummary.parent !== null);
-  // フォルダ（kind = 'folder'）では「…」を「書き出し（.zip）」「削除」だけにし、AI・公開・挿入の道具・ページの情報を出さない
-  const railIsFolder = railSummary?.kind === "folder";
   // 「並び」は動かせるときだけ出す（同じ階層に 1 つしか無いページには出さない）
   const railOrder = railSummary ? orderNeighbours(list.pages, railSummary.id) : { canUp: false, canDown: false };
   const canOrder = railOrder.canUp || railOrder.canDown;
@@ -1104,17 +1132,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   });
   const closeFrameSheet = useCallback(() => setFrameSheet(null), []);
   const closeInfo = useCallback(() => setInfoFor(null), []);
-  const toggleRail = () => {
-    if (narrow) setRailFor(railShown ? null : pathname);
-    else setRailOpenWide(!railShown);
-  };
 
-  // 左下の「このページの写真」: ページを開いていて（作ってあり、エディタが下書きを読み終えた）、設定などの画面でないときだけ出す。
-  // 本文との橋渡し（✓・本文に入れる・外したら本文とカバーから消す）は、開いているページのエディタで行う
-  const photoEditor = attached?.ai?.editor ?? null;
-  const photoClearCover = attached?.clearCover;
-  const photosBody = useMemo(() => (photoEditor ? pagePhotosBody(photoEditor, { clearCover: photoClearCover }) : null), [photoEditor, photoClearCover]);
-  const photoPageId = attached?.id ?? null;
+  // 「写真」のパネルの中身（閉じている間も mount したまま、上げている途中の写真を保つ）
   const photos =
     photoPageId && photosBody && !settings ? (
       <PagePhotos
@@ -1122,13 +1141,12 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         images={pageImages}
         srcOf={imageAssetPath}
         body={photosBody}
-        open={photosOpen}
-        onOpenChange={setPhotosOpen}
-        height={Math.max(PAGE_PHOTOS_MIN_HEIGHT, photosHeight)}
-        onHeightChange={setPhotosHeight}
+        // 閉じている間は読まない（出したときに読む）
+        open={photosShown}
+        panel={{ onClose: () => closePanel("photos"), drag: !narrow }}
         narrow={narrow}
-        // 狭い画面では一覧（このパネル）からページへ戻って、入れた写真を見せる
-        onInserted={narrow ? () => setListFor(null) : undefined}
+        // 狭い画面ではパネル（全画面）からページへ戻って、入れた写真を見せる
+        onInserted={narrow ? () => setPanelFor(null) : undefined}
         onUploadingChange={setPhotosUploading}
       />
     ) : undefined;
@@ -1139,33 +1157,38 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         <EditorShell
           sidebarOpen={sidebarOpen}
           railOpen={railShown}
+          pageOpen={pageShown}
+          photosOpen={photosShown}
+          // 左下の「設定」の直リンク。押すとすぐ設定の一覧（メニューは無い。オーナー決定 2026-11-06）
+          settings={{ current: settings !== undefined, onOpen: () => router.push("/settings") }}
           toolbar={editorBar && narrow ? <ShellMobileToolbar {...editorBar} compact /> : undefined}
           rail={
             railSummary ? (
               <InfoPanel
                 page={railPage}
                 aiSteps={aiSteps?.ownerId === railId ? aiSteps : null}
-                placement={
-                  narrow ? undefined : { at: layout.place.ai, open: layout.float.open, onOpenChange: layout.setFloatOpen }
-                }
+                placement={narrow ? undefined : { at: layout.dockOf("ai") ?? "right", open: true, onOpenChange: noop }}
+                onClose={() => closePanel("ai")}
                 onPagesChanged={onAiPagesChanged}
                 reads={aiReads}
               />
             ) : undefined
           }
+          page={railSummary ? <PagePanel steps={aiSteps?.ownerId === railId ? aiSteps : null} onClose={() => closePanel("page")} drag={!narrow} /> : undefined}
+          photos={photos}
           dock={{
             wide: !narrow,
-            place: layout.place,
+            docks: layout.docks,
             fit: layout.fit,
             widths: layout.widths,
             onWidth: layout.setWidth,
             peek: layout.peek,
             onPeek: layout.setPeek,
             onMove: layout.move,
+            onResize: layout.resize,
             side: sideId ? <SidePage key={sideId} id={sideId} refresh={sideRefresh} onSwap={() => void swapSide()} onClose={closeSide} /> : undefined,
             onDropPage: (id, where) => (where === "side" ? openSide(id) : select(id)),
             onDropSide: () => void swapSide(),
-            float: { ...layout.float, onHeight: layout.setFloatHeight },
           }}
           corner={
             railSummary && !railIsFolder ? (
@@ -1213,11 +1236,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                   <div ref={setSentinel} aria-hidden="true" style={{ height: 1 }} />
                 ) : null
               }
-              photos={photos}
               side={!narrow && currentId ? { id: sideId ?? undefined, onOpen: openSide } : undefined}
               onDeleteRow={(id) => rowDelete.open(id, rowTitle(id))}
               panel={!narrow}
-              me={{ current: settings !== undefined, onOpen: () => router.push("/settings") }}
             />
           }
           header={
@@ -1227,8 +1248,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               onOpenLocation={openFromLocation}
               plain={settings !== undefined}
               tools={editorBar && !narrow && !railIsFolder ? <ShellTools {...editorBar} compact /> : undefined}
-              showListButton={!sidebarOpen}
-              onToggleList={() => (narrow ? setListFor(pathname) : setCollapsed(false))}
+              // 狭い画面のページの画面で一覧へ戻る。デスクトップの一覧は右上の「一覧を出す」（閉じているパネルの組）
+              showListButton={narrow && !sidebarOpen}
+              onToggleList={() => setListFor(pathname)}
               status={attached ? headerStatus(attached.status, publishing.status) : publishing.status}
               trailing={
                 <>
@@ -1269,8 +1291,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                   </span>
                 </>
               }
-              railOpen={railShown}
-              onToggleRail={railSummary && !railIsFolder ? toggleRail : undefined}
+              panels={{ closed: closedPanels, onOpen: openPanel }}
               more={menu.more}
               publish={publishing.publish}
             />

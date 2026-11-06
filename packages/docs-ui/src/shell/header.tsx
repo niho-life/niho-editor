@@ -1,5 +1,5 @@
 import { useRef, type ReactNode } from "react";
-import { ShellBrand } from "./brand";
+import { SHELL_PANEL_ICON, SHELL_PANEL_NAME, type ShellPanelId } from "./dock-layout";
 import { Icon } from "./icons";
 import { ShellMenu } from "./menu";
 import { StatusDot } from "./status-dot";
@@ -40,7 +40,7 @@ export type ShellHeaderProps = {
   /** 場所（親のフォルダ › 親の録音）。720px より広いときにヘッダーの左に出す。 */
   location?: readonly ShellLocationItem[];
   onOpenLocation?: (id: string) => void;
-  /** 一覧がしまわれているときの「一覧を出す」ボタン（右隣にアプリ名 ShellBrand も出す）。 */
+  /** 一覧がしまわれているときの、左端の「一覧を出す」ボタン（900px 未満でページの画面から一覧へ戻る。アプリ名は枠が左上端に出す）。 */
   showListButton?: boolean;
   onToggleList?: () => void;
   /** 道具の帯（ShellTools）。 */
@@ -49,9 +49,14 @@ export type ShellHeaderProps = {
   publish?: { label: string; tone: ShellButtonTone; menu?: boolean; onClick?: () => void } | null;
   /** 状態・公開ボタンのかわりに出す操作（録音からの「やめる」など）。 */
   trailing?: ReactNode;
-  /** 右のレール（AIと作る）。 */
+  /** 右のレール（AIと作る）の開閉のボタン（dock を使わない画面。gallery）。 */
   railOpen?: boolean;
   onToggleRail?: () => void;
+  /**
+   * 右上の、閉じているパネルを出すボタン（#311）。開いているパネルには × があるので出さない（4 つとも開いていれば何も出ない）。
+   * 順は 一覧・AIと作る・ページ・写真（呼ぶ側が closed をその順で渡す）。
+   */
+  panels?: { closed: readonly ShellPanelId[]; onOpen: (panel: ShellPanelId) => void };
   more?: { open: boolean; items: ShellMenuItem[]; onToggle: () => void; onClose: () => void; onSelect: (id: string) => void };
   /** 設定系のページ用。デスクトップでは罫線を出さない（900px 未満では題名の帯として罫線が出る）。 */
   plain?: boolean;
@@ -69,7 +74,7 @@ export function shellMoreItems(shared?: boolean): ShellMenuItem[] {
 }
 
 /**
- * ヘッダーは1段: [一覧] [道具] … [状態] [公開] [レール] […]。
+ * ヘッダーは1段: [一覧] [道具] … [状態] [公開] [閉じているパネル] […]。
  * 状態は丸ひとつ（言葉はホバー／フォーカスの吹き出し）。保存ボタンは持たない（自動保存）。
  */
 export function ShellHeader(props: ShellHeaderProps) {
@@ -82,8 +87,6 @@ export function ShellHeader(props: ShellHeaderProps) {
           <Icon name="side" />
         </button>
       )}
-      {/* 一覧をしまったときも左上にアプリ名が残るように（900px 以下では題名の場所を空けるため CSS で隠す） */}
-      {props.showListButton && <ShellBrand />}
       {props.location && props.location.length > 0 && <ShellLocation items={props.location} onOpen={props.onOpenLocation} place="head" />}
       {props.title === undefined ? (
         // 題名を出さないときも、狭い幅で右の操作を右へ寄せる場所は取る（es-ttl は 900px 未満で伸びる）
@@ -106,6 +109,22 @@ export function ShellHeader(props: ShellHeaderProps) {
         </button>
       )}
       {props.trailing}
+      {props.panels && props.panels.closed.length > 0 && (
+        <span className="es-tg" role="group" aria-label="パネル">
+          {props.panels.closed.map((panel) => (
+            <button
+              key={panel}
+              type="button"
+              className="es-ib"
+              aria-label={`${SHELL_PANEL_NAME[panel]}を出す`}
+              title={`${SHELL_PANEL_NAME[panel]}を出す`}
+              onClick={() => props.panels?.onOpen(panel)}
+            >
+              <Icon name={SHELL_PANEL_ICON[panel]} />
+            </button>
+          ))}
+        </span>
+      )}
       {props.onToggleRail && (
         <button
           type="button"
