@@ -529,6 +529,9 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-body{position:relative;flex:1;min-height:0;padding:0;display:flex;flex-direction:column;overflow:hidden}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-thread{flex:1;min-height:72px;overflow:auto;padding:10px 13px 14px;display:flex;flex-direction:column;gap:14px;scrollbar-width:thin}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message{flex:none;min-width:0;font-size:12.5px;line-height:1.75;overflow-wrap:anywhere;white-space:pre-wrap}
+/* 頼んだときに開いていたページ（「◯◯ で」。会話はページを移っても続くので、どこで頼んだかを添える。#312） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-at{display:flex;align-items:center;gap:4px;margin-bottom:2px;font-size:12px;line-height:1.4;color:var(--ed-ink-mute);white-space:nowrap}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-at .es-ico{width:13px;height:13px;flex:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message--user{align-self:flex-end;max-width:88%;padding:8px 12px;background:var(--ed-accent-soft);color:var(--ed-ink);border-radius:16px 4px 16px 16px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message--assistant{padding:0 3px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message--assistant p+p{margin-top:8px}
@@ -567,10 +570,6 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-stop-mark{width:10px;height:10px;border-radius:2px;background:currentColor}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip{display:flex;align-items:center;gap:5px;margin:0 1px 7px;padding:4px 6px;border:1px solid var(--ed-line-2);border-radius:6px;color:var(--ed-accent-ink);font-size:12px;min-width:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip .es-ico{width:14px;height:14px}
-/* AI の入力欄の上の「読むもの」（このページ・この録音について・同じフォルダの N ページ）。モック editor-folders-v1 の .ctx */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-reads{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin:0 1px 7px;font-size:12px;color:var(--ed-ink-mute)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-read{display:inline-flex;align-items:center;gap:4px;min-height:22px;max-width:100%;padding:0 8px;border-radius:999px;background:var(--ed-sand);font-size:12px;font-weight:500;color:var(--ed-ink-mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-read .es-ico{width:12px;height:12px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip button{margin-left:auto;min-width:24px;min-height:24px;padding:0 4px;font-size:16px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-popover{position:absolute;z-index:35;left:8px;right:8px;border:1px solid var(--ed-line-2);border-radius:10px;background:var(--ed-canvas);box-shadow:0 12px 32px rgba(0,0,0,.12);padding:5px;max-height:310px;overflow:auto}

@@ -151,22 +151,19 @@ function memoryConversations(store: MemoryStore) {
       undoneAt: undone.has(`${messageId}/${change.pageId}`) ? NOW.toISOString() : null,
     }));
   };
+  // 作業場＝開いているページのフォルダの中（#312。editor-store の listChatWorkspace と同じ決まり: 段階は親の録音のフォルダ、フォルダの外はそのページだけ）
+  const folderOf = (row: { kind: string; parent: string | null }): string | null => (row.kind === "step" ? (store.rows.get(row.parent ?? "")?.parent ?? null) : row.parent);
   const conversations: ChatConversationStore & { turns: typeof turns } = {
     turns,
-    async references(owner, pageId) {
-      const open = store.rows.get(pageId);
-      if (!open || open.owner !== owner || open.deleted || open.parent === null) return null;
-      return [...store.rows.values()]
-        .filter((row) => row.owner === owner && !row.deleted && row.parent === open.parent && row.id !== open.id)
-        .map((row) => ({ id: row.id, title: row.title, kind: row.kind, blocks: row.blocks }));
-    },
     async workspace(owner, pageId) {
       const open = store.rows.get(pageId);
-      if (!open || open.owner !== owner || open.deleted) return null;
+      if (!open || open.owner !== owner || open.deleted || open.kind === "folder") return null;
+      const folder = folderOf(open);
       const pages: ChatWorkspacePage[] = [{ id: open.id, title: open.title, kind: open.kind, parent: open.parent, open: true }];
       for (const row of store.rows.values()) {
-        if (row.owner !== owner || row.deleted || row.id === open.id) continue;
-        if (row.parent === open.id || row.id === open.parent) pages.push({ id: row.id, title: row.title, kind: row.kind, parent: row.parent, open: false });
+        if (row.owner !== owner || row.deleted || row.id === open.id || row.kind === "folder" || folder === null) continue;
+        const parent = row.parent ? store.rows.get(row.parent) : undefined;
+        if (row.parent === folder || (parent?.kind === "rec" && parent.parent === folder)) pages.push({ id: row.id, title: row.title, kind: row.kind, parent: row.parent, open: false });
       }
       return pages;
     },
@@ -197,13 +194,16 @@ function memoryConversations(store: MemoryStore) {
           route: input.author?.route ?? null,
           engine: input.author?.engine ?? null,
           changes: changesOf(id),
+          pageId: input.pageId,
+          pageTitle: store.rows.get(input.pageId)?.title ?? null,
           createdAt: NOW.toISOString(),
         },
       };
     },
     async changes(owner, pageId, messageId) {
-      const found = turns.find((item) => item.id === messageId && item.pageId === pageId);
-      if (!found) return null;
+      // 会話は利用者のもの: 依頼を開いたページで絞らない（pageId は開いているページの確認だけ）
+      const found = turns.find((item) => item.id === messageId);
+      if (!found || store.rows.get(pageId)?.owner !== owner) return null;
       return changesOf(messageId).filter((change) => change.undoneAt === null);
     },
     async undone(owner, messageId, pageIds) {
@@ -370,22 +370,28 @@ describe("POST /api/pages/{id}/ai/chat", () => {
     ]);
   });
 
-  it("can read and write the subpages and the parent of the open page", async () => {
+  it("can read and write the whole folder of the open page: the recording above a step and the other pages of the folder (#312)", async () => {
     const store = memoryStore();
-    const parent = store.add("user-a", { title: "合成の録音", blocks: [p("文字起こし")] });
-    const page = store.add("user-a", { title: "記事本文", blocks: [p("本文")], parent: parent.id });
-    const sibling = store.add("user-a", { title: "記事方針", blocks: [p("方針")], parent: parent.id });
+    const folder = store.add("user-a", { title: "合成のフォルダ", kind: "folder" });
+    const rec = store.add("user-a", { title: "合成の録音", kind: "rec", blocks: [p("文字起こし")], parent: folder.id });
+    const step = store.add("user-a", { title: "記事本文", kind: "step", blocks: [p("本文")], parent: rec.id });
+    const note = store.add("user-a", { title: "記事方針", blocks: [p("方針")], parent: folder.id });
+    const elsewhere = store.add("user-a", { title: "別のフォルダのページ", blocks: [p("よそ")], parent: store.add("user-a", { title: "別のフォルダ", kind: "folder" }).id });
     const ai = stubBackend([
       turn({ toolCalls: [{ id: "t1", name: "list_pages", input: {} }], stopReason: "tool_use" }),
-      turn({ toolCalls: [{ id: "t2", name: "write_page", input: { page_id: parent.id, markdown: "直した文字起こし", base_revision: 1 } }], stopReason: "tool_use" }),
+      turn({ toolCalls: [{ id: "t2", name: "write_page", input: { page_id: rec.id, markdown: "直した文字起こし", base_revision: 1 } }], stopReason: "tool_use" }),
+      turn({ toolCalls: [{ id: "t3", name: "write_page", input: { page_id: note.id, markdown: "直した方針", base_revision: 1 } }], stopReason: "tool_use" }),
+      turn({ toolCalls: [{ id: "t4", name: "write_page", input: { page_id: elsewhere.id, markdown: "よそを書き換え", base_revision: 1 } }], stopReason: "tool_use" }),
       turn({ text: "直しました。" }),
     ]);
     const chats = memoryConversations(store);
-    await chat(page.id, { text: "親を直して" }, deps("user-a", store, { ai, conversations: chats }));
-    expect(plain(store.rows.get(parent.id)!.blocks)).toEqual([p("直した文字起こし")]);
-    expect(chats.turns[0]!.changes).toHaveLength(1);
-    // 兄弟は作業場に入らない（開いているページの親・子だけ）
-    expect(store.rows.get(sibling.id)!.blocks).toEqual([p("方針")]);
+    await chat(step.id, { text: "親と方針を直して" }, deps("user-a", store, { ai, conversations: chats }));
+    expect(plain(store.rows.get(rec.id)!.blocks)).toEqual([p("直した文字起こし")]);
+    expect(plain(store.rows.get(note.id)!.blocks)).toEqual([p("直した方針")]);
+    expect(chats.turns[0]!.changes).toHaveLength(2);
+    // 別のフォルダのページは作業場に入らない
+    expect(store.rows.get(elsewhere.id)!.blocks).toEqual([p("よそ")]);
+    expect(chats.turns[0]!.items.at(-1)).toEqual({ kind: "tool", tool: "write_page", page: null, ok: false });
   });
 
   it("refuses a page whose body cannot be text (an image or a recording), and writes nothing", async () => {
@@ -608,28 +614,49 @@ describe("the chat never leaks what it is working on", () => {
   });
 });
 
-describe("the chat reads the other pages of the folder", () => {
-  it("lets the model read them but not write them", async () => {
+describe("the chat reads and writes the other pages of the folder (#312)", () => {
+  it("lets the model read and write them, leaving a version", async () => {
     const store = memoryStore();
-    const folder = store.add("user-a", { title: "合成のフォルダ" });
+    const folder = store.add("user-a", { title: "合成のフォルダ", kind: "folder" });
     const page = store.add("user-a", { title: "開いているページ", blocks: [p("本文")], parent: folder.id });
     const other = store.add("user-a", { title: "同じフォルダのページ", blocks: [p("参考の本文")], parent: folder.id });
     const ai = stubBackend([
       turn({ toolCalls: [{ id: "t1", name: "list_pages", input: {} }], stopReason: "tool_use" }),
       turn({ toolCalls: [{ id: "t2", name: "read_page", input: { page_id: other.id } }], stopReason: "tool_use" }),
       turn({ toolCalls: [{ id: "t3", name: "write_page", input: { page_id: other.id, markdown: "書き換え", base_revision: 1 } }], stopReason: "tool_use" }),
-      turn({ text: "読むだけにしました。" }),
+      turn({ text: "直しました。" }),
     ]);
     const chats = memoryConversations(store);
-    await chat(page.id, { text: "同じフォルダを見て" }, deps("user-a", store, { ai, conversations: chats }));
-    // 読めるが書けない（書き換えは断られ、版も残らない）
-    expect(store.rows.get(other.id)!.blocks).toEqual([p("参考の本文")]);
-    expect(store.versions).toEqual([]);
+    await chat(page.id, { text: "同じフォルダを直して" }, deps("user-a", store, { ai, conversations: chats }));
+    expect(plain(store.rows.get(other.id)!.blocks)).toEqual([p("書き換え")]);
+    expect(store.versions).toEqual([{ pageId: other.id, version: 1, blocks: [p("参考の本文")] }]);
     expect(chats.turns[0]!.items).toEqual([
       { kind: "tool", tool: "list_pages", page: null, ok: true },
       { kind: "tool", tool: "read_page", page: "同じフォルダのページ", ok: true },
-      { kind: "tool", tool: "write_page", page: "同じフォルダのページ", ok: false },
+      { kind: "tool", tool: "write_page", page: "同じフォルダのページ", ok: true },
     ]);
+  });
+
+  it("goes on with the same conversation from another page, and records the page each turn was asked on", async () => {
+    const store = memoryStore();
+    const folder = store.add("user-a", { title: "合成のフォルダ", kind: "folder" });
+    const transcript = store.add("user-a", { title: "文字起こし修正", blocks: [p("文字起こし")], parent: folder.id });
+    const article = store.add("user-a", { title: "記事本文", blocks: [p("本文")], parent: folder.id });
+    const chats = memoryConversations(store);
+    const d = (ai: AiComposeBackend) => deps("user-a", store, { ai, conversations: chats });
+    const first = (await (await chat(transcript.id, { text: "表記をそろえて" }, d(stubBackend([turn({ text: "そろえました。" })])))).json()) as { conversation: { id: string } };
+    const second = await chat(
+      article.id,
+      { text: "記事にして", conversationId: first.conversation.id },
+      d(stubBackend(writeTurn(article.id, "## 見出し\n\n記事", "記事にしました。"))),
+    );
+    expect(second.status).toBe(200);
+    const body = (await second.json()) as { conversation: { id: string }; message: { pageId: string | null; pageTitle: string | null } };
+    expect(body.conversation.id).toBe(first.conversation.id);
+    // 2 回目は記事本文で頼み、記事本文が変わる。発言にはそのページが残る
+    expect(chats.turns.map((item) => [item.pageId, item.conversationId ?? null])).toEqual([[transcript.id, null], [article.id, first.conversation.id]]);
+    expect([body.message.pageId, body.message.pageTitle]).toEqual([article.id, "記事本文"]);
+    expect(plain(store.rows.get(article.id)!.blocks)?.[0]).toEqual({ type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "見出し" }] });
   });
 });
 
@@ -734,15 +761,15 @@ describe("POST /api/pages/{id}/ai/chat/turns (この Mac の CLI の結果)", ()
 
   it("checks every pageId against the workspace itself (it does not trust what the Mac sends)", async () => {
     const store = memoryStore();
-    const folder = store.add("user-a", { title: "合成のフォルダ" });
+    const folder = store.add("user-a", { title: "合成のフォルダ", kind: "folder" });
     const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")], parent: folder.id });
-    // 他人のページ・同じ人の別の場所のページ・同じフォルダのページ（読むだけ）は、どれも書けない
+    // 他人のページ・同じ人の別の場所のページは書けない。同じフォルダのページは作業場の中なので書ける（#312）
     const theirs = store.add("user-b", { blocks: [p("他人の本文")] });
     const far = store.add("user-a", { blocks: [p("同じ人の別の場所")] });
     const sibling = store.add("user-a", { title: "同じフォルダのページ", blocks: [p("参考の本文")], parent: folder.id });
     const chats = memoryConversations(store);
 
-    for (const target of [theirs, far, sibling]) {
+    for (const target of [theirs, far]) {
       const before = structuredClone(store.rows.get(target.id)!.blocks);
       const response = await deviceTurn(page.id, body(target.id), deps("user-a", store, { conversations: chats }));
       expect(response.status).toBe(200);
@@ -752,6 +779,11 @@ describe("POST /api/pages/{id}/ai/chat/turns (この Mac の CLI の結果)", ()
     }
     // 版も残らない（書く前に断っている）
     expect(store.versions).toEqual([]);
+    const response = await deviceTurn(page.id, body(sibling.id), deps("user-a", store, { conversations: chats }));
+    expect(response.status).toBe(200);
+    expect(plain(store.rows.get(sibling.id)!.blocks)).toEqual([p("CLI が書いた本文")]);
+    expect(chats.turns.at(-1)).toMatchObject({ result: "done", resultCode: null });
+    expect(store.versions).toEqual([{ pageId: sibling.id, version: 1, blocks: [p("参考の本文")] }]);
   });
 
   it("answers 401, 404 and 400 before writing anything", async () => {
@@ -1252,9 +1284,9 @@ describe("文書ガイドを指示の文脈に入れる（#279）", () => {
     const { store, rec, step, fields, guide, chats } = recWithStep();
     const ai = recordingBackend([turn({ text: "読みました。" })]);
     await chat(step.id, { text: "推敲して" }, deps("user-a", store, { ai, conversations: chats }));
-    // 欄は親の録音のもの、ガイドは開いているページから引く（run は録音の下にある）
+    // 欄もガイドも親の録音から引く（run は録音の下にある。#312: 系譜をたどって録音に当たる）
     expect(fields).toHaveBeenCalledWith("user-a", rec.id);
-    expect(guide).toHaveBeenCalledWith("user-a", step.id);
+    expect(guide).toHaveBeenCalledWith("user-a", rec.id);
     const system = ai.systems[0]!;
     expect(system).toContain("## 文書ガイド（お手本。文体・構成の指示。事実の根拠にはしない）\n<untrusted_data>\n手順: 合成の手順\n\n常体でそろえる。見出しは短く。\n</untrusted_data>");
     expect(system).toContain("- 佐藤: 店主");
@@ -1277,6 +1309,24 @@ describe("文書ガイドを指示の文脈に入れる（#279）", () => {
     expect(guide).not.toHaveBeenCalled();
     expect(onNote.systems[0]).not.toContain("文書ガイド（お手本");
     expect(onNote.systems[0]).not.toContain("この録音について");
+  });
+
+  it("フォルダに手順があれば（pages.recipe）、その guide を文書ガイドにし、run のガイドは読まない。録音は系譜（context）から引く（#312）", async () => {
+    const { store, rec, note, fields, guide, chats } = recWithStep();
+    const context = vi.fn(async (_owner: string, pageId: string) => ({ recordingId: pageId === note.id ? rec.id : null, folderRecipe: "synthetic-recipe" }));
+    const withContext: ChatConversationStore = { ...chats, context };
+    const settings: NonNullable<ChatApiDeps["settings"]> = () => async () => ({
+      ...DEFAULT_EDITOR_SETTINGS,
+      recipes: [{ id: "synthetic-recipe", name: "フォルダの手順", guide: "フォルダの手順のお手本。", steps: [] }],
+    });
+    const ai = recordingBackend([turn({ text: "読みました。" })]);
+    await chat(note.id, { text: "整えて" }, { ...deps("user-a", store, { ai, conversations: withContext }), settings });
+    expect(context).toHaveBeenCalledWith("user-a", note.id);
+    expect(guide).not.toHaveBeenCalled();
+    // 系譜の先の録音の欄が入り、ガイドはフォルダの手順のもの
+    expect(fields).toHaveBeenCalledWith("user-a", rec.id);
+    expect(ai.systems[0]).toContain("手順: フォルダの手順\n\nフォルダの手順のお手本。");
+    expect(ai.systems[0]).toContain("## この録音について");
   });
 
   it("run が無いとき（ガイドが null）は文書ガイドを出さず、録音の欄だけ入る", async () => {

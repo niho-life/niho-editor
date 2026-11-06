@@ -7,7 +7,7 @@ import axe from "axe-core";
 import type { AiDiffState, AttachedAi, AttachedAiDiff, AttachedAiSteps } from "@/lib/attached-page";
 import { AiSelection, aiSelectionOf } from "@/editor/ai-selection";
 import { buildPageExtensions } from "@/editor/page-extensions";
-import { AI_TEXT, AiPanel, aiReadsTags } from "./AiBox";
+import { AI_TEXT, AiPanel } from "./AiBox";
 
 const nativeMock = vi.hoisted(() => ({ shell: null as unknown }));
 vi.mock("niho-desktop-bridge/tauri-shell-transport", () => ({ detectShell: () => nativeMock.shell }));
@@ -214,36 +214,6 @@ async function press(key: string, init: KeyboardEventInit = {}) {
 async function click(element: HTMLElement) {
   await act(async () => { element.click(); });
 }
-
-describe("AI の欄の「読むもの」", () => {
-  it("このページ／この録音について（録音）／元の録音・ほかの段階（工程）／同じフォルダの N ページを文字で出す", () => {
-    expect(aiReadsTags({ kind: "note", folder: null }).map((tag) => tag.text)).toEqual(["このページ"]);
-    expect(aiReadsTags({ kind: "rec", folder: { title: "鎌倉の取材", others: 2 } }).map((tag) => tag.text)).toEqual(["このページ", "この録音について", "鎌倉の取材 の 2 ページ"]);
-    expect(aiReadsTags({ kind: "step", folder: { title: "鎌倉の取材", others: 2 } }).map((tag) => tag.text)).toEqual(["このページ", "この録音について", "元の録音", "ほかの段階 · 読むだけ"]);
-    expect(aiReadsTags({ kind: "note", folder: { title: "鎌倉の取材", others: 0 } }).map((tag) => tag.text)).toEqual(["このページ"]);
-  });
-
-  it("文書ガイドの札は、手順の run にガイドがある録音ページ・段階のページにだけ出る（執筆だけのページには出ない）", () => {
-    const texts = (reads: Parameters<typeof aiReadsTags>[0]) => aiReadsTags(reads).map((tag) => tag.text);
-    expect(texts({ kind: "rec", folder: null, guide: "記事制作" })).toEqual(["このページ", "この録音について", "文書ガイド（記事制作）"]);
-    expect(texts({ kind: "step", folder: null, guide: "記事制作" })).toEqual(["このページ", "この録音について", "元の録音", "ほかの段階 · 読むだけ", "文書ガイド（記事制作）"]);
-    expect(texts({ kind: "rec", folder: null, guide: null })).toEqual(["このページ", "この録音について"]);
-    expect(texts({ kind: "note", folder: null, guide: "記事制作" })).toEqual(["このページ"]);
-    expect(texts({ kind: "article", folder: null, guide: "記事制作" })).toEqual(["このページ"]);
-  });
-
-  it("入力欄の上に「読むもの」の札を出す", async () => {
-    defaultServer();
-    container = document.createElement("div");
-    document.body.append(container);
-    root = createRoot(container);
-    await act(async () => {
-      root!.render(<div className="es-root"><AiPanel pageId={PAGE_1} context={null} steps={null} reads={{ kind: "rec", folder: { title: "鎌倉の取材", others: 1 } }} /></div>);
-    });
-    const group = container!.querySelector('[role="group"][aria-label="読むもの"]');
-    expect(group?.textContent).toBe("読むものこのページこの録音について鎌倉の取材 の 1 ページ");
-  });
-});
 
 describe("AiPanel", () => {
   it("has no axe serious/critical violations in the persistent rail UI", async () => {
@@ -715,7 +685,7 @@ describe("AiPanel", () => {
     expect(String(recorded?.body.input)).not.toContain("写真をライブラリに共有しない");
   });
 
-  it("aborts/ignores an old reply when the page owner changes", async () => {
+  it("keeps the conversation when the page changes (#312): the reply to the old page still lands in the thread, tagged with that page, but no body is replaced", async () => {
     const waiting = deferred<Response>();
     defaultServer({ chat: () => waiting.promise });
     const first = context(PAGE_1);
@@ -725,29 +695,45 @@ describe("AiPanel", () => {
     await press("Enter");
     const second = context(PAGE_2);
     await render(PAGE_2, second);
+    // 移っても会話は消えず、進行中の依頼も止まらない
+    expect(logText()).toContain("古い依頼");
+    expect(button("止める")).toBeTruthy();
     waiting.resolve(chatResponse("古い返答", { page: page(PAGE_1) }));
-    await act(async () => { await Promise.resolve(); });
-    expect(logText()).not.toContain("古い返答");
+    await until(() => logText().includes("古い返答"));
+    expect([...container!.querySelectorAll(".es-ai-message--user")].map((node) => node.textContent)).toEqual(["合成ページ で古い依頼"]);
+    // 頼んだページをもう開いていないので、本文は載せ替えない（開き直したときにサーバーから読む）
     expect(second.bridge.replace).not.toHaveBeenCalled();
+    expect(first.bridge.replace).not.toHaveBeenCalled();
   });
 
-  it("does not unlock a new owner's pending turn when an old reply settles", async () => {
-    const oldReply = deferred<Response>();
-    const newReply = deferred<Response>();
-    const server = defaultServer({ chat: (body) => body.text === "古い依頼" ? oldReply.promise : newReply.promise });
-    await render(PAGE_1, context(PAGE_1));
-    setValue("古い依頼");
-    await press("Enter");
-    await render(PAGE_2, context(PAGE_2));
-    setValue("新しい依頼");
-    await press("Enter");
-    oldReply.resolve(chatResponse("古い返答"));
-    await act(async () => { await Promise.resolve(); });
-    await press("Enter");
-    expect(server.calls.filter((call) => call.url.endsWith("/ai/chat"))).toHaveLength(2);
-    newReply.resolve(chatResponse("新しい返答"));
-    await until(() => logText().includes("新しい返答"));
-    expect(logText()).not.toContain("古い返答");
+  it("an instruction typed on another page while a turn is in flight waits in the queue, and goes to that page in the same conversation once the old reply settles (#312)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const oldReply = deferred<Response>();
+      const server = defaultServer({ chat: (body) => (body.text === "古い依頼" ? oldReply.promise : chatResponse("新しい返答")) });
+      await render(PAGE_1, context(PAGE_1));
+      await until(() => !button("新しい会話").disabled);
+      setValue("古い依頼");
+      await press("Enter");
+      await render(PAGE_2, context(PAGE_2));
+      setValue("新しい依頼");
+      await press("Enter");
+      // 作業中なので送らずに積む
+      expect(server.calls.filter((call) => call.url.endsWith("/ai/chat"))).toHaveLength(1);
+      expect(container!.querySelector('[role="group"][aria-label="送信待ち"]')?.textContent).toContain("送信待ち 1 件");
+      oldReply.resolve(chatResponse("古い返答"));
+      await until(() => logText().includes("古い返答"));
+      await act(async () => { vi.advanceTimersByTime(1000); });
+      await until(() => logText().includes("新しい返答"));
+      const chats = server.calls.filter((call) => call.url.endsWith("/ai/chat"));
+      expect(chats).toHaveLength(2);
+      // 待ちは今のページ（PAGE_2）で、同じ会話に続けて送る
+      expect(chats[1]!.url).toContain(PAGE_2);
+      expect(chats[1]!.body).toMatchObject({ text: "新しい依頼", conversationId: CHAT_1 });
+      expect(logText()).toContain("古い返答");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the current chat and draft when the compact handoff exceeds the input limit", async () => {
@@ -773,6 +759,41 @@ describe("AiPanel", () => {
     await click(button("新しい会話"));
     expect(logText()).not.toContain(CHAT_2);
     expect(server.calls.some((call) => call.method === "DELETE")).toBe(false);
+  });
+
+  it("履歴を読み終えたあとにページを移っても、最新の会話を読み直さない（続けている会話・履歴で選んだ会話・「新しい会話」の下書きをそのまま続ける。#312 レビュー）", async () => {
+    const server = defaultServer({ list: json(200, { conversations: [summary(CHAT_1), summary(CHAT_2, "二つ目")] }), chat: () => chatResponse("返答") });
+    const lists = () => server.calls.filter((call) => call.method === "GET" && call.url.endsWith("/ai/conversations")).length;
+    const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+    await render(PAGE_1, context(PAGE_1));
+    await until(() => logText().includes(CHAT_1));
+    const listed = lists();
+    // 読み終えたあとの移動: 一覧を読み直さず、続けている会話（送った分も）がそのまま
+    setValue("続きの依頼");
+    await press("Enter");
+    await until(() => logText().includes("返答"));
+    await render(PAGE_2, context(PAGE_2));
+    await settle();
+    expect(lists()).toBe(listed);
+    expect(logText()).toContain("続きの依頼");
+    expect(logText()).toContain("返答");
+    // 履歴から古い会話へ切り替えてから移っても、選んだ会話のまま
+    await click(button("会話履歴と切り替え"));
+    await click([...container!.querySelectorAll<HTMLButtonElement>(".es-ai-menu-row")].find((item) => item.textContent?.includes("二つ目"))!);
+    await until(() => logText().includes(CHAT_2));
+    await render(PAGE_1, context(PAGE_1));
+    await settle();
+    expect(lists()).toBe(listed);
+    expect(logText()).toContain(CHAT_2);
+    expect(logText()).not.toContain(CHAT_1);
+    // 「新しい会話」の下書きも、移って最新の会話に戻されない
+    await click(button("新しい会話"));
+    expect(logText()).not.toContain(CHAT_2);
+    await render(PAGE_2, context(PAGE_2));
+    await settle();
+    expect(lists()).toBe(listed);
+    expect(logText()).not.toContain(CHAT_1);
+    expect(logText()).not.toContain(CHAT_2);
   });
 
   it("shows a saved-chat read failure and retries the same conversation", async () => {
@@ -903,14 +924,15 @@ describe("AiPanel", () => {
     await until(() => container!.querySelector(".es-ai-work") !== null);
     expect(container!.querySelector(".es-ai-message--live")?.textContent).toContain("本文を読みます。");
     expect(container!.querySelector(".es-ai-work")?.textContent).toBe("本文を読んでいます…");
-    expect([...container!.querySelectorAll(".es-ai-message--user")].map((node) => node.textContent)).toContain("一段落目を直して");
+    expect([...container!.querySelectorAll(".es-ai-message--user")].map((node) => node.textContent)).toContain("合成ページ で一段落目を直して");
     expect(button("止める")).toBeTruthy();
     expect(server.calls.find((call) => call.url.endsWith("/ai/chat"))).toBeTruthy();
     release();
     await until(() => container!.querySelector(".es-ai-message--live") === null);
     expect(container!.querySelector(".es-ai-work")).toBeNull();
     expect(logText()).toContain("一段落目を直しました。");
-    expect([...container!.querySelectorAll(".es-ai-message--user")].map((node) => node.textContent)).toEqual(["一段落目を直して"]);
+    // 頼んだページ（「◯◯ で」）を添える（会話はページを移っても続くので）
+    expect([...container!.querySelectorAll(".es-ai-message--user")].map((node) => node.textContent)).toEqual(["合成ページ で一段落目を直して"]);
     expect(button("メッセージを送る")).toBeTruthy();
   });
 
@@ -1395,15 +1417,22 @@ describe("AiPanel: 作業中の指示を送信待ちに積む（#282）", () => 
     expect(result.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical")).toEqual([]);
   });
 
-  it("別のページへ替わったら、待ちは持ち越さない", async () => {
-    const { server } = await startHeldTurn();
+  it("別のページへ替わっても待ちは残り、今のページで送る（会話はアプリ全体で 1 つ。#312）", async () => {
+    fakeDelay();
+    const { held, server } = await startHeldTurn();
     setValue("前のページの指示");
     await press("Enter");
     expect(queueRow()).not.toBeNull();
     await render(PAGE_2, context(PAGE_2));
-    expect(queueRow()).toBeNull();
+    expect(queueRow()?.textContent).toContain("送信待ち 1 件");
     expect(field().value).toBe("");
     expect(chatCalls(server.calls)).toEqual(["最初の依頼"]);
+    held.resolve(chatResponse("最初の返答"));
+    await until(() => container!.querySelector('button[aria-label="止める"]') === null && queueRow()?.textContent?.includes("1 秒後") === true);
+    await advance(1000);
+    await until(() => chatCalls(server.calls).length === 2);
+    expect(chatCalls(server.calls)).toEqual(["最初の依頼", "前のページの指示"]);
+    expect(server.calls.filter((call) => call.url.endsWith("/ai/chat")).at(-1)?.url).toContain(PAGE_2);
   });
 });
 
