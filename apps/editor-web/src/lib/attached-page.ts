@@ -77,6 +77,8 @@ export type AttachedFlow = {
   onAction: (id: string) => void;
   open: (holderId: string) => void;
   make: (row: PageFlowRow) => Promise<{ ok: boolean; message: string }>;
+  /** タブの ▾「作り直す（AI）」「同じ入力でもう 1 つ（AI）」（段階の出力のタブだけ）。 */
+  regenerate: (tabId: string, how: "regenerate" | "sibling") => Promise<{ ok: boolean; message: string }>;
   transcribe: (engine: string) => Promise<{ ok: boolean; message: string }>;
   changeRecipe: (recipeId: string) => Promise<{ ok: boolean; message: string }>;
 };

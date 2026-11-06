@@ -129,6 +129,21 @@ describe("TabBar（タブの帯。#308）", () => {
     expect(menuLabels(el)).toEqual([TAB_BAR_TEXT.rename, TAB_BAR_TEXT.duplicate, `${TAB_BAR_TEXT.remove}${TAB_BAR_TEXT.removeHint}`]);
   });
 
+  it("作り直す（AI）・同じ入力でもう 1 つ（AI）は、段階の出力のタブ（渡したとき）だけ。複製の次に並ぶ（#309）", () => {
+    const acts = actions({ onRegenerate: vi.fn(), onSibling: vi.fn() });
+    const el = mount(<TabBar tabs={TABS} currentId="t1" onOpen={vi.fn()} onAdd={vi.fn()} actions={acts} />);
+    const menuButton = el.querySelector<HTMLButtonElement>(".es-tab-menu")!;
+    click(menuButton);
+    expect(menuLabels(el)).toEqual([TAB_BAR_TEXT.rename, TAB_BAR_TEXT.duplicate, TAB_BAR_TEXT.regenerate, TAB_BAR_TEXT.sibling, `${TAB_BAR_TEXT.remove}${TAB_BAR_TEXT.removeHint}`]);
+    const item = (label: string) => [...el.querySelectorAll<HTMLButtonElement>('[role="menu"] button')].find((button) => button.textContent?.startsWith(label));
+    click(item(TAB_BAR_TEXT.regenerate));
+    expect(acts.onRegenerate).toHaveBeenCalledTimes(1);
+    expect(el.querySelector('[role="menu"]')).toBeNull();
+    click(menuButton);
+    click(item(TAB_BAR_TEXT.sibling));
+    expect(acts.onSibling).toHaveBeenCalledTimes(1);
+  });
+
   it("名前を変える: その場の欄。Enter で送り（変えていなければ送らない）、Esc でやめる。空は「名前なし」", () => {
     const acts = actions();
     const el = mount(<TabBar tabs={TABS} currentId="t1" onOpen={vi.fn()} onAdd={vi.fn()} actions={acts} />);

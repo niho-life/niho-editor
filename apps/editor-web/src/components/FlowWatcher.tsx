@@ -105,8 +105,8 @@ export function framePagesOf(state: FlowState): FrameFlowPage[] {
  */
 export function FlowWatcher({ pageId, kind, onBodyReplaced }: { pageId: string; kind: PageKind; onBodyReplaced?: () => void }) {
   const router = useRouter();
-  const frame = useEditorFrame();
-  const { registerFlow, registerAiSteps, flowPagesChanged } = frame;
+  // 枠からは安定した関数だけを取る（枠の値そのものは、登録した流れで変わる。値ごと依存にすると登録→再描画→登録の輪になる）
+  const { registerFlow, registerAiSteps, flowPagesChanged, openPage } = useEditorFrame();
   // 流れを持つのは本文のページ（フォルダと、#307 より前の段階のサブページには無い）
   const watched = kind === "note" || kind === "rec" || kind === "article";
   const [state, setState] = useState<FlowState | null>(null);
@@ -210,9 +210,9 @@ export function FlowWatcher({ pageId, kind, onBodyReplaced }: { pageId: string; 
 
   const open = useCallback((id: string) => {
     if (id === pageId) return;
-    if (frame.openPage) frame.openPage(id);
+    if (openPage) openPage(id);
     else router.push(`/p/${id}`);
-  }, [pageId, frame, router]);
+  }, [pageId, openPage, router]);
 
   /** 「作成」: 今のタブを入力に、段階 `stepId` まで。できた（最後の）タブを開く。 */
   const makeStep = useCallback((stepId: string) => {
@@ -276,10 +276,11 @@ export function FlowWatcher({ pageId, kind, onBodyReplaced }: { pageId: string; 
       onAction,
       open,
       make,
+      regenerate,
       transcribe,
       changeRecipe,
     };
-  }, [watched, state, pageId, busy, notice, onAction, open, make, transcribe, changeRecipe]);
+  }, [watched, state, pageId, busy, notice, onAction, open, make, regenerate, transcribe, changeRecipe]);
 
   useEffect(() => (flow ? registerFlow(flow) : undefined), [flow, registerFlow]);
 

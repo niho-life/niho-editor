@@ -154,6 +154,8 @@ export type EditorFrameApi = {
   now?: number;
   /** 場所（親のフォルダ › 親の録音）を押した。そのページへ移る。 */
   openPage?: (id: string) => void;
+  /** 開いているタブの流れ（FlowWatcher が登録したもの。タブの ▾ の「作り直す（AI）」が使う。#309）。無ければ null。 */
+  flow?: AttachedFlow | null;
 };
 
 const noop = () => undefined;
@@ -755,8 +757,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // frame の useMemo より前で計算する（React Compiler は、memo のあとに list.pages を外の関数へ渡す呼び出しがあると memo を保てない）
   const location = locationOf(openedForFolder(list), currentId ?? null);
   const frame = useMemo<EditorFrameApi>(
-    () => ({ narrow, ...api, pages: listPages, now, openPage: openFromLocation }),
-    [narrow, api, listPages, now, openFromLocation],
+    () => ({ narrow, ...api, pages: listPages, now, openPage: openFromLocation, flow }),
+    [narrow, api, listPages, now, openFromLocation, flow],
   );
 
   // 前に `pagehide`（タブを閉じる・再読み込み）で離れた、何も足していないページを捨てる（src/lib/left-empty-pages.ts）。
