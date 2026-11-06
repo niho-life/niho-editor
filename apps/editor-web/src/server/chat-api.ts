@@ -208,6 +208,43 @@ function matchesOf(text: string, find: string): number[] {
   return found;
 }
 
+/**
+ * 部分置換（edit_page）の材料: 段落（ブロック）ごとの Markdown（read_page が返すのと同じ形）と、それを空行でつないだ本文。
+ * `find` はつないだ本文で探し、**一致した段落だけ**を Markdown から組み直す。ほかの段落は元のブロックをそのまま保つ
+ * （本文の全体を Markdown に書き出して読み直すと、空の段落や段落末尾の改行（hardBreak）が落ち、頼んでいない段落まで変わる）。
+ * 書き出せないブロック（画像・録音など）があれば null。
+ */
+function paragraphsOf(blocks: readonly Block[]): { parts: string[]; joined: string } | null {
+  const parts: string[] = [];
+  for (const block of blocks) {
+    const one = blocksToMarkdown([block]);
+    if (!one.ok) return null;
+    parts.push(one.markdown.replace(/\n+$/u, ""));
+  }
+  return { parts, joined: parts.join("\n\n") };
+}
+
+/**
+ * つないだ本文の中の位置 `at` から `length` 字が掛かる段落の範囲（添字は 0 始まり、両端を含む）と、先頭の段落の開始位置。
+ * 段落と段落の間の空行（2 字）は、前の段落に付けて数える（どの位置もちょうど 1 つの段落に落ちる）。
+ */
+function paragraphRange(parts: readonly string[], at: number, length: number): { from: number; to: number; start: number } {
+  const last = Math.max(0, at + length - 1);
+  let from = 0;
+  let to = 0;
+  let start = 0;
+  for (let index = 0, offset = 0; index < parts.length; index++) {
+    const next = offset + parts[index]!.length + 2;
+    if (at >= offset && (at < next || index === parts.length - 1)) {
+      from = index;
+      start = offset;
+    }
+    if (last >= offset && (last < next || index === parts.length - 1)) to = index;
+    offset = next;
+  }
+  return { from, to: Math.max(from, to), start };
+}
+
 type TranscriptMatch = { page_id: string; title: string; time: string | null; speaker: string | null; before: string; match: string; after: string };
 
 /** 録音の文字起こしの中を語句で探す（大文字・小文字は区別しない）。 */
@@ -376,7 +413,10 @@ function createToolRunner(deps: {
       if (typeof input.replace !== "string") return { ok: false, result: "replace に、置き換えたあとの文字列を渡してください。" };
       const ready = await prepareWrite(input);
       if (!ready.ok) return ready.outcome;
-      const found = matchesOf(ready.before, input.find);
+      // 段落ごとの Markdown で探し、一致した段落だけを組み直す（ほかの段落は元のブロックのまま）
+      const paragraphsNow = paragraphsOf(ready.current.blocks);
+      if (!paragraphsNow) return { ok: false, result: PAGE_HAS_PARTS, page: ready.current.title };
+      const found = matchesOf(paragraphsNow.joined, input.find);
       if (found.length === 0) {
         return { ok: false, result: "find が本文に見つかりませんでした（0 か所）。read_page で今の本文を読み、そのとおりに写してください。", page: ready.current.title };
       }
@@ -384,10 +424,17 @@ function createToolRunner(deps: {
         return { ok: false, result: "find が本文の 2 か所以上に一致しました。1 か所に決まるよう、前後を含めてもっと長く指定してください。", page: ready.current.title };
       }
       const at = found[0]!;
-      const next = ready.before.slice(0, at) + input.replace + ready.before.slice(at + input.find.length);
-      const blocks = parseNext(next, ready.current.title);
-      if (!blocks.ok) return blocks.outcome;
-      const written = await commit(ready.target, ready.current, ready.before, next, blocks, ready.base, ready.device);
+      const range = paragraphRange(paragraphsNow.parts, at, input.find.length);
+      const segment = paragraphsNow.parts.slice(range.from, range.to + 1).join("\n\n");
+      const rel = at - range.start;
+      const nextSegment = segment.slice(0, rel) + input.replace + segment.slice(rel + input.find.length);
+      const replaced = parseNext(nextSegment, ready.current.title);
+      if (!replaced.ok) return replaced.outcome;
+      // 対象外の段落は元のブロックをそのまま継ぐ。ページ全体の大きさの上限はここで見る
+      const checked = parseBlocks([...ready.current.blocks.slice(0, range.from), ...replaced.value, ...ready.current.blocks.slice(range.to + 1)]);
+      if (!checked.ok) return { ok: false, result: "本文が大きすぎるか、保存できない形です。", page: ready.current.title };
+      const next = [...paragraphsNow.parts.slice(0, range.from), nextSegment, ...paragraphsNow.parts.slice(range.to + 1)].join("\n\n");
+      const written = await commit(ready.target, ready.current, paragraphsNow.joined, next, { value: checked.value }, ready.base, ready.device);
       if (!written.ok) return written.outcome;
       const paragraphs = changedParagraphs(ready.current.blocks, written.blocks);
       return {

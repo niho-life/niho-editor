@@ -1058,6 +1058,34 @@ describe("edit_page と読んだ版（#278）", () => {
     expect(store.versions).toEqual([]);
   });
 
+  it("部分置換は対象外の段落を元のブロックのまま保つ（空の段落・段落末尾の改行が落ちない）", async () => {
+    const store = memoryStore();
+    // Markdown に書き出して読み直すと、空の段落と段落末尾の hardBreak は失われる。置換した段落だけを組み直せば残る
+    const blocks: Block[] = [
+      p("本文 A です。"),
+      { type: "paragraph" },
+      { type: "paragraph", content: [{ type: "text", text: "本文 B です。" }, { type: "hardBreak" }] },
+      p("本文 C です。"),
+    ];
+    const page = store.add("user-a", { title: "合成の記事", blocks });
+    const ai = recordingBackend([
+      tool("t1", "edit_page", { page_id: page.id, find: "本文 C です。", replace: "本文 C でした。", base_revision: 1 }),
+      turn({ text: "C を直しました。" }),
+    ]);
+    const response = await chat(page.id, { text: "C を過去形に" }, deps("user-a", store, { ai }));
+    expect(response.status).toBe(200);
+    expect(JSON.parse(ai.results[0]!.content)).toMatchObject({ id: page.id, revision: 2, paragraphs: [4] });
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([blocks[0], blocks[1], blocks[2], p("本文 C でした。")]);
+    // 段落をまたぐ find（段落の切れ目を含む）も、掛かった段落だけを組み直す
+    const ai2 = recordingBackend([
+      tool("t1", "edit_page", { page_id: page.id, find: "本文 B です。\n\n本文 C でした。", replace: "本文 B と C です。", base_revision: 2 }),
+      turn({ text: "B と C をまとめました。" }),
+    ]);
+    await chat(page.id, { text: "B と C をまとめて" }, deps("user-a", store, { ai: ai2 }));
+    expect(JSON.parse(ai2.results[0]!.content)).toMatchObject({ revision: 3 });
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([blocks[0], blocks[1], p("本文 B と C です。")]);
+  });
+
   it("edit_page でも見出しは 2〜3 段にそろえ、画像のあるページは断る", async () => {
     const store = memoryStore();
     const page = store.add("user-a", { title: "合成の記事", blocks: [p("合成の見出しにする行")] });
