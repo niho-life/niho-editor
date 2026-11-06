@@ -6,7 +6,6 @@ import type { ShellDest } from "./types";
 
 export const SHELL_DEST_PILL: Record<ShellDest, string> = { exp: "experience.niho.life", niho: "niho.life", site: "自分のサイト" };
 
-/** 設定系ページの枠。EditorShell の children に入れる。h1 と、あれば戻るボタン・小さな印（pill）。 */
 /** `<a href>` のまま、普通のクリックだけを onNavigate へ回す（修飾キー・中クリックはブラウザに任せる）。 */
 export function linkTo(href: string, onNavigate: (href: string) => void) {
   return {
@@ -19,6 +18,7 @@ export function linkTo(href: string, onNavigate: (href: string) => void) {
   };
 }
 
+/** 設定系ページの枠。EditorShell の children に入れる。h1 と、あれば戻るボタン・小さな印（pill）。 */
 export function ShellSettingsPage({
   title,
   back,
