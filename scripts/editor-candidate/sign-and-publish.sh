@@ -12,7 +12,8 @@
 #   3. candidate.py recheck: manifest / receipt / file hash の照合（validate）に加え、tar を展開して inventory を作り直し、
 #      bundle identifier・版・codesign・dmg の中身を、この Mac の codesign / hdiutil で見る（CI の receipt を信用しない）。
 #   4. 公開鍵の組: 製品 source の tauri.conf.json の pubkey の SHA-256 が manifest の updaterPublicKeySha256 と同じ。
-#   5. 版: 更新フィードの今の版と、公開済みの docs-v* の tag より大きい（同じ tag・同じ source への上げ直しは通す）。
+#   5. 版: 更新フィード（製品 source の tauri.conf.json の plugins.updater.endpoints[0]。各 Mac が実際に見る URL）の今の版と、
+#      公開済みの docs-v* の tag より大きい（同じ tag・同じ source への上げ直しは通す）。
 #   6. 更新の鍵（minisign）で .app.tar.gz に署名し、updater-key.mjs verify で 4 の公開鍵と確かめる。
 #   7. docs-v<版>-<sha12> の Release（target は製品 source の SHA）に NIHO-docs-<版>-<sha12>.dmg / .dmg.sha256 / .app.tar.gz /
 #      .app.tar.gz.sig と、候補の manifest・実行証明を上げる。tag と asset 名は niho-app の Release と同じ形（フィードの参照先の切り替えだけで済む）。
@@ -25,7 +26,7 @@
 #     GH                              gh の呼び方（既定 gh。ghN のようなラッパーでもよい）
 #     NIHO_DOCS_UPDATER_KEY           minisign の秘密鍵（既定 ~/.niho/docs-updater.key。権限 600）
 #     NIHO_DOCS_UPDATER_KEY_PASSWORD  鍵のパスワード（既定 空）
-#     NIHO_DOCS_FEED_URL              配布済みの版を読む更新フィード（既定 https://niho.life/docs/updater/latest.json）
+#     NIHO_DOCS_FEED_URL              配布済みの版を読む更新フィード（既定は製品 source の tauri.conf.json の plugins.updater.endpoints[0]）
 #     NIHO_DOCS_SKIP_FEED=1           フィードが読めなくても止めない（版は公開済みの tag とだけ比べる）
 #
 # 前提: Apple Silicon の Mac（codesign・hdiutil）、python3、node 24、apps/docs の node_modules（tauri CLI。npm -C apps/docs ci）、
@@ -40,7 +41,6 @@ SCRIPT_DIR="${REPO_ROOT}/scripts/editor-candidate"
 DOCS_DIR="${REPO_ROOT}/apps/docs"
 GH="${GH:-gh}"
 KEY="${NIHO_DOCS_UPDATER_KEY:-${HOME}/.niho/docs-updater.key}"
-FEED_URL="${NIHO_DOCS_FEED_URL:-https://niho.life/docs/updater/latest.json}"
 DRY_RUN=0
 TAG=""
 
@@ -146,15 +146,18 @@ python3 "${SCRIPT_DIR}/candidate.py" recheck --directory "${WORK}/validated" --v
   || die "候補の再確認で止まりました（上の {stage,kind}）"
 
 # ---- 4. 公開鍵の組 ----
-PUBKEY="$(git -C "$REPO_ROOT" show "${SOURCE_SHA}:apps/docs/src-tauri/tauri.conf.json" \
-  | node -e '
-    let text = "";
-    process.stdin.on("data", (chunk) => (text += chunk)).on("end", () => {
-      const pubkey = JSON.parse(text)?.plugins?.updater?.pubkey;
-      if (typeof pubkey !== "string" || pubkey.trim() === "" || pubkey.trim() === "REPLACE_WITH_DOCS_UPDATER_PUBKEY") process.exit(1);
-      process.stdout.write(pubkey.trim());
-    });
-  ')" || die "製品 source の tauri.conf.json に更新の公開鍵がありません"
+# 製品 source の tauri.conf.json（配る .app に入る updater の設定）。公開鍵と、各 Mac が見るフィードの URL はここから読む（直書きしない）
+SOURCE_CONF="${WORK}/source-tauri.conf.json"
+git -C "$REPO_ROOT" show "${SOURCE_SHA}:apps/docs/src-tauri/tauri.conf.json" >"$SOURCE_CONF" || die "製品 source の tauri.conf.json を読めません"
+read_updater_conf() {
+  node -e '
+    const updater = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))?.plugins?.updater ?? {};
+    const value = process.argv[2] === "pubkey" ? updater.pubkey : updater.endpoints?.[0];
+    if (typeof value !== "string" || value.trim() === "" || value.trim() === "REPLACE_WITH_DOCS_UPDATER_PUBKEY") process.exit(1);
+    process.stdout.write(value.trim());
+  ' "$SOURCE_CONF" "$1"
+}
+PUBKEY="$(read_updater_conf pubkey)" || die "製品 source の tauri.conf.json に更新の公開鍵がありません"
 PUBKEY_SHA="$(printf '%s' "$PUBKEY" | shasum -a 256 | awk '{ print $1 }')"
 MANIFEST_PUBKEY_SHA="$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).updaterPublicKeySha256))' "${WORK}/validated/editor-candidate.json")"
 [ "$PUBKEY_SHA" = "$MANIFEST_PUBKEY_SHA" ] || die "候補に入っている公開鍵が、製品 source の tauri.conf.json の公開鍵と違います"
@@ -177,6 +180,8 @@ if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "$RELEASE_TAG" ]; then
   semver_gt "$VERSION" "${BASH_REMATCH[1]}" || die "版 ${VERSION} は公開済みの ${LATEST_TAG} 以下です（大きい版で候補を作り直してください）"
   PREVIOUS_TAG="$LATEST_TAG"
 fi
+FEED_URL="${NIHO_DOCS_FEED_URL:-$(read_updater_conf endpoint)}" || die "製品 source の tauri.conf.json に更新フィードの URL がありません"
+case "$FEED_URL" in https://*) ;; *) die "更新フィードの URL は https のはずです: ${FEED_URL}" ;; esac
 FEED_VERSION="$(curl -fsS --max-time 15 "${FEED_URL}?t=$(date +%s)" 2>/dev/null \
   | node -e '
     let text = "";
