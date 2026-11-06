@@ -1,40 +1,48 @@
 <!doctype html>
 <!--
-  mock: フォルダ › ページ › タブ。本文はタブにある。機能（文字起こし・手順の段階）はページとタブを作る v1（PC と 320px）。Issue #288
+  mock: フォルダ › ページ › タブ。本文はタブにある。機能（文字起こし・手順の段階）はページとタブを作る。
+        画面はパネル（一覧・AI・ページ・写真）をレールに置く形（Cursor のように動かせる）v1（PC と 320px）。Issue #288
   土台: docs/mockups/editor-folders-v1.html（フォルダ・この録音について）。色は :root の仮値（hex）。実装では packages/ui の token を引く。
 
   決めたこと（オーナー 2026-11-06。#288）:
     - 「案」という語も概念も置かない。あるのは フォルダ › ページ › タブ の 3 つ。
     - 本文はタブにある。タブが 1 つだけのページは、今までのページと同じに見える（タブの帯は出ない）。どのページでもタブを足せる。
+      新しいタブはまっさら（複製だけ元の本文を持つ）。
     - 機能の出力はフォルダの中へ。同じ役割のページがあればそのページに**タブ**が増え、無ければページができる（文字起こし › Gemini · Deepgram、記事本文 › 1 · 2）。
     - 手順（AI の生成・整理）はどのページ・タブにも当てられる。入力は「今見ているタブ」。
     - 本文の中にも、ページ名の下にも、ボタンや帯を置かない。操作（文字起こしする・記事にする・作り直す・もう 1 つ作る・ここから続きを作る・
-      タブを足す）と段階の帯（流れ）と系譜は、右レールの「ページ」パネル（オーナーの言う「エディタパネル」）。AI のパネルと入れ替わる。
+      タブを足す）と段階の帯（流れ）と系譜は「ページ」パネル（オーナーの言う「エディタパネル」）。
+    - **パネルは全部動かせる**（Cursor の感じ）: 一覧・AIと作る・ページ・写真 を、左右のレールの上／下へドラッグで置ける。
+      同じレールに 2 つ以上あれば上下に分かれ、境目をドラッグして高さを変える。× で閉じ、ヘッダーのボタンで出す。配置は localStorage に残る。
+      中央のエディタ（タブ › 題名 › 本文）だけは固定。
     - 比べる＝並べて開く（分割ビュー）。差分は出さない。要らないタブ・ページ＝ゴミ箱。
     - フォルダの外の録音で「文字起こしする」を押したら、録音の題名でフォルダを作って中に入れる。
 
   このモックで見せたいこと:
-    1. 録音ページ: 本文は 録音ブロック・「この録音について」・見出し「文字起こし」の下にタブの一覧だけ。「文字起こしする ▾」は右の「ページ」パネル。
+    1. 録音ページ: 本文は 録音ブロック・「この録音について」・見出し「文字起こし」の下にタブの一覧だけ。「文字起こしする ▾」は「ページ」パネル。
     2. 文字起こしページ: 上部に Gemini · Deepgram のタブ。再生バー（元の録音の音声）・話者と時刻つきの本文。「記事にする ▾」はパネル。
     3. 記事本文: タブが 1 つなら題名と本文だけのふつうのページ。2 つになると上部にタブ（1 · 2）。
-    4. 右の「ページ」パネル: 上から 操作のボタン › 流れ（このフォルダの段階。今のページを強調。タブの名前つき。「…（まだ）」）›
-       このタブ（役割・何から・ここから・タブ・字数）。ⓘ か右下の字数で開く。
+    4. 「ページ」パネル: 上から 操作のボタン › 流れ（このフォルダの段階。今のページを強調。タブの名前つき。「…（まだ）」）›
+       このタブ（役割・何から・ここから・タブ・字数）。
     5. 記事方針のタブ 2: パネルの「ここから続きを作る」で、この方針から記事本文のタブができる。
     6. ふつうのページ（コラム）のタブ: 下書き · 英語版。役割が無くても「ここから作る ▾」で手順を当てられる。
     7. フォルダを開いた画面: 中身の一覧だけ（録音 › 文字起こし › 段階の順。タブの名前つき）。
     8. フォルダの外の録音: パネルの「文字起こしする」を押すとフォルダができて中に入る（押して確かめる）。
+    9. パネルの配置: 既定は 左＝一覧、右＝ページ（上）＋AIと作る（下）。パネルの見出しをつかんで、現れる置き場（上／下、空のレール）へ落とす。
 
   見かた:
     - 上の黒い帯は mock 用。本物には無い。帯のボタンか ?state=rec|transcript|transcribing|step|two|plan2|split|tabs|folder|wrap で状態を開ける。
-    - 一覧の行を押すとそのページ（最後に見たタブ）。タブを押すと切り替え。右上の ⓘ で「ページ」パネル、AI のボタンで AI と切り替わる。
+      「配置を戻す」でパネルを既定に戻す。
+    - 一覧の行を押すとそのページ（最後に見たタブ）。タブを押すと切り替え。
     - タブは動く: 上部の ＋ ／ パネルの「タブを足す ▾」「＋ 足す」／「…」› タブを足す で足せる（空・複製）。タブの ▾ で 名前を変える（prompt）・
       複製・並べて開く・削除（本当に消える）。パネルの「タブ」の名前を押しても切り替わる。
-    - 幅 720px 以下はスマホの並び（一覧がはじめの画面。ページは全画面で、左上のボタンで一覧へ。パネルは全画面。並べて開くは縦に積む）。
+    - 幅 720px 以下はスマホの並び（一覧がはじめの画面。ページは全画面で、左上のボタンで一覧へ。パネルは 1 つずつ全画面。ドラッグは無し。
+      並べて開くは縦に積む）。
 
   作っていない:
-    - 本文の保存・公開・AI の送信・検索・ドラッグ・並べ替え・移動の実行は見た目だけ（押すと右上に一言）。
+    - 本文の保存・公開・AI の送信・検索・ドラッグでの並べ替え・移動の実行・写真の追加は見た目だけ（押すと右上に一言）。
     - 音声の再生・文字起こしの実行・段階の実行は動かない（「文字起こしする」「記事にする」「もう 1 つ作る」「ここから続きを作る」は
-      タブやページを 1 つ足して開くだけ）。波形は飾り。
+      タブやページを 1 つ足して開くだけ）。波形は飾り。レールの幅は固定。
     - 版の履歴・公開のシート・AI の返答は出していない。
   参照: Issue #288 / docs/architecture/editor-recipes-and-folders.md §3 / docs/mockups/editor-folders-v1.html（土台）/
         docs/mockups/editor-transcript-candidates-v1.html（採らない形）
@@ -56,7 +64,7 @@
   --red:#B42318;--red-pale:#fdebec;
   --sans:"Hiragino Maru Gothic ProN","Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;
   --mono:ui-monospace,Menlo,monospace;
-  --sbw:252px;--aiw:320px;--bar:40px;
+  --sbw:252px;--aiw:320px;--bar:40px;--rw:0px;
 }
 *{box-sizing:border-box}
 html,body{margin:0;min-height:100%}
@@ -122,22 +130,35 @@ kbd{font:12px var(--mono);color:var(--faint)}
 .mock .sw{display:flex;align-items:center;gap:6px;overflow:auto}
 .mock .sw button{height:24px;padding:0 10px;border-radius:999px;color:rgba(255,255,255,.75);font-weight:600;font-size:12px;border:1px solid rgba(255,255,255,.18);white-space:nowrap;flex:none}
 .mock .sw button.on{background:#fff;color:#141413;border-color:#fff}
+.mock .sw button.reset{border-style:dashed;color:rgba(255,255,255,.55)}
 @media (max-width:820px){.mock .url{display:none}}
 
-/* ===== shell ===== */
-.ws{display:grid;grid-template-columns:var(--sbw) minmax(0,1fr);min-height:calc(100vh - var(--bar))}
-.ws.nosb{grid-template-columns:minmax(0,1fr)}
-.ws.nosb .sb{display:none}
-.sb{position:sticky;top:var(--bar);height:calc(100vh - var(--bar));display:flex;flex-direction:column;background:var(--shell);border-right:1px solid var(--line);min-width:0}
-.sb-top{display:flex;align-items:center;gap:2px;height:52px;padding:10px 8px 6px 12px;flex:none}
-.brand{display:flex;align-items:center;gap:7px;min-width:0;flex:1;font-weight:600;font-size:14px;letter-spacing:.01em;color:var(--ink);padding:3px 6px 3px 2px;border-radius:8px;white-space:nowrap}
-.brand .logo{width:22px;height:22px;flex:none;border-radius:6px;box-shadow:0 1px 2px rgba(28,28,26,.14)}
-.sb-top .ib{width:30px;height:30px;color:var(--mute)}
-.sb-top .ib:hover,.sb-top .ib.on{color:var(--ink)}
-.sb-top .ib .ico{width:17px;height:17px}
-.sb-list{flex:1;min-height:0;overflow:auto;padding:4px 8px 10px}
+/* ===== shell: 左レール › 中央 › 右レール。レールにはパネルが縦に並ぶ ===== */
+.ws{display:grid;grid-template-columns:auto minmax(0,1fr) auto;min-height:calc(100vh - var(--bar))}
+.rail{position:sticky;top:var(--bar);height:calc(100vh - var(--bar));display:flex;flex-direction:column;min-width:0;width:var(--sbw);background:var(--shell);border-right:1px solid var(--line)}
+#rail-right{width:var(--aiw);background:var(--canvas);border-right:0;border-left:1px solid var(--line)}
+.panel{display:flex;flex-direction:column;min-height:0;flex:1 1 0;overflow:hidden;background:inherit}
+.ph{display:flex;align-items:center;gap:4px;height:38px;padding:0 6px 0 8px;font-size:12.5px;font-weight:600;color:var(--ink2);flex:none;user-select:none;cursor:grab}
+.ph:active{cursor:grabbing}
+.ph .grip{width:14px;height:14px;color:var(--line3);flex:none}
+.ph:hover .grip{color:var(--faint)}
+.ph .pt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-left:2px}
+.ph .ib{width:28px;height:28px;color:var(--faint)}
+.ph .ib:hover{color:var(--ink)}
+.ph .ib .ico{width:16px;height:16px}
+.pb{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}
+.split{height:6px;flex:none;cursor:row-resize;position:relative;touch-action:none}
+.split::after{content:"";position:absolute;left:10px;right:10px;top:2px;height:2px;border-radius:2px;background:var(--line2)}
+.split:hover::after,.split.on::after{background:var(--leaf)}
+#park{display:none}
+/* ドラッグ中の置き場 */
+.dz{position:fixed;z-index:95;display:none;align-items:center;justify-content:center;border:2px dashed var(--leaf);border-radius:12px;background:rgba(178,214,124,.16);color:var(--moss);font-size:13px;font-weight:600;pointer-events:none}
+body.dragging .dz{display:flex;pointer-events:auto}
+.dz.over{background:rgba(178,214,124,.42);border-style:solid}
+body.dragging .ph{cursor:grabbing}
 
-/* 一覧の行: フォルダ › ページ の 2 段。タブは行にしない（2 つ以上なら数だけ） */
+/* 一覧のパネル */
+.sb-list{flex:1;min-height:0;overflow:auto;padding:2px 8px 10px}
 .row{position:relative;display:flex;align-items:center;gap:6px;min-height:34px;padding:4px 4px 4px calc(8px + var(--d,0) * 16px);border-radius:8px;cursor:pointer;user-select:none;flex-wrap:wrap}
 .row:hover{background:var(--sand2)}
 .row.on{background:#fff;box-shadow:0 1px 2px rgba(28,28,26,.06),0 0 0 1px var(--line)}
@@ -162,16 +183,16 @@ kbd{font:12px var(--mono);color:var(--faint)}
 .row:hover .more{margin-left:16px}
 .row.menu-on .more{margin-left:16px;background:var(--line2);color:var(--ink)}
 @media (hover:none){.row .when{display:none}.row .more{display:grid}.ib[data-tip]::after{display:none}}
-
 .sb-foot{border-top:1px solid var(--line);padding:8px 10px;flex:none}
 .sb-set{display:flex;align-items:center;gap:10px;width:100%;padding:7px 8px;border-radius:10px;font-size:13.5px;font-weight:600;color:var(--ink2);text-decoration:none}
 .sb-set:hover{background:var(--sand2);color:var(--ink)}
 .sb-set .ico{width:18px;height:18px;color:var(--mute)}
 
-/* ===== ページ ===== */
+/* ===== 中央: ページ ===== */
 .doc{position:relative;display:flex;flex-direction:column;min-width:0;min-height:calc(100vh - var(--bar))}
 .dt{position:sticky;top:var(--bar);z-index:20;display:flex;align-items:center;gap:2px;height:52px;padding:0 10px 0 8px;background:var(--canvas)}
-.dt .brand{flex:none;margin-right:4px}
+.brand{display:flex;align-items:center;gap:7px;min-width:0;font-weight:600;font-size:14px;letter-spacing:.01em;color:var(--ink);padding:3px 6px 3px 2px;border-radius:8px;white-space:nowrap;flex:none;margin-right:4px}
+.brand .logo{width:22px;height:22px;flex:none;border-radius:6px;box-shadow:0 1px 2px rgba(28,28,26,.14)}
 .crumbs{display:flex;align-items:center;gap:2px;min-width:0;margin:0 4px;font-size:13px;color:var(--mute)}
 .crumbs button{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:22vw;padding:3px 7px;border-radius:7px;color:var(--mute)}
 .crumbs button:hover{background:var(--sand);color:var(--ink)}
@@ -182,11 +203,12 @@ kbd{font:12px var(--mono);color:var(--faint)}
 .dt .ins{display:flex;align-items:center;gap:2px;margin-left:6px;padding-left:10px;border-left:1px solid var(--line2)}
 .dt .ins .ib{color:var(--faint)}
 .dt .ins .ib:hover{color:var(--ink)}
+.dt .tg{display:flex;align-items:center;gap:2px;margin-left:4px;padding-left:8px;border-left:1px solid var(--line2)}
+.dt .tg .ib{color:var(--faint)}
+.dt .tg .ib.on{color:var(--ink);background:var(--sand2)}
 .pubbtn{height:30px;padding:0 13px;border-radius:8px;font-weight:600;font-size:13.5px;color:var(--ink);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:none}
 .pubbtn:hover{background:var(--sand)}
-.dbody{display:grid;grid-template-columns:minmax(0,1fr) 0;flex:1;transition:grid-template-columns .2s}
-.dbody.open{grid-template-columns:minmax(0,1fr) var(--aiw)}
-.canvas{padding:44px 56px 140px;min-width:0}
+.canvas{padding:44px 56px 140px;min-width:0;flex:1}
 .canvas .in{max-width:680px;margin:auto}
 .tt{font-weight:600;font-size:32px;line-height:1.25;letter-spacing:-.01em;min-height:1.25em;outline:none}
 .tt.fh{display:flex;align-items:center;gap:12px}
@@ -195,13 +217,12 @@ kbd{font:12px var(--mono);color:var(--faint)}
 .bd h2{font-size:20px;margin:26px 0 6px}
 .bd p+p{margin-top:10px}
 .bd ol{list-style:decimal;padding-left:1.5em}
-.ph:empty::before{content:attr(data-ph);color:var(--faint);pointer-events:none}
-.count{position:fixed;right:18px;bottom:14px;z-index:15;font-size:12px;color:var(--faint);padding:4px 9px;border-radius:999px;background:color-mix(in srgb,var(--canvas) 85%,transparent)}
+.ph-text:empty::before{content:attr(data-ph);color:var(--faint);pointer-events:none}
+.count{position:fixed;right:calc(var(--rw) + 18px);bottom:14px;z-index:15;font-size:12px;color:var(--faint);padding:4px 9px;border-radius:999px;background:color-mix(in srgb,var(--canvas) 85%,transparent)}
 .count:hover{color:var(--ink);background:var(--sand2)}
-.dbody.open .count{right:calc(var(--aiw) + 18px)}
 .runnote{display:flex;align-items:center;gap:8px;margin-top:14px;padding:8px 12px;border-radius:10px;background:var(--pale);color:var(--moss);font-size:13px;font-weight:600}
 
-/* タブ（中央レールの上部。ページにタブが 2 つ以上あるときだけ出る） */
+/* タブ（中央の上部。ページにタブが 2 つ以上あるときだけ出る） */
 .tabs{display:flex;align-items:flex-end;gap:2px;margin:-18px 0 18px;border-bottom:1px solid var(--line2);overflow-x:auto;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
 .tabs .tb{display:flex;align-items:flex-end;flex:none;position:relative}
@@ -257,10 +278,9 @@ kbd{font:12px var(--mono);color:var(--faint)}
 .ri-r textarea:focus{border-color:var(--leaf)}
 .ri-r textarea::placeholder{color:var(--faint)}
 
-/* 録音ページの「文字起こし」: 文字起こしページのタブの一覧 ＋「文字起こしする ▾」 */
+/* 録音ページの「文字起こし」: 文字起こしページのタブの一覧 */
 .txhd{display:flex;align-items:center;gap:8px;margin-top:28px;padding-bottom:6px;border-bottom:1px solid var(--line)}
 .txhd h2{font-size:14px;font-weight:600;color:var(--ink2);margin-right:2px}
-.txhd .btn{margin-left:auto;height:28px;padding:0 11px;font-size:12.5px}
 .txlist{margin-top:8px}
 .txlist li{display:flex;align-items:center;gap:10px;min-height:42px;padding:6px 10px;border-radius:10px;cursor:pointer}
 .txlist li:hover{background:var(--sand)}
@@ -270,7 +290,7 @@ kbd{font:12px var(--mono);color:var(--faint)}
 .txlist li .t small{display:block;font-size:12.5px;color:var(--mute)}
 .txlist li .when{font-size:12px;color:var(--faint);white-space:nowrap}
 .txlist li .ico.chev{width:14px;height:14px;color:var(--line3)}
-.txempty{margin-top:10px;padding:26px 16px;border:1px dashed var(--line3);border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:8px}
+.txempty{margin-top:10px;padding:26px 16px;border:1px dashed var(--line3);border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center}
 .txempty small{color:var(--faint);font-size:12.5px}
 
 /* 文字起こしページの本文 */
@@ -312,10 +332,7 @@ kbd{font:12px var(--mono);color:var(--faint)}
 .cols .bd{font-size:15px;min-height:0}
 .cols .tabs{display:none}
 
-/* 右: AI ／ ページの情報（どちらか 1 つ） */
-.ai,.info{position:sticky;top:calc(var(--bar) + 52px);align-self:start;height:calc(100vh - var(--bar) - 52px);border-left:1px solid var(--line);background:var(--canvas);display:flex;flex-direction:column;min-width:0;overflow:hidden}
-.ai .hd,.info .hd{display:flex;align-items:center;gap:2px;height:40px;padding:0 8px 0 16px;font-size:13px;font-weight:600;flex:none}
-.ai .hd span,.info .hd span{flex:1}
+/* AI のパネル */
 .thread{flex:1;overflow:auto;padding:4px 16px}
 .ctx{display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:0 14px 8px;font-size:12px;color:var(--faint)}
 .ctx .tag{font-weight:500;color:var(--mute);background:var(--sand)}
@@ -328,13 +345,14 @@ kbd{font:12px var(--mono);color:var(--faint)}
 .composer .foot .ib{width:28px;height:28px;color:var(--faint)}
 .send{width:28px;height:28px;border-radius:50%;background:var(--grad);color:#fff;display:grid;place-items:center;margin-left:auto}
 .send .ico{width:15px;height:15px;stroke-width:2.2}
-.ibody{flex:1;overflow:auto;padding:0 16px 16px;font-size:13px}
+
+/* ページのパネル: 操作 › 流れ › このタブ */
+.ibody{padding:0 16px 16px;font-size:13px}
 .sec{padding:12px 0 10px;border-top:1px solid var(--line2)}
 .sec:first-child{border-top:0;padding-top:4px}
 .sec h3{font-size:12px;font-weight:600;color:var(--mute);margin-bottom:6px}
 .pacts{display:flex;flex-wrap:wrap;gap:6px}
 .pacts .btn.quiet{padding:0 10px;box-shadow:inset 0 0 0 1px var(--line2)}
-/* 流れ（段階の帯を縦に）: このフォルダの役割のあるページを順に。今のページを強調 */
 .fl{display:flex;flex-direction:column;gap:1px}
 .fl li{display:flex;align-items:stretch;min-width:0}
 .fl li button,.fl li>span{display:flex;align-items:center;gap:8px;width:100%;min-height:32px;padding:4px 8px;border-radius:8px;color:var(--ink2);font-weight:500;min-width:0}
@@ -363,6 +381,17 @@ kbd{font:12px var(--mono);color:var(--faint)}
 .lineage li+li::before{content:"↳";color:var(--line3);font-size:12px;flex:none}
 .lineage li .cur{font-weight:600}
 
+/* 写真のパネル（このページの写真 #265） */
+.photos{padding:4px 14px 14px}
+.pgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.pho{aspect-ratio:1;border-radius:10px;background:var(--sand2);border:1px solid var(--line2);display:grid;place-items:center;color:var(--faint);font-size:12px;font-weight:600;cursor:grab}
+.pho.a{background:linear-gradient(160deg,#dfe8cf,#b8c9a2)}
+.pho.b{background:linear-gradient(160deg,#e8e0cf,#cdbfa0)}
+.pho.c{background:linear-gradient(160deg,#d6e1e8,#a7bcc9)}
+.pho.add{background:none;border-style:dashed;color:var(--moss);cursor:pointer}
+.pho.add .ico{width:18px;height:18px;stroke-width:2.2}
+.photos .hint{margin-top:10px;font-size:12px;color:var(--faint)}
+
 /* ===== シート（削除） ===== */
 .veil{position:fixed;inset:0;z-index:110;background:rgba(28,28,26,.28);display:none;align-items:center;justify-content:center;padding:16px}
 .veil.open{display:flex}
@@ -371,30 +400,31 @@ kbd{font:12px var(--mono);color:var(--faint)}
 .sheet p{font-size:13.5px;color:var(--ink2)}
 .sheet .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
 
-/* ===== スマホ（720px 以下） ===== */
+/* ===== スマホ（720px 以下）: レールは出さず、一覧は最初の画面、ほかのパネルは 1 つずつ全画面 ===== */
 @media (max-width:720px){
-  .ws,.ws.nosb{grid-template-columns:minmax(0,1fr)}
-  .sb{position:static;height:auto;min-height:calc(100vh - var(--bar));border-right:0}
-  .ws[data-screen="page"] .sb{display:none}
+  .ws{grid-template-columns:minmax(0,1fr)}
+  .rail{display:none}
+  .ws[data-screen="list"] #rail-left{display:flex;position:static;height:auto;min-height:calc(100vh - var(--bar));width:auto;border:0}
   .ws[data-screen="list"] .doc{display:none}
-  .sb-top{padding-left:10px}
-  #btn-collapse{display:none}
+  #rail-right.mob{display:flex;position:fixed;top:var(--bar);left:0;right:0;bottom:0;height:auto;width:auto;z-index:90;border:0}
+  .ph{cursor:default}
+  .ph .grip{display:none}
+  .split{display:none}
   .dt .brand{display:none}
-  .dt .ins{margin-left:0;padding-left:6px}
+  .dt .ins{display:none}
   .dt .crumbs{display:none}
+  .dt .tg{padding-left:4px;margin-left:2px}
+  .pubbtn{padding:0 9px}
+  #tg-list{display:none}
   .loc{display:flex;flex-wrap:wrap;margin:0 auto 4px;min-height:0}
   .loc:empty{display:none}
   .loc button{max-width:60vw;margin-left:-7px}
   .loc button+i{margin-left:0}
-  .dbody,.dbody.open{grid-template-columns:minmax(0,1fr)}
-  .ai{display:none}
-  .info{position:fixed;top:var(--bar);left:0;right:0;bottom:0;height:auto;border-left:0;z-index:90}
   .canvas{padding:24px 16px 120px}
   .tt{font-size:25px}
   .tabs{margin:-6px -16px 14px;padding:0 10px}
   .tabs [role=tab]{max-width:none}
-  .count,.dbody.open .count{right:12px}
-  #aitoggle{display:none}
+  .count{right:12px}
   .ri-r{grid-template-columns:minmax(0,1fr);gap:4px}
   .ri-r label{padding-top:0}
   .frows li .when,.txlist li .when{display:none}
@@ -420,33 +450,18 @@ kbd{font:12px var(--mono);color:var(--faint)}
     <button data-state="tabs">ふつうのページのタブ</button>
     <button data-state="folder">フォルダ</button>
     <button data-state="wrap">フォルダの外の録音</button>
+    <button class="reset" id="btn-reset-layout">配置を戻す</button>
   </div>
 </div>
 
 <div class="ws" id="ws" data-screen="page">
-  <!-- 左: 一覧（フォルダ › ページ。タブは行にしない） -->
-  <aside class="sb" aria-label="ページ">
-    <div class="sb-top" id="sbtop">
-      <div class="brand" id="brand"></div>
-      <button class="ib tip-r" id="btn-search" data-tip="検索 ⌘K" aria-label="検索（⌘K）"></button>
-      <span class="newwrap">
-        <button class="ib tip-r" id="btn-new" data-menu="new" data-tip="新しいページ ⌘N" aria-label="新しいページ（⌘N）" aria-haspopup="menu"></button>
-        <div class="menu" id="menu-new" role="menu" aria-label="新しいページ"></div>
-      </span>
-      <button class="ib tip-r" id="btn-collapse" data-tip="一覧をしまう" aria-label="一覧をしまう"></button>
-    </div>
-    <ul class="sb-list" id="list" aria-label="ページの一覧"></ul>
-    <div class="sb-foot">
-      <a class="sb-set" href="#" data-toast="設定（モック）"><span id="gear"></span>設定</a>
-    </div>
-  </aside>
+  <div class="rail" id="rail-left" aria-label="左のレール"></div>
 
   <!-- 中央: ページ（タブ › 題名 › 本文）／フォルダ -->
   <main class="doc" id="doc">
     <header class="dt">
-      <button class="ib tip-l" id="btn-expand" data-tip="一覧を出す" aria-label="一覧を出す" hidden></button>
       <button class="ib tip-l" id="btn-list" data-tip="一覧" aria-label="一覧へ" hidden></button>
-      <div class="brand" id="brand-hd" hidden></div>
+      <div class="brand" id="brand-hd"></div>
       <nav class="crumbs" id="crumbs" aria-label="場所"></nav>
       <div class="ins" id="ins">
         <button class="ib" data-tip="ブロック" aria-label="ブロックを挿入" data-toast="ブロックの一覧（モック）"><span data-ic="plus"></span></button>
@@ -455,44 +470,79 @@ kbd{font:12px var(--mono);color:var(--faint)}
       </div>
       <span class="sp"></span>
       <button class="pubbtn" id="pubbtn" data-toast="公開のシート（モック）">公開</button>
-      <button class="ib on" id="aitoggle" data-tip="AIと作る" aria-label="AIと作る" aria-pressed="true"><span data-ic="panel"></span></button>
-      <button class="ib" id="infotoggle" data-tip="ページ" aria-label="ページのパネル" aria-pressed="false"><span data-ic="info"></span></button>
+      <div class="tg" aria-label="パネル">
+        <button class="ib" id="tg-list" data-panel="list" data-tip="一覧" aria-label="一覧のパネル" aria-pressed="true"><span data-ic="side"></span></button>
+        <button class="ib" id="tg-ai" data-panel="ai" data-tip="AIと作る" aria-label="AIと作るのパネル" aria-pressed="true"><span data-ic="panel"></span></button>
+        <button class="ib" id="tg-page" data-panel="page" data-tip="ページ" aria-label="ページのパネル" aria-pressed="true"><span data-ic="info"></span></button>
+        <button class="ib" id="tg-photos" data-panel="photos" data-tip="写真" aria-label="写真のパネル" aria-pressed="false"><span data-ic="img"></span></button>
+      </div>
       <span class="newwrap">
         <button class="ib tip-r" data-menu="dots" data-tip="その他" aria-label="その他"><span data-ic="more"></span></button>
         <div class="menu" id="menu-dots" role="menu" aria-label="ページのメニュー"></div>
       </span>
     </header>
-    <div class="dbody open" id="dbody">
-      <div class="canvas" id="cv"><nav class="in loc crumbs" id="loc" aria-label="場所"></nav><div class="in" id="canvas"></div></div>
-      <aside class="ai" id="ai" aria-label="AIと作る">
-        <div class="hd"><span>AIと作る</span>
-          <button class="ib" data-tip="新しい会話" aria-label="新しい会話" data-toast="新しい会話（モック）"><span data-ic="edit"></span></button>
-          <button class="ib tip-r" data-tip="会話の履歴" aria-label="会話の履歴" data-toast="会話の履歴（モック）"><span data-ic="more"></span></button>
-        </div>
-        <div class="thread"></div>
-        <div class="ctx" id="ctx" aria-label="AI が読むもの"></div>
-        <div class="composer">
-          <div class="box">
-            <textarea rows="2" placeholder="直したいこと・作りたいもの…" aria-label="AI への依頼"></textarea>
-            <div class="foot">
-              <button class="ib" data-tip="工程・スキル" aria-label="工程・スキル" data-toast="工程・スキル（モック）"><span data-ic="plus"></span></button>
-              <button class="send" aria-label="送る" data-toast="送信（モック）"><span data-ic="up"></span></button>
-            </div>
-          </div>
-        </div>
-      </aside>
-      <aside class="info" id="info" aria-label="ページ" hidden>
-        <div class="hd"><span>ページ</span>
-          <button class="ib tip-r" id="info-close" data-tip="閉じる" aria-label="閉じる"><span data-ic="x"></span></button>
-        </div>
-        <div class="ibody" id="info-body"></div>
-      </aside>
-      <button class="count" id="count" aria-label="字数。押すとページのパネル">0 字</button>
-    </div>
+    <div class="canvas" id="cv"><nav class="in loc crumbs" id="loc" aria-label="場所"></nav><div class="in" id="canvas"></div></div>
+    <button class="count" id="count" aria-label="字数。押すとページのパネル">0 字</button>
   </main>
+
+  <div class="rail" id="rail-right" aria-label="右のレール"></div>
 </div>
 
+<!-- パネル（レールへ移して使う。ここは置き場） -->
+<div id="park">
+  <section class="panel" id="panel-list" data-panel="list" aria-label="一覧">
+    <div class="ph" draggable="true"><span data-ic="grip" class="grip"></span><span class="pt">一覧</span>
+      <button class="ib" id="btn-search" data-tip="検索 ⌘K" aria-label="検索（⌘K）"></button>
+      <button class="ib" id="btn-new" data-menu="new" data-tip="新しいページ ⌘N" aria-label="新しいページ（⌘N）" aria-haspopup="menu"></button>
+      <button class="ib tip-r" data-close-panel="list" data-tip="閉じる" aria-label="一覧を閉じる"><span data-ic="x"></span></button>
+    </div>
+    <div class="pb">
+      <ul class="sb-list" id="list" aria-label="ページの一覧"></ul>
+      <div class="sb-foot"><a class="sb-set" href="#" data-toast="設定（モック）"><span id="gear"></span>設定</a></div>
+    </div>
+  </section>
+  <section class="panel" id="panel-ai" data-panel="ai" aria-label="AIと作る">
+    <div class="ph" draggable="true"><span data-ic="grip" class="grip"></span><span class="pt">AIと作る</span>
+      <button class="ib" data-tip="新しい会話" aria-label="新しい会話" data-toast="新しい会話（モック）"><span data-ic="edit"></span></button>
+      <button class="ib" data-tip="会話の履歴" aria-label="会話の履歴" data-toast="会話の履歴（モック）"><span data-ic="more"></span></button>
+      <button class="ib tip-r" data-close-panel="ai" data-tip="閉じる" aria-label="AIと作るを閉じる"><span data-ic="x"></span></button>
+    </div>
+    <div class="pb">
+      <div class="thread"></div>
+      <div class="ctx" id="ctx" aria-label="AI が読むもの"></div>
+      <div class="composer">
+        <div class="box">
+          <textarea rows="2" placeholder="直したいこと・作りたいもの…" aria-label="AI への依頼"></textarea>
+          <div class="foot">
+            <button class="ib" data-tip="工程・スキル" aria-label="工程・スキル" data-toast="工程・スキル（モック）"><span data-ic="plus"></span></button>
+            <button class="send" aria-label="送る" data-toast="送信（モック）"><span data-ic="up"></span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section class="panel" id="panel-page" data-panel="page" aria-label="ページ">
+    <div class="ph" draggable="true"><span data-ic="grip" class="grip"></span><span class="pt">ページ</span>
+      <button class="ib tip-r" data-close-panel="page" data-tip="閉じる" aria-label="ページのパネルを閉じる"><span data-ic="x"></span></button>
+    </div>
+    <div class="pb"><div class="ibody" id="info-body"></div></div>
+  </section>
+  <section class="panel" id="panel-photos" data-panel="photos" aria-label="写真">
+    <div class="ph" draggable="true"><span data-ic="grip" class="grip"></span><span class="pt">写真 · このページ</span>
+      <button class="ib tip-r" data-close-panel="photos" data-tip="閉じる" aria-label="写真のパネルを閉じる"><span data-ic="x"></span></button>
+    </div>
+    <div class="pb"><div class="photos">
+      <div class="pgrid"><div class="pho a" title="総門の朝">1</div><div class="pho b" title="珈琲店">2</div><div class="pho c" title="線路の向こう">3</div><button class="pho add" aria-label="写真を追加" data-toast="写真を追加（モック）"><span data-ic="plus"></span></button></div>
+      <p class="hint">写真を本文へドラッグすると、その場所に入ります（モック）。</p>
+    </div></div>
+  </section>
+</div>
+
+<!-- ドラッグ中の置き場（JS が位置を決める） -->
+<div id="zones"></div>
+
 <!-- 固定のメニュー（scroll する箱の中からでも出せるように、画面に対して置く） -->
+<div class="menu at" id="menu-new" role="menu" aria-label="新しいページ"></div>
 <div class="menu at" id="menu-row" role="menu" aria-label="行のメニュー"></div>
 <div class="menu at" id="menu-tab" role="menu" aria-label="タブのメニュー"></div>
 <div class="menu at" id="menu-addtab" role="menu" aria-label="タブを足す"></div>
@@ -511,7 +561,7 @@ kbd{font:12px var(--mono);color:var(--faint)}
 <div class="toast" id="toast" role="status"></div>
 
 <script>
-/* ===== アイコン（packages/docs-ui/src/shell/icons.tsx の写し ＋ フォルダ・✦・行・再生・✓・列・ⓘ） ===== */
+/* ===== アイコン（packages/docs-ui/src/shell/icons.tsx の写し ＋ フォルダ・✦・行・再生・✓・列・ⓘ・つまみ） ===== */
 const IC = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   chev: '<path d="m9.5 6 6 6-6 6"/>',
@@ -522,6 +572,7 @@ const IC = {
   panel: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/>',
   cols: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M12 4.5v15"/>',
   more: '<circle cx="6" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="18" cy="12" r="1.2" fill="currentColor"/>',
+  grip: '<circle cx="9" cy="6" r="1.3" fill="currentColor"/><circle cx="15" cy="6" r="1.3" fill="currentColor"/><circle cx="9" cy="12" r="1.3" fill="currentColor"/><circle cx="15" cy="12" r="1.3" fill="currentColor"/><circle cx="9" cy="18" r="1.3" fill="currentColor"/><circle cx="15" cy="18" r="1.3" fill="currentColor"/>',
   mic: '<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M6 11.5a6 6 0 0 0 12 0M12 17.5v3"/>',
   img: '<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4 17 5-4.5 4 3.5 3-2.5 4 3.5"/>',
   doc: '<path d="M7 3.5h7l4 4v13H7z"/><path d="M14 3.5v4h4M10 12h5M10 15.5h5"/>',
@@ -554,15 +605,12 @@ const LOGO = `<svg class="logo" viewBox="0 0 256 256" aria-hidden="true"><rect w
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
-$("#brand").innerHTML = `${LOGO}<span>Editor</span>`;
 $("#brand-hd").innerHTML = `${LOGO}<span>Editor</span>`;
 $("#btn-search").innerHTML = svg("search");
 $("#btn-new").innerHTML = svg("plus");
-$("#btn-collapse").innerHTML = svg("side");
-$("#btn-expand").innerHTML = svg("side");
 $("#btn-list").innerHTML = svg("side");
 $("#gear").innerHTML = svg("gear");
-$$("[data-ic]").forEach((el) => (el.outerHTML = svg(el.dataset.ic)));
+$$("[data-ic]").forEach((el) => { const cls = el.classList.contains("grip") ? "ico grip" : "ico"; el.outerHTML = svg(el.dataset.ic, cls); });
 
 /* ===== 木（合成データ）: フォルダ › ページ › タブ。本文はタブにある。
    ページは role（"rec"／"transcript"／段階の番号／無し）を持ち、タブは from（何から作られたか）を持つ ===== */
@@ -609,7 +657,6 @@ index();
 
 let state = "rec";
 let curPage = "r1", curTab = "r1a";
-let rail = "ai"; /* "ai" | "info" | null */
 const shown = (n) => !n.only || n.only.includes(state);
 const isTab = (n) => !!n.page;
 const pageOf = (n) => (n.page ? n.page : n);
@@ -624,13 +671,16 @@ const kindOf = (p) => (p.role === "rec" ? "rec" : p.role === "transcript" ? "tra
 const tl = (t) => t.t ?? "1";
 const roleSay = (p) => (p.role === "rec" ? "録音 · 42:10" : p.role === "transcript" ? "42:10" : typeof p.role === "number" ? `${RECIPE.name} ${p.role + 1} / ${RECIPE.steps.length}` : p.pub ? p.pub : "");
 /* 系譜で呼ぶ名前: 文字起こしはエンジン名、ほかはタブが 2 つ以上あるときだけタブの名前を添える */
-const fullLabel = (t) => { const p = t.page; return p.role === "transcript" ? `文字起こし（${t.engine}）` : tabsOf(p).length > 1 ? `${p.t} ${tl(t)}` : p.t; };
+const fullLabel = (t) => { const p = t.page; return p.role === "transcript" && t.engine ? `文字起こし（${t.engine}）` : tabsOf(p).length > 1 ? `${p.t} ${tl(t)}` : p.t; };
 const madeFrom = (t) => (t && t.from ? BY.get(t.from) : null);
 const madeHere = (t) => allPages().flatMap((p) => tabsOf(p)).filter((x) => x.from === t.id);
 const nextName = (p) => (p.role === "transcript" ? RECIPE.steps[0] : typeof p.role === "number" && p.role + 1 < RECIPE.steps.length ? RECIPE.steps[p.role + 1] : null);
 const findRole = (f, role) => kidsOf(f).find((k) => k.role === role);
+/* まっさらなタブ・複製したタブは、本文の出どころを変える */
+const srcOf = (t) => (t.dupOf ? BY.get(t.dupOf) : t);
 const countOf = (t) => {
-  if (!t) return "0 字";
+  if (!t || t.blank) return "0 字";
+  t = srcOf(t);
   const p = t.page;
   if (t.st === "run" || t.st === "wait") return "0 字";
   if (p.role === "transcript") return "1,240 字";
@@ -650,7 +700,7 @@ function renderList() {
     const ts = isFolder ? [] : tabsOf(n);
     const running = ts.some((t) => t.st === "run");
     const sub = isFolder ? "" : running ? (n.role === "transcript" ? "文字起こし中…" : "作成中…") : n.role === "rec" ? "録音 · 42:10" : n.pub ? n.pub : "";
-    out.push(`<li class="row ${isFolder ? "folder" : kindOf(n)}${n.id === curPage ? " on" : ""}${isFolder && !open ? " closed" : ""}" data-id="${n.id}" style="--d:${d}" tabindex="0" draggable="true">
+    out.push(`<li class="row ${isFolder ? "folder" : kindOf(n)}${n.id === curPage ? " on" : ""}${isFolder && !open ? " closed" : ""}" data-id="${n.id}" style="--d:${d}" tabindex="0">
       ${isFolder ? `<button class="tw${kids.length ? "" : " none"}" aria-label="${open ? "閉じる" : "開く"}" aria-expanded="${open}">${svg("down")}</button>${svg("folder", "ico ki")}` : ""}
       ${n.role === "rec" ? svg("mic", "ico ki") : n.role === "transcript" ? svg("lines", "ico ki") : typeof n.role === "number" ? svg("spark", "ico ki") : ""}
       <b>${n.t}</b>${ts.length > 1 ? `<span class="n" aria-label="${ts.length} タブ">${ts.length}</span>` : ""}<span class="when">${isFolder ? "" : n.when}</span>
@@ -694,7 +744,7 @@ function recHtml(p, tab) {
   const closed = p.id !== "r9" && txs.length > 0;
   const list = txs.length
     ? `<ul class="txlist">${txs.map((t) => `<li data-open="${t.id}">${svg("lines", "ico ki")}<div class="t"><b>${tl(t)}</b><small>${t.st === "run" ? '<i class="spin"></i> 文字起こし中… · 残り 3 分ほど' : `${t.engine} · 42:10 · 1,240 字`}</small></div><span class="when">${t.when}</span>${svg("chev", "ico chev")}</li>`).join("")}</ul>`
-    : `<div class="txempty"><small>まだありません。右の「ページ」パネルの「文字起こしする」で、同じフォルダに「文字起こし」のページができます</small><button class="btn quiet sm" data-rail="info">${svg("info")}パネルを開く</button></div>`;
+    : `<div class="txempty"><small>まだありません。「ページ」パネルの「文字起こしする」で、同じフォルダに「文字起こし」のページができます</small><button class="btn quiet sm" data-show-panel="page">${svg("info")}パネルを開く</button></div>`;
   return `<h1 class="tt" contenteditable="true" spellcheck="false">${p.t}</h1>
   <div class="recblk"><button class="play" aria-label="再生" data-toast="再生（モック）">${svg("play")}</button><div class="wave" aria-hidden="true"></div><span class="time">00:00 / 42:10</span><span class="tag">2 ファイル</span></div>
   <section class="recinfo${closed ? " closed" : ""}" id="recinfo" aria-label="この録音について">
@@ -741,16 +791,19 @@ function stepHtml(p, tab) {
 }
 
 function noteHtml(p, tab) {
-  const body = {
+  const body = tab.blank ? "" : {
     w1a: `<p>材木座の冬の海は、朝の七時でもまだ青くない。灰色の水面に、サーファーが二人、点のように浮いている。</p><p>海辺の町で冬を過ごすと、海は見るものではなく、天気のように「ある」ものになる。</p>`,
     w1b: `<p>The winter sea at Zaimokuza is not yet blue at seven in the morning. On the grey water, two surfers float like dots.</p><p>Spend a winter in a seaside town and the sea stops being something you look at. It becomes something that is simply there, like the weather.</p>`,
     d1a: `<p>北鎌倉駅 → 円覚寺の総門 → 建長寺の前を通って → 明月院。徒歩で 40 分ほど。</p><p>朝 6 時台は人がいない。総門の前の坂で振り返ると、線路の向こうに朝日。</p>`,
     p2a: `<p>鎌倉が大好きです。</p>`,
   }[tab.id] ?? "";
-  return `<h1 class="tt ph" contenteditable="true" data-ph="無題" spellcheck="false">${p.t}</h1><div class="bd ph" contenteditable="true" data-ph="書きはじめる。「/」でブロック" spellcheck="false">${body}</div>`;
+  return `<h1 class="tt" contenteditable="true" spellcheck="false">${p.t}</h1><div class="bd ph-text" contenteditable="true" data-ph="書きはじめる。「/」でブロック" spellcheck="false">${body}</div>`;
 }
 
+/* 本文: まっさらなタブは空の本文。複製は元のタブの本文。ほかは役割で決まる */
 function bodyHtml(p, tab) {
+  if (tab.blank) return noteHtml(p, tab);
+  if (tab.dupOf) return bodyHtml(p, srcOf(tab));
   const k = kindOf(p);
   return k === "rec" ? recHtml(p, tab) : k === "transcript" ? transcriptHtml(p, tab) : k === "step" ? stepHtml(p, tab) : noteHtml(p, tab);
 }
@@ -764,7 +817,7 @@ function folderHtml(f) {
   ${rows.length ? `<ul class="frows">${rows.join("")}</ul>` : `<div class="empty">まだページがありません</div>`}`;
 }
 
-/* 流れ（段階の帯を右レールへ、縦に）: このフォルダの役割のあるページを順に。今のページを強調。次がまだなら「…（まだ）」 */
+/* 流れ（段階の帯をパネルへ、縦に）: このフォルダの役割のあるページを順に。今のページを強調。次がまだなら「…（まだ）」 */
 function flowHtml(p) {
   const f = folderOf(p);
   const roles = f ? sorted(kidsOf(f)).filter((k) => k.role !== undefined) : [];
@@ -781,14 +834,13 @@ function flowHtml(p) {
   return `<section class="sec"><h3>流れ · ${f.t}</h3><ol class="fl" aria-label="流れ">${li.join("")}</ol></section>`;
 }
 
-/* 右の「ページ」パネル（オーナーの言う「エディタパネル」）: 操作 › 流れ › このタブ */
+/* 「ページ」パネル（オーナーの言う「エディタパネル」）: 操作 › 流れ › このタブ */
 function infoHtml(p, tab) {
   const role = p.role;
-  const roleTxt = role === "rec" ? "録音" : role === "transcript" ? `文字起こし · ${tab.engine}` : typeof role === "number" ? `${RECIPE.name} › ${RECIPE.steps[role]}（${role + 1} / ${RECIPE.steps.length}）` : '<span class="none">なし</span>';
+  const roleTxt = role === "rec" ? "録音" : role === "transcript" ? `文字起こし${tab.engine ? ` · ${tab.engine}` : ""}` : typeof role === "number" ? `${RECIPE.name} › ${RECIPE.steps[role]}（${role + 1} / ${RECIPE.steps.length}）` : '<span class="none">なし</span>';
   const up = []; for (let a = madeFrom(tab); a; a = madeFrom(a)) up.unshift(a);
   const down = madeHere(tab);
   const ts = tabsOf(p);
-  /* 操作: 役割で変わる。タブを足すはどのページにも */
   const acts = [];
   if (role === "rec") acts.push(txBtn());
   else if (role === "transcript") acts.push(startBtn("記事にする"));
@@ -798,7 +850,6 @@ function infoHtml(p, tab) {
     acts.push(`<button class="btn quiet sm" data-make="sibling">${svg("copy")}もう 1 つ作る</button>`);
   } else acts.push(startBtn("ここから作る"));
   acts.push(`<button class="btn quiet sm" data-menu="addtab" aria-haspopup="menu">${svg("tab")}タブを足す${svg("down", "ico dn")}</button>`);
-  /* このタブ */
   const rows = [["役割", roleTxt]];
   if (up.length) rows.push(["何から", `<ol class="lineage">${up.map((a) => `<li><button class="lk" data-open="${a.id}"><span>${fullLabel(a)}</span></button></li>`).join("")}<li><span class="cur">このタブ</span></li></ol>`]);
   if (role === "rec" || role === "transcript" || typeof role === "number") {
@@ -829,17 +880,6 @@ function crumbsHtml(p) {
   return f ? `<button data-open="${f.id}">${svg("folder")}<span>${f.t}</span></button>` : "";
 }
 
-function setRail(r) {
-  rail = r;
-  const p = BY.get(curPage);
-  const folder = !p || p.kind === "folder";
-  $("#dbody").classList.toggle("open", !folder && !!rail);
-  $("#ai").hidden = folder || rail !== "ai";
-  $("#info").hidden = folder || rail !== "info";
-  $("#aitoggle").classList.toggle("on", rail === "ai"); $("#aitoggle").setAttribute("aria-pressed", String(rail === "ai"));
-  $("#infotoggle").classList.toggle("on", rail === "info"); $("#infotoggle").setAttribute("aria-pressed", String(rail === "info"));
-}
-
 /* ページを開く: id はページでもタブでもよい。ページなら最後に見たタブ（初回は 1 つ目） */
 function open(id) {
   const n = BY.get(id);
@@ -856,26 +896,23 @@ function open(id) {
   $("#canvas").innerHTML = folder ? folderHtml(p) : tabsHtml(p, tab) + bodyHtml(p, tab);
   $("#crumbs").innerHTML = crumbsHtml(p);
   $("#loc").innerHTML = crumbsHtml(p);
-  $("#ins").hidden = folder || p.role === "transcript";
+  $("#ins").hidden = folder || (p.role === "transcript" && !tab.blank);
   $("#pubbtn").hidden = folder;
-  $("#aitoggle").hidden = folder;
-  $("#infotoggle").hidden = folder;
   $("#count").hidden = folder;
   $("#ctx").innerHTML = folder ? "" : ctxHtml(p, tab);
-  $("#info-body").innerHTML = folder ? "" : infoHtml(p, tab);
+  $("#info-body").innerHTML = folder ? `<section class="sec"><p class="none">フォルダには操作がありません。ページを開くと、操作・流れ・タブが出ます。</p></section>` : infoHtml(p, tab);
   $("#count").textContent = countOf(tab);
   $("#menu-dots").innerHTML = folder
     ? `<button data-toast="フォルダの中を .zip に書き出します（モック）">${svg("doc")}書き出し<small>.zip</small></button><hr><button class="danger" data-del="${p.id}">${svg("trash")}削除</button>`
     : `<button data-toast="共有のリンク（モック）">${svg("link")}リンクで共有</button><button data-toast="書き出し（モック）">${svg("doc")}書き出し<small>.md · Google ドキュメント</small></button><button data-toast="履歴（モック）">${svg("cal")}履歴</button><hr><button data-make="tab">${svg("tab")}タブを足す</button><button data-toast="並べて開く相手を選びます（モック）">${svg("cols")}並べて開く…</button><button data-toast="移動（モック）">${svg("move")}移動…</button><hr><button class="danger" data-del="${p.id}">${svg("trash")}削除</button>`;
   $("#url").textContent = "/p/" + (tab ? tab.id : p.id);
-  setRail(rail);
   renderList();
-  renderNewMenu();
   $("#ws").dataset.screen = "page";
+  if (mq.matches) { mobilePanel = null; renderLayout(); }
   window.scrollTo(0, 0);
 }
 
-/* 並べて開く: 2 つのタブを横に（スマホは縦）。右のパネルは閉じる */
+/* 並べて開く: 2 つのタブを横に（スマホは縦） */
 function openSplit(a, b) {
   const A = BY.get(a), B = BY.get(b);
   curPage = A.page.id; curTab = a;
@@ -884,29 +921,17 @@ function openSplit(a, b) {
   $("#crumbs").innerHTML = crumbsHtml(A.page);
   $("#loc").innerHTML = crumbsHtml(A.page);
   $("#ins").hidden = true; $("#pubbtn").hidden = true; $("#count").hidden = true;
-  $("#aitoggle").hidden = false; $("#infotoggle").hidden = false;
-  /* 右のパネルは閉じるが、AI・ⓘ で開ける。前に開いていたタブの中身が残らないよう、左のタブ（今のタブ）のものに作り直す */
   $("#ctx").innerHTML = ctxHtml(A.page, A);
   $("#info-body").innerHTML = infoHtml(A.page, A);
-  setRail(null);
   $("#url").textContent = `/p/${a}?with=${b}`;
   renderList();
   $("#ws").dataset.screen = "page";
   window.scrollTo(0, 0);
 }
 
-/* 「新しいページ ▾」: フォルダの中にいるときは「『◯◯』の中に」 */
-function renderNewMenu() {
-  const n = BY.get(curPage);
-  const f = n ? folderOf(n) : null;
-  $("#menu-new").innerHTML = `${f ? `<div class="hd">${svg("folder")}「${f.t}」の中に</div>` : ""}
-    <button data-toast="空のページを作ります（モック）">${svg("doc")}空のページ<small>⌘N</small></button>
-    <button data-toast="録音のページを作ります（モック）">${svg("mic")}録音から</button>
-    <hr><button data-toast="フォルダを作ります（モック）">${svg("folder")}フォルダ</button>`;
-}
-
 /* 固定のメニューの中身（開くときに今のページ・タブで作る） */
 const MENUS = {
+  new: () => { const n = BY.get(curPage); const f = n ? folderOf(n) : null; return `${f ? `<div class="hd">${svg("folder")}「${f.t}」の中に</div>` : ""}<button data-toast="空のページを作ります（モック）">${svg("doc")}空のページ<small>⌘N</small></button><button data-toast="録音のページを作ります（モック）">${svg("mic")}録音から</button><hr><button data-toast="フォルダを作ります（モック）">${svg("folder")}フォルダ</button>`; },
   tx: () => `<div class="hd">同じフォルダの「文字起こし」にタブができます</div><button data-make="tx:Gemini">Gemini<small>既定</small></button><button data-make="tx:Deepgram">Deepgram</button><button data-make="tx:この Mac">この Mac<small>オフライン</small></button>`,
   start: () => `<div class="hd">${svg("spark")}このタブから作る</div><button data-make="run">${svg("spark")}${RECIPE.name}<small>${RECIPE.steps.join(" › ")}</small></button><button data-toast="議事録にする（モック）">議事録にする</button><button data-toast="インサイト整理（モック）">インサイト整理</button><button data-toast="コーチングにする（モック）">コーチングにする</button>`,
   addtab: () => {
@@ -967,7 +992,7 @@ function rolePage(f, role, title) {
 }
 function addTab(p, tab) { p.tabs.push(tab); index(); open(tab.id); return tab; }
 /* 文字起こしの元の録音タブ。録音のタブならそれ自身、文字起こしのタブなら作った元（from）→ 複製元（dupOf）の順にたどる。
-   空のタブ・複製には from が無いので、たどれなければフォルダの録音ページの最初のタブ。それも無ければ null */
+   空のタブ・複製には from が無いので、たどれなければフォルダの録音ページの最初のタブ。それも無ければ null（Codex P2, #288） */
 function recTabOf(n) {
   if (n.page.role === "rec") return n;
   for (let t = n, hops = 0; t && hops < 8; hops++) {
@@ -1018,32 +1043,138 @@ function makeContinue(tab) {
   open(last.id);
   toast(`「${fullLabel(tab)}」から続きを作っています（モック）`);
 }
+/* タブを足す: 空のタブはまっさら（本文なし）。複製は元のタブの本文をそのまま */
 function makeTab(dup) {
   const p = BY.get(curPage), cur = BY.get(curTab);
   const t = { id: "n" + (seq++), t: String(tabsOf(p).length + 1), when: "今" };
-  if (dup) { t.dupOf = cur.id; t.t = `${tl(cur)} のコピー`; }
+  if (dup) { t.dupOf = srcOf(cur).id; t.t = `${tl(cur)} のコピー`; } else t.blank = true;
   addTab(p, t);
-  toast(dup ? "タブを複製しました（モック）" : "タブを足しました（モック）");
+  toast(dup ? "タブを複製しました（モック）" : "空のタブを足しました（モック）");
 }
+
+/* ===== パネルの配置（Cursor のように動かせる）: レールごとの並びと高さの割合 ===== */
+const PANELS = { list: "一覧", ai: "AIと作る", page: "ページ", photos: "写真" };
+const HOME = { list: "left", ai: "right", page: "right", photos: "right" };
+const DEFAULT_LAYOUT = () => ({ left: ["list"], right: ["page", "ai"] });
+let layout = DEFAULT_LAYOUT();
+let sizes = { list: 1, ai: 1, page: 1, photos: 1 };
+let mobilePanel = null;
+const mq = matchMedia("(max-width:720px)");
+const placed = (id) => layout.left.includes(id) || layout.right.includes(id);
+function loadLayout() { try { const s = JSON.parse(localStorage.getItem("mock-layout") || "null"); if (s && s.layout && s.layout.left && s.layout.right) { layout = s.layout; sizes = { ...sizes, ...(s.sizes || {}) }; } } catch {} }
+function saveLayout() { try { localStorage.setItem("mock-layout", JSON.stringify({ layout, sizes })); } catch {} }
+function renderLayout() {
+  const mob = mq.matches;
+  const park = $("#park");
+  for (const id of Object.keys(PANELS)) park.appendChild($("#panel-" + id));
+  for (const side of ["left", "right"]) {
+    const rail = $("#rail-" + side);
+    rail.innerHTML = "";
+    const ids = mob ? (side === "left" ? ["list"] : (mobilePanel ? [mobilePanel] : [])) : layout[side];
+    ids.forEach((id, i) => {
+      if (i) { const s = document.createElement("div"); s.className = "split"; s.dataset.side = side; s.dataset.i = i; s.setAttribute("role", "separator"); s.setAttribute("aria-orientation", "horizontal"); rail.appendChild(s); }
+      const el = $("#panel-" + id); el.style.flex = `${sizes[id]} 1 0`; rail.appendChild(el);
+    });
+    rail.hidden = ids.length === 0;
+    rail.classList.toggle("mob", mob && side === "right" && ids.length > 0);
+  }
+  document.documentElement.style.setProperty("--rw", !mob && layout.right.length ? getComputedStyle(document.documentElement).getPropertyValue("--aiw") : "0px");
+  for (const id of Object.keys(PANELS)) {
+    const b = $("#tg-" + id); if (!b) continue;
+    const on = mob ? mobilePanel === id : placed(id);
+    b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on));
+  }
+}
+function showPanel(id) {
+  if (mq.matches) { mobilePanel = id; renderLayout(); return; }
+  if (!placed(id)) { layout[HOME[id]].push(id); saveLayout(); }
+  renderLayout();
+}
+function togglePanel(id) {
+  if (mq.matches) { mobilePanel = mobilePanel === id ? null : id; renderLayout(); return; }
+  if (placed(id)) hidePanel(id); else showPanel(id);
+}
+function hidePanel(id) {
+  if (mq.matches) { if (mobilePanel === id) mobilePanel = null; renderLayout(); return; }
+  layout.left = layout.left.filter((x) => x !== id); layout.right = layout.right.filter((x) => x !== id);
+  saveLayout(); renderLayout();
+}
+function movePanel(id, side, pos) {
+  layout.left = layout.left.filter((x) => x !== id); layout.right = layout.right.filter((x) => x !== id);
+  if (pos === "top") layout[side].unshift(id); else layout[side].push(id);
+  saveLayout(); renderLayout();
+  toast(`「${PANELS[id]}」を${side === "left" ? "左" : "右"}の${pos === "top" ? "上" : "下"}に置きました`);
+}
+/* ドラッグ: パネルの見出しをつかむと、置き場（各レールの上／下、空のレール）が現れる */
+let dragId = null;
+function placeZones() {
+  const zones = $("#zones"); zones.innerHTML = "";
+  const docR = $("#doc").getBoundingClientRect();
+  for (const side of ["left", "right"]) {
+    const rail = $("#rail-" + side);
+    const others = layout[side].filter((x) => x !== dragId);
+    const r = rail.hidden ? null : rail.getBoundingClientRect();
+    if (others.length && r) {
+      const h = r.height / 2;
+      zones.insertAdjacentHTML("beforeend", `<div class="dz" data-side="${side}" data-pos="top" style="left:${r.left + 6}px;top:${r.top + 6}px;width:${r.width - 12}px;height:${h - 9}px">上に置く</div><div class="dz" data-side="${side}" data-pos="bottom" style="left:${r.left + 6}px;top:${r.top + h + 3}px;width:${r.width - 12}px;height:${h - 9}px">下に置く</div>`);
+    } else {
+      const w = 150;
+      const left = side === "left" ? (r ? r.left + 6 : docR.left + 6) : (r ? r.right - w - 6 : docR.right - w - 6);
+      zones.insertAdjacentHTML("beforeend", `<div class="dz" data-side="${side}" data-pos="top" style="left:${left}px;top:${docR.top + 6}px;width:${w}px;height:${docR.height - 12}px">${side === "left" ? "左" : "右"}のレールに</div>`);
+    }
+  }
+}
+document.addEventListener("dragstart", (e) => {
+  const ph = e.target.closest && e.target.closest(".ph");
+  if (!ph || mq.matches) return;
+  dragId = ph.parentElement.dataset.panel;
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/plain", dragId);
+  document.body.classList.add("dragging");
+  placeZones();
+});
+document.addEventListener("dragend", () => { dragId = null; document.body.classList.remove("dragging"); $("#zones").innerHTML = ""; });
+document.addEventListener("dragover", (e) => { const z = e.target.closest && e.target.closest(".dz"); if (!z || !dragId) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; $$(".dz.over").forEach((x) => x.classList.remove("over")); z.classList.add("over"); });
+document.addEventListener("dragleave", (e) => { const z = e.target.closest && e.target.closest(".dz"); if (z) z.classList.remove("over"); });
+document.addEventListener("drop", (e) => { const z = e.target.closest && e.target.closest(".dz"); if (!z || !dragId) return; e.preventDefault(); movePanel(dragId, z.dataset.side, z.dataset.pos); });
+/* 境目をドラッグして高さを変える */
+document.addEventListener("pointerdown", (e) => {
+  const s = e.target.closest(".split"); if (!s) return;
+  e.preventDefault();
+  const side = s.dataset.side, i = +s.dataset.i, ids = layout[side];
+  const a = $("#panel-" + ids[i - 1]), b = $("#panel-" + ids[i]);
+  const ha = a.getBoundingClientRect().height, hb = b.getBoundingClientRect().height, y0 = e.clientY;
+  const tot = sizes[ids[i - 1]] + sizes[ids[i]];
+  s.classList.add("on");
+  const move = (ev) => { const dy = Math.max(-(ha - 90), Math.min(hb - 90, ev.clientY - y0)); const fa = (ha + dy) / (ha + hb); sizes[ids[i - 1]] = tot * fa; sizes[ids[i]] = tot * (1 - fa); a.style.flex = `${sizes[ids[i - 1]]} 1 0`; b.style.flex = `${sizes[ids[i]]} 1 0`; };
+  const up = () => { s.classList.remove("on"); document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); saveLayout(); };
+  document.addEventListener("pointermove", move); document.addEventListener("pointerup", up);
+});
+document.addEventListener("click", (e) => {
+  const tg = e.target.closest("[data-panel].ib"); if (tg) { togglePanel(tg.dataset.panel); return; }
+  const cl = e.target.closest("[data-close-panel]"); if (cl) { hidePanel(cl.dataset.closePanel); return; }
+  const sp = e.target.closest("[data-show-panel]"); if (sp) { showPanel(sp.dataset.showPanel); return; }
+});
+$("#btn-reset-layout").addEventListener("click", () => { layout = DEFAULT_LAYOUT(); sizes = { list: 1, ai: 1, page: 1, photos: 1 }; try { localStorage.removeItem("mock-layout"); } catch {} mobilePanel = null; renderLayout(); toast("パネルの配置を既定に戻しました"); });
 
 /* ===== 画面の切替（mock 用） ===== */
 const STATES = {
-  rec: () => { rail = "info"; open("r1"); },
-  transcribing: () => { rail = "info"; open("t2"); },
-  transcript: () => { rail = "info"; open("t1"); },
-  step: () => { rail = "ai"; open("s3a"); },
-  two: () => { rail = "info"; open("s3b"); },
-  plan2: () => { rail = "info"; open("s2b"); },
+  rec: () => open("r1"),
+  transcribing: () => open("t2"),
+  transcript: () => open("t1"),
+  step: () => open("s3a"),
+  two: () => open("s3b"),
+  plan2: () => open("s2b"),
   split: () => openSplit("s3a", "s3b"),
-  tabs: () => { rail = "info"; open("w1b"); },
+  tabs: () => open("w1b"),
   folder: () => open("f1"),
-  wrap: () => { rail = "info"; open("r9"); },
+  wrap: () => open("r9"),
 };
 function go(name) {
   closeMenus();
   state = STATES[name] ? name : "rec";
   STATES[state]();
-  $$("#sw button").forEach((b) => b.classList.toggle("on", b.dataset.state === state));
+  $$("#sw button[data-state]").forEach((b) => b.classList.toggle("on", b.dataset.state === state));
   history.replaceState(null, "", "?state=" + state);
 }
 
@@ -1068,8 +1199,6 @@ document.addEventListener("click", (e) => {
   }
   const rn = e.target.closest("[data-rename]");
   if (rn) { closeMenus(); renameTab(rn.dataset.rename); return; }
-  const rl = e.target.closest("[data-rail]");
-  if (rl) { setRail(rl.dataset.rail); return; }
   const c = e.target.closest("[data-close]");
   if (c) $("#" + c.dataset.close).classList.remove("open");
   const t = e.target.closest("[data-toast]");
@@ -1168,29 +1297,24 @@ document.addEventListener("click", (e) => {
 });
 $$(".veil").forEach((v) => v.addEventListener("click", (e) => { if (e.target === v) v.classList.remove("open"); }));
 
-/* 検索（見た目だけ）・一覧のしまう／出す・右のパネル・スマホ */
+/* 検索（見た目だけ）・スマホ・字数 */
 $("#btn-search").addEventListener("click", () => toast("検索（モック）"));
 const ws = $("#ws");
-function setSidebar(openSb) { ws.classList.toggle("nosb", !openSb); $("#btn-expand").hidden = openSb; $("#brand-hd").hidden = openSb; }
-$("#btn-collapse").addEventListener("click", () => setSidebar(false));
-$("#btn-expand").addEventListener("click", () => setSidebar(true));
-$("#btn-list").addEventListener("click", () => (ws.dataset.screen = "list"));
-const mq = matchMedia("(max-width:720px)");
-function onMq() { $("#btn-list").hidden = !mq.matches; if (mq.matches) setSidebar(true); }
-mq.addEventListener("change", onMq); onMq();
-$("#aitoggle").addEventListener("click", () => setRail(rail === "ai" ? null : "ai"));
-$("#infotoggle").addEventListener("click", () => setRail(rail === "info" ? null : "info"));
-$("#info-close").addEventListener("click", () => setRail(null));
-$("#count").addEventListener("click", () => setRail("info"));
+$("#btn-list").addEventListener("click", () => { mobilePanel = null; renderLayout(); ws.dataset.screen = "list"; });
+function onMq() { $("#btn-list").hidden = !mq.matches; renderLayout(); }
+mq.addEventListener("change", onMq);
+$("#count").addEventListener("click", () => showPanel("page"));
 
 let tt;
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(tt); tt = setTimeout(() => t.classList.remove("show"), 2200); }
 
 /* ===== URL の指定（確認用） ===== */
 const q = new URLSearchParams(location.search);
+loadLayout();
+onMq();
 go(q.get("state") || "rec");
-if (q.get("sb") === "closed") setSidebar(false);
 if (q.get("screen")) ws.dataset.screen = q.get("screen");
+if (q.get("layout") === "default") { layout = DEFAULT_LAYOUT(); renderLayout(); }
 </script>
 </body>
 </html>
