@@ -33,8 +33,16 @@ jobs:
           persist-credentials: false
       - name: Test candidate DATA protocol with synthetic inputs
         run: python3 -m unittest discover -s scripts/editor-candidate -p '*_test.py'
-      - name: Check the build wrapper
+      - name: Check the build wrapper and the owner-side signing script
         run: shellcheck scripts/editor-candidate/*.sh
+      - name: The owner-side signing script refuses a malformed candidate tag before touching the network
+        run: |
+          set -euo pipefail
+          bash scripts/editor-candidate/sign-and-publish.sh --help >/dev/null
+          if bash scripts/editor-candidate/sign-and-publish.sh not-a-candidate-tag 2>"$RUNNER_TEMP/err"; then
+            echo "expected a malformed tag to be refused"; exit 1
+          fi
+          grep -q "候補の tag の形ではありません" "$RUNNER_TEMP/err"
 
   plan:
     needs: tests

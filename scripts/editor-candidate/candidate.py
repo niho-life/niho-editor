@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build-plan and DATA-only verification for the public NIHO editor candidate."""
+"""Build-plan and DATA-only verification for the public NIHO editor candidate.
+
+plan / verify / validate run in the public workflow. recheck runs on the owner's Mac before signing
+(scripts/editor-candidate/sign-and-publish.sh): validate, then re-derive the tar inventory and run the
+codesign / dmg checks on the downloaded bytes, without trusting the receipt the workflow produced.
+"""
 from __future__ import annotations
 
 import argparse
@@ -524,6 +529,32 @@ def command_validate(args: argparse.Namespace) -> dict[str, Any]:
     return manifest
 
 
+def command_recheck(args: argparse.Namespace) -> dict[str, Any]:
+    """The owner's last check before signing: validate, then look at the bytes again on this Mac.
+
+    The receipt says what the fresh CI Mac saw. Here the tar is expanded again, its inventory is rebuilt and
+    compared with the receipt, codesign runs on the expanded app, and the dmg is mounted read-only and compared
+    with the tar. Nothing inside the candidate is executed. A tampered workflow can forge a receipt, not these bytes.
+    """
+    manifest = command_validate(args)
+    directory = Path(args.directory).resolve()
+    receipt = read_json_file(directory / MAC_NAME, "mac_receipt", canonical=True)
+    with tempfile.TemporaryDirectory(prefix="editor-candidate-recheck-") as temporary:
+        scratch = Path(temporary)
+        tar_proof = inspect_tar(directory / TAR_NAME, args.version, scratch / "tar")
+        require(
+            tar_proof["inventorySha256"] == receipt.get("inventorySha256")
+            and tar_proof["fileCount"] == receipt.get("files")
+            and tar_proof["expandedBytes"] == receipt.get("expandedBytes"),
+            "recheck",
+            "InventoryMismatch",
+        )
+        verify_codesign(scratch / "tar" / f"{APP_NAME}.app")
+        dmg_proof = verify_dmg(directory / DMG_NAME, scratch, args.version, tar_proof["inventory"])
+        require(dmg_proof == receipt.get("dmg"), "recheck", "DmgProofMismatch")
+    return manifest
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser()
     commands = root.add_subparsers(dest="command", required=True)
@@ -544,12 +575,14 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--run-id", required=True)
         command.add_argument("--run-attempt", required=True)
     validate = commands.add_parser("validate")
-    validate.add_argument("--directory", required=True)
-    validate.add_argument("--version", required=True)
-    validate.add_argument("--source-sha", required=True)
-    validate.add_argument("--controller-sha", required=True)
-    validate.add_argument("--run-id", required=True)
-    validate.add_argument("--run-attempt", required=True)
+    recheck = commands.add_parser("recheck")
+    for command in (validate, recheck):
+        command.add_argument("--directory", required=True)
+        command.add_argument("--version", required=True)
+        command.add_argument("--source-sha", required=True)
+        command.add_argument("--controller-sha", required=True)
+        command.add_argument("--run-id", required=True)
+        command.add_argument("--run-attempt", required=True)
     return root
 
 
@@ -560,6 +593,8 @@ def main(argv: list[str]) -> int:
             command_plan(args)
         elif args.command == "verify":
             command_verify(args)
+        elif args.command == "recheck":
+            command_recheck(args)
         else:
             command_validate(args)
         return 0

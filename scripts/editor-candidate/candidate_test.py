@@ -74,12 +74,19 @@ def make_tar(file: Path, *, bad: str | None = None) -> None:
             archive.addfile(info, io.BytesIO(b"bad"))
 
 
-def validated_fixture(directory: Path) -> dict:
+def validated_fixture(directory: Path, *, real_tar: bool = False, receipt_overrides: dict | None = None) -> dict:
+    """A validated directory. `real_tar` writes a real app tar (make_tar) and a receipt that matches its inventory,
+    so recheck can expand it; otherwise the tar is synthetic bytes and the receipt carries placeholder hashes."""
     (directory / candidate.DMG_NAME).write_bytes(b"synthetic dmg")
-    (directory / candidate.TAR_NAME).write_bytes(b"synthetic tar")
+    if real_tar:
+        make_tar(directory / candidate.TAR_NAME)
+        proof = candidate.inspect_tar(directory / candidate.TAR_NAME, VERSION)
+        inventory_hash, files, expanded = proof["inventorySha256"], proof["fileCount"], proof["expandedBytes"]
+    else:
+        (directory / candidate.TAR_NAME).write_bytes(b"synthetic tar")
+        inventory_hash, files, expanded = "c" * 64, 3, 12
     dmg = candidate.asset_record(directory / candidate.DMG_NAME, candidate.DMG_NAME)
     tar = candidate.asset_record(directory / candidate.TAR_NAME, candidate.TAR_NAME)
-    inventory_hash = "c" * 64
     receipt = {
         "schemaVersion": 1,
         "repository": candidate.REPOSITORY,
@@ -91,11 +98,12 @@ def validated_fixture(directory: Path) -> dict:
         "tarSha256": tar["sha256"],
         "dmgSha256": dmg["sha256"],
         "inventorySha256": inventory_hash,
-        "files": 3,
-        "expandedBytes": 12,
+        "files": files,
+        "expandedBytes": expanded,
         "checks": ["tar-safe-data", "tar-codesign", "dmg-readonly-nobrowse", "dmg-tar-inventory", "dmg-codesign"],
         "dmg": {"format": "UDZO", "inventorySha256": inventory_hash},
     }
+    receipt.update(receipt_overrides or {})
     (directory / candidate.MAC_NAME).write_bytes(candidate.stable_json_bytes(receipt))
     values = {"version": VERSION, "sourceSha": SOURCE_SHA, "controllerSha": CONTROLLER_SHA, "runId": RUN_ID, "runAttempt": RUN_ATTEMPT}
     build = {
@@ -178,6 +186,58 @@ class CandidateTest(unittest.TestCase):
                     target.write(b" ")
                 with self.assertRaises(candidate.CandidateError):
                     candidate.command_validate(validate_args(directory))
+
+    def test_recheck_expands_the_tar_again_and_runs_the_mac_checks_on_the_downloaded_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            manifest = validated_fixture(directory, real_tar=True)
+            receipt = json.loads((directory / candidate.MAC_NAME).read_bytes())
+            seen: dict[str, object] = {}
+
+            def codesign(app: Path) -> None:
+                # 展開した .app に対して、展開が終わった後に呼ばれる（中の binary は実行しない）
+                seen["app"] = app.name
+                seen["plist"] = (app / "Contents/Info.plist").is_file()
+
+            def dmg(path: Path, scratch: Path, version: str, inventory: list) -> dict:
+                seen["dmg"] = (path, version, [entry["path"] for entry in inventory], scratch.is_dir())
+                return {"format": "UDZO", "inventorySha256": receipt["inventorySha256"]}
+
+            with mock.patch.object(candidate, "verify_codesign", side_effect=codesign), mock.patch.object(candidate, "verify_dmg", side_effect=dmg):
+                self.assertEqual(candidate.command_recheck(validate_args(directory)), manifest)
+            self.assertEqual((seen["app"], seen["plist"]), (f"{candidate.APP_NAME}.app", True))
+            # command_recheck は directory を resolve する（macOS の一時ディレクトリは /var → /private/var）
+            self.assertEqual(seen["dmg"][:2], ((directory / candidate.DMG_NAME).resolve(), VERSION))
+            self.assertEqual(seen["dmg"][2], ["Contents/Info.plist", f"Contents/MacOS/{candidate.APP_NAME}", f"Contents/MacOS/{candidate.SIDECAR}"])
+
+    def test_recheck_rejects_a_receipt_that_does_not_match_the_bytes(self) -> None:
+        # receipt の inventory が tar と合わない（CI 側の検証や receipt が改ざんされていた）: codesign まで進まない
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            validated_fixture(directory, real_tar=True, receipt_overrides={"files": 99})
+            with mock.patch.object(candidate, "verify_codesign") as codesign, mock.patch.object(candidate, "verify_dmg"), self.assertRaises(candidate.CandidateError) as caught:
+                candidate.command_recheck(validate_args(directory))
+            self.assertEqual((caught.exception.stage, caught.exception.kind), ("recheck", "InventoryMismatch"))
+            codesign.assert_not_called()
+        # dmg の中身が receipt と合わない
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            validated_fixture(directory, real_tar=True)
+            with mock.patch.object(candidate, "verify_codesign"), mock.patch.object(candidate, "verify_dmg", return_value={"format": "UDZO", "inventorySha256": "0" * 64}), self.assertRaises(candidate.CandidateError) as caught:
+                candidate.command_recheck(validate_args(directory))
+            self.assertEqual((caught.exception.stage, caught.exception.kind), ("recheck", "DmgProofMismatch"))
+        # validate が先: 4 つのファイルの hash が manifest と合わなければ、Mac の検査に進まない
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            validated_fixture(directory, real_tar=True)
+            (directory / candidate.DMG_NAME).write_bytes(b"tampered")
+            with mock.patch.object(candidate, "verify_codesign") as codesign, self.assertRaises(candidate.CandidateError):
+                candidate.command_recheck(validate_args(directory))
+            codesign.assert_not_called()
+
+    def test_recheck_is_a_command(self) -> None:
+        args = candidate.parser().parse_args(["recheck", "--directory", "d", "--version", VERSION, "--source-sha", SOURCE_SHA, "--controller-sha", CONTROLLER_SHA, "--run-id", RUN_ID, "--run-attempt", RUN_ATTEMPT])
+        self.assertEqual(args.command, "recheck")
 
 
 if __name__ == "__main__":
