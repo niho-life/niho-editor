@@ -8,7 +8,7 @@
 
 | 資源 | 名前（既定） | 内容 |
 | --- | --- | --- |
-| Cloud Run サービス | `niho-editor` | 画面、`/api/pages`、公開 API `/v1/*`。誰でも呼べる（ログインはアプリの中）。min 0 / max 2、`EDITOR_AUTH_MODE` は `deploy.env` の値（既定 `niho`。§13）。要求の時間切れは 300 秒（AI の 1 回の呼び出しは 120 秒まで。§10） |
+| Cloud Run サービス | `niho-editor` | 画面、`/api/pages`、公開 API `/v1/*`。誰でも呼べる（ログインはアプリの中）。min 0 / max 2、`EDITOR_AUTH_MODE` は `deploy.env` の値（既定 `niho`。§13）。要求の時間切れは 300 秒。ただし手順（§11）が有効なら 1,560 秒、文字起こし（§12）が有効ならその時間切れ ＋ 2 分で、どちらも有効なら長い方（AI の 1 回の呼び出しは 120 秒まで。§10） |
 | Cloud Run ジョブ | `niho-editor-migrate` | 配備のたびに 1 回。migration の適用と、アプリ用ロールの作成・権限付与 |
 | Cloud SQL | 既存の共有インスタンスに データベース `niho_editor` | ロール 2 つ: `niho_editor_migrate`（表の所有者。migrate ジョブだけが使う）と `niho_editor_app`（DML だけ。DDL と migration の記録の書き換えは不可） |
 | GCS | 資産バケット（private） | 均一なバケットレベルのアクセス、公開アクセス禁止。実行 ID は作成と閲覧だけ（削除・上書き不可） |
@@ -47,6 +47,7 @@
 | `EDITOR_AI_MODE` | `anthropic` | 同上。版が無ければ渡さない（AI は 503 のまま） |
 | `EDITOR_AI_MODEL` | `AI_MODEL`（既定 `claude-sonnet-5-5`） | 同上 |
 | `EDITOR_AI_MONTHLY_LIMIT_USD` | `AI_MONTHLY_LIMIT_USD`（既定 `10`） | 同上。1 人・1 か月の上限（見込みの USD） |
+| `EDITOR_AI_MAX_TOKENS` | `AI_MAX_TOKENS`（既定 `32000`） | 同上。1 回のモデル呼び出しの出力の上限（トークン。思考の分を含む。256〜32000）。アプリの既定は 12,000 だが、配備は 32,000 を渡す（#276。§10） |
 
 手順（#37）の `EDITOR_STEPS_*` は `STEPS_MODE=cloud-tasks` のときだけ足す（§11）。
 
@@ -144,7 +145,8 @@ AI（チャット・手順の段階・翻訳）は Anthropic の Messages API（
 | `deploy.env` | 既定（推奨） | 渡る環境変数 | 理由 |
 | --- | --- | --- | --- |
 | `AI_MODEL` | `claude-sonnet-5-5` | `EDITOR_AI_MODEL` | 文を整える・要約・見出しには十分な品質で、Opus 系の約半額（入力 $2・出力 $10／100 万トークン）。docs-core の単価表にあり、見込み金額が出る |
-| `AI_MONTHLY_LIMIT_USD` | `10` | `EDITOR_AI_MONTHLY_LIMIT_USD` | 1 人・1 か月の見込みの上限。短い依頼の 1 往復は $0.01 前後、出力が上限まで出るいちばん悪い 1 回の呼び出し（出力 12,000 トークン）でも約 $0.13 なので、普段使いでは届かず、誤用や暴走は止まる |
+| `AI_MONTHLY_LIMIT_USD` | `10` | `EDITOR_AI_MONTHLY_LIMIT_USD` | 1 人・1 か月の見込みの上限。短い依頼の 1 往復は $0.01 前後、出力が上限まで出るいちばん悪い 1 回の呼び出し（出力 32,000 トークン）でも約 $0.33 なので、普段使いでは届かず、誤用や暴走は止まる |
+| `AI_MAX_TOKENS` | `32000` | `EDITOR_AI_MAX_TOKENS` | 1 回の出力の上限（思考の分を含む）。アプリの既定は 12,000 で、渡さないと手順の「軽量」（32,000。`apps/editor-web/src/steps/profile.ts`）がその値に切られ、長い文字起こしの修正が 12,000 ごとの「続き」（8 回まで）で繋ぐ形になって `output_too_long` で失敗しやすくなる（#276）。256〜32000 の整数だけ受ける（範囲の外は配備前に止める。アプリは黙って丸めるため）。空なら 32,000 |
 
 会話（AI チャット）はページごとに DB（`ai_conversations`・`ai_messages`・`ai_message_changes`。migration 0022・0025）に残る。残すのは頼んだこと・返答・作業の要約（道具とページの名前と成否、`edit_page` が直した段落の番号）・書き換えで残った版の番号だけで（以前の提案の発言も履歴として読める）、**鍵・プロンプト・モデルへ送った文は残さない**。ページを消せば会話も消える。GCP の追加の資源は無い。
 
@@ -159,9 +161,9 @@ AI（チャット・手順の段階・翻訳）は Anthropic の Messages API（
 （開いているページと同じフォルダの直下のほかのページ。サブページは入れない）。参考は 1 枚 4,000 字・合わせて 16,000 字まで
 入れ、それを超えた分は名前だけにする（手順の段階が使う。チャットは同じフォルダのページを道具で読む）。
 
-**チャット（自由入力）は AI がページを直接書き換える。** 道具は `list_pages`（字数と revision つき）・`read_page`（段落の番号つき。`from`・`to` で範囲）・`edit_page`（1 か所だけの部分置換）・`write_page`（全体の書き直し）・`create_page`・`search_transcript`（録音の文字起こしを語句で探す。時刻・話者・前後 200 字）。**書き込みは AI が読んだ版（`base_revision`）が今の版と同じときだけ**で、違えば「本文が変わっています」と返して読み直させる（#278）。1 回の依頼の上限は**道具 40 回・書き込み 20 回・10 分**（往復は道具の上限＋1 回）で、超えたら書いた分を残して止まる（`max_tools`・`max_writes`・`max_time`）。触れるのは「開いているページ・その親・そのサブページ」だけ（同じフォルダのほかのページは読むだけ）。書く前の本文は必ず版（`ai`）に残り、画面の「元に戻す」で戻せる。1 回の依頼で何度か往復するので、往復のたびに月の上限を見て、上限以上はその場で止める。**出力の上限で切れた往復の道具は実行しない**（引数が途中で切れた write で本文を欠けさせないため）。長いページは `edit_page` で一部だけ直せるので、`EDITOR_AI_MAX_TOKENS`（既定 12,000 トークン）に本文の全体が収まらなくても直せる（`write_page` で丸ごと書き換えるのは収まる長さだけ）。**10 分の上限は Cloud Run の要求の時間切れ（300 秒）より長い**ので、今は 300 秒で要求ごと切れうる（書いた分と版は残る）。worker（Cloud Tasks）へ移すのは後段。
+**チャット（自由入力）は AI がページを直接書き換える。** 道具は `list_pages`（字数と revision つき）・`read_page`（段落の番号つき。`from`・`to` で範囲）・`edit_page`（1 か所だけの部分置換）・`write_page`（全体の書き直し）・`create_page`・`search_transcript`（録音の文字起こしを語句で探す。時刻・話者・前後 200 字）。**書き込みは AI が読んだ版（`base_revision`）が今の版と同じときだけ**で、違えば「本文が変わっています」と返して読み直させる（#278）。1 回の依頼の上限は**道具 40 回・書き込み 20 回・10 分**（往復は道具の上限＋1 回）で、超えたら書いた分を残して止まる（`max_tools`・`max_writes`・`max_time`）。触れるのは「開いているページ・その親・そのサブページ」だけ（同じフォルダのほかのページは読むだけ）。書く前の本文は必ず版（`ai`）に残り、画面の「元に戻す」で戻せる。1 回の依頼で何度か往復するので、往復のたびに月の上限を見て、上限以上はその場で止める。**出力の上限で切れた往復の道具は実行しない**（引数が途中で切れた write で本文を欠けさせないため）。長いページは `edit_page` で一部だけ直せるので、`EDITOR_AI_MAX_TOKENS`（配備の既定 32,000 トークン）に本文の全体が収まらなくても直せる（`write_page` で丸ごと書き換えるのは収まる長さだけ）。**10 分の上限は、要求の時間切れが 300 秒のまま（手順 `STEPS_MODE` が無効）だとそれより長い**ので、要求ごと切れうる（書いた分と版は残る）。手順が有効なら要求の時間切れは 1,560 秒（§11）なので 10 分に収まる。worker（Cloud Tasks）へ移すのは後段。
 
-1 回の呼び出しの時間切れ（`EDITOR_AI_TIMEOUT_MS`、既定 120 秒）と出力の上限（`EDITOR_AI_MAX_TOKENS`、既定 12,000 トークン。思考の分を含む）は `deploy.sh` から渡さない（アプリの既定のまま）。Cloud Run の要求の時間切れはそれに合わせて 300 秒。自動の再試行はしない。チャットは上流の失敗（401・429・529・5xx・時間切れ）を `failed`（`ai_auth`・`ai_rate_limit` などの短い code）で終える。
+1 回の呼び出しの時間切れ（`EDITOR_AI_TIMEOUT_MS`、既定 120 秒）は `deploy.sh` から渡さない（アプリの既定のまま）。出力の上限（`EDITOR_AI_MAX_TOKENS`。思考の分を含む）は上の表の `AI_MAX_TOKENS` から渡す（#276）。Cloud Run の要求の時間切れは 300 秒を土台に、手順（§11）や文字起こし（§12）が有効なら、その 1 回分が収まる長さまで延ばす（`lib.sh` の `service_request_timeout`）。自動の再試行はしない。チャットは上流の失敗（401・429・529・5xx・時間切れ）を `failed`（`ai_auth`・`ai_rate_limit` などの短い code）で終える。
 
 ### 有効にする
 
@@ -231,6 +233,19 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 | `EDITOR_STEPS_WORKER_URL` | サービスの run.app の URL（独自ドメインではない。OIDC の audience にも使う） |
 | `EDITOR_STEPS_INVOKER_SA` | `niho-editor-tasks@<project>.iam.gserviceaccount.com` |
 
+### 時間切れ（要求・task・AI の予算）
+
+1 つの段階は、worker の route への **1 回の要求の中**で最後まで走ります（続きを頼んだ分だけモデルの往復は増える）。いちばん短いのが AI の予算で、**予算が先に尽きれば段階が失敗として記録され**（`step_time_limit`。読めた途中の本文だけ残す）、Cloud Run に要求ごと切られて `running` のまま掃除を待つことがありません（#276）:
+
+| 上限 | 値 | 決める所 |
+| --- | --- | --- |
+| 1 回のモデル呼び出し | 120 秒（既定） | `EDITOR_AI_TIMEOUT_MS` |
+| 1 段階の AI の総実行予算 | 24 分（1,440 秒） | `MAX_STEP_GENERATION_MS`（`apps/editor-web/src/steps/ai-executor.ts`） |
+| Cloud Run の 1 要求 | 予算 ＋ 2 分（1,560 秒）。文字起こしも有効なら長い方。上限は 3,600 秒（Cloud Run の決まり） | `deploy.sh` の `--timeout`（`lib.sh` の `service_request_timeout`。`STEPS_GENERATION_BUDGET_SEC` と `STEPS_TIMEOUT_MARGIN_SEC`） |
+| 1 つの task（`dispatchDeadline`） | 30 分（1,800 秒。Cloud Tasks の上限） | `DISPATCH_DEADLINE_SECONDS`（`apps/editor-web/src/steps/cloud-tasks.ts`） |
+
+要求（1,560 秒）は task の期限（1,800 秒）より短く、予算（1,440 秒）より長い。予算を変えるときは `lib.sh` の `STEPS_GENERATION_BUDGET_SEC` も合わせる（`lib-test.sh` が値を検査する）。
+
 ### 有効にする
 
 1. `scripts/editor-deploy/gcp-bootstrap.sh resources`（中で `steps-infra.sh` を呼ぶ。`scripts/editor-deploy/steps-infra.sh` だけでもよい）: API・キュー・サービスアカウント・権限・Scheduler を冪等に作る（あるものは更新）。Scheduler は作った時から 5 分おきに呼ぶが、次の 2 つが済むまでは worker の route が 404 を返す（ジョブの失敗として残るだけで、再試行しない）。
@@ -268,8 +283,8 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 ### 制約
 
 - 続きが終わらずに失敗した段階は、**そこまでに書けた本文を `StepError.partial` で運ぶ**（払った分を捨てないため）。記録（`step_attempts.partial_blocks`。#138）には残すが、**サブページの本文には書かず、ログにも code にも出さない**（中途半端な文書が黙って入る方が、はっきり失敗するより悪い）。
-- **出力が `EDITOR_AI_MAX_TOKENS`（既定 12,000）で切れたら、同じ答えの続きを書かせて繋ぐ**（旧 NIHO docs と同じ。続きは 8 回まで、重なりは 400 字まで除く。docs-core の `MAX_CONTINUATIONS`・`joinContinuation`）。続きの 1 回ずつも使用量に数え、月の上限は続きの前にも見る（上限に達したらそこで止める）。8 回で終わらなければ `output_too_long` で失敗し、**途中まで書けた文書はページに書かない**。
-- 1 つの段階は 1 回の要求（続きを頼んだ分だけ往復は増える）。今の `deploy.sh` の Cloud Run の要求の上限（`lib.sh` の `service_request_timeout`。既定 300 秒）を超える段階は途中で切れる（Cloud Tasks が再試行し、lease が切れれば掃除が拾う）。1 回のモデルの呼び出しの時間切れは `EDITOR_AI_TIMEOUT_MS`（既定 120 秒）なので、今の 300 秒に収まる。長い資料で足りなくなったら、要求の上限を段階の長さに合わせて上げる（上限は task の 30 分）。
+- **出力が `EDITOR_AI_MAX_TOKENS`（配備の既定 32,000。アプリの既定は 12,000）で切れたら、同じ答えの続きを書かせて繋ぐ**（旧 NIHO docs と同じ。続きは 8 回まで、重なりは 400 字まで除く。docs-core の `MAX_CONTINUATIONS`・`joinContinuation`）。続きの 1 回ずつも使用量に数え、月の上限は続きの前にも見る（上限に達したらそこで止める）。8 回で終わらなければ `output_too_long` で失敗し、**途中まで書けた文書はページに書かない**。
+- 1 つの段階は 1 回の要求（続きを頼んだ分だけ往復は増える）。Cloud Run の要求の上限（`lib.sh` の `service_request_timeout`）は、手順が有効なら 1,560 秒（24 分の予算 ＋ 2 分。上の「時間切れ」の表）で、段階は自分の予算が先に尽きて失敗になる（要求ごと切られない）。1 回のモデルの呼び出しの時間切れは `EDITOR_AI_TIMEOUT_MS`（既定 120 秒）。予算を超える長さの段階は作れない（上限は task の 30 分）。
 
 ## 12. 文字起こし（#36）
 
@@ -388,7 +403,7 @@ Cloud Scheduler niho-editor-transcribe-sweep ── 5 分おき POST /api/intern
 | 上限 | 値 | 決める所 |
 | --- | --- | --- |
 | エンジンの時間切れ | `TRANSCRIBE_TIMEOUT_SEC`（既定 1200 秒） | `EDITOR_TRANSCRIBE_TIMEOUT_SEC`。`executeRun` の `AbortSignal` |
-| Cloud Run の 1 要求 | 時間切れ ＋ 2 分（既定 1320 秒。`TRANSCRIBE_MODE` が空なら 300 秒。上限 3600 秒） | `deploy.sh` の `--timeout`（`lib.sh` の `service_request_timeout`） |
+| Cloud Run の 1 要求 | 時間切れ ＋ 2 分（既定 1320 秒。`TRANSCRIBE_MODE` が空なら 300 秒。上限 3600 秒）。手順（§11）も有効なら 1560 秒との長い方 | `deploy.sh` の `--timeout`（`lib.sh` の `service_request_timeout`） |
 | 1 つの task（`dispatchDeadline`） | 時間切れ ＋ 2 分（上限 1800 秒＝Cloud Tasks の決まり） | アプリが積むときに（`src/transcription/cloud-tasks.ts`） |
 | 掃除が取り残しと見なす | 時間切れ ＋ 5 分 | `src/server/transcription-worker-api.ts` の `STALE_MARGIN_SECONDS` |
 | 消した task の名前が空くまで | 最大 24 時間（Cloud Tasks の決まり） | 待たずに済むよう、掃除は積む前に run の世代を 1 つ進める（`requeueRun`） |
