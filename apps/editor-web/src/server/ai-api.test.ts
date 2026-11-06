@@ -1,112 +1,28 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_EDITOR_SETTINGS, type AdoptionInput, type AiConversationSummary, type AiMessage, type AiTurnInput, type AiUsageDelta, type AiUsageTotals, type Block, type CreatePageInput, type EditorSettings, type Page, type PagePatch, type PageVersionSummary, type SaveOptions, type SaveResult, type VersionReason } from "@niho/editor-store";
-import { AnthropicError, createAnthropicModel } from "../ai/anthropic";
-import { resolveAiBackend, type AiBackend } from "../ai/config";
-import type { Proposal } from "../ai/engine";
-import type { AiModel, AiRequest, AiUsageReport } from "../ai/model";
+import type { AiConversation, AiConversationSummary, AiMessage, AiUsageSource, AiUsageTotals } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
-import {
-  adoptAiProposal,
-  createAiProposal,
-  recordDeviceProposal,
-  getAiConversation,
-  getAiUsageSummary,
-  listAiConversations,
-  type AiApiDeps,
-  type AiConversationStore,
-  type AiPagesStore,
-  type AiUsageStore,
-  type UsageSummary,
-} from "./ai-api";
-import { MAX_BODY_BYTES } from "./http";
+import { getAiConversation, getAiUsageSummary, listAiConversations, type AiApiDeps, type AiConversationStore, type AiUsageStore, type UsageSummary } from "./ai-api";
+
+/**
+ * 会話の読み出しと使用量の API（提案 → 採用の API は #278 で外した）。合成の値だけを使う。
+ */
 
 const ORIGIN = "http://editor.test";
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NOW = new Date("2026-10-15T03:00:00Z");
 const MONTH = "2026-10";
 
-type Row = Page & { owner: string; deleted: boolean };
-type VersionRow = { pageId: string; version: number; reason: VersionReason; blocks: Block[] };
-
-/** owner ごとに分けた、メモリの中だけの合成の store（EditorStore と同じ約束: 該当なしは null、revision の不一致は conflict）。 */
-function memoryStore() {
-  const rows = new Map<string, Row>();
-  const versions: VersionRow[] = [];
-  /** 呼ばれた更新の順（版を残す → 保存 の順を確かめる）。 */
-  const writes: string[] = [];
-  const visible = (owner: string, id: string) => {
-    if (!UUID.test(id)) return null;
-    const row = rows.get(id);
-    return row && row.owner === owner && !row.deleted ? row : null;
-  };
-  const strip = (row: Row): Page => {
-    const page: Partial<Row> = structuredClone(row);
-    delete page.owner;
-    delete page.deleted;
-    return page as Page;
-  };
-  const store = {
-    rows,
-    versions,
-    writes,
-    async createPage(owner: string, input: CreatePageInput = {}): Promise<Page> {
-      const now = new Date().toISOString();
-      const page: Page = { id: randomUUID(), kind: input.kind ?? "note", title: input.title ?? "", lang: input.lang ?? "ja", blocks: input.blocks ?? [], cover: null, lead: null, parent: null, recipe: null, stepStatus: null, sortOrder: 0, revision: 1, createdAt: now, updatedAt: now };
-      rows.set(page.id, { ...structuredClone(page), owner, deleted: false });
-      return page;
-    },
-    async getPage(owner: string, id: string): Promise<Page | null> {
-      const row = visible(owner, id);
-      return row ? strip(row) : null;
-    },
-    async savePage(owner: string, id: string, patch: PagePatch, options: SaveOptions): Promise<SaveResult | null> {
-      writes.push("savePage");
-      const row = visible(owner, id);
-      if (!row) return null;
-      if (row.revision !== options.baseRevision) return { status: "conflict", page: strip(row) };
-      Object.assign(row, structuredClone(patch), { revision: row.revision + 1, updatedAt: new Date().toISOString() });
-      return { status: "saved", page: strip(row) };
-    },
-    async createVersion(owner: string, id: string, reason: VersionReason): Promise<PageVersionSummary | null> {
-      writes.push(`createVersion:${reason}`);
-      const row = visible(owner, id);
-      if (!row) return null;
-      const version = (versions.filter((item) => item.pageId === id).at(-1)?.version ?? 0) + 1;
-      versions.push({ pageId: id, version, reason, blocks: structuredClone(row.blocks) });
-      return { version, reason, createdAt: new Date().toISOString(), blockCount: row.blocks.length };
-    },
-  };
-  return store satisfies AiPagesStore;
-}
-
-type MemoryStore = ReturnType<typeof memoryStore>;
-
-/** owner・月ごとの使用量（recordAiUsage と同じ約束: 足した後の合計を返す）。 */
+/** owner・月ごとの使用量（経路ごと）。 */
 function memoryUsage() {
   const rows = new Map<string, AiUsageTotals>();
-  const zero = (owner: string, month: string): AiUsageTotals => ({ owner, month, source: "server", requests: 0, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 });
+  const zero = (owner: string, month: string, source: AiUsageSource): AiUsageTotals => ({ owner, month, source, requests: 0, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 });
   const usage = {
     rows,
-    async get(owner: string, month: string): Promise<AiUsageTotals> {
-      return { ...(rows.get(`${owner}/${month}`) ?? zero(owner, month)) };
+    async get(owner: string, month: string, source: AiUsageSource = "server"): Promise<AiUsageTotals> {
+      return { ...(rows.get(`${owner}/${month}/${source}`) ?? zero(owner, month, source)) };
     },
-    async record(owner: string, month: string, delta: AiUsageDelta): Promise<AiUsageTotals> {
-      const current = rows.get(`${owner}/${month}`) ?? zero(owner, month);
-      const next = {
-        owner,
-        month,
-        source: "server" as const,
-        requests: current.requests + delta.requests,
-        inputTokens: current.inputTokens + delta.inputTokens,
-        outputTokens: current.outputTokens + delta.outputTokens,
-        costMicroUsd: current.costMicroUsd + delta.costMicroUsd,
-      };
-      rows.set(`${owner}/${month}`, next);
-      return { ...next };
-    },
-    seed(owner: string, month: string, costMicroUsd: number) {
-      rows.set(`${owner}/${month}`, { ...zero(owner, month), requests: 1, costMicroUsd });
+    seed(owner: string, month: string, totals: Partial<AiUsageTotals>, source: AiUsageSource = "server") {
+      rows.set(`${owner}/${month}/${source}`, { ...zero(owner, month, source), ...totals });
     },
   };
   return usage satisfies AiUsageStore;
@@ -114,26 +30,19 @@ function memoryUsage() {
 
 type MemoryUsage = ReturnType<typeof memoryUsage>;
 
-/**
- * メモリの中だけの合成の会話の store（ai-conversations.ts と同じ約束: 他人のもの・無いものはどちらも null）。
- * ページの持ち主は memoryStore が持っているので、`pages` で引ける形で渡す。
- */
-function memoryConversations(pages: MemoryStore | null) {
-  type Row = { id: string; owner: string; pageId: string; createdAt: string; messages: AiMessage[] };
-  const rows = new Map<string, Row>();
-  const visiblePage = (owner: string, pageId: string) => {
-    const row = pages?.rows.get(pageId);
-    return row && row.owner === owner && !row.deleted ? row : null;
-  };
+/** owner とページで絞る会話（ai-conversations.ts と同じ約束: 他人のもの・無いものはどちらも null）。 */
+function memoryConversations() {
+  type Row = { id: string; owner: string; pageId: string; messages: AiMessage[] };
+  const rows: Row[] = [];
   const summary = (row: Row): AiConversationSummary => ({
     id: row.id,
     pageId: row.pageId,
-    createdAt: row.createdAt,
-    updatedAt: row.messages.at(-1)?.createdAt ?? row.createdAt,
+    createdAt: NOW.toISOString(),
+    updatedAt: NOW.toISOString(),
     messages: row.messages.length,
     lastText: row.messages.at(-1)?.text ?? null,
   });
-  const message = (seq: number, role: AiMessage["role"], text: string, extra: Partial<AiMessage> = {}): AiMessage => ({
+  const message = (seq: number, role: AiMessage["role"], text: string): AiMessage => ({
     id: randomUUID(),
     seq,
     role,
@@ -149,1179 +58,144 @@ function memoryConversations(pages: MemoryStore | null) {
     route: null,
     engine: null,
     changes: [],
-    createdAt: new Date().toISOString(),
-    ...extra,
+    createdAt: NOW.toISOString(),
   });
-  const own = (owner: string, pageId: string, id: string) => {
-    const row = rows.get(id);
-    return row && row.owner === owner && row.pageId === pageId ? row : null;
-  };
-  const conversations = {
-    rows,
-    async append(owner: string, input: AiTurnInput) {
-      if (!visiblePage(owner, input.pageId)) return null;
-      let row = input.conversationId == null ? null : own(owner, input.pageId, input.conversationId);
-      if (input.conversationId != null && !row) return null;
-      if (!row) {
-        row = { id: randomUUID(), owner, pageId: input.pageId, createdAt: new Date().toISOString(), messages: [] };
-        rows.set(row.id, row);
-      }
-      const seq = row.messages.length + 1;
-      const request = message(seq, "user", input.request.text, { preset: input.request.preset ?? null });
-      const result = message(seq + 1, "assistant", input.result.text, { proposal: input.result.proposal });
-      row.messages.push(request, result);
-      return { conversation: summary(row), request, result };
+  const pages = new Map<string, string>();
+  return {
+    pages,
+    add(owner: string, pageId: string, texts: string[]): string {
+      const row: Row = { id: randomUUID(), owner, pageId, messages: texts.map((text, index) => message(index + 1, index % 2 === 0 ? "user" : "assistant", text)) };
+      rows.push(row);
+      return row.id;
     },
-    async list(owner: string, pageId: string) {
-      if (!visiblePage(owner, pageId)) return null;
-      return [...rows.values()]
-        .filter((row) => row.owner === owner && row.pageId === pageId)
-        .map(summary)
-        .reverse();
+    async list(owner: string, pageId: string): Promise<AiConversationSummary[] | null> {
+      if (pages.get(pageId) !== owner) return null;
+      return rows.filter((row) => row.owner === owner && row.pageId === pageId).map(summary).reverse();
     },
-    async get(owner: string, pageId: string, conversationId: string) {
-      const row = own(owner, pageId, conversationId);
+    async get(owner: string, pageId: string, conversationId: string): Promise<AiConversation | null> {
+      const row = rows.find((item) => item.id === conversationId && item.owner === owner && item.pageId === pageId);
       return row ? { conversation: summary(row), messages: [...row.messages] } : null;
     },
-    async message(owner: string, pageId: string, messageId: string) {
-      for (const candidate of rows.values()) {
-        if (candidate.owner !== owner || candidate.pageId !== pageId) continue;
-        const found = candidate.messages.find((item) => item.id === messageId && item.role === "assistant");
-        if (found) return found;
-      }
-      return null;
-    },
-    async adopt(owner: string, input: AdoptionInput) {
-      const found = await conversations.message(owner, input.pageId, input.messageId);
-      if (!found || found.adopted !== null || found.proposal === null) return false;
-      found.adopted = input.adopted;
-      found.version = input.version;
-      found.adoptedAt = new Date().toISOString();
-      return true;
-    },
-  };
-  return conversations satisfies AiConversationStore;
+  } satisfies AiConversationStore & Record<string, unknown>;
 }
-
-type MemoryConversations = ReturnType<typeof memoryConversations>;
-
-/** 決まった出力と使用量を返す合成のモデル（呼ばれた要求を残す）。 */
-function stubBackend(respond: (request: AiRequest) => unknown, report: Partial<AiUsageReport> = {}, provider: AiBackend["provider"] = null) {
-  const calls: AiRequest[] = [];
-  const model: AiModel = {
-    async run(request) {
-      calls.push(request);
-      return { output: respond(request), usage: { model: "synthetic-model", inputTokens: 10, outputTokens: 5, ...report } };
-    },
-  };
-  return { backend: { model, provider, route: "server", engine: "synthetic:model" } satisfies AiBackend, calls };
-}
-
-const fake = (): AiBackend | null => resolveAiBackend({ EDITOR_AI_MODE: "fake", NODE_ENV: "test" });
-
-/** AI の API が呼ぶのは getSession だけ。ログインの経路（AuthProvider の残り）は使わない。 */
-const notUsed = async (): Promise<Response> => {
-  throw new Error("the AI API never calls the login routes");
-};
 
 function authAs(userId: string | null): AuthProvider {
-  return {
-    mode: "stub",
-    getSession: async () => (userId ? { userId, mode: "stub" } : null),
-    beginLogin: notUsed,
-    completeLogin: notUsed,
-    logout: notUsed,
+  const notUsed = async (): Promise<Response> => {
+    throw new Error("the AI API never calls the login routes");
   };
+  return { mode: "stub", getSession: async () => (userId ? { userId, mode: "stub" } : null), beginLogin: notUsed, completeLogin: notUsed, logout: notUsed };
 }
 
-type Options = {
-  usage?: MemoryUsage | null;
-  ai?: () => AiBackend | null;
-  limitUsd?: number | null;
-  settings?: EditorSettings | null;
-  conversations?: MemoryConversations | null;
-  /** 同じフォルダのほかのページ（自動参考）。 */
-  references?: { title: string; blocks: Block[] }[] | null;
-};
+type Options = { usage?: MemoryUsage | null; conversations?: ReturnType<typeof memoryConversations> | null; limitUsd?: number | null };
 
-function deps(userId: string | null, store: MemoryStore | null, options: Options = {}): AiApiDeps {
+function deps(userId: string | null, options: Options = {}): AiApiDeps {
   const usage = options.usage === undefined ? memoryUsage() : options.usage;
-  const chats = options.conversations === undefined ? memoryConversations(store) : options.conversations;
+  const chats = options.conversations === undefined ? memoryConversations() : options.conversations;
   return {
     auth: () => authAs(userId),
-    store: () => store,
-    usage: () => (store ? usage : null),
-    conversations: () => (store ? chats : null),
-    settings: options.settings === undefined ? undefined : () => (options.settings === null ? null : async () => options.settings!),
-    references:
-      options.references === undefined
-        ? undefined
-        : () =>
-            options.references === null
-              ? null
-              : async () => options.references!.map((page, index) => ({ id: `ref-${index}`, title: page.title, kind: "note", blocks: page.blocks })),
-    ai: options.ai ?? fake,
+    usage: () => usage,
+    conversations: () => chats,
     limitUsd: () => options.limitUsd ?? null,
     now: () => NOW,
-    env: {},
   };
 }
 
-function request(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Request {
-  const init: RequestInit = { method, headers: { host: "editor.test", ...(method === "GET" ? {} : { origin: ORIGIN, "content-type": "application/json" }), ...headers } };
-  if (body !== undefined) init.body = typeof body === "string" ? body : JSON.stringify(body);
-  return new Request(`${ORIGIN}${path}`, init);
+function request(path: string): Request {
+  return new Request(`${ORIGIN}${path}`, { method: "GET", headers: { host: "editor.test" } });
 }
 
-const propose = (id: string, body: unknown, d: AiApiDeps, headers?: Record<string, string>) => createAiProposal(request("POST", `/api/pages/${id}/ai/proposals`, body, headers), id, d);
-const adopt = (id: string, body: unknown, d: AiApiDeps, headers?: Record<string, string>) => adoptAiProposal(request("POST", `/api/pages/${id}/ai/adoptions`, body, headers), id, d);
-const usageOf = (d: AiApiDeps) => getAiUsageSummary(request("GET", "/api/ai/usage"), d);
-const deviceProposal = (id: string, body: unknown, d: AiApiDeps) =>
-  recordDeviceProposal(request("POST", `/api/pages/${id}/ai/proposals/device`, body), id, d);
-const listChats = (id: string, d: AiApiDeps) => listAiConversations(request("GET", `/api/pages/${id}/ai/conversations`), id, d);
-const openChat = (id: string, conversationId: string, d: AiApiDeps) =>
-  getAiConversation(request("GET", `/api/pages/${id}/ai/conversations/${conversationId}`), id, conversationId, d);
+const usageOf = (d: AiApiDeps) => getAiUsageSummary(request("/api/ai/usage"), d);
+const listChats = (id: string, d: AiApiDeps) => listAiConversations(request(`/api/pages/${id}/ai/conversations`), id, d);
+const openChat = (id: string, conversationId: string, d: AiApiDeps) => getAiConversation(request(`/api/pages/${id}/ai/conversations/${conversationId}`), id, conversationId, d);
 
-/** date 以外の header を並べたもの（同じ応答かどうかを比べる）。 */
-async function snapshot(response: Response) {
-  const headers = [...response.headers.entries()].filter(([name]) => name !== "date").sort();
-  return { status: response.status, headers, body: await response.text() };
-}
-
-const p = (value: string): Block => ({ type: "paragraph", content: [{ type: "text", text: value }] });
-const heading = (value: string): Block => ({ type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: value }] });
-const bullet = (value: string): Block => ({ type: "bulletList", content: [{ type: "listItem", content: [p(value)] }] });
-const bold = (value: string): Block => ({ type: "paragraph", content: [{ type: "text", text: value, marks: [{ type: "bold" }] }] });
-
-const sample = (): Block[] => [p("合成の  一段落目"), heading("合成の見出し"), bullet("合成の項目"), bold("すでに整っています。")];
-
-type ProposalBody = { proposal: Proposal; usage: UsageSummary; conversation: { id: string; messageId: string } | null };
-
-describe("POST /api/pages/{id}/ai/proposals", () => {
-  it("returns a proposal with word diffs and the month's usage, and writes nothing to the page", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: sample() });
-    const before = structuredClone(store.rows.get(page.id));
+describe("GET /api/ai/usage", () => {
+  it("answers the month's server usage against the limit, and the device usage as counts only", async () => {
     const usage = memoryUsage();
-
-    const response = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { usage }));
+    usage.seed("user-a", MONTH, { requests: 3, inputTokens: 300, outputTokens: 90, costMicroUsd: 1_600_000 });
+    const response = await usageOf(deps("user-a", { usage, limitUsd: 2 }));
     expect(response.status).toBe(200);
-    const body = (await response.json()) as ProposalBody;
-    expect(Object.keys(body).sort()).toEqual(["conversation", "proposal", "usage"]);
-    expect(body.proposal).toEqual({
-      label: "整える",
-      baseRevision: 1,
-      changes: [{ index: 0, before: "合成の  一段落目", after: "[fake] 合成の 一段落目。", parts: [{ ins: "[fake] " }, "合成の", { del: "  " }, { ins: " " }, "一段落目", { ins: "。" }] }],
-      inserts: [],
-      unchanged: 2,
+    expect(await response.json()).toEqual({
+      usage: { month: MONTH, inputTokens: 300, outputTokens: 90, costUsd: 1.6, limitUsd: 2, nearLimit: true } satisfies UsageSummary,
+      device: null,
     });
-    // 偽物の usage: 送った文字数（9 + 6 + 5 + 10）・返した文字数（16）の 1/4（切り上げ）。金額は 0
-    expect(body.usage).toEqual({ month: MONTH, inputTokens: 8, outputTokens: 4, costUsd: 0, limitUsd: null, nearLimit: false });
 
-    // 提案ではページに何も書かない（保存も版も無い）
-    expect(store.writes).toEqual([]);
-    expect(store.versions).toEqual([]);
-    expect(store.rows.get(page.id)).toEqual(before);
-  });
-
-  it("sends the 固有名詞 and the 提案の言語 from the settings (#108) to the model", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の 一")], lang: "ja" });
-    const glossary = [{ term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌"], note: "合成" }];
-    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
-    const settings: EditorSettings = { aiLang: "en", glossary, recipes: [], aboutName: "", about: "" };
-    const d = deps("user-a", store, { ai: () => stub.backend, settings });
-    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
-    expect(stub.calls[0]?.glossary).toEqual(glossary);
-    expect(stub.calls[0]?.lang).toBe("en");
-  });
-
-  it("falls back to the page's language and no 語彙 when the settings say 書いた言語のまま or cannot be read", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の 一")], lang: "ja" });
-    for (const settings of [DEFAULT_EDITOR_SETTINGS, null, undefined]) {
-      const stub = stubBackend(() => ({ edits: [], inserts: [] }));
-      const d = deps("user-a", store, { ai: () => stub.backend, settings });
-      expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
-      expect(stub.calls[0]?.glossary).toEqual([]);
-      expect(stub.calls[0]?.lang).toBe("ja");
-    }
-  });
-
-  it("adds the usage of every proposal to the owner's month", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
-    const usage = memoryUsage();
-    const d = deps("user-a", store, { usage });
-    const first = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "toEnglish" } }, d)).json()) as ProposalBody;
-    const second = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "toEnglish" } }, d)).json()) as ProposalBody;
-    expect(second.usage.inputTokens).toBe(first.usage.inputTokens * 2);
-    expect(second.usage.outputTokens).toBe(first.usage.outputTokens * 2);
-    expect(usage.rows.get(`user-a/${MONTH}`)?.requests).toBe(2);
-    expect(usage.rows.has(`user-b/${MONTH}`)).toBe(false);
-
-    const read = await usageOf(d);
-    expect(read.status).toBe(200);
-    // 経路ごとに分けて返す（device はこの Mac の CLI の分。上限が効くのは usage の方だけ）
-    expect(await read.json()).toEqual({ usage: second.usage, device: null });
-  });
-
-  it("estimates the cost from the price table, warns near the limit, and stops with 429 before calling the model", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成")] });
-    const usage = memoryUsage();
-    // claude-sonnet-5: 入力 $2・出力 $10 / 100 万トークン → 1 回 $3
-    const { backend, calls } = stubBackend(() => ({ edits: [], inserts: [] }), { model: "claude-sonnet-5", inputTokens: 1_000_000, outputTokens: 100_000 }, "claude");
-    const d = deps("user-a", store, { usage, ai: () => backend, limitUsd: 5 });
-    const ask = () => propose(page.id, { baseRevision: 1, intent: { text: "短く" } }, d);
-
-    const first = (await (await ask()).json()) as ProposalBody;
-    expect(first.usage).toEqual({ month: MONTH, inputTokens: 1_000_000, outputTokens: 100_000, costUsd: 3, limitUsd: 5, nearLimit: false });
-    const second = (await (await ask()).json()) as ProposalBody;
-    expect(second.usage).toMatchObject({ costUsd: 6, limitUsd: 5, nearLimit: true });
-    expect(calls).toHaveLength(2);
-
-    const refused = await ask();
-    expect(refused.status).toBe(429);
-    expect(await refused.text()).toBe('{"error":"quota_exceeded"}');
-    expect(calls).toHaveLength(2);
-    expect(usage.rows.get(`user-a/${MONTH}`)?.costMicroUsd).toBe(6_000_000);
-
-    // 単価表に無いモデルは 0（推測しない）
-    const unknown = stubBackend(() => ({}), { model: "claude-unknown", inputTokens: 1_000_000 }, "claude");
-    const free = (await (await propose(page.id, { baseRevision: 1, intent: { text: "短く" } }, deps("user-a", store, { ai: () => unknown.backend }))).json()) as ProposalBody;
-    expect(free.usage.costUsd).toBe(0);
-  });
-
-  it("answers 429 at exactly the limit and flags 80% as near the limit", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成")] });
-    const at = memoryUsage();
-    at.seed("user-a", MONTH, 2_000_000);
-    const { backend, calls } = stubBackend(() => ({}));
-    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { usage: at, ai: () => backend, limitUsd: 2 }))).status).toBe(429);
-    expect(calls).toHaveLength(0);
-    // 別の月・別の owner の使用量は数えない
-    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { ai: () => backend, limitUsd: 2 }))).status).toBe(200);
-
-    const near = memoryUsage();
-    near.seed("user-a", MONTH, 1_600_000);
-    expect(((await (await usageOf(deps("user-a", store, { usage: near, limitUsd: 2 }))).json()) as { usage: UsageSummary }).usage.nearLimit).toBe(true);
-    near.seed("user-a", MONTH, 1_599_999);
-    expect(((await (await usageOf(deps("user-a", store, { usage: near, limitUsd: 2 }))).json()) as { usage: UsageSummary }).usage).toEqual({
-      month: MONTH,
-      inputTokens: 0,
-      outputTokens: 0,
-      costUsd: 1.599999,
-      limitUsd: 2,
-      nearLimit: false,
+    const both: MemoryUsage & { bySource: NonNullable<AiUsageStore["bySource"]> } = Object.assign(memoryUsage(), {
+      bySource: async (owner: string, month: string) => ({
+        server: { owner, month, source: "server" as const, requests: 1, inputTokens: 10, outputTokens: 5, costMicroUsd: 0 },
+        device: { owner, month, source: "device" as const, requests: 4, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 },
+      }),
     });
-    // 上限 0（数として読めない設定も 0）は全て止める
-    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { ai: () => backend, limitUsd: 0 }))).status).toBe(429);
-  });
-
-  it("drops edits for a preset that only adds text and keeps the inserts", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("一"), p("二")] });
-    const { backend } = stubBackend(() => ({ edits: [{ index: 0, text: "勝手な書き換え" }], inserts: [{ afterIndex: -1, kind: "paragraph", text: "要約" }] }));
-    const body = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "summarize" } }, deps("user-a", store, { ai: () => backend }))).json()) as ProposalBody;
-    expect(body.proposal).toEqual({ label: "要約", baseRevision: 1, changes: [], inserts: [{ afterIndex: -1, kind: "paragraph", text: "要約" }], unchanged: 2 });
-  });
-
-  it("sends only the selected range, splits a long page into several requests, and answers an empty proposal for an empty page", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("一"), p("二"), p("三")] });
-    const scoped = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "toEnglish" }, scope: { fromIndex: 1, toIndex: 1 } }, deps("user-a", store))).json()) as ProposalBody;
-    expect(scoped.proposal.changes.map((change) => [change.index, change.after])).toEqual([[1, "[fake EN] 二"]]);
-    expect(scoped.proposal.unchanged).toBe(0);
-
-    const long = await store.createPage("user-a", { blocks: [p("あ".repeat(7000)), p("い".repeat(7000)), p("う".repeat(7000))] });
-    const usage = memoryUsage();
-    const { backend, calls } = stubBackend((aiRequest) => ({ edits: aiRequest.paragraphs.map((paragraph) => ({ index: paragraph.index, text: `${paragraph.index}` })) }));
-    const split = (await (await propose(long.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { usage, ai: () => backend }))).json()) as ProposalBody;
-    expect(calls.map((call) => call.paragraphs.map((paragraph) => paragraph.index))).toEqual([[0], [1], [2]]);
-    expect(split.proposal.changes.map((change) => change.after)).toEqual(["0", "1", "2"]);
-    expect(usage.rows.get(`user-a/${MONTH}`)?.requests).toBe(3);
-
-    const empty = await store.createPage("user-a");
-    const before = calls.length;
-    const response = await propose(empty.id, { baseRevision: 1, intent: { preset: "summarize" } }, deps("user-a", store, { ai: () => backend }));
-    expect(response.status).toBe(200);
-    expect(((await response.json()) as ProposalBody).proposal).toEqual({ label: "要約", baseRevision: 1, changes: [], inserts: [], unchanged: 0 });
-    expect(calls.length).toBe(before);
-  });
-
-  it("answers 409 with the current page to a stale baseRevision without calling the model", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("一")] });
-    await store.savePage("user-a", page.id, { blocks: [p("別の画面")] }, { baseRevision: 1 });
-    const { backend, calls } = stubBackend(() => ({}));
-    const response = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { ai: () => backend }));
-    expect(response.status).toBe(409);
-    const body = (await response.json()) as { error: string; page: Page };
-    expect(Object.keys(body).sort()).toEqual(["error", "page"]);
-    expect(body).toMatchObject({ error: "conflict", page: { id: page.id, revision: 2, blocks: [p("別の画面")] } });
-    expect(body.page).not.toHaveProperty("owner");
-    expect(calls).toEqual([]);
-  });
-
-  it("answers 502 when the model fails or returns output that does not pass the checks, still recording what was used", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("一"), bullet("項目")] });
-    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const bad = [
-      "not json",
-      { edits: [{ index: 1, text: "箇条書きは変えない" }] },
-      { edits: [{ index: 5, text: "範囲外" }] },
-      { edits: [{ index: 0, text: "" }] },
-      { inserts: [{ afterIndex: 0, kind: "script", text: "x" }] },
-      { edits: [{ index: 0, text: "秘密の出力 a\u0000b" }] },
-    ];
-    for (const output of bad) {
-      const usage = memoryUsage();
-      const { backend } = stubBackend(() => output);
-      const response = await propose(page.id, { baseRevision: 1, intent: { text: "直して" } }, deps("user-a", store, { usage, ai: () => backend }));
-      expect(response.status, JSON.stringify(output)).toBe(502);
-      expect(await response.text()).toBe('{"error":"ai_failed"}');
-      expect(usage.rows.get(`user-a/${MONTH}`)?.requests).toBe(1);
-    }
-
-    const usage = memoryUsage();
-    const throwing: AiModel = {
-      async run() {
-        throw Object.assign(new Error("upstream said: secret prompt text"), { name: "ProviderError" });
-      },
-    };
-    const failed = await propose(page.id, { baseRevision: 1, intent: { text: "直して" } }, deps("user-a", store, { usage, ai: () => ({ model: throwing, provider: null, route: "server", engine: "synthetic:model" }) }));
-    expect(failed.status).toBe(502);
-    expect(await failed.text()).toBe('{"error":"ai_failed"}');
-    expect(usage.rows.size).toBe(0);
-    const logged = JSON.stringify(log.mock.calls);
-    expect(logged).not.toContain("secret prompt text");
-    expect(logged).not.toContain("秘密の出力");
-    expect(logged).toContain("ProviderError");
-    log.mockRestore();
-    expect(store.writes).toEqual([]);
-  });
-
-  it("answers 413 above 1 MiB and too_large above 30,000 characters of text", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("一")] });
-    const big = JSON.stringify({ baseRevision: 1, intent: { text: "a".repeat(MAX_BODY_BYTES) } });
-    const tooBig = await propose(page.id, big, deps("user-a", store));
-    expect(tooBig.status).toBe(413);
-    expect(await tooBig.text()).toBe('{"error":"payload_too_large"}');
-
-    const huge = await store.createPage("user-a", { blocks: Array.from({ length: 4 }, () => p("あ".repeat(10_000))) });
-    const { backend, calls } = stubBackend(() => ({}));
-    const tooLarge = await propose(huge.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { ai: () => backend }));
-    expect(tooLarge.status).toBe(413);
-    expect(await tooLarge.text()).toBe('{"error":"too_large"}');
-    // 範囲を選べば送れる
-    expect((await propose(huge.id, { baseRevision: 1, intent: { preset: "tidy" }, scope: { fromIndex: 0, toIndex: 2 } }, deps("user-a", store, { ai: () => backend }))).status).toBe(200);
-    expect(calls.length).toBeGreaterThan(0);
-  });
-
-  it("answers 400 to bodies that are not JSON or not the right shape, and to a range outside the page", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("一"), p("二")] });
-    const { backend, calls } = stubBackend(() => ({}));
-    const bad: Array<[unknown, Record<string, string>?]> = [
-      ["{", undefined],
-      [{ baseRevision: 1, intent: { preset: "tidy" } }, { "content-type": "text/plain" }],
-      [{}, undefined],
-      [{ intent: { preset: "tidy" } }, undefined],
-      [{ baseRevision: 0, intent: { preset: "tidy" } }, undefined],
-      [{ baseRevision: "1", intent: { preset: "tidy" } }, undefined],
-      [{ baseRevision: 1 }, undefined],
-      [{ baseRevision: 1, intent: "tidy" }, undefined],
-      [{ baseRevision: 1, intent: { preset: "rewriteEverything" } }, undefined],
-      [{ baseRevision: 1, intent: { text: "" } }, undefined],
-      [{ baseRevision: 1, intent: { text: "あ".repeat(501) } }, undefined],
-      [{ baseRevision: 1, intent: { preset: "tidy", text: "x" } }, undefined],
-      [{ baseRevision: 1, intent: { preset: "tidy" }, owner: "user-b" }, undefined],
-      [{ baseRevision: 1, intent: { preset: "tidy" }, scope: { fromIndex: -1, toIndex: 0 } }, undefined],
-      [{ baseRevision: 1, intent: { preset: "tidy" }, scope: { fromIndex: 1, toIndex: 0 } }, undefined],
-      [{ baseRevision: 1, intent: { preset: "tidy" }, scope: { fromIndex: 0, toIndex: 1.5 } }, undefined],
-      [{ baseRevision: 1, intent: { preset: "tidy" }, scope: { fromIndex: 0 } }, undefined],
-      [{ baseRevision: 1, intent: { preset: "tidy" }, scope: { fromIndex: 0, toIndex: 0, extra: 1 } }, undefined],
-      // 範囲が本文の外（ページを読んでから確かめる）
-      [{ baseRevision: 1, intent: { preset: "tidy" }, scope: { fromIndex: 0, toIndex: 2 } }, undefined],
-    ];
-    for (const [body, headers] of bad) {
-      const response = await propose(page.id, body, deps("user-a", store, { ai: () => backend }), headers);
-      expect(response.status, JSON.stringify(body)).toBe(400);
-      expect(await response.text()).toBe('{"error":"bad_request"}');
-    }
-    expect(calls).toEqual([]);
-  });
-});
-
-describe("POST /api/pages/{id}/ai/adoptions", () => {
-  it("keeps the current body as an ai version first, then saves only the adopted changes with the baseRevision", async () => {
-    const store = memoryStore();
-    const original = [p("合成の  一段落目"), bold("太字のまま"), bullet("項目")];
-    const page = await store.createPage("user-a", { blocks: original });
-    const d = deps("user-a", store);
-    const proposal = ((await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody).proposal;
-    expect(proposal.changes.map((change) => change.index)).toEqual([0, 1]);
-    const save = vi.spyOn(store, "savePage");
-
-    // 1 つ目だけ採用し、見出しを 1 つ差し込む
-    const response = await adopt(
-      page.id,
-      { baseRevision: proposal.baseRevision, changes: [{ index: 0, text: proposal.changes[0]!.after }], inserts: [{ afterIndex: -1, kind: "heading", text: "見出し" }] },
-      d,
-    );
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { page: Page };
-    expect(Object.keys(body)).toEqual(["page", "adopted"]);
-    expect(body.page.revision).toBe(2);
-    expect(body.page.blocks).toEqual([heading("見出し"), p("[fake] 合成の 一段落目。"), bold("太字のまま"), bullet("項目")]);
-    expect(store.writes).toEqual(["createVersion:ai", "savePage"]);
-    expect(save.mock.calls[0]?.[3]).toEqual({ baseRevision: 1 });
-    // 履歴から戻せる（採用の前の本文が ai の版に残る）
-    expect(store.versions).toEqual([{ pageId: page.id, version: 1, reason: "ai", blocks: original }]);
-  });
-
-  it("answers 409 with the current page to a stale baseRevision and writes nothing", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("一")] });
-    await store.savePage("user-a", page.id, { blocks: [p("別の画面")] }, { baseRevision: 1 });
-    store.writes.length = 0;
-    const response = await adopt(page.id, { baseRevision: 1, changes: [{ index: 0, text: "採用" }], inserts: [] }, deps("user-a", store));
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ error: "conflict", page: { revision: 2, blocks: [p("別の画面")] } });
-    expect(store.writes).toEqual([]);
-    expect(store.versions).toEqual([]);
-  });
-
-  it("answers 409 when another save lands between keeping the version and saving", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("一")] });
-    const keep = store.createVersion.bind(store);
-    store.createVersion = async (owner, id, reason) => {
-      const kept = await keep(owner, id, reason);
-      // 別の画面の保存が先に入る
-      Object.assign(store.rows.get(id)!, { blocks: [p("別の画面")], revision: 2 });
-      return kept;
-    };
-    const response = await adopt(page.id, { baseRevision: 1, changes: [{ index: 0, text: "採用" }], inserts: [] }, deps("user-a", store));
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ error: "conflict", page: { revision: 2, blocks: [p("別の画面")] } });
-    expect(store.rows.get(page.id)?.blocks).toEqual([p("別の画面")]);
-  });
-
-  it("answers 400 to bodies of the wrong shape and to adoptions that do not fit the current body, writing nothing", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("一"), bullet("項目")] });
-    const bad: unknown[] = [
-      {},
-      { baseRevision: 1 },
-      { baseRevision: 1, changes: [], inserts: [] },
-      { changes: [{ index: 0, text: "x" }] },
-      { baseRevision: 0, changes: [{ index: 0, text: "x" }] },
-      { baseRevision: 1, changes: {} },
-      { baseRevision: 1, changes: [{ index: "0", text: "x" }] },
-      { baseRevision: 1, changes: [{ index: -1, text: "x" }] },
-      { baseRevision: 1, changes: [{ index: 0, text: 1 }] },
-      { baseRevision: 1, changes: [{ index: 0, text: "x", marks: [] }] },
-      { baseRevision: 1, inserts: [{ afterIndex: -2, kind: "paragraph", text: "x" }] },
-      { baseRevision: 1, inserts: [{ afterIndex: 0, kind: "image", text: "x" }] },
-      { baseRevision: 1, inserts: [{ afterIndex: 0, kind: "paragraph" }] },
-      { baseRevision: 1, changes: [{ index: 0, text: "x" }], blocks: [] },
-      // 今の本文に合わない（ページを読んでから確かめる）
-      { baseRevision: 1, changes: [{ index: 1, text: "箇条書き" }] },
-      { baseRevision: 1, changes: [{ index: 2, text: "範囲外" }] },
-      { baseRevision: 1, changes: [{ index: 0, text: "" }] },
-      { baseRevision: 1, changes: [{ index: 0, text: "一" }, { index: 0, text: "二" }] },
-      { baseRevision: 1, inserts: [{ afterIndex: 2, kind: "paragraph", text: "範囲外" }] },
-    ];
-    for (const body of bad) {
-      const response = await adopt(page.id, body, deps("user-a", store));
-      expect(response.status, JSON.stringify(body)).toBe(400);
-      expect(await response.text()).toBe('{"error":"bad_request"}');
-    }
-    expect(store.writes).toEqual([]);
-    expect(store.rows.get(page.id)?.revision).toBe(1);
-  });
-});
-
-describe("AI routes: shared rules", () => {
-  it("answers the same 404 for another owner's page, an unknown id, a malformed id and a deleted page — even when the baseRevision would conflict", async () => {
-    const store = memoryStore();
-    const theirs = await store.createPage("user-b", { blocks: [p("theirs")] });
-    const removed = await store.createPage("user-a", { blocks: [p("removed")] });
-    store.rows.get(removed.id)!.deleted = true;
-    const ids = [theirs.id, randomUUID(), "not-a-uuid", "../../etc", removed.id];
-    const { backend, calls } = stubBackend(() => ({}));
-    const d = deps("user-a", store, { ai: () => backend });
-    const cases: Array<[string, (id: string) => Promise<Response>]> = [
-      ["propose current", (id) => propose(id, { baseRevision: 1, intent: { preset: "tidy" } }, d)],
-      ["propose stale", (id) => propose(id, { baseRevision: 9, intent: { text: "x" } }, d)],
-      ["propose scope", (id) => propose(id, { baseRevision: 1, intent: { preset: "tidy" }, scope: { fromIndex: 0, toIndex: 0 } }, d)],
-      ["adopt current", (id) => adopt(id, { baseRevision: 1, changes: [{ index: 0, text: "x" }] }, d)],
-      ["adopt stale", (id) => adopt(id, { baseRevision: 9, inserts: [{ afterIndex: -1, kind: "paragraph", text: "x" }] }, d)],
-      ["adopt unfit", (id) => adopt(id, { baseRevision: 1, changes: [{ index: 5, text: "x" }] }, d)],
-    ];
-    let first: Awaited<ReturnType<typeof snapshot>> | undefined;
-    for (const [label, call] of cases) {
-      const results = await Promise.all(ids.map(async (id) => snapshot(await call(id))));
-      first ??= results[0];
-      for (const result of results) expect(result, label).toEqual(first);
-    }
-    expect(first?.status).toBe(404);
-    expect(first?.body).toBe('{"error":"not_found"}');
-    expect(calls).toEqual([]);
-    expect(store.writes).toEqual([]);
-    expect(store.rows.get(theirs.id)).toMatchObject({ revision: 1, blocks: [p("theirs")] });
-  });
-
-  it("answers 401 without a session on every route", async () => {
-    const store = memoryStore();
-    const id = randomUUID();
-    for (const response of [
-      await propose(id, { baseRevision: 1, intent: { preset: "tidy" } }, deps(null, store)),
-      await adopt(id, { baseRevision: 1, changes: [{ index: 0, text: "x" }] }, deps(null, store)),
-      await usageOf(deps(null, store)),
-    ]) {
-      expect(response.status).toBe(401);
-      expect(await response.text()).toBe('{"error":"unauthorized"}');
-    }
-  });
-
-  it("answers 403 to proposals and adoptions from another origin or without an Origin", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("一")] });
-    const { backend, calls } = stubBackend(() => ({}));
-    for (const origin of ["https://evil.example", "null", ""]) {
-      const d = deps("user-a", store, { ai: () => backend });
-      for (const response of [
-        await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d, { origin }),
-        await adopt(page.id, { baseRevision: 1, changes: [{ index: 0, text: "x" }] }, d, { origin }),
-      ]) {
-        expect(response.status, origin).toBe(403);
-        expect(await response.text()).toBe('{"error":"forbidden"}');
-      }
-    }
-    expect(calls).toEqual([]);
-    expect(store.writes).toEqual([]);
-  });
-
-  it("answers 413 to an adoption above 1 MiB", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("一")] });
-    const big = JSON.stringify({ baseRevision: 1, changes: [{ index: 0, text: "a".repeat(MAX_BODY_BYTES) }] });
-    expect((await adopt(page.id, big, deps("user-a", store))).status).toBe(413);
-    expect(store.writes).toEqual([]);
-  });
-
-  it("answers 503 without a database, and ai_unavailable when AI is off or the fake model is asked for in production", async () => {
-    const id = randomUUID();
-    for (const response of [
-      await propose(id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", null)),
-      await adopt(id, { baseRevision: 1, changes: [{ index: 0, text: "x" }] }, deps("user-a", null)),
-      await usageOf(deps("user-a", null)),
-    ]) {
-      expect(response.status).toBe(503);
-      expect(await response.text()).toBe('{"error":"unavailable"}');
-    }
-
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("一")] });
-    const off = () => resolveAiBackend({});
-    const productionFake = () => resolveAiBackend({ EDITOR_AI_MODE: "fake", NODE_ENV: "production" });
-    const unknown = () => resolveAiBackend({ EDITOR_AI_MODE: "some-provider" });
-    for (const ai of [off, productionFake, unknown]) {
-      for (const response of [
-        await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { ai })),
-        await adopt(page.id, { baseRevision: 1, changes: [{ index: 0, text: "x" }] }, deps("user-a", store, { ai })),
-      ]) {
-        expect(response.status).toBe(503);
-        expect(await response.text()).toBe('{"error":"ai_unavailable"}');
-      }
-      // 使用量は AI が無効でも読める
-      expect((await usageOf(deps("user-a", store, { ai }))).status).toBe(200);
-    }
-    expect(store.writes).toEqual([]);
-  });
-
-  it("answers 500 without internal details when the store or the usage fails", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("一")] });
-    const failure = () => Object.assign(new Error('relation "ai_usage" does not exist at SELECT secret_column FROM pages'), { code: "42P01" });
-    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-
-    const broken = memoryStore();
-    broken.getPage = async () => {
-      throw failure();
-    };
-    const usage = memoryUsage();
-    usage.get = async () => {
-      throw failure();
-    };
-    for (const response of [
-      await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", broken)),
-      await adopt(page.id, { baseRevision: 1, changes: [{ index: 0, text: "x" }] }, deps("user-a", broken)),
-      await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { usage })),
-      await usageOf(deps("user-a", store, { usage })),
-    ]) {
-      expect(response.status).toBe(500);
-      expect(await response.text()).toBe('{"error":"internal"}');
-    }
-    expect(JSON.stringify(log.mock.calls)).not.toContain("SELECT");
-    log.mockRestore();
-  });
-
-  it("marks every response noindex, nofollow and uncacheable", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("一")] });
-    const usage = memoryUsage();
-    usage.seed("user-a", MONTH, 9_000_000);
-    const { backend } = stubBackend(() => "not json");
-    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const responses = [
-      await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store)),
-      await propose(page.id, { baseRevision: 9, intent: { preset: "tidy" } }, deps("user-a", store)),
-      await propose(page.id, "{", deps("user-a", store)),
-      await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { usage, limitUsd: 1 })),
-      await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { ai: () => backend })),
-      await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { ai: () => null })),
-      await propose(randomUUID(), { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store)),
-      await adopt(page.id, { baseRevision: 1, changes: [{ index: 0, text: "x" }] }, deps("user-a", store)),
-      await adopt(page.id, { baseRevision: 1, changes: [{ index: 0, text: "x" }] }, deps("user-a", store)),
-      await usageOf(deps("user-a", store)),
-      await usageOf(deps(null, store)),
-      await usageOf(deps("user-a", null)),
-    ];
-    log.mockRestore();
-    expect(responses.map((response) => response.status)).toEqual([200, 409, 400, 429, 502, 503, 404, 200, 409, 200, 401, 503]);
-    for (const response of responses) {
-      expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
-      expect(response.headers.get("cache-control")).toBe("private, no-store");
-      expect(response.headers.get("content-type")).toBe("application/json; charset=utf-8");
-    }
-  });
-});
-
-describe("AI routes with the Anthropic adapter (fake fetch)", () => {
-  it("proposes from the model's answer and records the cost from the claude-sonnet-5-5 price table", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の  一段落目"), heading("合成の見出し")] });
-    const usage = memoryUsage();
-    // 合成の鍵。本物の API は呼ばない（fetch は差し替える）
-    const key = "synthetic-anthropic-key-0123456789";
-    const sent: { url: string; body: { model: string; messages: { content: string }[] }; key: string | null }[] = [];
-    let answer = (): Response =>
-      Response.json({
-        model: "claude-sonnet-5-5",
-        content: [{ type: "text", text: '```json\n{"edits":[{"index":0,"text":"合成の一段落目。"}],"inserts":[]}\n```' }],
-        stop_reason: "end_turn",
-        usage: { input_tokens: 30_000, output_tokens: 4_000 },
-      });
-    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      sent.push({ url: String(input), body: JSON.parse(String(init?.body)), key: new Headers(init?.headers).get("x-api-key") });
-      return answer();
-    }) as typeof globalThis.fetch;
-    const backend: AiBackend = { model: createAnthropicModel({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: key }, fetch }), provider: "claude", route: "server", engine: "anthropic:claude-sonnet-5-5" };
-    const d = deps("user-a", store, { usage, ai: () => backend, limitUsd: 0.15 });
-
-    const response = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d);
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as ProposalBody;
-    expect(body.proposal.changes).toEqual([{ index: 0, before: "合成の  一段落目", after: "合成の一段落目。", parts: ["合成の", { del: "  " }, "一段落目", { ins: "。" }] }]);
-    // claude-sonnet-5-5: 入力 $2・出力 $10 / 100 万トークン → 30,000 × 2 + 4,000 × 10 = $0.10
-    expect(body.usage).toEqual({ month: MONTH, inputTokens: 30_000, outputTokens: 4_000, costUsd: 0.1, limitUsd: 0.15, nearLimit: false });
-    expect(usage.rows.get(`user-a/${MONTH}`)).toMatchObject({ requests: 1, costMicroUsd: 100_000 });
-    expect(sent).toHaveLength(1);
-    expect(sent[0]!.url).toBe("https://api.anthropic.com/v1/messages");
-    expect(sent[0]!.key).toBe(key);
-    expect(sent[0]!.body.model).toBe("claude-sonnet-5-5");
-    expect(sent[0]!.body.messages[0]!.content).toContain("<untrusted_data>");
-    expect(store.writes).toEqual([]);
-
-    // 上流の失敗・読めない出力は 502（鍵・本文はログに出さない）
-    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    answer = () => new Response("synthetic upstream failure", { status: 529 });
-    const overloaded = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d);
-    expect([overloaded.status, await overloaded.text()]).toEqual([502, '{"error":"ai_failed"}']);
-    // トークン数が返らない失敗（HTTP の失敗）は数えない
-    expect(usage.rows.get(`user-a/${MONTH}`)).toMatchObject({ requests: 1, costMicroUsd: 100_000 });
-    // JSON でない応答も課金されているので数える（10 × 2 + 10 × 10 = 120 micro-USD）
-    answer = () => Response.json({ model: "claude-sonnet-5-5", content: [{ type: "text", text: "合成の一段落目 は JSON ではない" }], usage: { input_tokens: 10, output_tokens: 10 } });
-    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(502);
-    expect(usage.rows.get(`user-a/${MONTH}`)).toMatchObject({ requests: 2, inputTokens: 30_010, outputTokens: 4_010, costMicroUsd: 100_120 });
-    // 出力の上限で途中で切れた応答も 502 で、数える
-    answer = () => Response.json({ model: "claude-sonnet-5-5", content: [{ type: "text", text: '{"edits":[{"index":0,"text":"合成' }], stop_reason: "max_tokens", usage: { input_tokens: 10, output_tokens: 12_000 } });
-    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(502);
-    expect(usage.rows.get(`user-a/${MONTH}`)).toMatchObject({ requests: 3, costMicroUsd: 100_120 + 120_020 });
-    const logged = JSON.stringify(log.mock.calls);
-    log.mockRestore();
-    expect(logged).not.toContain(key);
-    expect(logged).not.toContain("一段落目");
-    expect(logged).toContain("AnthropicError");
-    expect(logged).toContain('"kind":"overloaded","status":529');
-    expect(logged).toContain('"kind":"invalid_output","reason":"max_tokens"');
-
-    // 上限（$0.15）に届いたらモデルを呼ばずに 429（いまは $0.22014）
-    const calls = sent.length;
-    const refused = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d);
-    expect([refused.status, await refused.text()]).toEqual([429, '{"error":"quota_exceeded"}']);
-    expect(sent).toHaveLength(calls);
-  });
-});
-
-describe("AI routes: usage of a failed model call", () => {
-  it("counts the usage a model error carries (an answer that came back unusable) and nothing for an error without it", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成"), p("合成の二")] });
-    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const failing = (error: unknown): AiBackend => ({
-      model: {
-        async run() {
-          throw error;
-        },
-      },
-      provider: "claude",
-      route: "server",
-      engine: "anthropic:claude-sonnet-5-5",
+    expect(await (await usageOf(deps("user-a", { usage: both }))).json()).toEqual({
+      usage: { month: MONTH, inputTokens: 10, outputTokens: 5, costUsd: 0, limitUsd: null, nearLimit: false },
+      device: { month: MONTH, requests: 4, inputTokens: 0, outputTokens: 0 },
     });
-    const ask = (backend: AiBackend, usage: MemoryUsage) => propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { usage, ai: () => backend }));
+  });
 
-    // JSON でない応答（AnthropicError に使用量）: 502 で、使用量が増える
-    const counted = memoryUsage();
-    const notJson = new AnthropicError("invalid_output", { reason: "not_json", usage: { model: "claude-sonnet-5-5", inputTokens: 1_000, outputTokens: 500 } });
-    const response = await ask(failing(notJson), counted);
-    expect([response.status, await response.text()]).toEqual([502, '{"error":"ai_failed"}']);
-    // 1,000 × 2 + 500 × 10 = 7,000 micro-USD
-    expect(counted.rows.get(`user-a/${MONTH}`)).toEqual({ owner: "user-a", month: MONTH, source: "server", requests: 1, inputTokens: 1_000, outputTokens: 500, costMicroUsd: 7_000 });
-
-    // 使用量の無い例外（HTTP の失敗・時間切れ・AnthropicError でないもの）では増えない
-    for (const error of [new AnthropicError("overloaded", { status: 529 }), new AnthropicError("timeout"), Object.assign(new Error("synthetic"), { usage: { model: "claude-sonnet-5-5", inputTokens: 1_000, outputTokens: 500 } })]) {
-      const untouched = memoryUsage();
-      expect((await ask(failing(error), untouched)).status).toBe(502);
-      expect(untouched.rows.size).toBe(0);
-    }
-
-    // 先に通った要求の分と、失敗した要求の分を両方数える（長いページを分けたとき）
-    const long = await store.createPage("user-a", { blocks: [p("あ".repeat(3_000)), p("い".repeat(3_000))] });
-    const both = memoryUsage();
-    let call = 0;
-    const second: AiBackend = {
-      model: {
-        async run() {
-          call += 1;
-          if (call === 1) return { output: { edits: [], inserts: [] }, usage: { model: "claude-sonnet-5-5", inputTokens: 100, outputTokens: 10 } };
-          throw new AnthropicError("invalid_output", { reason: "max_tokens", usage: { model: "claude-sonnet-5-5", inputTokens: 200, outputTokens: 20 } });
-        },
-      },
-      provider: "claude",
-      route: "server",
-      engine: "anthropic:claude-sonnet-5-5",
+  it("answers 401 without a session, 503 without a database, and 500 without internal details", async () => {
+    expect([(await usageOf(deps(null))).status]).toEqual([401]);
+    const away = await usageOf(deps("user-a", { usage: null }));
+    expect([away.status, await away.text()]).toEqual([503, '{"error":"unavailable"}']);
+    const broken = memoryUsage();
+    broken.get = async () => {
+      throw Object.assign(new Error("SELECT secret_column FROM ai_usage"), { code: "42P01" });
     };
-    expect((await propose(long.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { usage: both, ai: () => second }))).status).toBe(502);
-    expect(call).toBe(2);
-    expect(both.rows.get(`user-a/${MONTH}`)).toMatchObject({ requests: 2, inputTokens: 300, outputTokens: 30, costMicroUsd: 900 });
-    log.mockRestore();
-    expect(store.writes).toEqual([]);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const failed = await usageOf(deps("user-a", { usage: broken }));
+      expect([failed.status, await failed.text()]).toEqual([500, '{"error":"internal"}']);
+      expect(JSON.stringify(log.mock.calls)).not.toContain("SELECT");
+    } finally {
+      log.mockRestore();
+    }
   });
 });
 
-describe("the conversation of a page (AI チャット)", () => {
-  type ChatBody = { conversation: AiConversationSummary; messages: AiMessage[] };
-
-  it("keeps the ask and the proposal as one turn, and continues the same conversation", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: sample() });
-    const chats = memoryConversations(store);
-    const d = deps("user-a", store, { conversations: chats });
-
-    const first = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
-    expect(first.conversation).not.toBeNull();
-    const conversationId = first.conversation!.id;
-
-    const second = await propose(page.id, { baseRevision: 1, intent: { text: "もっと短く" }, conversationId }, d);
-    expect(second.status).toBe(200);
-    expect(((await second.json()) as ProposalBody).conversation!.id).toBe(conversationId);
-
-    const opened = (await (await openChat(page.id, conversationId, d)).json()) as ChatBody;
-    expect(opened.messages.map((message) => [message.role, message.text, message.preset])).toEqual([
-      ["user", "整える", "tidy"],
-      ["assistant", "提案が 1 件あります", null],
-      ["user", "もっと短く", null],
-      ["assistant", "提案が 1 件あります", null],
+describe("the conversations of a page", () => {
+  it("lists one page's conversations newest first and opens one with its messages", async () => {
+    const chats = memoryConversations();
+    const pageId = randomUUID();
+    chats.pages.set(pageId, "user-a");
+    const d = deps("user-a", { conversations: chats });
+    expect(((await (await listChats(pageId, d)).json()) as { conversations: AiConversationSummary[] }).conversations).toEqual([]);
+    const first = chats.add("user-a", pageId, ["合成の頼み", "合成の返答"]);
+    const second = chats.add("user-a", pageId, ["次の頼み", "次の返答"]);
+    const list = ((await (await listChats(pageId, d)).json()) as { conversations: AiConversationSummary[] }).conversations;
+    expect(list.map((item) => item.id)).toEqual([second, first]);
+    expect(list[0]).toMatchObject({ pageId, messages: 2, lastText: "次の返答" });
+    const opened = (await (await openChat(pageId, first, d)).json()) as AiConversation;
+    expect(opened.messages.map((message) => [message.role, message.text])).toEqual([
+      ["user", "合成の頼み"],
+      ["assistant", "合成の返答"],
     ]);
-    // 提案そのものも残る（履歴から差分を見られる）
-    expect(opened.messages[1]?.proposal).toEqual(first.proposal);
-    // 会話に残しても、ページには何も書かない
-    expect(store.writes).toEqual([]);
   });
 
   it("is only the owner's own: another owner's conversation and a missing page are the same 404", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
-    const chats = memoryConversations(store);
-    const mine = deps("user-a", store, { conversations: chats });
-    const theirs = deps("user-b", store, { conversations: chats });
-    const body = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, mine)).json()) as ProposalBody;
-    const conversationId = body.conversation!.id;
-    const messageId = body.conversation!.messageId;
-
-    const missing = await snapshot(await openChat(randomUUID(), conversationId, mine));
-    expect(await snapshot(await openChat(page.id, conversationId, theirs))).toEqual(missing);
-    expect(await snapshot(await listChats(page.id, theirs))).toEqual(await snapshot(await listChats(randomUUID(), mine)));
-    expect(missing.status).toBe(404);
-
-    // 他人の会話・無い会話を続けようとしても同じ 404（モデルは呼ばない）
-    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
-    const watched = deps("user-b", store, { conversations: chats, ai: () => stub.backend });
-    const theirPage = await store.createPage("user-b", { blocks: [p("合成の 一")] });
-    expect((await propose(theirPage.id, { baseRevision: 1, intent: { preset: "tidy" }, conversationId }, watched)).status).toBe(404);
-    expect((await propose(theirPage.id, { baseRevision: 1, intent: { preset: "tidy" }, conversationId: randomUUID() }, watched)).status).toBe(404);
-    expect(stub.calls).toEqual([]);
-
-    // 他人の提案の発言には採用を繋げない（ページの保存も起きない）
-    expect((await adopt(theirPage.id, { baseRevision: 1, changes: [{ index: 0, text: "合成" }], messageId }, watched)).status).toBe(404);
-    expect(store.writes).toEqual([]);
-  });
-
-  it("answers 401 when there is no session, before looking at the page", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
-    const signedOut = deps(null, store);
-    for (const response of [await listChats(page.id, signedOut), await openChat(page.id, randomUUID(), signedOut)]) {
-      expect([response.status, await response.text()]).toEqual([401, '{"error":"unauthorized"}']);
-    }
-  });
-
-  it("answers 503 while the database is away, and lists the conversations of one page newest first", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
-    const chats = memoryConversations(store);
-    const d = deps("user-a", store, { conversations: chats });
-    expect((await listChats(page.id, deps("user-a", store, { conversations: null }))).status).toBe(503);
-
-    expect(((await (await listChats(page.id, d)).json()) as { conversations: AiConversationSummary[] }).conversations).toEqual([]);
-    const first = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
-    const second = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
-    const list = ((await (await listChats(page.id, d)).json()) as { conversations: AiConversationSummary[] }).conversations;
-    expect(list.map((item) => item.id)).toEqual([second.conversation!.id, first.conversation!.id]);
-    expect(list[0]).toMatchObject({ pageId: page.id, messages: 2, lastText: "提案が 1 件あります" });
-  });
-
-  it("says in the conversation when there was nothing to change", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [bold("すでに整っています。")] });
-    const chats = memoryConversations(store);
-    const d = deps("user-a", store, { conversations: chats });
-    const body = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
-    expect(body.proposal.changes).toEqual([]);
-    expect(chats.rows.get(body.conversation!.id)?.messages.at(-1)?.text).toBe("変えるところはありませんでした");
-  });
-
-  it("does not call the model, and writes nothing to the conversation, when the month is over the limit", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
-    const usage = memoryUsage();
-    usage.seed("user-a", MONTH, 10_000_000);
-    const chats = memoryConversations(store);
-    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
-    const d = deps("user-a", store, { usage, conversations: chats, limitUsd: 10, ai: () => stub.backend });
-
-    const response = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d);
-    expect([response.status, await response.text()]).toEqual([429, '{"error":"quota_exceeded"}']);
-    expect(stub.calls).toEqual([]);
-    expect(chats.rows.size).toBe(0);
-
-    // 会話を続ける要求でも同じ（会話が増えても上限は同じ意味で働く）
-    const allowed = deps("user-a", store, { usage: memoryUsage(), conversations: chats, ai: () => stub.backend });
-    const body = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, allowed)).json()) as ProposalBody;
-    const conversationId = body.conversation!.id;
-    const over = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" }, conversationId }, d);
-    expect(over.status).toBe(429);
-    expect(chats.rows.get(conversationId)?.messages).toHaveLength(2);
-  });
-
-  it("writes the adoption and the version number on the proposal that was adopted", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の  一段落目"), p("二段落目")] });
-    const chats = memoryConversations(store);
-    const d = deps("user-a", store, { conversations: chats });
-    const proposed = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
-    const messageId = proposed.conversation!.messageId;
-    const change = proposed.proposal.changes[0]!;
-
-    const response = await adopt(page.id, { baseRevision: 1, changes: [{ index: change.index, text: change.after }], messageId }, d);
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { page: Page; adopted: { messageId: string; version: number } | null };
-    expect(body.adopted).toEqual({ messageId, version: 1 });
-    // 採用した分だけが版になり（版は採用の前の本文）、ページは 1 回だけ保存される
-    expect(store.writes).toEqual(["createVersion:ai", "savePage"]);
-    expect(store.versions).toEqual([{ pageId: page.id, version: 1, reason: "ai", blocks: [p("合成の  一段落目"), p("二段落目")] }]);
-    expect(body.page.blocks).toEqual([p(change.after), p("二段落目")]);
-
-    const message = await chats.message("user-a", page.id, messageId);
-    expect(message?.version).toBe(1);
-    expect(message?.adopted).toEqual({ changes: [{ index: change.index, text: change.after }], inserts: [] });
-
-    // 閉じた（採用しなかった）提案はページも会話も変えない
-    const other = (await (await propose(page.id, { baseRevision: 2, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
-    expect((await chats.message("user-a", page.id, other.conversation!.messageId))?.adopted).toBeNull();
-    expect(store.writes).toEqual(["createVersion:ai", "savePage"]);
-  });
-
-  it("still saves the page when the adoption cannot be linked to a conversation (no messageId)", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の  一段落目")] });
-    const d = deps("user-a", store);
-    const response = await adopt(page.id, { baseRevision: 1, changes: [{ index: 0, text: "合成の 一段落目。" }] }, d);
-    expect(response.status).toBe(200);
-    expect(((await response.json()) as { adopted: unknown }).adopted).toBeNull();
-    expect(store.writes).toEqual(["createVersion:ai", "savePage"]);
-  });
-
-  it("writes the adoption once (a replayed adoption does not move the version number)", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の  一段落目")] });
-    const chats = memoryConversations(store);
-    const d = deps("user-a", store, { conversations: chats });
-    const proposed = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
-    const messageId = proposed.conversation!.messageId;
-    const change = proposed.proposal.changes[0]!;
-    const body = { changes: [{ index: change.index, text: change.after }], messageId };
-    expect((await adopt(page.id, { ...body, baseRevision: 1 }, d)).status).toBe(200);
-
-    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const again = await adopt(page.id, { ...body, baseRevision: 2 }, d);
-    expect(again.status).toBe(200);
-    expect(((await again.json()) as { adopted: unknown }).adopted).toBeNull();
-    log.mockRestore();
-    expect((await chats.message("user-a", page.id, messageId))?.version).toBe(1);
-  });
-});
-
-describe("the person's context goes into the proposal (「あなたについて」と自動参考ページ)", () => {
-  it("sends 「あなたについて」 and the other pages of the folder, as data", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
-    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
-    const settings: EditorSettings = { ...DEFAULT_EDITOR_SETTINGS, aboutName: "合成の呼び名", about: "合成の自己紹介です。" };
-    const d = deps("user-a", store, {
-      ai: () => stub.backend,
-      settings,
-      references: [{ title: "同じフォルダのページ", blocks: [p("参考の本文")] }],
-    });
-    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
-    expect(stub.calls[0]?.about).toEqual({ name: "合成の呼び名", text: "合成の自己紹介です。" });
-    expect(stub.calls[0]?.references).toEqual([{ title: "同じフォルダのページ", text: "参考の本文" }]);
-  });
-
-  it("asks without them when there is no 「あなたについて」 and no other page", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
-    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
-    const d = deps("user-a", store, { ai: () => stub.backend, references: [] });
-    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
-    expect(stub.calls[0]?.about).toBeUndefined();
-    expect(stub.calls[0]?.references).toBeUndefined();
-  });
-
-  it("asks anyway when the folder cannot be read", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
-    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
-    const d = deps("user-a", store, { ai: () => stub.backend, references: null });
-    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
-    expect(stub.calls[0]?.references).toBeUndefined();
-  });
-
-  it("puts the same context on every request when the page is split", async () => {
-    const store = memoryStore();
-    const long = await store.createPage("user-a", { blocks: [p("あ".repeat(3_000)), p("い".repeat(3_000))] });
-    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
-    const settings: EditorSettings = { ...DEFAULT_EDITOR_SETTINGS, aboutName: "合成の呼び名", about: "合成の自己紹介です。" };
-    const d = deps("user-a", store, { ai: () => stub.backend, settings, references: [{ title: "参考", blocks: [p("参考の本文")] }] });
-    expect((await propose(long.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
-    expect(stub.calls).toHaveLength(2);
-    for (const call of stub.calls) {
-      expect(call.about).toEqual({ name: "合成の呼び名", text: "合成の自己紹介です。" });
-      expect(call.references).toEqual([{ title: "参考", text: "参考の本文" }]);
-    }
-  });
-
-  it("writes who made the proposal into the conversation", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
-    const chats = memoryConversations(store);
-    const d = deps("user-a", store, { conversations: chats });
-    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
-    const conversation = [...chats.rows.values()][0];
-    expect(conversation?.messages.at(-1)).toMatchObject({ role: "assistant" });
-  });
-});
-
-describe("POST /api/pages/{id}/ai/proposals/device（この Mac の CLI が作った提案）", () => {
-  const body = (extra: Record<string, unknown> = {}) => ({
-    baseRevision: 1,
-    input: "二段落目を短くして",
-    reply: "短くしました。",
-    engine: "cli:claude-code",
-    changes: [{ index: 0, text: "短くした一段落目" }],
-    inserts: [],
-    ...extra,
-  });
-
-  it("builds the diff from the page itself, records the turn as device, and leaves the page alone", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("もとの一段落目"), p("二段落目")] });
-    const before = structuredClone(store.rows.get(page.id));
-    const chats = memoryConversations(store);
-    const usage = memoryUsage();
-    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
-    const d = deps("user-a", store, { conversations: chats, usage, ai: () => stub.backend });
-
-    const response = await deviceProposal(page.id, body(), d);
-    expect(response.status).toBe(200);
-    const answer = (await response.json()) as { proposal: Proposal; conversation: { id: string; messageId: string } };
-    // 差分はサーバーが今の本文から作る（モデルは呼ばない）
-    expect(stub.calls).toEqual([]);
-    expect(answer.proposal.changes).toEqual([
-      // 差分は engine.ts と同じ語の単位（共通の「一段落目」は残る）
-      { index: 0, before: "もとの一段落目", after: "短くした一段落目", parts: [{ del: "もとの" }, { ins: "短くした" }, "一段落目"] },
-    ]);
-    // ページは変わらない（採用のときだけ）
-    expect(store.rows.get(page.id)).toEqual(before);
-    expect(store.writes).toEqual([]);
-    // 会話には「この Mac の CLI が作った」と残る
-    const conversation = chats.rows.get(answer.conversation.id);
-    expect(conversation?.messages.map((message) => message.text)).toEqual(["二段落目を短くして", "短くしました。"]);
-    // サブスクなので金額は 0（上限には効かない）
-    expect(usage.rows.get(`user-a/${MONTH}`)).toMatchObject({ requests: 1, costMicroUsd: 0 });
-  });
-
-  it("can be adopted like any other proposal (the version and the link are the same)", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("もとの一段落目")] });
-    const chats = memoryConversations(store);
-    const d = deps("user-a", store, { conversations: chats });
-    const answer = (await (await deviceProposal(page.id, body(), d)).json()) as { conversation: { messageId: string } };
-    const adopted = await adopt(page.id, { baseRevision: 1, changes: [{ index: 0, text: "短くした一段落目" }], messageId: answer.conversation.messageId }, d);
-    expect(adopted.status).toBe(200);
-    expect(store.writes).toEqual(["createVersion:ai", "savePage"]);
-    expect((await chats.message("user-a", page.id, answer.conversation.messageId))?.version).toBe(1);
-  });
-
-  it("drops a change that changes nothing and refuses one that is not an editable paragraph", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("そのまま"), bullet("項目")] });
-    const d = deps("user-a", store);
-    const same = (await (await deviceProposal(page.id, body({ changes: [{ index: 0, text: "そのまま" }] }), d)).json()) as { proposal: Proposal };
-    expect(same.proposal.changes).toEqual([]);
-    expect(same.proposal.unchanged).toBe(1);
-    expect((await deviceProposal(page.id, body({ changes: [{ index: 1, text: "書き換え" }] }), d)).status).toBe(400);
-    expect((await deviceProposal(page.id, body({ changes: [{ index: 9, text: "書き換え" }] }), d)).status).toBe(400);
-  });
-
-  it("answers 401, 404, 409 and 400, and never writes", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("もとの一段落目")] });
-    expect((await deviceProposal(page.id, body(), deps(null, store))).status).toBe(401);
-    const theirs = await deviceProposal(page.id, body(), deps("user-b", store));
-    const missing = await deviceProposal(randomUUID(), body(), deps("user-a", store));
-    expect([theirs.status, await theirs.text()]).toEqual([404, '{"error":"not_found"}']);
+    const chats = memoryConversations();
+    const pageId = randomUUID();
+    chats.pages.set(pageId, "user-a");
+    const conversationId = chats.add("user-a", pageId, ["合成の頼み", "合成の返答"]);
+    const theirs = deps("user-b", { conversations: chats });
+    const mine = deps("user-a", { conversations: chats });
+    const missing = await openChat(randomUUID(), conversationId, mine);
+    const other = await openChat(pageId, conversationId, theirs);
     expect([missing.status, await missing.text()]).toEqual([404, '{"error":"not_found"}']);
-    // 本文が進んでいれば 409（黙って古い版に当てない）
-    expect((await deviceProposal(page.id, body({ baseRevision: 2 }), deps("user-a", store))).status).toBe(409);
-    for (const bad of [
-      body({ engine: "CLI Claude Code" }),
-      body({ input: "" }),
-      body({ changes: [], inserts: [] }),
-      body({ inserts: [{ afterIndex: 9, kind: "paragraph", text: "x" }] }),
-      body({ extra: 1 }),
-    ]) {
-      expect((await deviceProposal(page.id, bad, deps("user-a", store))).status, JSON.stringify(bad)).toBe(400);
-    }
-    expect(store.writes).toEqual([]);
+    expect([other.status, await other.text()]).toEqual([404, '{"error":"not_found"}']);
+    expect((await listChats(pageId, theirs)).status).toBe(404);
   });
 
-  it("refuses a conversation that is not this page's", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("もとの一段落目")] });
-    const chats = memoryConversations(store);
-    const d = deps("user-a", store, { conversations: chats });
-    expect((await deviceProposal(page.id, body({ conversationId: "someone-elses" }), d)).status).toBe(404);
-  });
-});
-
-describe("会話に書けなくても、提案と採用は壊さない", () => {
-  /** 会話の store が投げる（大きすぎる提案・DB の一時的な失敗）。読む側はそのまま。 */
-  function throwingChats(chats: MemoryConversations): MemoryConversations {
-    return Object.assign({ ...chats, rows: chats.rows }, {
-      append: async () => {
-        throw new TypeError("editor-store: proposal must be a small JSON object");
-      },
-      adopt: async () => {
-        throw new Error("synthetic database failure");
-      },
-    });
-  }
-
-  it("returns the proposal even when the conversation cannot keep it", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: sample() });
-    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      const response = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { conversations: throwingChats(memoryConversations(store)) }));
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as ProposalBody;
-      // 提案は使える（モデルを呼んだ分は課金済み）。会話に残せなかったことだけが null で分かる
-      expect(body.proposal.changes).toHaveLength(1);
-      expect(body.conversation).toBeNull();
-      // ログに出すのは route と失敗の名前だけ
-      expect(JSON.stringify(log.mock.calls)).not.toContain("合成の");
-    } finally {
-      log.mockRestore();
-    }
-  });
-
-  it("keeps the saved page when the adoption cannot be written to the conversation", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("合成の  一段落目")] });
-    const chats = memoryConversations(store);
-    const d = deps("user-a", store, { conversations: chats });
-    const proposed = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
-    const messageId = proposed.conversation!.messageId;
-    const change = proposed.proposal.changes[0]!;
-
-    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      const broken = deps("user-a", store, { conversations: throwingChats(chats) });
-      const response = await adopt(page.id, { baseRevision: 1, changes: [{ index: change.index, text: change.after }], messageId }, broken);
-      // ページの保存は済んでいるので 200 のまま（成功したのに失敗に見せない）
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as { page: Page; adopted: unknown };
-      expect(body.page.blocks).toEqual([p(change.after)]);
-      expect(body.adopted).toBeNull();
-      expect(store.writes).toEqual(["createVersion:ai", "savePage"]);
-    } finally {
-      log.mockRestore();
-    }
-  });
-
-  it("returns the Mac's proposal even when the conversation cannot keep it", async () => {
-    const store = memoryStore();
-    const page = await store.createPage("user-a", { blocks: [p("もとの一段落目")] });
-    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      const response = await deviceProposal(
-        page.id,
-        { baseRevision: 1, input: "短くして", reply: "短くしました。", engine: "cli:claude-code", changes: [{ index: 0, text: "短くした一段落目" }], inserts: [] },
-        deps("user-a", store, { conversations: throwingChats(memoryConversations(store)) }),
-      );
-      expect(response.status).toBe(200);
-      expect(((await response.json()) as { conversation: unknown }).conversation).toBeNull();
-    } finally {
-      log.mockRestore();
+  it("answers 401 without a session and 503 while the database is away, marking every response uncacheable", async () => {
+    const pageId = randomUUID();
+    const responses = [
+      await listChats(pageId, deps(null)),
+      await openChat(pageId, randomUUID(), deps(null)),
+      await listChats(pageId, deps("user-a", { conversations: null })),
+      await openChat(pageId, randomUUID(), deps("user-a", { conversations: null })),
+      await usageOf(deps("user-a")),
+    ];
+    expect(responses.map((response) => response.status)).toEqual([401, 401, 503, 503, 200]);
+    for (const response of responses) {
+      expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
     }
   });
 });

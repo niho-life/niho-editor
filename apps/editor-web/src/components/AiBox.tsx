@@ -41,6 +41,9 @@ export const AI_TEXT = {
   undone: "元に戻しました",
   undoKept: "このページは、そのあと直されているので戻しませんでした",
   stopped: "途中で止まりました。もう一度頼めます",
+  stoppedTools: "1 回の依頼で使える道具の回数（40 回）に達したので止まりました。ここまでの変更は残っています。もう一度頼めます",
+  stoppedWrites: "1 回の依頼で書ける回数（20 回）に達したので止まりました。ここまでの変更は残っています。もう一度頼めます",
+  stoppedTime: "1 回の依頼の時間（10 分）を過ぎたので止まりました。ここまでの変更は残っています。もう一度頼めます",
   chatFailed: "AI が答えられませんでした。もう一度お試しください",
   nearLimit: "今月の AI の使用量が上限に近づいています",
   diffFailed: "変更を読めませんでした",
@@ -73,19 +76,35 @@ export function aiChangeText(change: { title: string; change: "edited" | "create
   return change.change === "created" ? `${name} を作りました（${change.delta} 字）` : `${name} を直しました（${delta} 字）`;
 }
 
+/** 止まった理由（resultCode）ごとの言い方。無い code は AI_TEXT.stopped。 */
+export const AI_STOP_TEXT: Record<string, string> = {
+  max_tools: AI_TEXT.stoppedTools,
+  max_steps: AI_TEXT.stoppedTools,
+  max_writes: AI_TEXT.stoppedWrites,
+  max_time: AI_TEXT.stoppedTime,
+};
+
+export function aiStopText(code: string | null): string {
+  return (code !== null && AI_STOP_TEXT[code]) || AI_TEXT.stopped;
+}
+
 export const AI_TOOL_TEXT: Record<string, string> = {
   list_pages: "ページを見ました",
   read_page: "読みました",
+  edit_page: "直しました",
   write_page: "書き換えました",
   create_page: "作りました",
+  search_transcript: "文字起こしを探しました",
 };
 
-/** 作業中の薄い 1 行（道具の実行の前に出し、次の出来事まで残す）。 */
+/** 作業中の薄い 1 行（道具の実行の前に出し、次の出来事まで残す）。サーバーが `detail` を付けたときはそちらを出す。 */
 export const AI_WORK_TEXT: Record<string, string> = {
   read_page: "本文を読んでいます…",
   list_pages: "ページを見ています…",
+  edit_page: "本文の一部を直しています…",
   write_page: "書いています…",
   create_page: "ページを作っています…",
+  search_transcript: "文字起こしを探しています…",
 };
 
 const AI_WORK_FALLBACK = "作業しています…";
@@ -106,8 +125,9 @@ export function liveTurn(input: string): AiLiveTurn {
 /** 出来事を書きかけの発言に足す。段落は道具の前後と、思考と返答の切り替わりで分ける。 */
 export function addLiveEvent(turn: AiLiveTurn, event: AiChatEvent): AiLiveTurn {
   if (event.type === "tool") {
-    if (event.phase === "start") return { ...turn, work: AI_WORK_TEXT[event.tool] ?? AI_WORK_FALLBACK, workEnded: false, split: true };
-    return { ...turn, workEnded: true, split: true };
+    if (event.phase === "start") return { ...turn, work: event.detail ? `${event.detail}…` : AI_WORK_TEXT[event.tool] ?? AI_WORK_FALLBACK, workEnded: false, split: true };
+    // 終わりの 1 句（「第 3 段落を直しました」）があれば、次の文が届くまでそれを出す
+    return { ...turn, ...(event.detail ? { work: event.detail } : {}), workEnded: true, split: true };
   }
   const kind = event.kind ?? "text";
   const last = turn.paragraphs.at(-1);
@@ -117,10 +137,12 @@ export function addLiveEvent(turn: AiLiveTurn, event: AiChatEvent): AiLiveTurn {
   return { ...turn, paragraphs, split: false, ...(turn.workEnded ? { work: null, workEnded: false } : {}) };
 }
 
-export function aiItemText(item: { kind: "narration"; text: string } | { kind: "tool"; tool: string; page: string | null; ok: boolean }): string {
+export function aiItemText(item: { kind: "narration"; text: string } | { kind: "tool"; tool: string; page: string | null; ok: boolean; paragraphs?: number[] }): string {
   if (item.kind === "narration") return item.text;
-  const what = AI_TOOL_TEXT[item.tool] ?? item.tool;
-  const name = item.page ? `${item.page} を` : "";
+  const paragraphs = item.paragraphs ?? [];
+  const target = paragraphs.length === 0 ? "" : paragraphs.length <= 3 ? `第 ${paragraphs.join("・")} 段落を` : `第 ${paragraphs[0]}〜${paragraphs.at(-1)} 段落を`;
+  const what = `${target}${AI_TOOL_TEXT[item.tool] ?? item.tool}`;
+  const name = item.page ? `${item.page} ${target ? "の" : "を"}` : "";
   return item.ok ? `${name}${what}` : `${name}${what}（できませんでした）`;
 }
 
@@ -135,7 +157,7 @@ type MenuItem =
 
 const FACTCHECK_TEXT = "本文の固有名詞・数値・日付・引用を、文字起こしと資料に照らし確認してください。本文は直さず、確認箇所と理由を一覧にしてください。";
 const POLISH_TEXT = "文体をそろえ、繰り返しと冗長な言い回しを削って読みやすくしてください。意味・固有名詞・数字・引用は変えないでください。";
-const EXPAND_TEXT = "本文の各段落を章の書き出しとして一字も変えずに残し、その前後を参照（録音の文字起こし・同じフォルダの資料）から補ってください。各章の前に見出し案（##）を足してください。資料に無い事実は書かず、〔要確認: 何が不明か〕と置いてください。文字起こし由来の段落の末尾に（mm:ss）の時刻を添えてください。";
+const EXPAND_TEXT = "本文の各段落を章の書き出しとして一字も変えずに残し、その前後を参照（録音の文字起こし・同じフォルダの資料）から補ってください。各章の前に見出し案（##）を足してください。資料に無い事実は書かず、確かめられないことは本文に印を置かず、返答で知らせてください。引用の時刻は返答にだけ書き、本文には入れないでください。";
 /** 入力欄へ文を入れるだけのスキル。 */
 const SKILL_TEXT: Partial<Record<SkillId, string>> = { factcheck: FACTCHECK_TEXT, polish: POLISH_TEXT, expand: EXPAND_TEXT };
 const COMPACT_PROMPT = [
@@ -695,7 +717,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
       if (generation !== generationRef.current) return;
       setStatus(answer.resultCode === "revision_conflict" ? "ページが更新されました。もう一度お試しください" :
         native && macRoute !== "server" && answer.resultCode === "write_refused" ? AI_TEXT.nativeRefused :
-          answer.result === "failed" ? AI_TEXT.chatFailed : answer.result === "stopped" ? AI_TEXT.stopped : "");
+          answer.result === "failed" ? AI_TEXT.chatFailed : answer.result === "stopped" ? aiStopText(answer.resultCode) : "");
       if (answer.conversation) {
         const summary: AiChatSummary = { id: answer.conversation.id, updatedAt: new Date().toISOString(), messages: thread.length + 2, lastText: answer.reply };
         setSessions((current) => [summary, ...current.filter((item) => item.id !== summary.id)]);
@@ -759,7 +781,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
       const summary = answer.reply.trim();
       if (answer.result !== "done" || summary.length === 0) {
         setText(keptDraft);
-        setStatus(answer.result === "stopped" ? AI_TEXT.stopped : AI_TEXT.chatFailed);
+        setStatus(answer.result === "stopped" ? aiStopText(answer.resultCode) : AI_TEXT.chatFailed);
         return;
       }
       const handoff = `前の会話の要約:\n${summary}${keptDraft.trim() ? `\n\n${keptDraft}` : ""}`;

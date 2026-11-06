@@ -1,6 +1,5 @@
 import "server-only";
-import type { AiModel, AiRequest, AiResult, AiUsageReport } from "./model";
-import { buildPrompt } from "./prompt";
+import type { AiUsageReport } from "./model";
 
 /**
  * 本物のモデル: Anthropic の Messages API（Issue #38。`EDITOR_AI_MODE=anthropic` のとき config.ts が作る）。
@@ -140,15 +139,6 @@ export function timeoutMs(env: AnthropicEnv): number {
 
 export function maxTokensLimit(env: AnthropicEnv): number {
   return boundedInteger(env.EDITOR_AI_MAX_TOKENS, DEFAULT_MAX_TOKENS, MIN_MAX_TOKENS, MAX_MAX_TOKENS);
-}
-
-/**
- * 提案の 1 回の要求の出力の上限。書き直しは送った文と同じくらいの長さで返る（日本語は 1 字 1〜1.5 トークン。JSON と思考の分も要る）ので、
- * 送る編集できる段落の文字数の 3 倍に 1,024 を足し、`EDITOR_AI_MAX_TOKENS` で止める（小さな依頼で出力が暴走しないように）。
- */
-export function proposalMaxTokens(request: AiRequest, limit: number): number {
-  const chars = request.paragraphs.reduce((sum, paragraph) => (paragraph.kind === "context" ? sum : sum + Array.from(paragraph.text).length), 0);
-  return Math.min(limit, 1024 + chars * 3);
 }
 
 function statusKind(status: number): AnthropicErrorKind {
@@ -488,30 +478,6 @@ export function createAnthropicClient(options: AnthropicOptions): AnthropicClien
         ? await send(options, { ...body, stream: true }, maxTokens, input.signal, readStream(input.onText, options.model))
         : await send(options, body, maxTokens, input.signal);
       return readTurn(message, options.model);
-    },
-  };
-}
-
-const FENCED = /^```(?:json)?[ \t]*\r?\n?([\s\S]*?)\r?\n?```$/i;
-
-/** モデルの出力の JSON（```json … ``` で囲まれていたら外す）。読めなければ invalid_output（使用量は持たせる）。 */
-function parseJsonOutput(text: string, usage: AiUsageReport): unknown {
-  const fenced = FENCED.exec(text);
-  try {
-    return JSON.parse(fenced ? fenced[1]! : text);
-  } catch {
-    throw failure("invalid_output", { reason: "not_json", usage });
-  }
-}
-
-/** 提案のモデル（AiModel）。プロンプトは buildPrompt（本文は system ではなく信頼しないデータの枠に入る）。 */
-export function createAnthropicModel(options: AnthropicOptions): AiModel {
-  const client = createAnthropicClient(options);
-  return {
-    async run(request: AiRequest, signal?: AbortSignal): Promise<AiResult> {
-      const prompt = buildPrompt(request);
-      const { text, usage } = await client.complete({ system: prompt.system, user: prompt.user, maxTokens: proposalMaxTokens(request, maxTokensLimit(options.env)), signal });
-      return { output: parseJsonOutput(text, usage), usage };
     },
   };
 }
