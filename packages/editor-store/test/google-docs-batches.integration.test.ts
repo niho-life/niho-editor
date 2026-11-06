@@ -64,6 +64,11 @@ describe("Google Docs durable batches", { skip: databaseUrl === undefined }, () 
     store = new EditorStore(pool);
   });
 
+  /** 親子を直に書く（旧データの「本文のある親ページ」と工程のサブページの形。movePage はフォルダにしか入れない）。 */
+  const nest = async (child: string, parent: string) => {
+    await pool.query("UPDATE pages SET parent = $2 WHERE owner = $1 AND id = $3", [OWNER, parent, child]);
+  };
+
   after(async () => {
     await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
     await pool.end();
@@ -74,8 +79,8 @@ describe("Google Docs durable batches", { skip: databaseUrl === undefined }, () 
     const child = await store.createPage(OWNER, { title: "子", blocks });
     const grandchild = await store.createPage(OWNER, { title: "孫", blocks });
     const other = await store.createPage(OTHER, { title: "他人", blocks });
-    assert.equal(await store.movePage(OWNER, child.id, root.id), "moved");
-    assert.equal(await store.movePage(OWNER, grandchild.id, child.id), "moved");
+    await nest(child.id, root.id);
+    await nest(grandchild.id, child.id);
     const tree = await readGoogleDocsBatchTree(pool, OWNER, root.id);
     assert.deepEqual(tree?.map((page) => [page.title, page.depth]), [["親", 0], ["子", 1], ["孫", 2]]);
     assert.equal(await readGoogleDocsBatchTree(pool, OTHER, root.id), null, "other owner is indistinguishable from missing");
@@ -188,7 +193,7 @@ describe("Google Docs durable batches", { skip: databaseUrl === undefined }, () 
 
     const softRoot = await store.createPage(OWNER, { title: "ゴミ箱root", blocks });
     const softChild = await store.createPage(OWNER, { title: "ゴミ箱child", blocks });
-    assert.equal(await store.movePage(OWNER, softChild.id, softRoot.id), "moved");
+    await nest(softChild.id, softRoot.id);
     const softTree = (await readGoogleDocsBatchTree(pool, OWNER, softRoot.id))!;
     const softChildMetadata = softTree.find((source) => source.id === softChild.id)!;
     const softBatch = await prepareGoogleDocsBatch(
@@ -205,7 +210,7 @@ describe("Google Docs durable batches", { skip: databaseUrl === undefined }, () 
 
     const childRoot = await store.createPage(OWNER, { title: "子だけ削除root", blocks });
     const childSource = await store.createPage(OWNER, { title: "子だけ削除child", blocks });
-    assert.equal(await store.movePage(OWNER, childSource.id, childRoot.id), "moved");
+    await nest(childSource.id, childRoot.id);
     const childMetadata = (await readGoogleDocsBatchTree(pool, OWNER, childRoot.id))!.find((source) => source.id === childSource.id)!;
     const childBatch = await prepareGoogleDocsBatch(
       pool,
@@ -217,7 +222,7 @@ describe("Google Docs durable batches", { skip: databaseUrl === undefined }, () 
 
     const removing = await store.createPage(OWNER, { title: "消去root", blocks });
     const removingChild = await store.createPage(OWNER, { title: "消去child", blocks });
-    assert.equal(await store.movePage(OWNER, removingChild.id, removing.id), "moved");
+    await nest(removingChild.id, removing.id);
     const removingTree = (await readGoogleDocsBatchTree(pool, OWNER, removing.id))!;
     const removingBatch = await prepareGoogleDocsBatch(
       pool,
@@ -235,7 +240,7 @@ describe("Google Docs durable batches", { skip: databaseUrl === undefined }, () 
   it("32 MiB超のraw sourceはJSONBをNodeへ返さず開始前に拒否する", async () => {
     const page = await store.createPage(OWNER, { title: "巨大raw source", blocks });
     const child = await store.createPage(OWNER, { title: "選択した小さい子", blocks });
-    assert.equal(await store.movePage(OWNER, child.id, page.id), "moved");
+    await nest(child.id, page.id);
     await pool.query(
       `UPDATE pages SET blocks=jsonb_build_array(jsonb_build_object(
          'type','paragraph','content',jsonb_build_array(jsonb_build_object('type','text','text',repeat('x',$3)))

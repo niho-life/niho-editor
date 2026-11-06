@@ -3,13 +3,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageSummary } from "@niho/editor-store";
-import { ShellSettingsPage } from "niho-docs-ui/shell";
+import { ShellLocation, ShellSettingsPage } from "niho-docs-ui/shell";
 import { rememberLastPage } from "@/lib/last-page";
 import { addLeftEmptyCandidate, isRetryableDiscardError, isTabCreatedPage, markTabCreatedPage } from "@/lib/left-empty-pages";
 import { discardPageRequest, readPageRequest, type ConflictPage } from "@/lib/pages-client";
+import { locationOf } from "@/lib/sidebar-items";
 import { isNarrowNow, useEditorFrame } from "./EditorFrame";
+import { FolderPage } from "./FolderPage";
 import { PageEditor } from "./PageEditor";
 import { PageSteps } from "./PageSteps";
+import { RecordingInfo } from "./RecordingInfo";
 import { RecordingTranscript } from "./RecordingTranscript";
 
 export { RecordingStartScreen } from "./RecordingStartScreen";
@@ -104,13 +107,23 @@ export function OpenPage({
     pageSaved(id);
   }, [id, pageSaved]);
 
+  // 狭い画面（720px 以下）の場所（親のフォルダ › 親の録音）。題名の上の 1 行（広い画面ではヘッダーに出し、ここは CSS で隠す）
+  const location = useMemo(() => {
+    const pages = frame.pages ?? [];
+    return locationOf(pages.some((page) => page.id === id) ? pages : [...pages, summary], id);
+  }, [frame.pages, id, summary]);
+  const aboveTitle = location.length > 0 ? <ShellLocation items={location} onOpen={frame.openPage} place="body" /> : null;
+
   const fresh = replaced?.id === id ? replaced : null;
   const current = fresh?.page;
   const pageCover = current ? current.cover ?? null : cover;
   const pageLead = current ? current.lead ?? null : lead;
+  // フォルダは本文のエディタを出さず、中身の一覧と「新しいページ」「録音から」だけ（§3.2）
+  if (summary.kind === "folder") return <FolderPage summary={summary} revision={current?.revision ?? revision} aboveTitle={aboveTitle} />;
   const editor = (
     <PageEditor
       key={fresh?.count ?? 0}
+      aboveTitle={aboveTitle}
       page={{
         id,
         title: current?.title ?? summary.title,
@@ -143,7 +156,15 @@ export function OpenPage({
       pageId={id}
       kind={summary.kind}
       parentId={summary.parent}
-      media={summary.kind === "rec" ? <RecordingTranscript key={id} pageId={id} /> : null}
+      // 録音ページ: 「この録音について」（§3.3）と、録音ブロック・見出し「文字起こし」の下の文字起こし
+      media={
+        summary.kind === "rec" ? (
+          <>
+            <RecordingInfo key={`info-${id}`} pageId={id} />
+            <RecordingTranscript key={id} pageId={id} />
+          </>
+        ) : null
+      }
       onBodyReplaced={onBodyReplaced}
     >
       {editor}
@@ -182,6 +203,9 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
   const titleRef = useRef("");
   const query = useSearchParams();
   const experience = query.get("experience");
+  // `?in=<フォルダ>`: そのフォルダの中に作る（「新しいページ ▾」の「『◯◯』の中に」・フォルダの画面の「新しいページ」）
+  const inside = query.get("in");
+  const createIn = inside !== null && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(inside) ? inside.toLowerCase() : null;
   const handoff = query.get("destination") === "exp" && query.get("lang") === "en" && (experience === null || /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(experience));
   // この下書きのエディタがまだ画面にあるか。保存（POST）が終わる前に「録音から」へ移った・別の下書きへ戻ったときは、
   // URL が `/p/new` のままでも、その URL を作ったページの ID へ替えない（pathname だけでは別の画面と区別できない）
@@ -196,6 +220,7 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
     <PageEditor
       page={{ id: null, title: "", blocks: [], revision: null, ...(handoff ? { lang: "en" as const } : {}) }}
       createOnOpen
+      createIn={createIn}
       // 作ったばかりのページは共有していない
       shared={false}
       onTitleChange={(value) => {
@@ -207,7 +232,7 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
         // 再読み込みのあと `/p/{id}` で開き直しても、このタブで作ったページと分かるように
         markTabCreatedPage(id);
         props.onCreated(id);
-        frame.pageCreated(id, titleRef.current);
+        frame.pageCreated(id, titleRef.current, "note", createIn);
         // 保存が終わる前に別の画面へ移っていたら、その画面の URL は替えない
         if (!aliveRef.current || window.location.pathname !== "/p/new") return;
         window.history.replaceState(null, "", `/p/${id}${handoff ? `?destination=exp&lang=en${experience ? `&experience=${encodeURIComponent(experience)}` : ""}` : ""}`);

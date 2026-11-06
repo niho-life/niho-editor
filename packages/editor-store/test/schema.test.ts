@@ -71,6 +71,20 @@ describe("migration files", () => {
     assert.doesNotMatch(sql, /\b(DELETE|TRUNCATE|DROP TABLE|DROP COLUMN)\b/);
   });
 
+  it("20261106161433 adds the folder kind and the recording background; only note parents with non-step children become folders", async () => {
+    const file = (await readMigrations()).find((item) => item.name === "20261106161433_folder_kind_recording_fields.sql");
+    assert.ok(file, "the folder migration is in the ordered list");
+    const sql = withoutComments(file.sql);
+    assert.match(sql, /ALTER TABLE pages DROP CONSTRAINT pages_kind_check;/);
+    assert.match(sql, /ADD CONSTRAINT pages_kind_check CHECK \(kind IN \('note', 'rec', 'article', 'step', 'folder'\)\)/);
+    assert.match(sql, /ALTER TABLE page_fields\s+ADD COLUMN background text NOT NULL DEFAULT '' CHECK \(length\(background\) <= 4000\)/);
+    // 書き換えるのは子（工程のサブページ以外）を持つ上の段の note の kind だけ
+    assert.equal((sql.match(/\bUPDATE\b/g) ?? []).length, 1);
+    assert.match(sql, /SET kind = 'folder'\s+WHERE p\.kind = 'note'\s+AND p\.parent IS NULL\s+AND EXISTS/);
+    assert.match(sql, /c\.kind <> 'step' AND c\.deleted_at IS NULL/);
+    assert.doesNotMatch(sql, /\b(DELETE|TRUNCATE|DROP TABLE|DROP COLUMN)\b/);
+  });
+
   it("refuses a migration that is not wrapped in BEGIN/COMMIT", () => {
     assert.throws(() => migrationBody({ name: "0099_bad.sql", sql: "CREATE TABLE x (id int);\n" }), /BEGIN/);
   });

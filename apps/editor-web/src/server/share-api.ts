@@ -3,7 +3,7 @@ import type { DocsPageShareState } from "@niho/docs-core";
 import type { Block, DuplicatedPage, OwnerId, PageShareState } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
 import { exportFullMarkdown, MarkdownExportError } from "../export/markdown";
-import { ROBOTS_HEADER_VALUE, errorResponse, expectedOrigin, guarded, isSameOriginRequest, jsonResponse, notFoundResponse } from "./http";
+import { ROBOTS_HEADER_VALUE, errorResponse, expectedOrigin, folderResponse, guarded, isSameOriginRequest, jsonResponse, notFoundResponse } from "./http";
 
 /**
  * 「…」の操作のうちサーバーで行うもの（#34）: リンクで共有（状態・開始・作り直し・停止）、複製、Markdown の書き出し。
@@ -18,8 +18,8 @@ export type PageActionsStore = {
   rotateShare: (owner: OwnerId, pageId: string) => Promise<PageShareState | null>;
   stopShare: (owner: OwnerId, pageId: string) => Promise<PageShareState | null>;
   duplicatePage: (owner: OwnerId, pageId: string) => Promise<DuplicatedPage | null>;
-  /** 書き出しに使う題名と本文（最新の保存版）。 */
-  getPage: (owner: OwnerId, pageId: string) => Promise<{ title: string; blocks: Block[] } | null>;
+  /** 書き出しに使う題名と本文（最新の保存版）。`kind` はフォルダを断るために見る（無ければ見ない）。 */
+  getPage: (owner: OwnerId, pageId: string) => Promise<{ title: string; blocks: Block[]; kind?: string } | null>;
 };
 
 export type ShareApiDeps = {
@@ -66,7 +66,14 @@ export async function readShareFlag(store: Pick<PageActionsStore, "getShare"> | 
 
 type ShareOperation = "getShare" | "enableShare" | "rotateShare" | "stopShare";
 
+/** 本人のページがフォルダか（無い・別の人のページは false。その先の store が同じ 404 を返す）。 */
+async function isOwnFolder(store: PageActionsStore, owner: OwnerId, id: string): Promise<boolean> {
+  return (await store.getPage(owner, id))?.kind === "folder";
+}
+
 function shareRoute(route: string, operation: ShareOperation, write: boolean) {
+  // 共有を始める・作り直すはフォルダには無い（§3.2 の 3）。状態を読む・止めるは何もしないので通す
+  const refusesFolder = operation === "enableShare" || operation === "rotateShare";
   return (request: Request, id: string, deps: ShareApiDeps): Promise<Response> =>
     guarded(route, async () => {
       const session = await deps.auth().getSession(request);
@@ -74,6 +81,7 @@ function shareRoute(route: string, operation: ShareOperation, write: boolean) {
       if (write && !isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
       const store = deps.store();
       if (!store) return errorResponse("unavailable");
+      if (refusesFolder && (await isOwnFolder(store, session.userId, id))) return folderResponse();
       // owner は認証の層の本人だけ（要求の値からは決めない）
       const state = await store[operation](session.userId, id);
       if (!state) return notFoundResponse();
@@ -98,6 +106,7 @@ export function duplicatePageRoute(request: Request, id: string, deps: ShareApiD
     if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
     const store = deps.store();
     if (!store) return errorResponse("unavailable");
+    if (await isOwnFolder(store, session.userId, id)) return folderResponse();
     const page = await store.duplicatePage(session.userId, id);
     return page ? jsonResponse(201, { page }) : notFoundResponse();
   });
@@ -141,6 +150,8 @@ export function exportMarkdownRoute(request: Request, id: string, deps: ShareApi
     if (!store) return errorResponse("unavailable");
     const page = await store.getPage(session.userId, id);
     if (!page) return notFoundResponse();
+    // フォルダの書き出しは zip（export.zip）だけ
+    if (page.kind === "folder") return folderResponse();
     let markdown: string;
     try { markdown = exportFullMarkdown(page.blocks); }
     catch (error) {

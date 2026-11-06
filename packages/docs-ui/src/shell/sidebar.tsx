@@ -14,8 +14,17 @@ export type ShellSidebarProps = {
   onToggleFolder?: (id: string) => void;
   /** 上の 1 行の右端の「一覧をしまう」。 */
   onCollapse?: () => void;
-  /** 上の 1 行の「＋」（空のページ／録音から／音声ファイルから のメニュー）。 */
-  newMenu?: { open: boolean; onToggle: () => void; onClose: () => void; onPick: (kind: NewPageKind) => void };
+  /** 上の 1 行の「＋」（空のページ／録音から／フォルダ のメニュー）。 */
+  newMenu?: {
+    open: boolean;
+    onToggle: () => void;
+    onClose: () => void;
+    onPick: (kind: NewPageKind) => void;
+    /** 出す項目（既定は 空のページ・録音から・フォルダ）。 */
+    kinds?: readonly NewPageKind[];
+    /** 開いているページがフォルダか、フォルダの中のとき、そのフォルダ（メニューの上に「『◯◯』の中に」）。 */
+    inside?: { title: string } | null;
+  };
   /** 上の 1 行の「検索」。押すとその行が検索欄に変わる。 */
   search?: { open: boolean; value: string; onOpen: () => void; onClose: () => void; onChange: (value: string) => void };
   /**
@@ -194,7 +203,13 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
             }
             onDragEnd={drag ? () => drag.onEnd() : undefined}
           >
-            {item.folder && onToggleFolder && (
+            {item.folder && onToggleFolder && item.empty === true && (
+              // 中身の無いフォルダ: 開閉は押せない。幅だけ取って、中身のあるフォルダと題名の位置を揃える
+              <span className="es-ditw es-ditw--none" aria-hidden="true">
+                ▾
+              </span>
+            )}
+            {item.folder && onToggleFolder && item.empty !== true && (
               <button
                 type="button"
                 className="es-ditw"
@@ -225,7 +240,10 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
                   : undefined
               }
             >
-              <span className={`es-di-t${item.title ? "" : " es-di-t--untitled"}`}>{item.title || "無題"}</span>
+              <span className={`es-di-t${item.title ? "" : " es-di-t--untitled"}${item.icon ? ` es-di-t--${item.icon}` : ""}`}>
+                {item.icon && <Icon name={item.icon} className="es-di-ki" />}
+                {item.title || "無題"}
+              </span>
               <span className="es-when">{item.when}</span>
               {(item.sub || item.busy || onSide) && (
                 <span className="es-di-sub">
@@ -269,7 +287,7 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
  * 絞り込み（すべて／公開中／録音）は持たない。`onDrop` を渡すと、行をドラッグしてフォルダへ入れる・並べ替える。
  * 1行は題名と時刻。2行目は公開先・録音・作成中のときだけ。行の「…」は「削除」だけ（`onDeleteRow`）。
  * 下は「設定」の直リンクひとつ（発信先・役割とつながり・ログアウトは設定の一覧の中。オーナー決定 2026-11-06）。
- * 一覧は 1 本の木（フォルダ＝子を持てるページ）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
+ * 一覧は 1 本の木（フォルダ＝`kind = 'folder'` の入れ物。空でも開閉の場所を取る）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
  */
 export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, onDrop, canDrop, listEnd, recent, photos, side, onDeleteRow, panel, me }: ShellSidebarProps) {
   const newButton = useRef<HTMLButtonElement | null>(null);
@@ -376,7 +394,7 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
                 >
                   <Icon name="plus" />
                 </button>
-                {newMenu.open && <NewPageMenu trigger={newButton} onPick={newMenu.onPick} onClose={newMenu.onClose} />}
+                {newMenu.open && <NewPageMenu trigger={newButton} onPick={newMenu.onPick} onClose={newMenu.onClose} kinds={newMenu.kinds} inside={newMenu.inside} />}
               </span>
             )}
             {onCollapse && (

@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import axe from "axe-core";
 import type { AiDiffState, AttachedAi, AttachedAiDiff, AttachedAiSteps } from "@/lib/attached-page";
-import { AiPanel } from "./AiBox";
+import { AiPanel, aiReadsTags } from "./AiBox";
 
 const nativeMock = vi.hoisted(() => ({ shell: null as unknown }));
 vi.mock("niho-desktop-bridge/tauri-shell-transport", () => ({ detectShell: () => nativeMock.shell }));
@@ -202,6 +202,27 @@ async function press(key: string, init: KeyboardEventInit = {}) {
 async function click(element: HTMLElement) {
   await act(async () => { element.click(); });
 }
+
+describe("AI の欄の「読むもの」", () => {
+  it("このページ／この録音について（録音）／元の録音・ほかの段階（工程）／同じフォルダの N ページを文字で出す", () => {
+    expect(aiReadsTags({ kind: "note", folder: null }).map((tag) => tag.text)).toEqual(["このページ"]);
+    expect(aiReadsTags({ kind: "rec", folder: { title: "鎌倉の取材", others: 2 } }).map((tag) => tag.text)).toEqual(["このページ", "この録音について", "鎌倉の取材 の 2 ページ"]);
+    expect(aiReadsTags({ kind: "step", folder: { title: "鎌倉の取材", others: 2 } }).map((tag) => tag.text)).toEqual(["このページ", "元の録音", "ほかの段階 · 読むだけ"]);
+    expect(aiReadsTags({ kind: "note", folder: { title: "鎌倉の取材", others: 0 } }).map((tag) => tag.text)).toEqual(["このページ"]);
+  });
+
+  it("入力欄の上に「読むもの」の札を出す", async () => {
+    defaultServer();
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<div className="es-root"><AiPanel pageId={PAGE_1} context={null} steps={null} reads={{ kind: "rec", folder: { title: "鎌倉の取材", others: 1 } }} /></div>);
+    });
+    const group = container!.querySelector('[role="group"][aria-label="読むもの"]');
+    expect(group?.textContent).toBe("読むものこのページこの録音について鎌倉の取材 の 1 ページ");
+  });
+});
 
 describe("AiPanel", () => {
   it("has no axe serious/critical violations in the persistent rail UI", async () => {

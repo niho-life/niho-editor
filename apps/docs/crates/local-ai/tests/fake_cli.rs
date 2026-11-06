@@ -5,8 +5,8 @@
 
 use niho_local_ai::{
   install_claude_with, provider_status_with, provider_usage_with, run_turn_with, start_auth_with, update_claude_with,
-  Capabilities, InstallerConfig, Provider, ReasonCode, Runtime, StopReason, ToolPolicy, TurnEvent, TurnHandle,
-  TurnRequest, Usage,
+  Capabilities, InstallerConfig, NoticeCode, Provider, ReasonCode, Runtime, StopReason, ToolPolicy, TurnEvent,
+  TurnHandle, TurnRequest, Usage,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -168,6 +168,7 @@ impl Harness {
       timeout: Duration::from_secs(20),
       max_budget_usd: None,
       tool_policy: ToolPolicy::None,
+      web_search: true,
     }
   }
 
@@ -185,6 +186,7 @@ impl Harness {
   }
 
   /// 案件フォルダの中だけを読み書きする依頼（書けるのは artifacts/ の下だけ）。
+  /// 既存の修正の会話のテストは Web を切った形（ファイルの道具だけ）を確かめる。Web を許す形は `web_folder_request`。
   fn folder_request(&self, provider: Provider, model: &str) -> TurnRequest {
     let dir = self.project();
     TurnRequest {
@@ -193,7 +195,15 @@ impl Harness {
         dir,
         writable: vec!["artifacts".to_string()],
       },
+      web_search: false,
       ..self.request(provider, model)
+    }
+  }
+
+  fn web_folder_request(&self, provider: Provider, model: &str) -> TurnRequest {
+    TurnRequest {
+      web_search: true,
+      ..self.folder_request(provider, model)
     }
   }
 
@@ -292,8 +302,23 @@ fn done_of(events: &[TurnEvent]) -> DoneView {
   }
 }
 
+/// 最後のイベントと知らせ（`Notice`。`notices` で見る）を除いたもの。
 fn deltas(events: &[TurnEvent]) -> Vec<TurnEvent> {
-  events.iter().filter(|event| !event.is_terminal()).cloned().collect()
+  events
+    .iter()
+    .filter(|event| !event.is_terminal() && !matches!(event, TurnEvent::Notice { .. }))
+    .cloned()
+    .collect()
+}
+
+fn notices(events: &[TurnEvent]) -> Vec<NoticeCode> {
+  events
+    .iter()
+    .filter_map(|event| match event {
+      TurnEvent::Notice { code } => Some(*code),
+      _ => None,
+    })
+    .collect()
 }
 
 fn args_of(text: &str) -> Vec<String> {
@@ -2134,6 +2159,240 @@ fn codex_project_folder_uses_workspace_write_in_the_folder() {
     ]
   );
   assert_eq!(done_of(&events).text, "見出しを短くしました。");
+}
+
+// --- Web の検索（#283）
+
+#[test]
+fn project_folder_with_web_search_off_tells_it_once_and_keeps_web_tools_out() {
+  let _guard = global_lock();
+  // Claude Code: Web の道具は --tools にも --allowedTools にも無い
+  let h = Harness::new("web-off-claude");
+  let lines = vec![
+    claude_file_init(),
+    claude_message_start(1),
+    claude_text("直しました。"),
+    claude_message_delta("end_turn", 1),
+    claude_result(json!({"result":"直しました。"})),
+  ];
+  h.fake("claude", &format!("{CLAUDE_RECORD}\n{}", print_lines(&lines)));
+  let events = h.run(h.folder_request(Provider::ClaudeCode, "sonnet"));
+  assert_eq!(notices(&events), vec![NoticeCode::WebSearchOff]);
+  assert!(matches!(events.first(), Some(TurnEvent::Notice { .. })));
+  assert_eq!(done_of(&events).text, "直しました。");
+  let args = args_of(&h.read_out("args.txt"));
+  for flag in ["--tools", "--allowedTools"] {
+    let value = arg_after(&args, flag).unwrap();
+    assert!(!value.contains("Web") && !value.contains("Bash"), "{flag} {value}");
+  }
+  // Codex: web_search は disabled のまま
+  let h = Harness::new("web-off-codex");
+  let lines = vec![
+    json!({"type":"thread.started","thread_id":THREAD}).to_string(),
+    json!({"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"直しました。"}}).to_string(),
+    json!({"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}).to_string(),
+  ];
+  h.fake("codex", &format!("{CODEX_RECORD}\n{}", print_lines(&lines)));
+  let events = h.run(h.folder_request(Provider::CodexCli, "gpt-5.6-luna"));
+  assert_eq!(notices(&events), vec![NoticeCode::WebSearchOff]);
+  assert_eq!(done_of(&events).text, "直しました。");
+  let args = args_of(&h.read_out("args.txt"));
+  assert!(args
+    .windows(2)
+    .any(|pair| pair[0] == "-c" && pair[1] == "web_search=\"disabled\""));
+  // Antigravity CLI: エージェントの道具に Web は無い
+  let h = Harness::new("web-off-agy");
+  let script = [
+    AGY_EDITOR_RECORD.to_string(),
+    print_lines(&[
+      agy_init("niho-docs-editor"),
+      agy_user_input(CONVERSATION),
+      agy_step(
+        CONVERSATION,
+        1,
+        "DONE",
+        "agent_response",
+        json!({"text_delta":"直しました。"}),
+      ),
+      agy_result(CONVERSATION, json!({"response":"直しました。"})),
+    ]),
+  ]
+  .join("\n");
+  h.fake("agy", &script);
+  let events = h.run(h.folder_request(Provider::GeminiCli, "gemini-3.8-flash"));
+  assert_eq!(notices(&events), vec![NoticeCode::WebSearchOff]);
+  assert_eq!(done_of(&events).text, "直しました。");
+  assert!(!h.read_out("agent-copy.md").contains("search_web"));
+  // ツール無しの工程は Web の知らせを出さない（Web を使わない）
+  let h = Harness::new("web-off-plain");
+  let lines = vec![
+    json!({"type":"system","subtype":"init","session_id":"s","tools":[],"mcp_servers":[],"model":"claude-sonnet-5"})
+      .to_string(),
+    claude_message_start(1),
+    claude_text("本文"),
+    claude_message_delta("end_turn", 1),
+    claude_result(json!({"result":"本文"})),
+  ];
+  h.fake("claude", &format!("{CLAUDE_RECORD}\n{}", print_lines(&lines)));
+  let plain = TurnRequest {
+    web_search: false,
+    ..h.request(Provider::ClaudeCode, "sonnet")
+  };
+  assert!(notices(&h.run(plain)).is_empty());
+}
+
+#[test]
+fn claude_project_folder_with_web_search_allows_only_web_search_and_web_fetch() {
+  let _guard = global_lock();
+  let h = Harness::new("web-claude");
+  let lines = vec![
+    json!({"type":"system","subtype":"init","session_id":"s","tools":["Edit","Glob","Grep","Read","Write","WebSearch","WebFetch"],"mcp_servers":[],"model":"claude-sonnet-5"}).to_string(),
+    claude_message_start(10),
+    json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_s","name":"WebSearch","input":{"query":"秘密の検索語"}}]},"parent_tool_use_id":null}).to_string(),
+    claude_tool_result("toolu_s", false),
+    claude_message_start(20),
+    claude_text("確かめました。"),
+    claude_message_delta("end_turn", 5),
+    claude_result(json!({"result":"確かめました。"})),
+  ];
+  h.fake("claude", &format!("{CLAUDE_RECORD}\n{}", print_lines(&lines)));
+  let events = h.run(h.web_folder_request(Provider::ClaudeCode, "sonnet"));
+  let args = args_of(&h.read_out("args.txt"));
+  assert_eq!(
+    arg_after(&args, "--tools").as_deref(),
+    Some("Read,Edit,Write,Glob,Grep,WebSearch,WebFetch")
+  );
+  assert_eq!(
+    arg_after(&args, "--allowedTools").as_deref(),
+    Some("Read,Glob,Grep,Edit(./artifacts/**),WebSearch,WebFetch")
+  );
+  assert!(!args.iter().any(|arg| arg.contains("Bash")));
+  assert!(notices(&events).is_empty());
+  assert_eq!(
+    deltas(&events),
+    vec![
+      TurnEvent::ToolUse {
+        id: "toolu_s".into(),
+        name: "WebSearch".into(),
+        summary: String::new()
+      },
+      TurnEvent::ToolResult {
+        id: "toolu_s".into(),
+        name: "WebSearch".into(),
+        ok: true
+      },
+      TurnEvent::TextDelta("確かめました。".into()),
+    ]
+  );
+  assert_eq!(done_of(&events).text, "確かめました。");
+
+  // Web を許しても Bash の呼び出しは止める
+  let h = Harness::new("web-claude-bash");
+  let lines = vec![
+    json!({"type":"system","subtype":"init","session_id":"s","tools":["Read","WebSearch","WebFetch"],"mcp_servers":[]}).to_string(),
+    json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_b","name":"Bash","input":{"command":"ls"}}]},"parent_tool_use_id":null}).to_string(),
+    claude_result(json!({"result":"x"})),
+  ];
+  h.fake("claude", &format!("{CLAUDE_RECORD}\n{}", print_lines(&lines)));
+  let events = h.run(h.web_folder_request(Provider::ClaudeCode, "sonnet"));
+  assert!(matches!(
+    events.last(),
+    Some(TurnEvent::Error {
+      reason_code: ReasonCode::NotConfigured,
+      ..
+    })
+  ));
+}
+
+#[test]
+fn codex_project_folder_with_web_search_runs_live_search_and_still_stops_commands() {
+  let _guard = global_lock();
+  let h = Harness::new("web-codex");
+  let lines = vec![
+    json!({"type":"thread.started","thread_id":THREAD}).to_string(),
+    json!({"type":"item.completed","item":{"id":"ws_1","type":"web_search","query":"秘密の検索語"}}).to_string(),
+    json!({"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"確かめました。"}}).to_string(),
+    json!({"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}).to_string(),
+  ];
+  h.fake("codex", &format!("{CODEX_RECORD}\n{}", print_lines(&lines)));
+  let events = h.run(h.web_folder_request(Provider::CodexCli, "gpt-5.6-luna"));
+  let args = args_of(&h.read_out("args.txt"));
+  assert_eq!(
+    &args[..4],
+    ["exec", "--json", "--sandbox", "workspace-write"].map(String::from)
+  );
+  assert!(args
+    .windows(2)
+    .any(|pair| pair[0] == "-c" && pair[1] == "web_search=\"live\""));
+  assert!(args
+    .windows(2)
+    .any(|pair| pair[0] == "-c" && pair[1] == "features.shell_tool=false"));
+  assert!(notices(&events).is_empty());
+  assert_eq!(
+    deltas(&events),
+    vec![
+      TurnEvent::ToolUse {
+        id: "ws_1".into(),
+        name: "WebSearch".into(),
+        summary: String::new()
+      },
+      TurnEvent::ToolResult {
+        id: "ws_1".into(),
+        name: "WebSearch".into(),
+        ok: true
+      },
+      TurnEvent::TextDelta("確かめました。".into()),
+    ]
+  );
+  assert_eq!(done_of(&events).text, "確かめました。");
+
+  // コマンド実行の item は Web を許しても止める
+  let h = Harness::new("web-codex-command");
+  let lines = vec![
+    json!({"type":"thread.started","thread_id":THREAD}).to_string(),
+    json!({"type":"item.started","item":{"id":"c_1","type":"command_execution","command":"ls"}}).to_string(),
+    json!({"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}).to_string(),
+  ];
+  h.fake("codex", &format!("{CODEX_RECORD}\n{}", print_lines(&lines)));
+  let events = h.run(h.web_folder_request(Provider::CodexCli, "gpt-5.6-luna"));
+  assert!(matches!(
+    events.last(),
+    Some(TurnEvent::Error {
+      reason_code: ReasonCode::NotConfigured,
+      ..
+    })
+  ));
+}
+
+#[test]
+fn agy_project_folder_with_web_search_adds_the_web_tools_and_tells_when_the_cli_lacks_them() {
+  let _guard = global_lock();
+  let h = Harness::new("web-agy");
+  // 偽物の init の道具の一覧（agy_init）には search_web が無い＝この版では検索できない
+  let script = [
+    AGY_EDITOR_RECORD.to_string(),
+    print_lines(&[
+      agy_init("niho-docs-editor"),
+      agy_user_input(CONVERSATION),
+      agy_step(
+        CONVERSATION,
+        1,
+        "DONE",
+        "agent_response",
+        json!({"text_delta":"検索なしで直しました。"}),
+      ),
+      agy_result(CONVERSATION, json!({"response":"検索なしで直しました。"})),
+    ]),
+  ]
+  .join("\n");
+  h.fake("agy", &script);
+  let events = h.run(h.web_folder_request(Provider::GeminiCli, "gemini-3.8-flash"));
+  assert!(h
+    .read_out("agent-copy.md")
+    .contains("\ntools: [view_file, list_dir, write_to_file, replace_file_content, multi_replace_file_content, search_web, read_url_content]\n"));
+  assert!(!h.read_out("agent-copy.md").contains("run_command"));
+  assert_eq!(notices(&events), vec![NoticeCode::WebSearchUnsupported]);
+  assert_eq!(done_of(&events).text, "検索なしで直しました。");
 }
 
 #[test]

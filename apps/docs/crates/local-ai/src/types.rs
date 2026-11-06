@@ -87,7 +87,7 @@ impl Effort {
 }
 
 /// ツールの方針。工程の実行はツール無し（既定）。修正の会話（S5 #18386）は、呼び出し側が渡した作業フォルダ内だけを
-/// 読み書きできる（Web・シェル・MCP は使えない）。Codex は `writable` がちょうど 1 つのとき、その場所だけを cwd にする。
+/// 読み書きできる（シェル・MCP は使えない。Web の検索・取得は `TurnRequest.web_search` のときだけ。#283）。Codex は `writable` がちょうど 1 つのとき、その場所だけを cwd にする。
 /// 音声の区切りの文字起こし（S2a #18383）は、渡した 1 つのファイルを読むだけ（Antigravity CLI だけ）。
 /// JSON は `{"kind":"none"}` | `{"kind":"projectFolder","dir":"/abs/path","writable":["artifacts"]}` |
 /// `{"kind":"readFile","file":"/abs/part-01.wav"}`。
@@ -141,6 +141,10 @@ pub struct TurnRequest {
   pub max_budget_usd: Option<f64>,
   /// ツールの方針（既定はツール無し）。`ProjectFolder` のとき claude・agy は `dir`、codex は唯一の `writable` root で動く
   pub tool_policy: ToolPolicy,
+  /// 修正の会話（`ProjectFolder`）で Web の検索・取得の道具を許すか（JSON `webSearch`。既定 true。#283）。false なら
+  /// 3 つの CLI とも Web の道具を許可に入れず、最初に `Notice { code: WebSearchOff }` を送る。ほかの方針では使わない
+  /// （工程・文字起こしは今まで通り Web 無し）。コマンド実行（Bash・shell）はどちらでも許さない
+  pub web_search: bool,
 }
 
 #[derive(Deserialize)]
@@ -160,6 +164,12 @@ struct TurnRequestWire {
   max_budget_usd: Option<f64>,
   #[serde(default)]
   tool_policy: ToolPolicy,
+  #[serde(default = "default_web_search")]
+  web_search: bool,
+}
+
+fn default_web_search() -> bool {
+  true
 }
 
 impl From<TurnRequestWire> for TurnRequest {
@@ -175,6 +185,7 @@ impl From<TurnRequestWire> for TurnRequest {
       timeout: Duration::from_millis(wire.timeout_ms),
       max_budget_usd: wire.max_budget_usd,
       tool_policy: wire.tool_policy,
+      web_search: wire.web_search,
     }
   }
 }
@@ -214,7 +225,8 @@ pub enum TurnEvent {
   TextDelta(String),
   /// ツールを呼んだ。`id` は CLI の呼び出しの ID（`ToolResult` と組にする）、`name` はツール名（claude は Read・Edit・
   /// Write・Glob・Grep、codex は変更の種類で Edit・Write・Delete、agy は道具を写して Read・Glob・Write・Edit）、`summary` は
-  /// 対象のファイル名だけ（パスのフォルダ・本文・検索語は流さない。無ければ空）
+  /// 対象のファイル名だけ（パスのフォルダ・本文・検索語は流さない。無ければ空）。Web を許した修正の会話では、3 つとも
+  /// Web の道具を `WebSearch`（summary は空）・`WebFetch`（summary は読むページのホスト名だけ）で流す
   ToolUse {
     id: String,
     name: String,
@@ -225,6 +237,11 @@ pub enum TurnEvent {
     id: String,
     name: String,
     ok: bool,
+  },
+  /// 実行は続くが、画面に一言知らせること（Web の検索を切った・この CLI の版では検索できない。#283）。
+  /// 修正の会話（`ProjectFolder`）のときだけ、`Done`・`Error` より前に届く。本文・検索語は載せない
+  Notice {
+    code: NoticeCode,
   },
   Done {
     text: String,
@@ -239,6 +256,26 @@ pub enum TurnEvent {
     reason_code: ReasonCode,
     message: String,
   },
+}
+
+/// `TurnEvent::Notice` の種類。JSON は "webSearchOff" | "webSearchUnsupported"。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NoticeCode {
+  /// 呼び出し側が Web の検索を切った（`TurnRequest.web_search == false`）。検索なしで続ける
+  WebSearchOff,
+  /// この CLI の版（またはログインの種類）では Web の道具が使えない。検索なしで続ける
+  WebSearchUnsupported,
+}
+
+impl NoticeCode {
+  /// 画面に出す文。
+  pub fn message(self) -> &'static str {
+    match self {
+      NoticeCode::WebSearchOff => "検索は切っています。",
+      NoticeCode::WebSearchUnsupported => "この CLI の版では検索できません。",
+    }
+  }
 }
 
 impl TurnEvent {
@@ -278,6 +315,13 @@ impl Serialize for TurnEvent {
         map.serialize_entry("id", id)?;
         map.serialize_entry("name", name)?;
         map.serialize_entry("ok", ok)?;
+        map.end()
+      }
+      TurnEvent::Notice { code } => {
+        let mut map = serializer.serialize_map(Some(3))?;
+        map.serialize_entry("type", "notice")?;
+        map.serialize_entry("code", code)?;
+        map.serialize_entry("message", code.message())?;
         map.end()
       }
       TurnEvent::Done {
@@ -582,6 +626,14 @@ mod tests {
     assert_eq!(minimal.timeout, Duration::from_secs(60));
     // ツールの方針の既定はツール無し
     assert_eq!(minimal.tool_policy, ToolPolicy::None);
+    // Web の検索の既定は許す（#283。設定のスイッチが false を渡す）
+    assert!(minimal.web_search);
+    let off: TurnRequest = serde_json::from_value(json!({
+      "provider": "claudeCode", "model": "m", "systemPrompt": "", "userPrompt": "x", "workdir": "/tmp",
+      "timeoutMs": 5, "webSearch": false
+    }))
+    .unwrap();
+    assert!(!off.web_search);
 
     // timeout は timeoutMs でだけ受ける
     assert!(serde_json::from_value::<TurnRequest>(json!({
@@ -649,6 +701,28 @@ mod tests {
       id: String::new(),
       name: String::new(),
       summary: String::new()
+    }
+    .is_terminal());
+  }
+
+  #[test]
+  fn notice_events_carry_only_the_code_and_the_fixed_message() {
+    assert_eq!(
+      serde_json::to_value(TurnEvent::Notice {
+        code: NoticeCode::WebSearchOff
+      })
+      .unwrap(),
+      json!({"type":"notice","code":"webSearchOff","message":"検索は切っています。"})
+    );
+    assert_eq!(
+      serde_json::to_value(TurnEvent::Notice {
+        code: NoticeCode::WebSearchUnsupported
+      })
+      .unwrap(),
+      json!({"type":"notice","code":"webSearchUnsupported","message":"この CLI の版では検索できません。"})
+    );
+    assert!(!TurnEvent::Notice {
+      code: NoticeCode::WebSearchOff
     }
     .is_terminal());
   }

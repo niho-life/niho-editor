@@ -978,15 +978,18 @@ describe("POST /api/pages/{id}/ai/chat の SSE（Accept: text/event-stream）", 
 });
 
 /** 決まった答えを順に返し、道具の結果（tool_result の中身）を覚える偽のモデル。 */
-function recordingBackend(answers: Turn[]): AiComposeBackend & { results: Array<{ content: string; isError: boolean }> } {
+function recordingBackend(answers: Turn[]): AiComposeBackend & { results: Array<{ content: string; isError: boolean }>; systems: string[] } {
   const backend = stubBackend(answers);
   const results: Array<{ content: string; isError: boolean }> = [];
+  const systems: string[] = [];
   const converse = backend.client.converse;
   return Object.assign(backend, {
     results,
+    systems,
     client: {
       ...backend.client,
       converse: async (input: Parameters<typeof converse>[0]) => {
+        systems.push(String((input as { system?: unknown }).system ?? ""));
         const last = input.messages.at(-1) as { content?: unknown } | undefined;
         if (last && Array.isArray(last.content)) {
           for (const block of last.content as Array<{ type?: string; content?: unknown; is_error?: boolean }>) {
@@ -1187,6 +1190,34 @@ describe("read_page の範囲と list_pages（#278）", () => {
     expect(ai.results[2]).toMatchObject({ isError: true });
     expect(JSON.parse(ai.results[3]!.content)).toMatchObject({ from: 2, to: 2, total: 2, paragraphs: [{ n: 2, markdown: "二三" }] });
     expect(JSON.parse(ai.results[4]!.content)).toEqual({ pages: [{ id: page.id, title: "合成の記事", kind: "note", open: true, writable: true, chars: 3, revision: 1 }] });
+  });
+});
+
+describe("この録音について（録音ページの背景・登場人物・固有名詞）を指示の文脈に入れる", () => {
+  it("開いているのが録音ページなら欄を読んで system に入れ、ふつうのページでは読まない", async () => {
+    const store = memoryStore();
+    const rec = store.add("user-a", { title: "合成の録音", kind: "rec" });
+    const note = store.add("user-a", { title: "合成のメモ" });
+    const fields = vi.fn(async (_owner: string, pageId: string) => ({
+      entities: pageId === rec.id ? [{ name: "佐藤", reading: "", role: "店主", note: "" }] : [],
+      terms: [{ term: "円覚寺", reading: "えんがくじ", variants: [], note: "" }],
+      background: "北鎌倉の珈琲店主に、開店前の散歩の習慣を聞いた。",
+    }));
+    const chats: ChatConversationStore = { ...memoryConversations(store), fields };
+
+    const ai = recordingBackend([turn({ text: "読みました。" })]);
+    await chat(rec.id, { text: "背景を踏まえて" }, deps("user-a", store, { ai, conversations: chats }));
+    expect(fields).toHaveBeenCalledWith("user-a", rec.id);
+    expect(ai.systems[0]).toContain("## この録音について（資料。事実の根拠にはしない）");
+    expect(ai.systems[0]).toContain("- 佐藤: 店主");
+    expect(ai.systems[0]).toContain("北鎌倉の珈琲店主に、開店前の散歩の習慣を聞いた。");
+    expect(ai.systems[0]).toContain("- 円覚寺（えんがくじ）");
+
+    fields.mockClear();
+    const ai2 = recordingBackend([turn({ text: "読みました。" })]);
+    await chat(note.id, { text: "直して" }, deps("user-a", store, { ai: ai2, conversations: chats }));
+    expect(fields).not.toHaveBeenCalled();
+    expect(ai2.systems[0]).not.toContain("この録音について");
   });
 });
 

@@ -51,6 +51,8 @@ fn request(project: &Path, system_prompt: &str, user_prompt: String) -> TurnRequ
       dir: project.to_path_buf(),
       writable: vec!["artifacts".to_string()],
     },
+    // 2026-10-15 に本物で確かめた形（ファイルの道具だけ）。Web の検索はまだ本物で確かめていない（#283）
+    web_search: false,
   }
 }
 
@@ -290,6 +292,7 @@ fn plain_request(provider: Provider, model: String, workdir: &Path) -> TurnReque
     timeout: Duration::from_secs(5 * 60),
     max_budget_usd: None,
     tool_policy: ToolPolicy::None,
+    web_search: true,
   }
 }
 

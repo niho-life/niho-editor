@@ -57,6 +57,11 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-mi--danger{color:var(--ed-red)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-mi .es-mi-check{margin-left:auto;display:inline-flex;color:var(--ed-accent-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-mi small+.es-mi-check{margin-left:6px}
+/* メニューの見出し（「『◯◯』の中に」。押せない）と区切り。モック editor-folders-v1 の .menu .hd / hr */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-menu-hd{display:flex;align-items:center;gap:6px;min-width:0;padding:4px 10px 6px;font-size:12px;font-weight:600;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-menu-hd span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-menu-hd .es-ico{width:14px;height:14px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-menu-sep{height:1px;margin:5px 4px;background:var(--ed-line)}
 
 /* ===== 枠（一覧｜ヘッダー＋ページ＋レール） ===== */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ws{display:grid;grid-template-columns:272px minmax(0,1fr);height:100%;min-height:0}
@@ -135,6 +140,11 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow{display:flex;align-items:flex-start;gap:2px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ditw{flex:0 0 auto;width:18px;align-self:stretch;display:flex;align-items:center;justify-content:center;border-radius:6px;font-size:12px;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ditw:hover{background:var(--ed-sand-2)}
+/* 中身の無いフォルダの開閉（押せない。幅だけ取る。モック editor-folders-v1 の .tw.none） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ditw--none{visibility:hidden}
+/* 題名の前のアイコン（フォルダ・録音・工程のサブページの ✦）。意味は題名と 2 行目の文字が持つ */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-t .es-di-ki{width:16px;height:16px;margin-right:6px;vertical-align:-3px;color:var(--ed-ink-sub)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-t--spark .es-di-ki{width:13px;height:13px;vertical-align:-2px;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di{flex:1 1 0;min-width:0}
 /* 行の「…」（右に並べて開く。設計 §5.5）。ふだんは隠し、行に乗る・フォーカス・メニューを開いている間だけ出す。触る端末（hover なし）では常に出す */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di-more{flex:none;margin-top:4px;color:var(--ed-ink-mute);opacity:0}
@@ -204,6 +214,21 @@
 /* ===== ヘッダー（1段） ===== */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt{position:relative;z-index:10;flex:none;display:flex;align-items:center;gap:8px;height:var(--es-header);padding:0 14px 0 18px;background:color-mix(in srgb,var(--ed-canvas) 96%,transparent);border-bottom:1px solid var(--ed-line)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ttl{display:none;font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 場所（パンくず。親のフォルダ › 親の録音。ページ名は出さない）。ヘッダーは 720px より広いときだけ、本文の題名の上は 720px 以下だけ */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc{display:flex;align-items:center;flex-wrap:wrap;gap:2px;min-width:0;font-size:13px;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc--head{flex:0 1 auto;flex-wrap:nowrap;margin:0 4px;overflow:hidden}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc--body{display:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc-part{display:inline-flex;align-items:center;min-width:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc-sep{flex:none;margin:0 2px;color:var(--ed-line-3);font-style:normal}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc-btn{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:22vw;padding:3px 7px;border-radius:7px;color:var(--ed-ink-mute);font-size:13px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc-btn:hover{background:var(--ed-sand);color:var(--ed-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc-btn span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc-btn .es-ico{width:14px;height:14px}
+@media (max-width:720px){
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc--head{display:none}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc--body{display:flex;margin:0 0 4px -7px}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc--body .es-loc-btn{max-width:60vw}
+}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-morewrap{position:relative;display:flex}
 
 /* 状態は丸ひとつ。言葉はホバー／フォーカスの吹き出しに出す */
@@ -500,6 +525,10 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-stop-mark{width:10px;height:10px;border-radius:2px;background:currentColor}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip{display:flex;align-items:center;gap:5px;margin:0 1px 7px;padding:4px 6px;border:1px solid var(--ed-line-2);border-radius:6px;color:var(--ed-accent-ink);font-size:12px;min-width:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip .es-ico{width:14px;height:14px}
+/* AI の入力欄の上の「読むもの」（このページ・この録音について・同じフォルダの N ページ）。モック editor-folders-v1 の .ctx */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-reads{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin:0 1px 7px;font-size:12px;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-read{display:inline-flex;align-items:center;gap:4px;min-height:22px;max-width:100%;padding:0 8px;border-radius:999px;background:var(--ed-sand);font-size:12px;font-weight:500;color:var(--ed-ink-mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-read .es-ico{width:12px;height:12px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-chip button{margin-left:auto;padding:0 4px;font-size:16px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-popover{position:absolute;z-index:35;left:8px;right:8px;border:1px solid var(--ed-line-2);border-radius:10px;background:var(--ed-canvas);box-shadow:0 12px 32px rgba(0,0,0,.12);padding:5px;max-height:310px;overflow:auto}

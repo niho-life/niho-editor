@@ -33,6 +33,18 @@ describe("parseCreatePage", () => {
     expect(parseCreatePage({ lead: "あ".repeat(161) }).ok).toBe(false);
     expect(parseCreatePage({ cover: "00000000-0000-4000-8000-000000000001" }).ok).toBe(false);
   });
+
+  it("takes a folder and a parent folder id; a folder has no body and no parent", () => {
+    const parent = "00000000-0000-4000-8000-000000000001";
+    expect(parseCreatePage({ kind: "folder", title: "フォルダ" })).toEqual({ ok: true, value: { kind: "folder", title: "フォルダ" } });
+    expect(parseCreatePage({ kind: "rec", parent })).toEqual({ ok: true, value: { kind: "rec", parent } });
+    expect(parseCreatePage({ parent: parent.toUpperCase() })).toEqual({ ok: true, value: { parent } });
+    expect(parseCreatePage({ parent: null })).toEqual({ ok: true, value: {} });
+    for (const body of [{ parent: "x" }, { parent: 1 }, { kind: "folder", parent }, { kind: "folder", blocks: [paragraph("本文")] }]) {
+      expect(parseCreatePage(body), JSON.stringify(body)).toEqual({ ok: false });
+    }
+    expect(parseCreatePage({ kind: "folder", blocks: [] }).ok).toBe(true);
+  });
 });
 
 describe("parsePagePatch", () => {

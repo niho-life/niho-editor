@@ -49,7 +49,58 @@ const tabStops = (root: ParentNode = document) =>
   [...root.querySelectorAll<HTMLElement>("a[href], button, input, textarea, select, [tabindex]")].filter(
     (el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled && !el.closest("[inert]"),
   );
+const ME = { onOpen: () => undefined };
 const nameOf = (el: Element | null | undefined) => el?.getAttribute("aria-label") ?? el?.textContent?.trim() ?? "";
+
+describe("一覧のフォルダの行とアイコン（kind = 'folder'）", () => {
+  it("空のフォルダも開閉の場所を取るが押せない。中身のあるフォルダは開閉を押せる。題名の前にアイコン", () => {
+    const onToggle = vi.fn();
+    const host = mount(
+      <ShellSidebar
+        items={[
+          { id: "f1", title: "空のフォルダ", when: "昨日", folder: true, empty: true, icon: "folder" },
+          { id: "f2", title: "取材", when: "昨日", folder: true, open: true, icon: "folder" },
+          { id: "r1", title: "録音", when: "昨日", depth: 1, icon: "mic", sub: { text: "録音 · 文字起こし済み" } },
+          { id: "s1", title: "記事本文", when: "昨日", depth: 2, icon: "spark", sub: { text: "記事制作" } },
+        ]}
+        onToggleFolder={onToggle}
+        me={ME}
+      />,
+    );
+    const toggles = [...host.querySelectorAll<HTMLButtonElement>("button.es-ditw")];
+    expect(toggles.map((button) => button.getAttribute("aria-label"))).toEqual(["取材 の中"]);
+    const placeholder = host.querySelector(".es-ditw--none")!;
+    expect(placeholder.tagName).toBe("SPAN");
+    expect(placeholder.getAttribute("aria-hidden")).toBe("true");
+    act(() => toggles[0]!.click());
+    expect(onToggle).toHaveBeenCalledWith("f2");
+    expect(host.querySelectorAll(".es-di-t .es-di-ki")).toHaveLength(4);
+    expect(host.querySelector(".es-di-t--spark")?.textContent).toBe("記事本文");
+  });
+});
+
+describe("ヘッダーの場所（パンくず）", () => {
+  it("親のフォルダ › 親の録音だけを出し、ページの題名は出さない。押すとその場所へ。上の段では何も出さない", () => {
+    const onOpen = vi.fn();
+    const host = mount(
+      <ShellHeader
+        location={[
+          { id: "f1", title: "鎌倉の取材", icon: "folder" },
+          { id: "r1", title: "", icon: "mic" },
+        ]}
+        onOpenLocation={onOpen}
+      />,
+    );
+    const nav = host.querySelector('nav[aria-label="場所"]')!;
+    expect(nav.textContent).toBe("鎌倉の取材›無題");
+    expect(host.querySelector(".es-ttl")?.textContent).toBe("");
+    act(() => [...nav.querySelectorAll("button")][1]!.click());
+    expect(onOpen).toHaveBeenCalledWith("r1");
+
+    const top = mount(<ShellHeader location={[]} />);
+    expect(top.querySelector('nav[aria-label="場所"]')).toBeNull();
+  });
+});
 
 describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
   function Sidebar({ onPick = vi.fn(), onSettings = vi.fn() }: { onPick?: (kind: string) => void; onSettings?: () => void }) {
@@ -57,7 +108,7 @@ describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
     return <ShellSidebar items={[]} newMenu={{ open, onToggle: () => setOpen((v) => !v), onClose: () => setOpen(false), onPick }} me={{ onOpen: onSettings }} />;
   }
 
-  it("＋で新しいページのメニュー（空のページ／録音から）が開き、先頭にフォーカス。Esc で閉じて＋へ戻る", () => {
+  it("＋で新しいページのメニュー（空のページ／録音から／フォルダ）が開き、先頭にフォーカス。Esc で閉じて＋へ戻る", () => {
     const onPick = vi.fn();
     const host = mount(<Sidebar onPick={onPick} />);
     const plus = host.querySelector<HTMLButtonElement>('button[aria-label="新しいページ（⌘N）"]')!;
@@ -65,14 +116,33 @@ describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
     act(() => plus.click());
     const menu = host.querySelector('[role="menu"]')!;
     expect(menu.getAttribute("aria-label")).toBe("新しいページ");
-    expect([...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["空のページ", "録音から"]);
+    expect([...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["空のページ⌘N", "録音から", "フォルダ"]);
+    // フォルダの前に区切り。上の段にいるときは見出しを出さない
+    expect(menu.querySelectorAll('[role="separator"]')).toHaveLength(1);
+    expect(menu.querySelector(".es-menu-hd")).toBeNull();
     expect(plus.getAttribute("aria-expanded")).toBe("true");
-    expect(document.activeElement?.textContent).toBe("空のページ");
+    expect(document.activeElement?.textContent).toBe("空のページ⌘N");
     key(document.activeElement!, "ArrowDown");
     expect(document.activeElement?.textContent).toBe("録音から");
     key(document.activeElement!, "Escape");
     expect(host.querySelector('[role="menu"]')).toBeNull();
     expect(document.activeElement).toBe(plus);
+  });
+
+  it("フォルダの中では上に「『◯◯』の中に」の見出し。フォルダを選ぶと onPick（folder）。kinds で項目を絞れる（Mac）", () => {
+    const onPick = vi.fn();
+    const host = mount(
+      <ShellSidebar items={[]} me={ME} newMenu={{ open: true, onToggle: vi.fn(), onClose: vi.fn(), onPick, inside: { title: "鎌倉の取材" } }} />,
+    );
+    const menu = host.querySelector('[role="menu"]')!;
+    expect(menu.querySelector(".es-menu-hd")?.textContent).toBe("「鎌倉の取材」の中に");
+    expect(menu.textContent).not.toContain("上の段");
+    act(() => [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent === "フォルダ")!.click());
+    expect(onPick).toHaveBeenCalledWith("folder");
+
+    const mac = mount(<ShellSidebar items={[]} me={ME} newMenu={{ open: true, onToggle: vi.fn(), onClose: vi.fn(), onPick, kinds: ["blank", "recording"] }} />);
+    expect([...mac.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(["空のページ⌘N", "録音から"]);
+    expect(mac.querySelectorAll('[role="separator"]')).toHaveLength(0);
   });
 
   it("メニューの項目を選ぶと onPick（recording）が呼ばれる", () => {

@@ -8,12 +8,10 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageKind, PageLang, PageSummary, StepStatus } from "@niho/editor-store";
 import {
   EditorShell,
-  ShellEntitiesEditor,
   ShellHeader,
   ShellMobileToolbar,
   ShellSheet,
   ShellSidebar,
-  ShellTermsEditor,
   ShellTools,
   type NewPageKind,
   type ShellDropTarget,
@@ -26,17 +24,27 @@ import { imageAssetPath } from "@/image/image-paths";
 import { pageImages } from "@/lib/image-upload-client";
 import { movePageOrderRequest, recordPageOpenRequest } from "@/lib/folder-client";
 import { discardLeftEmptyCandidates, dropLeftEmptyCandidate } from "@/lib/left-empty-pages";
-import { listPagesRequest, movePageRequest } from "@/lib/pages-client";
+import { createPageRequest, listPagesRequest, movePageRequest } from "@/lib/pages-client";
 import { PAGE_MAX_BYTES } from "@/image/image-limits";
 import { SAVE_STATUS_TEXT, headerStatus, type SaveStatus } from "@/lib/save-status";
 import { useShortcuts } from "@/lib/shortcuts";
-import { arrangeSidebarItems, folderOptions, orderNeighbours, reorderedPages, searchRows, siblingOrder, withoutPageTree, type SidebarPublication } from "@/lib/sidebar-items";
+import {
+  arrangeSidebarItems,
+  folderOfPage,
+  folderOptions,
+  locationOf,
+  orderNeighbours,
+  reorderedPages,
+  searchRows,
+  siblingOrder,
+  withoutPageTree,
+  type SidebarPublication,
+} from "@/lib/sidebar-items";
 import { usePageHistory } from "@/lib/use-page-history";
 import { AI_GRAY_ITEM, usePageMenu, type AttachedPage, type PageMenuLocalItem } from "@/lib/use-page-menu";
 import { setAiGray, useAiGray } from "@/lib/ai-gray";
 import type { AttachedAiSteps } from "@/lib/attached-page";
 import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
-import { useFolderFields, type FolderFieldsState } from "@/lib/use-folder-fields";
 import { usePageShare } from "@/lib/use-page-share";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
 import { useShellLayout } from "@/lib/use-shell-layout";
@@ -98,8 +106,8 @@ export type EditorFrameApi = {
   pageLangChanged: (id: string, lang: PageLang) => void;
   /** 保存した。一覧の上へ動かし、時刻を今にする。 */
   pageSaved: (id: string) => void;
-  /** 新しいページを作った（複製を含む）。一覧の上に足す。種類は既定で note。 */
-  pageCreated: (id: string, title: string, kind?: PageKind) => void;
+  /** 新しいページを作った（複製を含む）。一覧の上に足す。種類は既定で note、親（入れたフォルダ）は既定で無し。 */
+  pageCreated: (id: string, title: string, kind?: PageKind, parent?: string | null) => void;
   /** ページをゴミ箱へ入れた。一覧から、そのページと子孫（読み込んである分）を外す。 */
   pageRemoved: (id: string) => void;
   /**
@@ -125,6 +133,12 @@ export type EditorFrameApi = {
   openPublish: () => void;
   /** 左下の「このページの写真」で写真を上げている途中か（何も足していないページを捨てる判定に使う）。 */
   photosUploading?: () => boolean;
+  /** 一覧に読み込んである行（フォルダを開いた画面の中身・AI の「読むもの」の数に使う）。 */
+  pages?: readonly PageSummary[];
+  /** 一覧の時刻の基準（サーバーで描いた時刻。フォルダの中身の時刻を一覧と同じにする）。 */
+  now?: number;
+  /** 場所（親のフォルダ › 親の録音）を押した。そのページへ移る。 */
+  openPage?: (id: string) => void;
 };
 
 const noop = () => undefined;
@@ -176,6 +190,11 @@ function samePublication(a: SidebarPublication | null, b: SidebarPublication | n
   return a === b || (a !== null && b !== null && a.dest === b.dest && a.handle === b.handle && a.range === b.range && a.stopped === b.stopped);
 }
 
+/** 読み込んである行と、開いているページ（一覧に無いこともある）を合わせたもの（所属フォルダ・場所を辿るため）。 */
+function openedForFolder(list: Pick<ListState, "pages" | "opened">): PageSummary[] {
+  return list.opened && !list.pages.some((page) => page.id === list.opened!.id) ? [...list.pages, list.opened] : list.pages;
+}
+
 function toTop(pages: PageSummary[], page: PageSummary): PageSummary[] {
   return [page, ...pages.filter((item) => item.id !== page.id)];
 }
@@ -215,13 +234,21 @@ const VISUALLY_HIDDEN_STYLE = {
  * 削除の確認（docs-ui の ShellSheet。外は inert、Esc・外の押下・「やめる」で閉じ、閉じたら「…」へフォーカスが戻る）。
  * 送っている間は閉じず、2 回目を送らない。失敗の理由はダイアログの中に出し、閉じない。
  */
-function DeleteConfirm(props: { title?: string; busy: boolean; error: string | null; onConfirm: () => void; onCancel: () => void }) {
-  const { busy } = props;
+function DeleteConfirm(props: { title?: string; busy: boolean; error: string | null; onConfirm: () => void; onCancel: () => void; folder?: { title: string; count: number } | null }) {
+  const { busy, folder } = props;
   return (
-    <ShellSheet label="ページの削除" onClose={props.onCancel}>
+    <ShellSheet label={folder ? "フォルダの削除" : "ページの削除"} onClose={props.onCancel}>
       <div className="es-sh-hd">
-        {/* 一覧の行から消すときは、どのページかを見出しで言う（無題なら「このページ」） */}
-        <h2>{props.title ? `「${props.title}」を削除しますか？` : "このページを削除しますか？"}</h2>
+        {/* どのページかを見出しで言う（無題なら「このページ」）。フォルダは中のページの数も言う */}
+        <h2>
+          {folder
+            ? folder.count > 0
+              ? `「${folder.title || "無題"}」と中の ${folder.count} ページを削除しますか？`
+              : `「${folder.title || "無題"}」を削除しますか？`
+            : props.title
+              ? `「${props.title}」を削除しますか？`
+              : "このページを削除しますか？"}
+        </h2>
       </div>
       <div className="es-sh-body">
         <div className="es-sh-sec">
@@ -352,62 +379,6 @@ function MoveSheet(props: {
   );
 }
 
-/** 「⋯」の「フォルダの背景…」: 登場人物・固有名詞（#37）。シートを開いているあいだだけ読む。 */
-function FolderFieldsSheet({ fields, onClose }: { fields: FolderFieldsState; onClose: () => void }) {
-  return (
-    <ShellSheet label="フォルダの背景" onClose={onClose}>
-      <div className="es-sh-hd">
-        <h2>フォルダの背景</h2>
-      </div>
-      <div className="es-sh-body">
-        <div className="es-sh-sec">
-          {fields.open ? (
-            <>
-              <ShellEntitiesEditor entities={fields.entities} max={fields.max.entities} busy={fields.busy} onChange={fields.onEntities} onCancel={fields.onCancel} onSave={fields.onSave} />
-              <ShellTermsEditor
-                terms={fields.terms}
-                max={fields.max.terms}
-                busy={fields.busy}
-                onChange={fields.onTerms}
-                onCancel={fields.onCancel}
-                onSave={fields.onSave}
-                heading="このフォルダの固有名詞"
-                name="このフォルダの固有名詞"
-              />
-            </>
-          ) : (
-            <>
-              <dl className="es-kv">
-                <div>
-                  <dt>登場人物</dt>
-                  <dd>{fields.entities.length === 0 ? "なし" : fields.entities.map((entity) => entity.name).join(" · ")}</dd>
-                </div>
-                <div>
-                  <dt>固有名詞</dt>
-                  <dd>{fields.terms.length === 0 ? "なし" : fields.terms.map((term) => term.term).join(" · ")}</dd>
-                </div>
-              </dl>
-              <button type="button" className="es-btn es-btn--outline es-btn--sm" style={{ marginTop: 12 }} data-autofocus="" onClick={fields.onOpen}>
-                編集
-              </button>
-            </>
-          )}
-          {fields.note && (
-            <p role="alert" className="es-upnote">
-              {fields.note}
-            </p>
-          )}
-        </div>
-      </div>
-      <div className="es-sh-foot">
-        <span className="es-sp" />
-        <button type="button" className="es-btn es-btn--quiet" onClick={onClose}>
-          閉じる
-        </button>
-      </div>
-    </ShellSheet>
-  );
-}
 
 /** 右下のページの情報の ⓘ: 容量の説明（説明文はここだけに置く）。 */
 function CapacitySheet({ onClose }: { onClose: () => void }) {
@@ -435,7 +406,7 @@ function CapacitySheet({ onClose }: { onClose: () => void }) {
 }
 
 /** 枠が出すシート（「⋯」の移動・フォルダの背景と、ページの情報の ⓘ）。開いたページの id で持ち、ページが替わったら出さない。 */
-type FrameSheet = { kind: "move" | "folder-fields" | "capacity"; id: string };
+type FrameSheet = { kind: "move" | "capacity"; id: string };
 
 /**
  * editor の枠（一覧＋ヘッダー＋ページ）。見た目は niho-docs-ui の shell（#48）。ここは状態と移動だけを持つ。
@@ -613,10 +584,10 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         // 公開中なら「更新あり」を確かめ直す
         publishSaved.current(id);
       },
-      pageCreated: (id, title, kind = "note") => {
+      pageCreated: (id, title, kind = "note", parent = null) => {
         const at = new Date().toISOString();
         // 作ったばかりのページは公開していない
-        const page: PageSummary = { id, kind, title, lang: "ja", parent: null, stepStatus: null, sortOrder: 0, createdAt: at, updatedAt: at, publication: null };
+        const page: PageSummary = { id, kind, title, lang: "ja", parent, stepStatus: null, sortOrder: 0, createdAt: at, updatedAt: at, publication: null };
         setList((current) => ({ ...current, pages: toTop(current.pages, page) }));
       },
       registerPageSaver: (saveNow) => {
@@ -693,7 +664,21 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     }),
     [],
   );
-  const frame = useMemo<EditorFrameApi>(() => ({ narrow, ...api }), [narrow, api]);
+  // 場所（パンくず）を押したときの移動。router の値が描くたびに替わっても frame（context）を作り直さない
+  const routerRef = useRef(router);
+  useEffect(() => {
+    routerRef.current = router;
+  }, [router]);
+  const openFromLocation = useCallback((id: string) => routerRef.current.push(`/p/${id}`), []);
+  // 読み込んである一覧の行（フォルダの画面の中身・場所・AI の「読むもの」が使う）。依存は値そのもので書く（React Compiler の規則）
+  const listPages = list.pages;
+  // ヘッダーの場所（親のフォルダ › 親の録音）。上の段のページでは空。
+  // frame の useMemo より前で計算する（React Compiler は、memo のあとに list.pages を外の関数へ渡す呼び出しがあると memo を保てない）
+  const location = locationOf(openedForFolder(list), currentId ?? null);
+  const frame = useMemo<EditorFrameApi>(
+    () => ({ narrow, ...api, pages: listPages, now, openPage: openFromLocation }),
+    [narrow, api, listPages, now, openFromLocation],
+  );
 
   // 前に `pagehide`（タブを閉じる・再読み込み）で離れた、何も足していないページを捨てる（src/lib/left-empty-pages.ts）。
   // 開いたときに 1 回だけ。今開いているページ（再読み込み・最後に開いたページへ戻った）は候補から外すだけで捨てない。
@@ -798,9 +783,25 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     else router.push(`/p/${id}${sideId ? `?side=${sideId}` : ""}`);
   };
 
+  // 開いているページの所属フォルダ（フォルダそのもの・その中のページ・その中の録音の工程のサブページ）。新しいページはその中に作る
+  const hereFolder = folderOfPage(openedForFolder(list), currentId ?? null);
+  const [folderNote, setFolderNote] = useState<string | null>(null);
   const pickNew = (kind: NewPageKind) => {
     setNewMenuOpen(false);
-    router.push(kind === "recording" ? "/p/new?from=recording" : "/p/new");
+    if (kind === "folder") {
+      // フォルダは入れ子にしないので、いつも上の段に作る。作ったらそのフォルダを開く（題名はその場で直す）
+      setFolderNote(null);
+      void createPageRequest({ kind: "folder" }).then(
+        (created) => {
+          api.pageCreated(created.id, "", "folder");
+          router.push(`/p/${created.id}`);
+        },
+        () => setFolderNote("フォルダを作れませんでした"),
+      );
+      return;
+    }
+    const inside = hereFolder ? `in=${encodeURIComponent(hereFolder.id)}` : "";
+    router.push(kind === "recording" ? `/p/new?from=recording${inside ? `&${inside}` : ""}` : `/p/new${inside ? `?${inside}` : ""}`);
   };
 
   // 一覧の行の「…」→「削除」（確認のシートはヘッダーの「…」の削除と同じ）。消したページ（フォルダなら中のページも）を開いていればホームへ、右に並べていれば閉じる
@@ -820,9 +821,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const rowTitle = (id: string) =>
     items.find((item) => item.id === id)?.title ?? list.pages.find((page) => page.id === id)?.title ?? "";
 
-  const opened = currentId ? (list.pages.find((page) => page.id === currentId) ?? (list.opened?.id === currentId ? list.opened : undefined)) : undefined;
   const recordingStart = pathname === "/p/new" && searchParams.get("from") === "recording";
-  const title = currentId ? (opened?.title ?? "") : recordingStart ? "録音から" : (settings?.title ?? "");
+  // ページの題名はヘッダーに出さない（本文の題名にだけ。オーナー決定 2026-11-06）。ページでない画面（録音から・設定）は出す
+  const title = currentId ? undefined : recordingStart ? "録音から" : (settings?.title ?? "");
 
   // 公開の状態・ボタン・シートは、開いている（一覧か開いたページで分かっている）自分のページにだけ出す
   const openPage = currentId ? (list.opened?.id === currentId ? list.opened : list.pages.find((page) => page.id === currentId)) : undefined;
@@ -978,7 +979,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   );
 
   const publishing = usePagePublish({
-    pageId: openPage?.id ?? null,
+    // フォルダは公開しない（公開のボタン・状態を出さない）
+    pageId: openPage && openPage.kind !== "folder" ? openPage.id : null,
     isArticle: openPage?.kind === "article",
     onPublication,
     onNavigate: (path) => router.push(path),
@@ -1038,23 +1040,35 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     ? (list.pages.find((page) => page.id === railId) ?? (list.opened?.id === railId ? list.opened : undefined))
     : undefined;
   const railPage = attached && attached.id !== null && attached.id === railId ? attached : null;
-  const railShown = railSummary !== undefined && (narrow ? railFor === pathname : railOpenWide);
+  const railShown = railSummary !== undefined && railSummary.kind !== "folder" && (narrow ? railFor === pathname : railOpenWide);
   // 分割ビュー（設計 §5.5）: 一覧・AI の置き場所と幅、浮かせた AI。端末ごとに覚える（src/lib/use-shell-layout.ts）。
   // 900px 未満は今のまま（EditorShell が従来の 1 枚表示にする。覚えた配置は使わない）
   const layout = useShellLayout({ wide: !narrow, list: sidebarOpen, ai: railShown, side: sideId !== null });
   // 入れられるフォルダ（読み込んである上の段のページ）。入れ先が無く、いま上の段にいるなら「移動…」の「フォルダ」を出さない
   const railFolders = useMemo(() => (railSummary ? folderOptions(list.pages, railSummary.id) : []), [railSummary, list.pages]);
   const canFolder = railSummary !== undefined && (railFolders.length > 0 || railSummary.parent !== null);
-  // フォルダ（＝子を持つ上の段のページ）でだけ「フォルダの背景…」とフォルダの書き出しを出す
-  const railIsFolder = railSummary !== undefined && railSummary.parent === null && list.pages.some((page) => page.parent === railSummary.id);
+  // フォルダ（kind = 'folder'）では「…」を「書き出し（.zip）」「削除」だけにし、AI・公開・挿入の道具・ページの情報を出さない
+  const railIsFolder = railSummary?.kind === "folder";
   // 「並び」は動かせるときだけ出す（同じ階層に 1 つしか無いページには出さない）
   const railOrder = railSummary ? orderNeighbours(list.pages, railSummary.id) : { canUp: false, canDown: false };
   const canOrder = railOrder.canUp || railOrder.canDown;
   // 枠のシートとページの情報は、開いたときのページでだけ出す（ページが替わったら出さない）
   const sheetFor = frameSheet && railSummary && frameSheet.id === railSummary.id ? frameSheet.kind : null;
   const infoOpen = railSummary !== undefined && infoFor === railSummary.id;
-  // フォルダの欄を読むのは「フォルダの背景…」のシートを開いているあいだだけ
-  const folderFields = useFolderFields(sheetFor === "folder-fields" && railIsFolder && railSummary ? railSummary.id : null);
+  // AI の欄の「読むもの」（このページ・この録音について・元の録音・同じフォルダの N ページ）
+  const aiReads = useMemo(() => {
+    if (!railSummary || railSummary.kind === "folder") return null;
+    const parent = railSummary.parent ? list.pages.find((page) => page.id === railSummary.parent) : undefined;
+    const folder = parent?.kind === "folder" ? { title: parent.title, others: list.pages.filter((page) => page.parent === parent.id && page.id !== railSummary.id).length } : null;
+    return { kind: railSummary.kind, folder };
+  }, [railSummary, list.pages]);
+  // フォルダを削除するときの確認の言葉（中のページの数。読み込んである分）。ヘッダーの「…」と一覧の行の「…」の両方で使う
+  const folderDeleteInfo = (id: string): { title: string; count: number } | null => {
+    const page = list.pages.find((item) => item.id === id);
+    if (page?.kind !== "folder") return null;
+    return { title: page.title, count: list.pages.length - withoutPageTree(list.pages, id).length - 1 };
+  };
+  const deleteFolder = railIsFolder && railSummary ? folderDeleteInfo(railSummary.id) : null;
   // 右上の「…」（リンクで共有・書き出し・履歴・複製・移動・ページの情報・削除）。操作の前に、開いているページのまだ届いていない変更を保存する
   // 「…」の「AI の文を灰色で見せる」（この端末の表示だけ。PageEditor が本文に当てる）
   const aiGray = useAiGray();
@@ -1073,8 +1087,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     openSheet: (sheet, owner) => (sheet === "share" ? share.open(owner) : history.open(owner)),
     focusMore,
     goToGoogleDocsBatch: (path) => router.push(path),
-    extras: { folder: railIsFolder, move: canFolder || canOrder, pageInfo: railSummary !== undefined, aiGray },
-    // 「移動…」「フォルダの背景…」はシート、「ページの情報」は右下のポップオーバー。開いたときのページの id で持つ
+    extras: railIsFolder ? { folder: true } : { move: canFolder || canOrder, pageInfo: railSummary !== undefined, aiGray },
+    // 「移動…」はシート、「ページの情報」は右下のポップオーバー。開いたときのページの id で持つ
     onLocal: (item: PageMenuLocalItem) => {
       if (item === AI_GRAY_ITEM) {
         setAiGray(!aiGray);
@@ -1083,7 +1097,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
       const id = railSummary?.id;
       if (!id) return;
       if (item === "page-info") setInfoFor(id);
-      else setFrameSheet({ kind: item === "move" ? "move" : "folder-fields", id });
+      else setFrameSheet({ kind: "move", id });
     },
   });
   const closeFrameSheet = useCallback(() => setFrameSheet(null), []);
@@ -1133,6 +1147,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                   narrow ? undefined : { at: layout.place.ai, open: layout.float.open, onOpenChange: layout.setFloatOpen }
                 }
                 onPagesChanged={onAiPagesChanged}
+                reads={aiReads}
               />
             ) : undefined
           }
@@ -1151,7 +1166,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
             float: { ...layout.float, onHeight: layout.setFloatHeight },
           }}
           corner={
-            railSummary ? (
+            railSummary && !railIsFolder ? (
               <PageInfo
                 summary={railSummary}
                 text={railPage?.text ?? null}
@@ -1173,7 +1188,13 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               onCollapse={collapse}
               onDrop={searching ? undefined : (dragId, target) => void dropPage(dragId, target)}
               canDrop={canDrop}
-              newMenu={{ open: newMenuOpen, onToggle: () => setNewMenuOpen((open) => !open), onClose: () => setNewMenuOpen(false), onPick: pickNew }}
+              newMenu={{
+                open: newMenuOpen,
+                onToggle: () => setNewMenuOpen((open) => !open),
+                onClose: () => setNewMenuOpen(false),
+                onPick: pickNew,
+                inside: hereFolder ? { title: hereFolder.title } : null,
+              }}
               search={{
                 open: search.open,
                 value: search.value,
@@ -1200,8 +1221,10 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           header={
             <ShellHeader
               title={title}
+              location={location}
+              onOpenLocation={openFromLocation}
               plain={settings !== undefined}
-              tools={editorBar && !narrow ? <ShellTools {...editorBar} compact /> : undefined}
+              tools={editorBar && !narrow && !railIsFolder ? <ShellTools {...editorBar} compact /> : undefined}
               showListButton={!sidebarOpen}
               onToggleList={() => (narrow ? setListFor(pathname) : setCollapsed(false))}
               status={attached ? headerStatus(attached.status, publishing.status) : publishing.status}
@@ -1216,6 +1239,11 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                   {sheetFor !== "move" && (orderNote ?? moveNote) && (
                     <span role="alert" style={MENU_NOTE_STYLE}>
                       {orderNote ?? moveNote}
+                    </span>
+                  )}
+                  {folderNote && (
+                    <span role="alert" style={MENU_NOTE_STYLE}>
+                      {folderNote}
                     </span>
                   )}
                   {menu.note && (
@@ -1240,7 +1268,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 </>
               }
               railOpen={railShown}
-              onToggleRail={railSummary ? toggleRail : undefined}
+              onToggleRail={railSummary && !railIsFolder ? toggleRail : undefined}
               more={menu.more}
               publish={publishing.publish}
             />
@@ -1248,9 +1276,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           overlay={
             <>
               {menu.confirm ? (
-                <DeleteConfirm {...menu.confirm} />
+                <DeleteConfirm {...menu.confirm} folder={deleteFolder} />
               ) : rowDelete.confirm ? (
-                <DeleteConfirm {...rowDelete.confirm} />
+                <DeleteConfirm {...rowDelete.confirm} folder={folderDeleteInfo(rowDelete.confirm.id)} />
               ) : share.sheet ? (
                 <ShareSheet {...share.sheet} />
               ) : history.sheet ? (
@@ -1265,8 +1293,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                   }
                   onClose={closeFrameSheet}
                 />
-              ) : sheetFor === "folder-fields" && railIsFolder ? (
-                <FolderFieldsSheet fields={folderFields} onClose={closeFrameSheet} />
               ) : sheetFor === "capacity" ? (
                 <CapacitySheet onClose={closeFrameSheet} />
               ) : null}

@@ -83,14 +83,13 @@ describe("discardEmptyPage on PostgreSQL", { skip: databaseUrl === undefined }, 
     assert.equal(await exists(id), false);
   });
 
-  it("keeps a page with a title, body text, a lead, a non-note kind or a folder parent", async () => {
+  it("keeps a page with a title, body text, a lead or a non-note kind", async () => {
     const cases: Array<[string, (id: string, revision: number) => Promise<unknown>]> = [
       ["title", (id, revision) => store.savePage(OWNER, id, { title: "合成の題名" }, { baseRevision: revision })],
       ["body", (id, revision) => store.savePage(OWNER, id, { blocks: [{ type: "paragraph", content: [{ type: "text", text: "合成" }] }] }, { baseRevision: revision })],
       ["divider", (id, revision) => store.savePage(OWNER, id, { blocks: [{ type: "horizontalRule" }] }, { baseRevision: revision })],
       ["lead", (id, revision) => store.savePage(OWNER, id, { lead: "合成のリード" }, { baseRevision: revision })],
       ["kind", (id, revision) => store.savePage(OWNER, id, { kind: "article" }, { baseRevision: revision })],
-      ["parent", async (id) => store.movePage(OWNER, id, await blank())],
     ];
     for (const [label, change] of cases) {
       const id = await blank();
@@ -99,6 +98,16 @@ describe("discardEmptyPage on PostgreSQL", { skip: databaseUrl === undefined }, 
       assert.deepEqual(await store.discardEmptyPage(OWNER, id), { discarded: false }, label);
       assert.equal(await exists(id), true, label);
     }
+  });
+
+  it("discards an untouched page made inside a folder (the parent alone does not make it non-empty)", async () => {
+    const folder = (await store.createPage(OWNER, { kind: "folder", title: "合成のフォルダ" })).id;
+    const inside = await store.createPage(OWNER, { parent: folder });
+    assert.ok(inside);
+    assert.deepEqual(await store.discardEmptyPage(OWNER, inside.id), { discarded: true });
+    assert.equal(await exists(inside.id), false);
+    // 空のフォルダは note でないので捨てない
+    assert.deepEqual(await store.discardEmptyPage(OWNER, folder), { discarded: false });
   });
 
   it("keeps a page that has an image (ready or still uploading), an audio asset or a cover", async () => {
@@ -123,7 +132,8 @@ describe("discardEmptyPage on PostgreSQL", { skip: databaseUrl === undefined }, 
   it("keeps a page with a child page (even in the trash), a share, a version, page fields or a publication version", async () => {
     const parent = await blank();
     const child = await blank();
-    assert.equal(await store.movePage(OWNER, child, parent), "moved");
+    // 旧データの親ページ（note のまま子を持つ）。movePage はフォルダにしか入れないので直に書く
+    await pool.query("UPDATE pages SET parent = $2 WHERE id = $1", [child, parent]);
     assert.equal(await store.deletePage(OWNER, child), "deleted");
 
     const shared = await blank();

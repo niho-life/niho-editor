@@ -11,10 +11,10 @@ vi.mock("./folder-client", () => ({
   savePageFieldsRequest: (id: string, patch: Partial<PageFields>) => savePageFieldsRequest(id, patch),
 }));
 
-import { useFolderFields, type FolderFieldsState } from "./use-folder-fields";
+import { usePageFields, type PageFieldsState } from "./use-page-fields";
 
 /**
- * フォルダの欄（登場人物・固有名詞）は、サーバーの値を読み終えるまで編集も保存もさせない。
+ * 録音の欄（登場人物・固有名詞・背景）は、サーバーの値を読み終えるまで編集も保存もさせない。
  * 読む前に編集を開くと、空の値で始まった編集画面の保存が既存の値を丸ごと置き換えて消してしまう。合成の値だけを使う。
  */
 
@@ -22,15 +22,16 @@ const FOLDER = "11111111-1111-4111-8111-111111111111";
 const stored: PageFields = {
   entities: [{ name: "合成の人物", role: "取材先" }],
   terms: [{ term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌"], note: "" }],
+  background: "合成の背景",
 } as unknown as PageFields;
 
-describe("useFolderFields: 読み終えるまで編集も保存もさせない", () => {
+describe("usePageFields: 読み終えるまで編集も保存もさせない", () => {
   let root: Root;
   let container: HTMLElement;
-  let fields: FolderFieldsState;
+  let fields: PageFieldsState;
 
   function Harness({ pageId }: { pageId: string }) {
-    fields = useFolderFields(pageId);
+    fields = usePageFields(pageId);
     return null;
   }
 
@@ -96,5 +97,30 @@ describe("useFolderFields: 読み終えるまで編集も保存もさせない",
     act(() => fields.onOpen());
     expect(fields.open).toBe(true);
     expect(fields.entities.map((entity) => entity.name)).toEqual(["合成の人物"]);
+  });
+
+  it("背景は読んだ値から始まり、欄を離れたときだけ保存する（変わっていなければ送らない）。登場人物・固有名詞は送らない", async () => {
+    loadPageFields.mockResolvedValueOnce(stored);
+    await mount();
+    await settle();
+    expect(fields.background).toBe("合成の背景");
+    act(() => fields.onSaveBackground());
+    expect(savePageFieldsRequest).not.toHaveBeenCalled();
+
+    savePageFieldsRequest.mockResolvedValueOnce({ ...stored, background: "取材の目的" });
+    act(() => fields.onBackground(" 取材の目的 "));
+    await act(async () => fields.onSaveBackground());
+    await settle();
+    expect(savePageFieldsRequest).toHaveBeenCalledWith(FOLDER, { background: "取材の目的" });
+    expect(fields.background).toBe("取材の目的");
+  });
+
+  it("背景を読み終える前には打てず、保存もしない", async () => {
+    loadPageFields.mockReturnValueOnce(new Promise<PageFields>(() => undefined));
+    await mount();
+    act(() => fields.onBackground("先に打った文字"));
+    act(() => fields.onSaveBackground());
+    expect(fields.background).toBe("");
+    expect(savePageFieldsRequest).not.toHaveBeenCalled();
   });
 });

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const router = { push: vi.fn(), refresh: vi.fn(), replace: vi.fn() };
 const frame = { pageCreated: vi.fn(), pageTitleChanged: vi.fn(), pageSaved: vi.fn(), pageOpened: vi.fn(), narrow: false };
 
-vi.mock("next/navigation", () => ({ useRouter: () => router }));
+vi.mock("next/navigation", () => ({ useRouter: () => router, useSearchParams: () => new URLSearchParams(window.location.search) }));
 vi.mock("./EditorFrame", () => ({ useEditorFrame: () => frame }));
 // jsdom の <audio> はメタデータを読まないので、長さは偽物にする（既定は「分からない」）
 vi.mock("@/lib/audio-duration", () => ({ probeAudioDuration: vi.fn(async () => null) }));
@@ -293,7 +293,7 @@ describe("RecordingStartScreen", () => {
     const init = fetchMock.mock.calls[0]![1]!;
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({ name: "dinner.vtt", vtt: VTT });
-    expect(frame.pageCreated).toHaveBeenCalledWith(PAGE_ID, "dinner");
+    expect(frame.pageCreated).toHaveBeenCalledWith(PAGE_ID, "dinner", "rec", null);
     expect(router.push).toHaveBeenCalledWith(`/p/${PAGE_ID}`);
   });
 
@@ -452,7 +452,7 @@ describe("RecordingStartScreen（音声ファイル）", () => {
     await act(async () => sending!.respond(200));
     await until(() => router.push.mock.calls.length > 0);
     expect(calls(`/api/pages/${PAGE_ID}/recording/audio/complete`)).toHaveLength(1);
-    expect(frame.pageCreated).toHaveBeenCalledWith(PAGE_ID, "合成の会議", "rec");
+    expect(frame.pageCreated).toHaveBeenCalledWith(PAGE_ID, "合成の会議", "rec", null);
     expect(router.push).toHaveBeenCalledWith(`/p/${PAGE_ID}`);
     expect(alertText()).toBe("");
   });
@@ -586,7 +586,7 @@ describe("RecordingStartScreen（音声を 2 本以上まとめて）", () => {
     expect(calls("/api/recordings/audio/start")).toHaveLength(1);
     expect(calls(`/api/pages/${PAGE_ID}/recording/audio/parts`)).toHaveLength(2);
     expect(router.push).toHaveBeenCalledWith(`/p/${PAGE_ID}`);
-    expect(frame.pageCreated).toHaveBeenCalledWith(PAGE_ID, "合成の会議", "rec");
+    expect(frame.pageCreated).toHaveBeenCalledWith(PAGE_ID, "合成の会議", "rec", null);
   });
 
   it("足す途中で失敗したら、その場で知らせて録音ページを開ける（1 本目は残る）", async () => {
@@ -710,7 +710,7 @@ describe("RecordingStartScreen（マイク）", () => {
     expect(body.sizeBytes).toBe(3);
     expect(body.sha256).toBe(createHash("sha256").update(new Uint8Array([1, 2, 7])).digest("hex"));
     expect(mic.tracks[0]!.stopped).toBe(true);
-    expect(frame.pageCreated).toHaveBeenCalledWith(PAGE_ID, "合成の会議", "rec");
+    expect(frame.pageCreated).toHaveBeenCalledWith(PAGE_ID, "合成の会議", "rec", null);
     vi.useRealTimers();
   });
 

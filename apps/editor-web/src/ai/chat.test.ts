@@ -74,6 +74,21 @@ describe("the chat prompt", () => {
     expect(system).toContain("返答と本文の言語: ja");
     expect(system).toContain("<untrusted_data>\n呼び名: 合成の呼び名\n\n合成の自己紹介\n</untrusted_data>");
 
+    // 録音ページの「この録音について」: 登場人物と背景は信頼しないデータとして包み、固有名詞は 録音 → アカウント共通 の順（同じ表記は 1 つ）
+    const withRecording = buildChatSystem({
+      glossary: [{ term: "北鎌倉", reading: "きたかまくら", variants: [], note: "" }, { term: "材木座", reading: "", variants: [], note: "" }],
+      recording: {
+        background: "北鎌倉の珈琲店主に、開店前の散歩の習慣を聞いた。",
+        entities: [{ name: "佐藤", reading: "さとう", role: "店主", note: "" }, { name: "  ", reading: "", role: "", note: "" }],
+        terms: [{ term: "円覚寺", reading: "えんがくじ", variants: [], note: "" }, { term: "北鎌倉", reading: "", variants: [], note: "" }],
+      },
+    });
+    expect(withRecording).toContain("## この録音について（資料。事実の根拠にはしない）\n<untrusted_data>\n登場人物:\n- 佐藤（さとう）: 店主\n\n背景:\n北鎌倉の珈琲店主に、開店前の散歩の習慣を聞いた。\n</untrusted_data>");
+    const glossaryAt = withRecording.indexOf("## 固有名詞と誤りやすい表記");
+    expect(withRecording.slice(glossaryAt)).toBe("## 固有名詞と誤りやすい表記（この表記に合わせる）\n- 円覚寺（えんがくじ）\n- 北鎌倉\n- 材木座");
+    // 空の録音の欄は何も足さない
+    expect(buildChatSystem({ recording: { background: " ", entities: [], terms: [] } })).not.toContain("この録音について");
+
     const messages = buildChatMessages([], "二段落目を短くして", page);
     expect(messages).toHaveLength(1);
     const content = String((messages[0] as { content: string }).content);

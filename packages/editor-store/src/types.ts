@@ -1,7 +1,10 @@
 import type { Pool } from "pg";
 
-/** ページの種類（見た目と初期値を決めるだけで、あとから変えられる）。設計 §3。 */
-export const PAGE_KINDS = ["note", "rec", "article", "step"] as const;
+/**
+ * ページの種類（見た目と初期値を決める。設計 §3）。`folder` だけは入れ物で、本文も欄も持たず、ほかの種類と行き来しない
+ * （docs/architecture/editor-recipes-and-folders.md §3.2）。
+ */
+export const PAGE_KINDS = ["note", "rec", "article", "step", "folder"] as const;
 export type PageKind = (typeof PAGE_KINDS)[number];
 
 export const PAGE_LANGS = ["ja", "en"] as const;
@@ -78,6 +81,8 @@ export type CreatePageInput = {
   lang?: PageLang;
   blocks?: Block[];
   lead?: string | null;
+  /** 作るときに入れるフォルダ（本人の生きている `kind='folder'` だけ。`kind='folder'` には付けられない）。 */
+  parent?: string | null;
 };
 
 /** 部分更新。指定したものだけを変える。 */
@@ -101,9 +106,10 @@ export type SaveOptions = {
 
 /**
  * フォルダへ入れる・出すの結果（ページか入れ先が無いときは null＝同じ 404）。
- * `too_deep` は段が深くなりすぎる移動、`cycle` は自分自身・自分の子孫の下へ入れる移動（どちらも何も書かない）。
+ * `too_deep` は段が深くなりすぎる移動、`cycle` は自分自身・自分の子孫の下へ入れる移動、
+ * `not_folder` は入れ先がフォルダでない・フォルダをフォルダへ入れる移動（どれも何も書かない）。
  */
-export type MovePageResult = "moved" | "too_deep" | "cycle";
+export type MovePageResult = "moved" | "too_deep" | "cycle" | "not_folder";
 
 /** 手動の並びを 1 つ動かす向き。 */
 export type OrderMove = "up" | "down";

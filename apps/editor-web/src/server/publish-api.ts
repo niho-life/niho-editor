@@ -42,7 +42,7 @@ import {
 import type { AuthProvider, Session } from "../auth/types";
 import { PUBLISH_MESSAGES, SLUG_MESSAGES } from "../publish/messages";
 import type { PublishWiring } from "../publish/ports";
-import { errorResponse, guarded, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
+import { errorResponse, folderResponse, guarded, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
 
 /**
  * 公開のシート（#39）: シートのデータ（GET）、公開する・更新を公開・保存・発信先を変える（POST）、公開をやめる（POST …/stop）。
@@ -422,16 +422,21 @@ export function publishFailureResponse(result: Exclude<PublishResult, { ok: true
   }
 }
 
+/** フォルダ（`kind = 'folder'`）は公開しない（§3.2 の 3）。store の下書きの行が kind を持つときだけ見る。 */
+function isFolderDraft(page: object): boolean {
+  return "kind" in page && (page as { kind?: unknown }).kind === "folder";
+}
+
 /** 今の公開と、写真のあるページか（本人のページのときだけ）。ページが無ければ undefined。 */
 async function currentPublication(
   wiring: PublishWiring,
   actorId: string,
   pageId: string,
-): Promise<{ publication: PublicationRecord | null; photos: boolean } | undefined> {
+): Promise<{ publication: PublicationRecord | null; photos: boolean; folder: boolean } | undefined> {
   return wiring.connections.store.transaction(async (tx) => {
     const page = await tx.getPage(pageId);
     if (!page || page.ownerId !== actorId) return undefined;
-    return { publication: await tx.getPublication(pageId), photos: hasPhotos(page) };
+    return { publication: await tx.getPublication(pageId), photos: hasPhotos(page), folder: isFolderDraft(page) };
   });
 }
 
@@ -454,6 +459,7 @@ export function publishRoute(request: Request, id: string, deps: PublishApiDeps)
     const actorId = session.userId;
     const read = await currentPublication(wiring, actorId, id);
     if (read === undefined) return notFoundResponse();
+    if (read.folder) return folderResponse();
     // 写真の置き場所が無いと、写真のあるページは何度試しても失敗する。もう一度とは言わない
     if (read.photos && !wiring.photosReady) {
       return jsonResponse(422, { error: "failed", retryable: false, detail: "photos_unavailable", message: PUBLISH_MESSAGES.photosUnavailable });

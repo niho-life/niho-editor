@@ -148,7 +148,8 @@ function transactionOf(client: Queryable, isOpen: () => boolean): ConnectionTx {
 
 // --- 行とレコードの写し ---------------------------------------------------------------
 
-function toDraftPage(row: DraftPageRow): DraftPage {
+/** 公開の元のページ。`kind` は公開の受付がフォルダを断るために足す（DraftPage の外。fingerprint には入らない）。 */
+function toDraftPage(row: DraftPageRow): DraftPage & { readonly kind: string } {
   return {
     id: row.id,
     ownerId: row.ownerId,
@@ -157,6 +158,7 @@ function toDraftPage(row: DraftPageRow): DraftPage {
     lead: row.lead,
     coverAssetId: row.coverAssetId,
     content: row.content,
+    kind: row.kind,
   };
 }
 

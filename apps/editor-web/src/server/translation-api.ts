@@ -35,7 +35,7 @@ import {
 import type { AuthProvider } from "../auth/types";
 import type { PrivateJobPayloadCipher } from "../storage/private-job-payload";
 import { StorageError, isObjectPath, type ObjectStorage } from "../storage/types";
-import { errorResponse, guarded, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
+import { errorResponse, folderResponse, guarded, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TRANSLATION_OUTPUT_MAX_TOKENS_BASE = 1024;
@@ -340,6 +340,8 @@ export function generateTranslationRoute(request: Request, pageId: string, deps:
     if (!backend) return requestError(503, "ai_unavailable");
     const source = await store.source(session.userId, pageId);
     if (!source) return notFoundResponse();
+    // フォルダは英語版を持たない（§3.2 の 3）
+    if (source.source.kind === "folder") return folderResponse();
 
     const referenced = pageImageIds(source.source.blocks);
     if (source.source.cover) referenced.add(source.source.cover.toLowerCase());

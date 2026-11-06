@@ -5,7 +5,7 @@ use crate::process::{
   is_uuid, register_running_turn, sanitize_stderr_tail, sweep_stale_private_dirs, ChildExit, RunningTurn,
 };
 use crate::runtime::{provider_command, resolve_cli, Runtime};
-use crate::types::{Provider, ReasonCode, StopReason, ToolPolicy, TurnEvent, TurnRequest, Usage};
+use crate::types::{NoticeCode, Provider, ReasonCode, StopReason, ToolPolicy, TurnEvent, TurnRequest, Usage};
 use crate::{agy, claude, codex};
 use serde_json::{json, Value};
 use std::ffi::OsString;
@@ -40,6 +40,11 @@ const READ_FILE_MISSING_MESSAGE: &str = "読ませるファイルが見つかり
 const READ_FILE_RESUME_MESSAGE: &str = "ファイルを読ませる実行は、同じ会話で続けられません。";
 /// 読ませるファイルの名前の長さの上限（作業フォルダに同じ名前で写し、指示文で指す）。
 const MAX_READ_FILE_NAME_CHARS: usize = 128;
+/// 修正の会話の 1 依頼で許す Web の検索の回数（#283。サーバーの `web_search` の `max_uses` と同じ）。これを超えた検索を
+/// 見たら止める（取得＝ページを読む方は数えない）。
+pub(crate) const MAX_WEB_SEARCHES: usize = 5;
+const WEB_SEARCH_LIMIT_MESSAGE: &str =
+  "Web の検索が 1 回の依頼で 5 回を超えたため止めました。調べることを絞って、もう一度頼んでください。";
 
 /// 実行中の 1 回への手綱。止める・終わったか見る・終わるまで待つ。
 pub struct TurnHandle {
@@ -148,9 +153,12 @@ fn execute(
     // 強制終了などで残った一時フォルダを消す（ほかに実行中の工程が無いときだけ）
     sweep_stale_private_dirs(&runtime.scratch_dir);
   }
-  // 検査済み（validate）。ここで実体のパスにする
+  // 検査済み（validate）。ここで実体のパスにし、Web の道具を許すかを載せる
   let folder = match folder_access(&req.tool_policy) {
-    Ok(folder) => folder,
+    Ok(folder) => folder.map(|folder| FolderAccess {
+      web: req.web_search,
+      ..folder
+    }),
     Err(_) => {
       return settle_early(running, || {
         error_event(
@@ -161,6 +169,12 @@ fn execute(
       })
     }
   };
+  if folder.as_ref().is_some_and(|folder| !folder.web) {
+    // 3 つの CLI とも Web の道具を許可に入れない。検索なしで続ける
+    emit(TurnEvent::Notice {
+      code: NoticeCode::WebSearchOff,
+    });
+  }
   let started = Instant::now();
   let timeout = req.timeout.min(MAX_TURN_TIMEOUT);
   let ctx = TurnCtx {
@@ -317,12 +331,14 @@ fn validate(req: &TurnRequest) -> Result<(), Invalid> {
 // 作業フォルダ（ToolPolicy::ProjectFolder）
 
 /// 修正の会話の作業フォルダ。`dir` は実体の workspace（Claude・agy の cwd にする）、`given` は依頼のパス（CLI が返すパスとの比較用）、
-/// `writable` は書ける相対フォルダ（空なら `dir` の中ならどこでも）。
+/// `writable` は書ける相対フォルダ（空なら `dir` の中ならどこでも）、`web` は Web の検索・取得の道具を許すか
+/// （`TurnRequest.web_search`。コマンド実行はどちらでも許さない）。
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FolderAccess {
   pub dir: PathBuf,
   pub given: PathBuf,
   pub writable: Vec<String>,
+  pub web: bool,
 }
 
 impl FolderAccess {
@@ -443,6 +459,8 @@ pub(crate) fn folder_access(policy: &ToolPolicy) -> Result<Option<FolderAccess>,
     dir: canonical,
     given: dir.clone(),
     writable: writable.clone(),
+    // 呼び出し側（execute）が TurnRequest.web_search で決める
+    web: false,
   }))
 }
 
@@ -487,6 +505,24 @@ pub(crate) struct Breach {
   /// 最後に返す理由。ツールの気配・init の違反は NotConfigured、続きのはずが別の会話になったら SessionNotFound
   pub code: ReasonCode,
   pub message: String,
+}
+
+/// Web の検索を数える（修正の会話の 1 依頼で [`MAX_WEB_SEARCHES`] 回まで）。同じ呼び出し（ID）は 1 回と数える。
+#[derive(Default)]
+pub(crate) struct WebSearchCount {
+  seen: std::collections::HashSet<String>,
+}
+
+impl WebSearchCount {
+  /// 検索の呼び出し `id` を数え、上限を超えたら止める理由を返す。
+  pub(crate) fn record(&mut self, id: &str) -> Option<Breach> {
+    self.seen.insert(id.to_string());
+    (self.seen.len() > MAX_WEB_SEARCHES).then(|| Breach {
+      kind: "web_search_limit".to_string(),
+      code: ReasonCode::TransientFailure,
+      message: WEB_SEARCH_LIMIT_MESSAGE.to_string(),
+    })
+  }
 }
 
 /// CLI ごとの出力の読み取り。`run_child` が stdout の 1 行ずつを渡し、子プロセスが終わったら最後のイベントを作る。
@@ -642,6 +678,7 @@ mod tests {
       timeout: Duration::from_secs(60),
       max_budget_usd: None,
       tool_policy: ToolPolicy::None,
+      web_search: true,
     }
   }
 
@@ -780,6 +817,7 @@ mod tests {
       dir: PathBuf::from("/private/tmp/p"),
       given: PathBuf::from("/tmp/p"),
       writable: vec!["artifacts".into()],
+      web: false,
     };
     assert!(folder.permits_write("/private/tmp/p/artifacts/abc.md"));
     assert!(folder.permits_write("/tmp/p/artifacts/abc.md"));

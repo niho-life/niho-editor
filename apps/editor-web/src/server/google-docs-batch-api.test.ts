@@ -30,7 +30,7 @@ const EXPIRY = "2030-01-01T23:50:00.000Z";
 const tree: GoogleDocsBatchTreePage[] = [{
   id: ROOT, title: "DBに保存した題名", revision: 7, parent: null, depth: 0,
   blocks: [{ type: "paragraph", content: [{ type: "text", text: "DBに保存した本文" }] }] as GoogleDocsBatchTreePage["blocks"],
-  entities: [{ name: "人物" }], terms: [], transcriptSegments: [{ start: 0, speaker: 1, text: "合成文字起こし" }], speakerNames: { 1: "話者" }, hasRecording: true,
+  entities: [{ name: "人物" }], terms: [], background: "", transcriptSegments: [{ start: 0, speaker: 1, text: "合成文字起こし" }], speakerNames: { 1: "話者" }, hasRecording: true,
   hasBackground: true, hasTranscript: true,
   backgroundCount: 1, transcriptCount: 1,
 }];

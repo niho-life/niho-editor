@@ -705,36 +705,39 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.deepEqual(await statuses(), ["done", "done", "done"]);
   });
 
-  it("uses empty background blocks when the recording has no parent folder", async () => {
+  it("uses an empty background when the recording has no fields of its own", async () => {
     const parent = await recording();
     const input = await readStepInput(pool, { owner: OWNER, parentId: parent, previousPageId: null });
     assert.deepEqual(input?.parentBlocks, TRANSCRIPT);
-    assert.deepEqual(input?.backgroundBlocks, []);
+    assert.equal(input?.background, "");
+    assert.deepEqual(input?.fields, { entities: [], terms: [] });
   });
 
-  it("reads all upstream, folder fields, settings and ordered references; explains each changed input", async () => {
-    const folder = (await store.createPage(OWNER, { title: "合成フォルダ", blocks: paragraph("合成の背景情報") })).id;
+  it("reads all upstream, the recording's own fields, settings and ordered references; explains each changed input", async () => {
+    const folder = (await store.createPage(OWNER, { kind: "folder", title: "合成フォルダ" })).id;
     const parent = await recording();
     await pool.query("UPDATE pages SET parent = $2 WHERE id = $1", [parent, folder]);
     const reference = (await store.createPage(OWNER, { title: "初期の題名", blocks: paragraph("参考本文") })).id;
     await pool.query("UPDATE pages SET parent = $2 WHERE id = $1", [reference, folder]);
-    await pool.query("INSERT INTO page_fields(owner,page_id,entities) VALUES ($1,$2,$3::jsonb)", [OWNER, folder, JSON.stringify([{ name: "合成人物", reading: "", role: "取材相手", note: "" }])]);
+    // 欄は録音ページ自身の id で持つ（フォルダの id の行は読まない）
+    await pool.query("INSERT INTO page_fields(owner,page_id,entities,background) VALUES ($1,$2,$3::jsonb,'合成の背景情報')", [OWNER, parent, JSON.stringify([{ name: "合成人物", reading: "", role: "取材相手", note: "" }])]);
+    await pool.query("INSERT INTO page_fields(owner,page_id,entities,background) VALUES ($1,$2,$3::jsonb,'フォルダの古い背景')", [OWNER, folder, JSON.stringify([{ name: "フォルダの人物", reading: "", role: "", note: "" }])]);
     await pool.query("INSERT INTO editor_settings(owner,ai_lang,about) VALUES ($1,'en','合成の説明') ON CONFLICT(owner) DO UPDATE SET ai_lang = 'en', about = '合成の説明'", [OWNER]);
     const run = await created(parent);
     await completeAll(run.id);
     const input = await readStepInput(pool, { owner: OWNER, parentId: parent, recipe: RECIPE.id, stepIndex: 2, previousPageId: run.steps[1]!.pageId, stepIds: RECIPE.steps.map((step) => step.id) });
     assert.deepEqual(input?.upstream.map((item) => item.id), ["aaaa1111", "bbbb2222"]);
     assert.deepEqual(input?.parentBlocks, TRANSCRIPT);
-    assert.deepEqual(input?.backgroundBlocks, paragraph("合成の背景情報"));
+    assert.equal(input?.background, "合成の背景情報");
     assert.deepEqual(input?.refs.map((item) => item.id), [reference]);
     assert.equal(input?.fields.entities[0]?.name, "合成人物");
     assert.equal(input?.settings.aiLang, "en");
     assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], []);
 
-    await userEdit(OWNER, folder, paragraph("変更した合成の背景情報"));
+    await pool.query("UPDATE page_fields SET background = '変更した合成の背景情報' WHERE owner = $1 AND page_id = $2", [OWNER, parent]);
     assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 3);
     assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], ["info"]);
-    await userEdit(OWNER, folder, paragraph("合成の背景情報"));
+    await pool.query("UPDATE page_fields SET background = '合成の背景情報' WHERE owner = $1 AND page_id = $2", [OWNER, parent]);
     assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 3);
     assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], []);
 
@@ -745,10 +748,10 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], ["refs"]);
     await userEdit(OWNER, reference, paragraph("参考本文"));
     await refreshStale(pool, OWNER, parent, RECIPE);
-    await pool.query("UPDATE page_fields SET terms = $3::jsonb WHERE owner = $1 AND page_id = $2", [OWNER, folder, JSON.stringify([{ term: "合成語", reading: "", variants: [], note: "" }])]);
+    await pool.query("UPDATE page_fields SET terms = $3::jsonb WHERE owner = $1 AND page_id = $2", [OWNER, parent, JSON.stringify([{ term: "合成語", reading: "", variants: [], note: "" }])]);
     await refreshStale(pool, OWNER, parent, RECIPE);
     assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], ["info"]);
-    await pool.query("UPDATE page_fields SET terms = '[]'::jsonb WHERE owner = $1 AND page_id = $2", [OWNER, folder]);
+    await pool.query("UPDATE page_fields SET terms = '[]'::jsonb WHERE owner = $1 AND page_id = $2", [OWNER, parent]);
     await pool.query("UPDATE editor_settings SET about = '変更' WHERE owner = $1", [OWNER]);
     await refreshStale(pool, OWNER, parent, RECIPE);
     assert.deepEqual((await readStepStaleReasons(pool, OWNER, parent, RECIPE))[2], ["info"]);

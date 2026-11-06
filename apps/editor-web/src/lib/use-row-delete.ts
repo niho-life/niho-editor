@@ -8,7 +8,7 @@ import { PAGE_MENU_TEXT, failureText } from "./use-page-menu";
 type RowDeleteState = { id: string; title: string; busy: boolean; error: string | null };
 
 /** 確認のシート（EditorFrame の DeleteConfirm）に渡す形。 */
-export type RowDeleteConfirm = { title: string; busy: boolean; error: string | null; onConfirm: () => void; onCancel: () => void };
+export type RowDeleteConfirm = { id: string; title: string; busy: boolean; error: string | null; onConfirm: () => void; onCancel: () => void };
 
 /**
  * 左の一覧の行の「…」→「削除」（オーナー決定 2026-11-06）。確認はヘッダーの「…」の削除と同じシート（ゴミ箱に 30 日）。
@@ -68,6 +68,7 @@ export function useRowDelete({
 
   const confirm: RowDeleteConfirm | null = state
     ? {
+        id: state.id,
         title: state.title,
         busy: state.busy,
         error: state.error,

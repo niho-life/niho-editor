@@ -260,10 +260,30 @@ export type AiPanelProps = {
   placement?: AiPanelPlacement;
   /** AI がページを書き換えた・元に戻した（右に並べたページを読み直すため）。直したページの id。 */
   onPagesChanged?: (pageIds: readonly string[]) => void;
+  /** 入力欄の上の「読むもの」（このページ・この録音について・元の録音・同じフォルダの N ページ）。無ければ出さない。 */
+  reads?: AiReads | null;
 };
 
+/**
+ * AI が読むもの（モック editor-folders-v1 の「読むもの」）。録音ページは「この録音について」、工程のサブページは元の録音と
+ * ほかの段階、同じフォルダの直下に自分以外のページがあれば「◯◯ の N ページ」（参考として自動で読まれる）。
+ */
+export type AiReads = {
+  kind: "note" | "rec" | "step" | "article";
+  folder: { title: string; others: number } | null;
+};
+
+/** 「読むもの」の札（文字で出す。色だけにしない）。 */
+export function aiReadsTags(reads: AiReads): { icon: "doc" | "mic" | "spark" | "folder"; text: string }[] {
+  const tags: { icon: "doc" | "mic" | "spark" | "folder"; text: string }[] = [{ icon: "doc", text: "このページ" }];
+  if (reads.kind === "rec") tags.push({ icon: "mic", text: "この録音について" });
+  if (reads.kind === "step") tags.push({ icon: "mic", text: "元の録音" }, { icon: "spark", text: "ほかの段階 · 読むだけ" });
+  if (reads.kind !== "step" && reads.folder && reads.folder.others > 0) tags.push({ icon: "folder", text: `${reads.folder.title || "無題"} の ${reads.folder.others} ページ` });
+  return tags;
+}
+
 /** 右レール下半分の常設 AI。レールを閉じても EditorShell が unmount しないため draft と実行状態を保つ。 */
-export function AiPanel({ pageId, context, steps, placement, onPagesChanged }: AiPanelProps) {
+export function AiPanel({ pageId, context, steps, placement, onPagesChanged, reads = null }: AiPanelProps) {
   const [thread, setThread] = useState<AiChatMessage[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<AiChatSummary[]>([]);
@@ -1072,6 +1092,17 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged }: A
           {nearLimit && <p className="es-ai-status">{AI_TEXT.nearLimit}</p>}
         </div>
         <div className="es-ai-composer">
+          {reads && (
+            <div className="es-ai-reads" role="group" aria-label="読むもの">
+              <span>読むもの</span>
+              {aiReadsTags(reads).map((tag) => (
+                <span key={tag.text} className="es-ai-read">
+                  <Icon name={tag.icon} />
+                  {tag.text}
+                </span>
+              ))}
+            </div>
+          )}
           {selectedStep && <div className="es-ai-chip"><Icon name="play" /><span>{selectedStep.label}</span><button type="button" aria-label={`${selectedStep.label}を外す`} disabled={busy !== null} onClick={() => setSelectedStep(null)}>×</button></div>}
           <textarea
             ref={textareaRef}

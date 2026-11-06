@@ -1,4 +1,4 @@
-/** ブラウザから フォルダまわりの API（並び・子の一覧・欄・「最近」。#37）を呼ぶ（同じ origin）。 */
+/** ブラウザから フォルダまわりの API（並び・子の一覧・録音の欄・「最近」。#37）を呼ぶ（同じ origin）。 */
 
 import type { PageEntity, PageFields, PageSummary } from "@niho/editor-store";
 import { PageRequestError } from "./pages-client";
@@ -38,18 +38,22 @@ export async function recordPageOpenRequest(id: string): Promise<void> {
 function fieldsOf(data: unknown): PageFields {
   const fields = (data as { fields?: unknown } | null)?.fields;
   if (typeof fields !== "object" || fields === null) throw new PageRequestError(500);
-  const { entities, terms } = fields as { entities?: unknown; terms?: unknown };
-  return { entities: Array.isArray(entities) ? (entities as PageEntity[]) : [], terms: Array.isArray(terms) ? (terms as PageFields["terms"]) : [] };
+  const { entities, terms, background } = fields as { entities?: unknown; terms?: unknown; background?: unknown };
+  return {
+    entities: Array.isArray(entities) ? (entities as PageEntity[]) : [],
+    terms: Array.isArray(terms) ? (terms as PageFields["terms"]) : [],
+    background: typeof background === "string" ? background : "",
+  };
 }
 
-/** フォルダの欄（登場人物・固有名詞）。 */
+/** 録音ページの欄「この録音について」（登場人物・固有名詞・背景）。 */
 export async function loadPageFields(id: string): Promise<PageFields> {
   const response = await fetch(`/api/pages/${encodeURIComponent(id)}/fields`, { credentials: "same-origin", cache: "no-store" });
   if (!response.ok) throw new PageRequestError(response.status);
   return fieldsOf(await response.json());
 }
 
-/** フォルダの欄を入れ替える（渡した項目だけ）。 */
+/** 録音ページの欄を入れ替える（渡した項目だけ）。 */
 export async function savePageFieldsRequest(id: string, patch: Partial<PageFields>): Promise<PageFields> {
   return fieldsOf(await send(`/api/pages/${encodeURIComponent(id)}/fields`, "PATCH", patch));
 }

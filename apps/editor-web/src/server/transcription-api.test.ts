@@ -157,6 +157,32 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
     expect(runs[0]!.input).toEqual({ engine: "gemini", diarize: true, replace: false, terms: [] });
   });
 
+  it("uses the recording's own 固有名詞 as terms when the screen sends none, and the screen's terms when it does", async () => {
+    const target = page();
+    const { store, runs } = memoryStore([target]);
+    const hints = vi.fn(async () => ({ kind: "rec", terms: ["北鎌倉", "円覚寺"] }));
+    const runner = { engine: "fake" as const, engines: ["fake" as const], dispatcher: dispatcher().dispatcher };
+    expect((await start(target.id, {}, deps("user-a", { ...store, hints }, runner))).status).toBe(202);
+    expect(runs[0]!.input.terms).toEqual(["北鎌倉", "円覚寺"]);
+    expect(hints).toHaveBeenCalledWith("user-a", target.id);
+
+    const other = page();
+    const second = memoryStore([other]);
+    expect((await start(other.id, { terms: ["合成語"] }, deps("user-a", { ...second.store, hints }, runner))).status).toBe(202);
+    expect(second.runs[0]!.input.terms).toEqual(["合成語"]);
+  });
+
+  it("refuses a folder with 400 (reason folder) and enqueues nothing", async () => {
+    const target = page();
+    const { store, runs } = memoryStore([target]);
+    const hints = async () => ({ kind: "folder", terms: [] });
+    const runner = { engine: "fake" as const, engines: ["fake" as const], dispatcher: dispatcher().dispatcher };
+    const response = await start(target.id, {}, deps("user-a", { ...store, hints }, runner));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "bad_request", reason: "folder" });
+    expect(runs).toEqual([]);
+  });
+
   it("uses the defaults for an empty body and passes the asked language", async () => {
     const target = page();
     const { store, runs } = memoryStore([target]);

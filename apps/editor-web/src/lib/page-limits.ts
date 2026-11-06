@@ -10,7 +10,7 @@ export const PAGE_BODY_MAX_BYTES = 30 * 1024 * 1024 + 16 * 1024;
 export const PAGE_CHUNK = 100;
 
 /**
- * フォルダの欄の件数の上限（`PAGE_FIELD_LIMITS`（editor-store）と同じ値。画面はサーバー専用の module を読めないので写す。
- * 食い違いは src/lib/page-limits.test.ts が落とす）。
+ * 録音の欄（この録音について）の上限（`PAGE_FIELD_LIMITS`（editor-store）と同じ値。画面はサーバー専用の module を読めないので写す。
+ * 食い違いは src/server/client-limits.test.ts が落とす）。
  */
-export const FOLDER_FIELD_LIMITS = { entities: 200, terms: 200 } as const;
+export const RECORDING_FIELD_LIMITS = { entities: 200, terms: 200, backgroundChars: 4000 } as const;
