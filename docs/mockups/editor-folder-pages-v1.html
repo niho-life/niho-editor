@@ -220,7 +220,7 @@ body.dragging .ph{cursor:grabbing}
 .pubbtn:hover{background:var(--sand)}
 /* タブの帯: ページ名の上、本文のコンテンツ幅（680px）と同じ薄い罫線。右端に ＋。タブが 2 つ以上なら左にタブ */
 .tabbar{position:sticky;top:calc(var(--bar) + 52px);z-index:19;padding:0 56px;background:var(--canvas)}
-.tabbar .in{display:flex;align-items:flex-end;gap:2px;height:38px;border-bottom:1px solid var(--line2)}
+.tabbar .in{display:flex;align-items:flex-end;gap:2px;height:38px;max-width:680px;margin:auto;border-bottom:1px solid var(--line2)}
 .tabbar .tb{display:flex;align-items:flex-end;flex:none;position:relative}
 .tabbar [role=tab]{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 12px;margin-bottom:-1px;border-bottom:2px solid transparent;border-radius:8px 8px 0 0;font-size:13.5px;font-weight:600;color:var(--mute);white-space:nowrap;max-width:46vw;overflow:hidden;text-overflow:ellipsis}
 .tabbar [role=tab]:hover{background:var(--sand);color:var(--ink)}
