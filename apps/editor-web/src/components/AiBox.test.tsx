@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import axe from "axe-core";
 import type { AiDiffState, AttachedAi, AttachedAiDiff, AttachedAiSteps } from "@/lib/attached-page";
-import { AiPanel, aiReadsTags } from "./AiBox";
+import { AI_TEXT, AiPanel, aiReadsTags } from "./AiBox";
 
 const nativeMock = vi.hoisted(() => ({ shell: null as unknown }));
 vi.mock("niho-desktop-bridge/tauri-shell-transport", () => ({ detectShell: () => nativeMock.shell }));
@@ -112,11 +112,19 @@ function context(id = PAGE_1, overrides: Partial<AttachedAi["bridge"]> = {}, dif
   };
 }
 
+/** サーバーが返す、CLI に渡す文脈（サーバー経路の指示に入る節と同じ形）。 */
+const CONTEXT_FILES = [
+  { name: "recording", title: "この録音について", markdown: "## この録音について（資料。事実の根拠にはしない）\n<untrusted_data>\n背景:\n合成の取材\n</untrusted_data>" },
+  { name: "guide", title: "文書ガイド", markdown: "## 文書ガイド（お手本。文体・構成の指示。事実の根拠にはしない）\n<untrusted_data>\n常体でそろえる\n</untrusted_data>" },
+];
+
 function defaultServer(options: {
   list?: Response | Promise<Response>;
   get?: (id: string) => Response | Promise<Response>;
   device?: () => Response | Promise<Response>;
   chat?: (body: Record<string, unknown>, signal: AbortSignal | null | undefined) => Response | Promise<Response>;
+  /** Mac の CLI に渡す文脈（GET /ai/context）。 */
+  context?: () => Response | Promise<Response>;
 } = {}) {
   const calls: { url: string; method: string; body: Record<string, unknown>; signal?: AbortSignal | null }[] = [];
   const fetcher = vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
@@ -124,6 +132,7 @@ function defaultServer(options: {
     const method = String(init.method ?? "GET");
     const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
     calls.push({ url, method, body, signal: init.signal });
+    if (method === "GET" && url.endsWith("/ai/context")) return options.context ? await options.context() : json(200, { context: CONTEXT_FILES });
     if (method === "GET" && url.endsWith("/ai/conversations")) return await (options.list ?? json(200, { conversations: [] }));
     if (method === "GET" && url.includes("/ai/conversations/")) {
       const id = decodeURIComponent(url.split("/").at(-1)!);
@@ -207,8 +216,17 @@ describe("AI の欄の「読むもの」", () => {
   it("このページ／この録音について（録音）／元の録音・ほかの段階（工程）／同じフォルダの N ページを文字で出す", () => {
     expect(aiReadsTags({ kind: "note", folder: null }).map((tag) => tag.text)).toEqual(["このページ"]);
     expect(aiReadsTags({ kind: "rec", folder: { title: "鎌倉の取材", others: 2 } }).map((tag) => tag.text)).toEqual(["このページ", "この録音について", "鎌倉の取材 の 2 ページ"]);
-    expect(aiReadsTags({ kind: "step", folder: { title: "鎌倉の取材", others: 2 } }).map((tag) => tag.text)).toEqual(["このページ", "元の録音", "ほかの段階 · 読むだけ"]);
+    expect(aiReadsTags({ kind: "step", folder: { title: "鎌倉の取材", others: 2 } }).map((tag) => tag.text)).toEqual(["このページ", "この録音について", "元の録音", "ほかの段階 · 読むだけ"]);
     expect(aiReadsTags({ kind: "note", folder: { title: "鎌倉の取材", others: 0 } }).map((tag) => tag.text)).toEqual(["このページ"]);
+  });
+
+  it("文書ガイドの札は、手順の run にガイドがある録音ページ・段階のページにだけ出る（執筆だけのページには出ない）", () => {
+    const texts = (reads: Parameters<typeof aiReadsTags>[0]) => aiReadsTags(reads).map((tag) => tag.text);
+    expect(texts({ kind: "rec", folder: null, guide: "記事制作" })).toEqual(["このページ", "この録音について", "文書ガイド（記事制作）"]);
+    expect(texts({ kind: "step", folder: null, guide: "記事制作" })).toEqual(["このページ", "この録音について", "元の録音", "ほかの段階 · 読むだけ", "文書ガイド（記事制作）"]);
+    expect(texts({ kind: "rec", folder: null, guide: null })).toEqual(["このページ", "この録音について"]);
+    expect(texts({ kind: "note", folder: null, guide: "記事制作" })).toEqual(["このページ"]);
+    expect(texts({ kind: "article", folder: null, guide: "記事制作" })).toEqual(["このページ"]);
   });
 
   it("入力欄の上に「読むもの」の札を出す", async () => {
@@ -283,7 +301,7 @@ describe("AiPanel", () => {
     setValue("前置き /事実");
     expect(container!.querySelector('[aria-label="工程とスキル"]')?.textContent).toContain("事実確認");
     await press("Enter");
-    expect(field().value).toContain("前置き\n本文の固有名詞・数値・日付・引用を、文字起こしと資料に照らし確認してください。本文は直さず、確認箇所と理由を一覧にしてください。");
+    expect(field().value).toContain("前置き\n本文の主張（数字・固有名詞・日付・引用）を列挙し、文字起こし（search_transcript）と Web の検索で確かめてください。本文は直さず、返答に「確かめた／食い違い／確かめられない」の一覧と根拠を書いてください。直すのは、一覧を見て私が頼んだときだけです。");
     setValue("/要約");
     await press("Escape");
     expect(container!.querySelector('[aria-label="工程とスキル"]')).toBeNull();
@@ -322,6 +340,76 @@ describe("AiPanel", () => {
     expect(ai.bridge.replace).toHaveBeenCalledWith(expect.objectContaining({ title: latest.title, blocks: latest.blocks, revision: latest.revision }), { saved: false });
   });
 
+  it("reads the context before it takes the page snapshot, so an edit while waiting is still noticed", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const aiTurn = vi.fn(async () => ({
+      finalEvent: { type: "Done" as const, text: "CLI の返答", stop_reason: "EndTurn" as const, session_id: null, usage: { input_tokens: 1, output_tokens: 1, cost_usd: null, model_used: "gpt-5", cost_known: false }, duration_ms: 1, continuations: 0 },
+      page: null,
+      pageRemoved: false,
+      extraFiles: 0,
+    }));
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-5"], effort: true, resume: true }]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    const server = defaultServer();
+    const ai = context(PAGE_1);
+    await render(PAGE_1, ai);
+    await until(() => enginePill()?.textContent?.includes("Codex CLI") ?? false);
+    setValue("端末で直す");
+    await press("Enter");
+    await until(() => aiTurn.mock.calls.length === 1);
+    const contextFetch = server.fetcher.mock.invocationCallOrder[server.calls.findIndex((call) => call.url.endsWith("/ai/context"))]!;
+    const snapshot = (ai.bridge.saved as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
+    expect(contextFetch).toBeLessThan(snapshot);
+  });
+
+  it("does not run the Mac CLI when the page was edited while the context was being read", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const aiTurn = vi.fn();
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-5"], effort: true, resume: true }]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    const gate = deferred<Response>();
+    const server = defaultServer({ context: () => gate.promise });
+    // 本文の update を起こせる最小のエディタ（AiBox が見るのは on / off だけ）
+    const updates = new Set<() => void>();
+    const editor = { on: (_name: string, listener: () => void) => updates.add(listener), off: (_name: string, listener: () => void) => updates.delete(listener) };
+    const ai = { ...context(PAGE_1), editor: editor as unknown as AttachedAi["editor"] };
+    await render(PAGE_1, ai);
+    await until(() => enginePill()?.textContent?.includes("Codex CLI") ?? false);
+    setValue("端末で直す");
+    await press("Enter");
+    await until(() => server.calls.some((call) => call.url.endsWith("/ai/context")));
+    // 資料を待っているあいだに、人が本文を編集した
+    act(() => updates.forEach((listener) => listener()));
+    gate.resolve(json(200, { context: CONTEXT_FILES }));
+    await until(() => container!.textContent!.includes("CLI の作業中にページが編集されました"));
+    expect(aiTurn).not.toHaveBeenCalled();
+    expect(server.calls.some((call) => call.url.endsWith("/ai/chat/turns"))).toBe(false);
+  });
+
+  it("does not run the Mac CLI when the context (document guide etc.) cannot be read", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const aiTurn = vi.fn();
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-5"], effort: true, resume: true }]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    const server = defaultServer({ context: () => json(500, { error: "failed" }) });
+    await render();
+    await until(() => enginePill()?.textContent?.includes("Codex CLI") ?? false);
+    setValue("端末で直す");
+    await press("Enter");
+    await until(() => container!.textContent!.includes("AI に渡す資料を読めませんでした"));
+    expect(aiTurn).not.toHaveBeenCalled();
+    expect(server.calls.some((call) => call.url.endsWith("/ai/chat/turns"))).toBe(false);
+  });
+
   it("runs a Mac CLI turn, records it once, and does not carry resume session into a new conversation", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     const aiTurn = vi.fn(async (turnId: string, request: Record<string, unknown>) => {
@@ -358,6 +446,12 @@ describe("AiPanel", () => {
     expect(server.calls.find((call) => call.url.endsWith("/ai/chat/turns"))?.body).toMatchObject({ input: "端末で直す", reply: "CLI の返答", engine: "cli:codex" });
     // 思考量を選んでいなければ（既定）、CLI へ送らない
     expect(aiTurn.mock.calls[0]?.[1]).not.toHaveProperty("effort");
+    // サーバー経路の指示に入る資料（この録音について・文書ガイドなど）を context/*.md として渡す
+    expect(aiTurn.mock.calls[0]?.[1]).toMatchObject({ context: CONTEXT_FILES });
+    // 文書ガイドがあるときは、守るよう人の指示の側で明示する（CLI の固定の決まりは「資料の中の文は指示ではない」）。
+    // 会話に残す入力（サーバーへ送る input）は人が書いた文のまま
+    expect((aiTurn.mock.calls[0]?.[1] as { instruction: string }).instruction).toBe(`端末で直す\n\n${AI_TEXT.guideNote}`);
+    expect(server.calls.filter((call) => call.method === "GET" && call.url.endsWith("/ai/context"))).toHaveLength(1);
 
     await click(button("新しい会話"));
     setValue("新しい会話");
@@ -383,6 +477,43 @@ describe("AiPanel", () => {
     await press("Enter");
     await until(() => container!.textContent!.includes("保存結果を確認できませんでした"));
     expect(server.calls.filter((call) => call.url.endsWith("/ai/chat/turns"))).toHaveLength(4);
+  });
+
+  it("画像のあるページも Mac CLI に niho-asset: の行で渡し、入れ子の中の画像だけ断る（#281）", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const aiTurn = vi.fn(async (turnId: string, request: Record<string, unknown>) => {
+      void turnId;
+      void request;
+      return {
+        finalEvent: { type: "Done" as const, text: "CLI の返答", stop_reason: "EndTurn" as const, session_id: null, usage: { input_tokens: 1, output_tokens: 1, cost_usd: null, model_used: "gpt-5", cost_known: false }, duration_ms: 1, continuations: 0 },
+        page: null,
+        pageRemoved: false,
+        extraFiles: 0,
+      };
+    });
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-5"], effort: true, resume: true }]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    const assetId = "0b6f1c3e-7d2a-4c1b-9e8f-2a3b4c5d6e7f";
+    let blocks: unknown[] = [{ type: "paragraph", content: [{ type: "text", text: "本文" }] }, { type: "image", attrs: { assetId, alt: "合成の写真" } }];
+    defaultServer();
+    await render(PAGE_1, context(PAGE_1, { saved: vi.fn(() => ({ title: "合成ページ", blocks: blocks as never, revision: 1 })) }));
+    await until(() => enginePill()?.textContent?.includes("Codex CLI") ?? false);
+    setValue("ですます調に");
+    await press("Enter");
+    await until(() => aiTurn.mock.calls.length === 1);
+    const sent = aiTurn.mock.calls[0]![1] as { page: { markdown: string }; instruction: string };
+    expect(sent.page.markdown).toBe(`本文\n\n![合成の写真](niho-asset:${assetId})`);
+    expect(sent.instruction).toContain("niho-asset:");
+    await until(() => logText().includes("CLI の返答を保存しました"));
+
+    blocks = [{ type: "blockquote", content: [{ type: "image", attrs: { assetId } }] }];
+    setValue("もう一度");
+    await press("Enter");
+    await until(() => container!.textContent!.includes("箇条書き・引用・囲み・表の中に画像や録音がある"));
+    expect(aiTurn.mock.calls).toHaveLength(1);
   });
 
   it("puts the Mac route, model and effort behind one button at the bottom of the input, sends the effort, and remembers them on this Mac", async () => {
@@ -656,7 +787,7 @@ describe("AiPanel", () => {
   it("attaches a real PageSteps option and reports its start result", async () => {
     defaultServer();
     const start = vi.fn(async () => ({ ok: true, message: "記事制作を開始しました" }));
-    const steps: AttachedAiSteps = { ownerId: PAGE_1, options: [{ id: "article", label: "記事制作", hint: "記事にする", disabledReason: null }], start };
+    const steps: AttachedAiSteps = { ownerId: PAGE_1, guide: null, options: [{ id: "article", label: "記事制作", hint: "記事にする", disabledReason: null }], start };
     const ai = context();
     await render(PAGE_1, ai, steps);
     await until(() => !button("工程とスキルを開く").disabled);
@@ -955,5 +1086,261 @@ describe("AiPanel: 分割ビューの置き場所（設計 §5.5）", () => {
     await click([...container!.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent === "元に戻す")!);
     await until(() => logText().includes("元に戻しました"));
     expect(onPagesChanged).toHaveBeenLastCalledWith([PAGE_1]);
+  });
+});
+
+describe("AiPanel: 作業中の指示を送信待ちに積む（#282）", () => {
+  const chatCalls = (calls: { url: string; method: string; body: Record<string, unknown> }[]) =>
+    calls.filter((call) => call.method === "POST" && call.url.endsWith("/ai/chat")).map((call) => String(call.body.text));
+  const queueRow = () => container!.querySelector<HTMLElement>('[role="group"][aria-label="送信待ち"]');
+  /** 1 秒の待ちだけ偽の時計にする（応答の Promise はそのまま動かす）。 */
+  const fakeDelay = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  afterEach(() => { vi.useRealTimers(); });
+  const advance = async (ms: number) => { await act(async () => { vi.advanceTimersByTime(ms); }); };
+  /** 最初の依頼を保留のまま送り、作業中の状態にする。 */
+  async function startHeldTurn(first = "最初の依頼") {
+    let release!: (response: Response) => void;
+    let abortWith!: (reason: unknown) => void;
+    const heldPromise = new Promise<Response>((resolve, reject) => { release = resolve; abortWith = reject; });
+    const held = { promise: heldPromise, resolve: release };
+    const chat = vi.fn((_body: Record<string, unknown>, signal: AbortSignal | null | undefined) => {
+      if (chat.mock.calls.length > 1) return chatResponse("次の返答");
+      signal?.addEventListener("abort", () => abortWith(new DOMException("aborted", "AbortError")));
+      return held.promise;
+    });
+    const server = defaultServer({ chat });
+    await render();
+    await until(() => !button("新しい会話").disabled);
+    setValue(first);
+    await press("Enter");
+    await until(() => container!.querySelector('button[aria-label="止める"]') !== null);
+    return { held, server };
+  }
+
+  it("作業中も入力欄を打て、送ると送信待ちに積む。終わると 1 秒おいて順に送る", async () => {
+    fakeDelay();
+    const { held, server } = await startHeldTurn();
+    expect(field().readOnly).toBe(false);
+    expect(field().placeholder).toContain("送信待ち");
+    setValue("二つ目の指示");
+    await press("Enter");
+    expect(queueRow()?.textContent).toContain("送信待ち 1 件");
+    expect(field().value).toBe("");
+    setValue("三つ目の指示");
+    await click(button("送信待ちに積む"));
+    expect(queueRow()?.textContent).toContain("送信待ち 2 件");
+    expect(chatCalls(server.calls)).toEqual(["最初の依頼"]);
+
+    held.resolve(chatResponse("最初の返答"));
+    await until(() => container!.querySelector('button[aria-label="止める"]') === null && queueRow()?.textContent?.includes("1 秒後") === true);
+    expect(chatCalls(server.calls)).toEqual(["最初の依頼"]);
+    await advance(999);
+    expect(chatCalls(server.calls)).toEqual(["最初の依頼"]);
+    await advance(1);
+    await until(() => chatCalls(server.calls).length === 2);
+    expect(chatCalls(server.calls)).toEqual(["最初の依頼", "二つ目の指示"]);
+    await until(() => queueRow()?.textContent?.includes("1 秒後") === true);
+    await advance(1000);
+    await until(() => chatCalls(server.calls).length === 3);
+    expect(chatCalls(server.calls)).toEqual(["最初の依頼", "二つ目の指示", "三つ目の指示"]);
+    await until(() => queueRow() === null && container!.querySelector('button[aria-label="止める"]') === null);
+    expect(field().value).toBe("");
+  });
+
+  it("待ちは 3 件まで。超えた指示は欄に残し、先の指示を待つよう知らせる", async () => {
+    const { server } = await startHeldTurn();
+    for (const value of ["一", "二", "三"]) {
+      setValue(value);
+      await press("Enter");
+    }
+    expect(queueRow()?.textContent).toContain("送信待ち 3 件");
+    setValue("四");
+    await press("Enter");
+    expect(container!.textContent).toContain("先の指示を待ってから送ってください");
+    expect(field().value).toBe("四");
+    expect(queueRow()?.textContent).toContain("送信待ち 3 件");
+    expect(chatCalls(server.calls)).toEqual(["最初の依頼"]);
+  });
+
+  it("「止める」で止めたら待ちは送らず、止めた依頼と待ちを順に入力欄へ戻す", async () => {
+    fakeDelay();
+    const { server } = await startHeldTurn();
+    for (const value of ["二つ目", "三つ目"]) {
+      setValue(value);
+      await press("Enter");
+    }
+    await click(button("止める"));
+    await until(() => container!.textContent!.includes("中止しました"));
+    expect(container!.textContent).toContain("送信待ちは入力欄に戻しました");
+    expect(queueRow()).toBeNull();
+    expect(field().value).toBe("最初の依頼\n\n二つ目\n\n三つ目");
+    await advance(5000);
+    expect(chatCalls(server.calls)).toEqual(["最初の依頼"]);
+  });
+
+  it("失敗で終わったときも、待ちは送らず入力欄へ戻す", async () => {
+    fakeDelay();
+    const chat = vi.fn(() => json(500, { error: "failed" }));
+    const gate = deferred<void>();
+    const server = defaultServer({ chat: async () => { await gate.promise; return chat(); } });
+    await render();
+    await until(() => !button("新しい会話").disabled);
+    setValue("失敗する依頼");
+    await press("Enter");
+    await until(() => container!.querySelector('button[aria-label="止める"]') !== null);
+    setValue("待ちの指示");
+    await press("Enter");
+    setValue("打ちかけの文");
+    gate.resolve();
+    await until(() => container!.querySelector('button[aria-label="止める"]') === null && queueRow() === null);
+    expect(field().value).toBe("失敗する依頼\n\n待ちの指示\n\n打ちかけの文");
+    await advance(5000);
+    expect(chatCalls(server.calls)).toEqual(["失敗する依頼"]);
+  });
+
+  it("待ちから送った指示が失敗したら、その指示は消えずに入力欄へ戻る（打ちかけの文の前に並ぶ）", async () => {
+    fakeDelay();
+    const first = deferred<void>();
+    let calls = 0;
+    const server = defaultServer({ chat: async () => { calls += 1; if (calls === 1) { await first.promise; return chatResponse("最初の返答"); } return json(500, { error: "failed" }); } });
+    await render();
+    await until(() => !button("新しい会話").disabled);
+    setValue("最初の依頼");
+    await press("Enter");
+    await until(() => container!.querySelector('button[aria-label="止める"]') !== null);
+    setValue("失敗する待ち");
+    await press("Enter");
+    setValue("打ちかけの文");
+    first.resolve();
+    await until(() => queueRow()?.textContent?.includes("1 秒後") === true);
+    expect(field().value).toBe("打ちかけの文");
+    await advance(1000);
+    await until(() => chatCalls(server.calls).length === 2);
+    await until(() => container!.querySelector('button[aria-label="止める"]') === null && queueRow() === null);
+    expect(field().value).toBe("失敗する待ち\n\n打ちかけの文");
+  });
+
+  it("送る前の 1 秒のあいだに「取り消す」と、待ちは送らず入力欄へ戻る", async () => {
+    fakeDelay();
+    const { held, server } = await startHeldTurn();
+    setValue("取り消す指示");
+    await press("Enter");
+    held.resolve(chatResponse("最初の返答"));
+    await until(() => queueRow()?.textContent?.includes("1 秒後") === true);
+    const cancel = [...queueRow()!.querySelectorAll("button")].find((item) => item.textContent === "取り消す")!;
+    await click(cancel);
+    expect(queueRow()).toBeNull();
+    expect(field().value).toBe("取り消す指示");
+    await advance(5000);
+    expect(chatCalls(server.calls)).toEqual(["最初の依頼"]);
+  });
+
+  it("送信待ちがあるあいだは、要約・工程のメニューを開けない（待ちを戻す先の文を、要約が上書きしないため）", async () => {
+    fakeDelay();
+    const { held, server } = await startHeldTurn();
+    setValue("待ちの指示");
+    await press("Enter");
+    expect(button("工程とスキルを開く").disabled).toBe(true);
+    held.resolve(chatResponse("最初の返答"));
+    await until(() => queueRow()?.textContent?.includes("1 秒後") === true);
+    expect(button("工程とスキルを開く").disabled).toBe(true);
+    setValue("/");
+    expect(container!.querySelector(".es-ai-skills")).toBeNull();
+    // 取り消して待ちを欄へ戻すと、メニューをまた開ける
+    await click([...queueRow()!.querySelectorAll("button")].find((item) => item.textContent === "取り消す")!);
+    expect(field().value).toBe("待ちの指示\n\n/");
+    expect(button("工程とスキルを開く").disabled).toBe(false);
+    expect(chatCalls(server.calls)).toEqual(["最初の依頼"]);
+  });
+
+  it("待ちの中身を開いて見られ、1 件ずつ消せる。消した分は送らない", async () => {
+    fakeDelay();
+    const { held, server } = await startHeldTurn();
+    for (const value of ["残す指示", "消す指示"]) {
+      setValue(value);
+      await press("Enter");
+    }
+    const toggle = queueRow()!.querySelector<HTMLButtonElement>(".es-ai-queue-toggle")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect([...queueRow()!.querySelectorAll("li span")].map((item) => item.textContent)).toEqual(["残す指示", "消す指示"]);
+    await click(button("送信待ちの 2 件目を消す"));
+    expect(queueRow()?.textContent).toContain("送信待ち 1 件");
+    held.resolve(chatResponse("最初の返答"));
+    await until(() => queueRow()?.textContent?.includes("1 秒後") === true);
+    await advance(1000);
+    await until(() => chatCalls(server.calls).length === 2);
+    await until(() => queueRow() === null && container!.querySelector('button[aria-label="止める"]') === null);
+    expect(chatCalls(server.calls)).toEqual(["最初の依頼", "残す指示"]);
+  });
+
+  it("Mac の CLI でも、作業中の指示を積み、CLI が終わって保存してから次を起動する", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    fakeDelay();
+    const release = deferred<void>();
+    const finished = {
+      finalEvent: {
+        type: "Done" as const,
+        text: "CLI の返答",
+        stop_reason: "EndTurn" as const,
+        session_id: "resume-one",
+        usage: { input_tokens: 1, output_tokens: 1, cost_usd: null, model_used: "gpt-5", cost_known: false },
+        duration_ms: 1,
+        continuations: 0,
+      },
+      page: null,
+      pageRemoved: false,
+      extraFiles: 0,
+    };
+    const aiTurn = vi.fn(async (turnId: string, request: Record<string, unknown>) => {
+      void turnId;
+      void request;
+      if (aiTurn.mock.calls.length === 1) await release.promise;
+      return finished;
+    });
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-5"], effort: true, resume: true }]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    const server = defaultServer();
+    await render();
+    await until(() => enginePill()?.textContent?.includes("Codex CLI") ?? false);
+    setValue("端末で直す");
+    await press("Enter");
+    await until(() => aiTurn.mock.calls.length === 1);
+    setValue("続けてこれも");
+    await press("Enter");
+    expect(queueRow()?.textContent).toContain("送信待ち 1 件");
+    expect(aiTurn).toHaveBeenCalledTimes(1);
+    release.resolve();
+    await until(() => server.calls.filter((call) => call.url.endsWith("/ai/chat/turns")).length === 1 && queueRow()?.textContent?.includes("1 秒後") === true);
+    expect(aiTurn).toHaveBeenCalledTimes(1);
+    await advance(1000);
+    await until(() => aiTurn.mock.calls.length === 2);
+    // 積んだ指示がそのまま次の CLI の指示になる（文書ガイドがあるときは、守らせる 1 行が後ろに付く。#279）
+    expect(aiTurn.mock.calls[1]?.[1]).toMatchObject({ instruction: `続けてこれも\n\n${AI_TEXT.guideNote}` });
+    await until(() => server.calls.filter((call) => call.url.endsWith("/ai/chat/turns")).length === 2 && queueRow() === null);
+  });
+
+  it("待ちの行を開いても、axe の serious 以上の違反が無い", async () => {
+    await startHeldTurn();
+    setValue("待ちの指示");
+    await press("Enter");
+    await click(queueRow()!.querySelector<HTMLButtonElement>(".es-ai-queue-toggle")!);
+    const result = await axe.run(container!, { rules: { "color-contrast": { enabled: false } } });
+    expect(result.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical")).toEqual([]);
+  });
+
+  it("別のページへ替わったら、待ちは持ち越さない", async () => {
+    const { server } = await startHeldTurn();
+    setValue("前のページの指示");
+    await press("Enter");
+    expect(queueRow()).not.toBeNull();
+    await render(PAGE_2, context(PAGE_2));
+    expect(queueRow()).toBeNull();
+    expect(field().value).toBe("");
+    expect(chatCalls(server.calls)).toEqual(["最初の依頼"]);
   });
 });

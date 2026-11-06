@@ -125,6 +125,14 @@ describe("AiDiffView", () => {
     expect(target.getJSON().content?.[0]?.content?.[0]).toMatchObject({ text: "前の AI の文", marks: [{ type: "ai" }] });
   });
 
+  it("消した画像・録音は「（画像）」「（録音）」として位置だけ示す（#281）", () => {
+    const image = { type: "image", attrs: { assetId: "11111111-1111-4111-8111-111111111111", alt: "合成の海" } };
+    const recording = { type: "recording", attrs: { assetId: "22222222-2222-4222-8222-222222222222" } };
+    const target = open([p("最後の段落。")]);
+    expect(target.commands.showAiDiff({ before: [image, p("最後の段落。"), recording] })).toBe(true);
+    expect([...target.view.dom.querySelectorAll(".es-diff-del-block")].map((node) => node.textContent)).toEqual(["（画像）", "（録音）"]);
+  });
+
   it("closes on Escape", () => {
     const target = open();
     target.commands.showAiDiff({ before: BEFORE });

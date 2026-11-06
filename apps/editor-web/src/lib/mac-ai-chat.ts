@@ -14,7 +14,7 @@ export const MAC_AI_ERROR_TEXT = {
   auth: "CLI のログインが必要です。CLI でログインしてから状態を読み直してください。",
   busy: "この会話の CLI が動いています。終わってからもう一度お試しください。",
   too_large: "このページは Mac の CLI に渡せる大きさを超えています。本文を短くしてください。",
-  unreadable: "このページの本文を CLI 用の文書にできません。画像などの添付を含むページは、この経路では編集できません。",
+  unreadable: "このページの本文を CLI 用の文書にできません。箇条書き・引用・囲み・表の中に画像や録音があるページは、この経路では編集できません（それ以外の場所の画像は残したまま文章を直せます）。",
   aborted: "中止しました。ページには反映していません。",
   incomplete: "CLI が書き切れませんでした。ページには反映していません。",
   page_removed: "CLI が文書を削除したため、ページには反映していません。",
@@ -27,6 +27,7 @@ export const MAC_AI_ERROR_TEXT = {
   timed_out: "CLI が時間内に終わりませんでした。ページには反映していません。",
   session: "CLI で前の会話の続きを見つけられませんでした。ページには反映していません。新しい会話で頼んでください。",
   failed: "CLI の依頼を終えられませんでした。ページには反映していません。",
+  context: "文書ガイドなど、AI に渡す資料を読めませんでした。ページには反映していません。もう一度お試しください。",
 } as const;
 
 export type MacAiErrorCode = keyof typeof MAC_AI_ERROR_TEXT;
@@ -144,6 +145,16 @@ export type MacAiTurnOutput = {
   writes: { pageId: string; markdown: string }[];
 };
 
+/**
+ * 本文に画像・録音の行（`niho-asset:`）があるときに指示へ添える注意（#281）。書き戻しはサーバーが検査し、行が欠ければ保存しない。
+ */
+export const MAC_PARTS_NOTE = "本文の `niho-asset:` の行は画像・録音です（中身は見えません）。消さず、作らず、前後を空行で区切った 1 行のまま残してください。動かしてよいのは行の位置と、画像の代替文・キャプションだけです。1 つでも欠けると保存されません。録音と文字起こしは書き換えられません。";
+
+function instructionOf(input: { instruction: string; selection: string | null; page: { markdown: string } }): string {
+  const base = input.selection === null ? input.instruction : `${input.instruction}\n\n選択範囲を主な対象にしてください。選択範囲は context/selection.md にあります。`;
+  return input.page.markdown.includes("](niho-asset:") ? `${base}\n\n${MAC_PARTS_NOTE}` : base;
+}
+
 /** native の一時置き場でだけ動く。確定前の結果はサーバーへ送らない。 */
 export async function runMacAiTurn(input: {
   shell: ShellBridge;
@@ -151,6 +162,8 @@ export async function runMacAiTurn(input: {
   model: string;
   page: { pageId: string; title: string; markdown: string };
   selection: string | null;
+  /** 読むだけの文脈（`context/<name>.md`。あなたについて・この録音について・文書ガイド・固有名詞）。サーバー経路が指示に入れるものと同じ。 */
+  context?: readonly { name: string; title: string; markdown: string }[];
   instruction: string;
   conversationId: string | null;
   resumeSession: string | null;
@@ -166,6 +179,8 @@ export async function runMacAiTurn(input: {
       (input.selection !== null && new TextEncoder().encode(input.selection).byteLength > 64 * 1024)) {
     throw new MacAiError("too_large");
   }
+  // 文脈のファイル（選択範囲は別名 `selection`。文脈の名前と重ならない）
+  const files = [...(input.context ?? []), ...(input.selection === null ? [] : [{ name: "selection", title: "選択範囲", markdown: input.selection }])];
   const turnId = crypto.randomUUID();
   let retryStopOnEvent = false;
   const stop = () => {
@@ -181,9 +196,9 @@ export async function runMacAiTurn(input: {
       ...(input.effort ? { effort: input.effort } : {}),
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       ...(input.resumeSession ? { resumeSession: input.resumeSession } : {}),
-      instruction: input.selection === null ? input.instruction : `${input.instruction}\n\n選択範囲を主な対象にしてください。選択範囲は context/selection.md にあります。`,
+      instruction: instructionOf(input),
       page: input.page,
-      ...(input.selection === null ? {} : { context: [{ name: "selection", title: "選択範囲", markdown: input.selection }] }),
+      ...(files.length === 0 ? {} : { context: files }),
     }, (envelope) => {
       if (!envelope || envelope.turnId !== turnId || !Number.isSafeInteger(envelope.seq) || envelope.seq <= lastSeq) return;
       lastSeq = envelope.seq;

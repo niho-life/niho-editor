@@ -83,7 +83,7 @@ export type AiChatResult = {
 export type DeviceChatWrite = { pageId: string; markdown: string; baseRevision: number };
 
 /** 作業の 1 行（道具の名前とページの名前。edit_page は直した段落の番号も）。 */
-export type AiChatItem = { kind: "narration"; text: string } | { kind: "tool"; tool: string; page: string | null; ok: boolean; paragraphs?: number[] };
+export type AiChatItem = { kind: "narration"; text: string } | { kind: "tool"; tool: string; page: string | null; ok: boolean; paragraphs?: number[]; results?: number };
 
 /** 「元に戻す」の結果。`kept` は戻さなかったページとその理由。 */
 export type AiUndoResult = { undone: string[]; kept: { pageId: string; reason: string }[]; page: AiPage | null };
@@ -156,7 +156,9 @@ function chatItemOf(value: unknown): AiChatItem | null {
   if (value.kind === "narration" && typeof value.text === "string") return { kind: "narration", text: value.text };
   if (value.kind !== "tool" || typeof value.tool !== "string") return null;
   const paragraphs = Array.isArray(value.paragraphs) ? value.paragraphs.filter((n): n is number => isIndex(n, 1)).slice(0, 200) : [];
-  return { kind: "tool", tool: value.tool, page: typeof value.page === "string" ? value.page : null, ok: value.ok === true, ...(paragraphs.length > 0 ? { paragraphs } : {}) };
+  // Web 検索（#283）は件数だけを持つ
+  const results = isIndex(value.results, 0) ? value.results : null;
+  return { kind: "tool", tool: value.tool, page: typeof value.page === "string" ? value.page : null, ok: value.ok === true, ...(paragraphs.length > 0 ? { paragraphs } : {}), ...(results === null ? {} : { results }) };
 }
 
 function chatItemsOf(value: unknown): AiChatItem[] {
@@ -240,6 +242,25 @@ export async function listAiChats(pageId: string, options: { signal?: AbortSigna
   const conversations = data.conversations.map(chatSummaryOf);
   if (conversations.some((item) => item === null)) throw new AiRequestError("failed");
   return conversations as AiChatSummary[];
+}
+
+/** Mac の CLI に渡す文脈の 1 ファイル（`context/<name>.md`）。サーバー経路が指示に入れる節と同じもの。 */
+export type AiContextFile = { name: string; title: string; markdown: string };
+
+const CONTEXT_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/** Mac の CLI に渡す文脈（あなたについて・この録音について・文書ガイド・固有名詞。無いものは含まれない）。 */
+export async function fetchAiChatContext(pageId: string, options: { signal?: AbortSignal } = {}): Promise<AiContextFile[]> {
+  const data = await get(pagePath(pageId, "/ai/context"), options.signal);
+  if (!isRecord(data) || !Array.isArray(data.context)) throw new AiRequestError("failed");
+  const files: AiContextFile[] = [];
+  for (const item of data.context) {
+    if (!isRecord(item) || typeof item.name !== "string" || !CONTEXT_NAME.test(item.name) || typeof item.title !== "string" || typeof item.markdown !== "string") {
+      throw new AiRequestError("failed");
+    }
+    files.push({ name: item.name, title: item.title, markdown: item.markdown });
+  }
+  return files;
 }
 
 /** 1 つの会話とその発言（古い順）。 */

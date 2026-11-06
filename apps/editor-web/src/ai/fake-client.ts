@@ -1,4 +1,4 @@
-import type { AnthropicClient, CompleteInput, Completion, ToolCall, Turn } from "./anthropic";
+import { AnthropicError, type AnthropicClient, type CompleteInput, type Completion, type ToolCall, type Turn } from "./anthropic";
 
 /**
  * 偽物の 1 往復（`EDITOR_AI_MODE=fake`。開発と CI だけ。本番では config.ts が受け付けない）。
@@ -9,6 +9,10 @@ import type { AnthropicClient, CompleteInput, Completion, ToolCall, Turn } from 
  *
  * AI チャット（`converse`）は道具を順に呼ぶ: list_pages → read_page → write_page → 返答。
  * 本物と同じ道を通すための決まった動きで、書き足すのは `[fake]` の印を付けた 1 段落だけ。
+ *
+ * Web 検索（#283）: `web_search` の道具を渡され、今回の頼むことに「調べて」があれば、サーバー側の検索の往復を 1 つ通す:
+ * 1 往復目は検索の呼び出しと結果（合成の URL）を返して `pause_turn` で止まり、2 往復目は返されたブロックが手つかずか確かめて
+ * （崩れていれば本物と同じく 400 = bad_request）、引用つきの返答で終わる。ページは書かない。
  */
 
 export const FAKE_CLIENT_MODEL = "fake";
@@ -67,6 +71,72 @@ function lastTool(messages: readonly unknown[]): { name: string; result: unknown
 
 const FAKE_LINE = "[fake] AI チャットが足した段落です。";
 
+/** 偽の検索の呼び出しの id と、結果に載せる合成の出典（実在の店・URL ではない）。 */
+const FAKE_SEARCH_ID = "srvtoolu_fake_1";
+const FAKE_SEARCH_URL = "https://example.com/fake-hours";
+const FAKE_SEARCH_TITLE = "[fake] 営業時間のページ";
+const FAKE_ENCRYPTED = "fake-encrypted-content";
+
+function hasWebSearchTool(tools: readonly unknown[] | undefined): boolean {
+  return (tools ?? []).some((tool) => isRecord(tool) && tool.name === "web_search" && typeof tool.type === "string" && tool.type.startsWith("web_search_"));
+}
+
+/** 今回の頼むこと（いちばん後ろの、文字列の user）。 */
+function lastInstruction(messages: readonly unknown[]): string {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (isRecord(message) && message.role === "user" && typeof message.content === "string") return message.content;
+  }
+  return "";
+}
+
+/** 返された assistant の中の偽の検索のブロック（呼び出しと結果）。 */
+function returnedSearch(messages: readonly unknown[]): { call: Record<string, unknown> | null; result: Record<string, unknown> | null } {
+  let call: Record<string, unknown> | null = null;
+  let result: Record<string, unknown> | null = null;
+  for (const message of messages) {
+    if (!isRecord(message) || message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (!isRecord(block)) continue;
+      if (block.type === "server_tool_use" && block.id === FAKE_SEARCH_ID) call = block;
+      if (block.type === "web_search_tool_result" && block.tool_use_id === FAKE_SEARCH_ID) result = block;
+    }
+  }
+  return { call, result };
+}
+
+/** 偽の検索の往復。検索の対象ではないときは null（いつもの list_pages → read_page → write_page へ）。 */
+function searchTurn(input: { messages: unknown[]; tools?: unknown[] }, usage: Turn["usage"]): Turn | null {
+  if (!hasWebSearchTool(input.tools) && returnedSearch(input.messages).call === null) return null;
+  if (!lastInstruction(input.messages).includes("調べて")) return null;
+  const { call, result } = returnedSearch(input.messages);
+  if (call === null) {
+    const content = [
+      { type: "text", text: "[fake] Web で調べます。" },
+      { type: "server_tool_use", id: FAKE_SEARCH_ID, name: "web_search", input: { query: "[fake] 営業時間" } },
+      {
+        type: "web_search_tool_result",
+        tool_use_id: FAKE_SEARCH_ID,
+        content: [{ type: "web_search_result", url: FAKE_SEARCH_URL, title: FAKE_SEARCH_TITLE, encrypted_content: FAKE_ENCRYPTED, page_age: null }],
+      },
+    ];
+    return { text: "[fake] Web で調べます。", toolCalls: [], stopReason: "pause_turn", usage: { ...usage, webSearchRequests: 1 }, content };
+  }
+  // 本物は、返されたブロック（encrypted_content を含む）が崩れていると 400 で断る
+  const results = result && Array.isArray(result.content) ? result.content : [];
+  const intact = results.some((item) => isRecord(item) && item.encrypted_content === FAKE_ENCRYPTED && item.url === FAKE_SEARCH_URL);
+  if (!intact) throw new AnthropicError("bad_request", { status: 400 });
+  const answer = "[fake] 営業時間は 10 時から 18 時です。";
+  const content = [
+    {
+      type: "text",
+      text: answer,
+      citations: [{ type: "web_search_result_location", url: FAKE_SEARCH_URL, title: FAKE_SEARCH_TITLE, encrypted_index: "fake-index", cited_text: "[fake] 10:00–18:00" }],
+    },
+  ];
+  return { text: answer, toolCalls: [], stopReason: "end_turn", usage, content };
+}
+
 /** 偽物の道具の呼び出し（id は決定的）。 */
 function callTool(name: string, input: unknown, step: number): ToolCall {
   return { id: `fake-tool-${step}`, name, input };
@@ -88,7 +158,14 @@ function composeAnswer(user: string): string {
 /** 決定的な偽物の 1 往復。usage は送った文字数・返した文字数の 1/4（切り上げ）。 */
 export function createFakeClient(): AnthropicClient {
   const usageOf = (sent: number, returned: number) => ({ model: FAKE_CLIENT_MODEL, inputTokens: Math.ceil(sent / 4), outputTokens: Math.ceil(returned / 4) });
-  type FakeConverseInput = { system: string; messages: unknown[]; tools?: unknown[]; signal?: AbortSignal; onText?: (delta: string) => void };
+  type FakeConverseInput = {
+    system: string;
+    messages: unknown[];
+    tools?: unknown[];
+    signal?: AbortSignal;
+    onText?: (delta: string) => void;
+    onServerBlock?: (block: Record<string, unknown>) => void;
+  };
   const answer = async (input: FakeConverseInput): Promise<Turn> => {
     input.signal?.throwIfAborted();
     const sent = countChars(input.system) + countChars(JSON.stringify(input.messages));
@@ -100,6 +177,8 @@ export function createFakeClient(): AnthropicClient {
       const text = composeAnswer(user);
       return { text, toolCalls: [], stopReason: "end_turn", usage: usageOf(sent, countChars(text)) };
     }
+    const searched = searchTurn(input, usage);
+    if (searched) return searched;
     const last = lastTool(input.messages);
     if (last === null) return { text: "", toolCalls: [callTool("list_pages", {}, 1)], stopReason: "tool_use", usage };
     if (last.name === "list_pages") {
@@ -124,6 +203,8 @@ export function createFakeClient(): AnthropicClient {
   const converse = async (input: FakeConverseInput): Promise<Turn> => {
     const turn = await answer(input);
     if (input.onText && turn.text) input.onText(turn.text);
+    // 本物の streaming と同じく、サーバー側の道具のブロックを知らせる
+    if (input.onText) for (const block of turn.content ?? []) if (isRecord(block) && (block.type === "server_tool_use" || block.type === "web_search_tool_result")) input.onServerBlock?.(block);
     return turn;
   };
   return {

@@ -353,6 +353,14 @@ describe("AI conversations", { skip: databaseUrl ? false : "TEST_DATABASE_URL is
         ].sort(),
       );
       assert.ok(!workspace?.some((item) => item.id === far.id));
+      // 親がフォルダなら作業場に入れない（本文を持たない入れ物。同じフォルダのページは参考として読むだけ）。フォルダ自身は開けない
+      const folder = await store.createPage(OWNER, { title: "合成のフォルダ", kind: "folder" });
+      const inFolder = (await store.createPage(OWNER, { title: "フォルダの中", parent: folder.id }))!;
+      assert.deepEqual(
+        (await listChatWorkspace(pool, OWNER, inFolder.id))?.map((item) => item.title),
+        ["フォルダの中"],
+      );
+      assert.equal(await listChatWorkspace(pool, OWNER, folder.id), null);
       // 他人のページ・無いページ・ゴミ箱の中は null
       assert.equal(await listChatWorkspace(pool, OTHER, page.id), null);
       assert.equal(await listChatWorkspace(pool, OWNER, randomUUID()), null);
