@@ -423,7 +423,8 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
     assert.ok(copy);
     assert.notEqual(copy.id, page.id);
     assert.equal(copy.kind, "rec");
-    assert.equal(copy.title, "合成の会議のコピー");
+    // 同じ入れ物の新しいタブ: 題名はページの名前のまま、タブの名前が「のコピー」（#307 #308）
+    assert.deepEqual([copy.title, copy.page, copy.tabName], ["合成の会議", page.page, "1のコピー"]);
     const copied = await getRecording(pool, OWNER, copy.id);
     assert.ok(copied);
     assert.equal(copied.revision, 1, "the copy starts again at revision 1");

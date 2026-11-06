@@ -29,7 +29,7 @@ function fakeFetch() {
   return { fetchMock, requests };
 }
 
-const hit = (title: string): SearchHit => ({ id: `00000000-0000-4000-8000-${String(title.length).padStart(12, "0")}`, kind: "note", title, snippet: `${title} の本文`, updatedAt: new Date(0).toISOString() });
+const hit = (title: string): SearchHit => ({ id: `00000000-0000-4000-8000-${String(title.length).padStart(12, "0")}`, kind: "note", title, snippet: `${title} の本文`, updatedAt: new Date(0).toISOString(), tab: null });
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;

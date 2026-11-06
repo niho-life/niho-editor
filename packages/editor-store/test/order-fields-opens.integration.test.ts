@@ -111,12 +111,16 @@ describe("manual order, folder fields and 最近 (20261101013000)", { skip: data
 
     it("pageSiblingOrders returns the confirmed sort_order of every sibling (also the ones a screen has not loaded)", async () => {
       const [a, b, c] = await pages("a", "b", "c");
-      // 並べ替える前は 0 のまま
-      assert.deepEqual((await store.pageSiblingOrders(OWNER, a!)).map((row) => row.sortOrder), [0, 0, 0]);
+      // 並べ替える前は 0 のまま（返す行は入れ物とそのタブ。#307 #308）
+      assert.deepEqual((await store.pageSiblingOrders(OWNER, a!)).map((row) => row.sortOrder), [0, 0, 0, 0, 0, 0]);
       // 更新の新しい順は c・b・a。c を 1 つ下へ → b・c・a（1 から振り直す）
       assert.equal(await store.movePageOrder(OWNER, c!, "down"), "moved");
       const orders = new Map((await store.pageSiblingOrders(OWNER, a!)).map((row) => [row.id, row.sortOrder]));
-      assert.deepEqual([...orders.entries()].sort(), [[a!, 3], [b!, 1], [c!, 2]].sort());
+      const holder = async (id: string) => (await store.getPage(OWNER, id))!.page!;
+      assert.deepEqual(
+        [...orders.entries()].sort(),
+        [[a!, 3], [b!, 1], [c!, 2], [await holder(a!), 3], [await holder(b!), 1], [await holder(c!), 2]].sort(),
+      );
       // どの兄弟から聞いても同じ
       assert.deepEqual(new Map((await store.pageSiblingOrders(OWNER, b!)).map((row) => [row.id, row.sortOrder])), orders);
       // 別の人・存在しない id・形の違う id は空

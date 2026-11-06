@@ -26,7 +26,7 @@ import {
 import { stubAuthProvider } from "../auth/stub";
 import { AuthTemporarilyUnavailable, type AuthProvider } from "../auth/types";
 import { PAGE_BODY_MAX_BYTES } from "./http";
-import { createPage, createTab, deletePage, discardPage, getPage, getTabs, listPages, movePage, moveTab, patchPage, reorderTabs, type PagesApiDeps, type PagesStore } from "./pages-api";
+import { createPage, createTab, deletePage, discardPage, getPage, getTabs, listPages, movePage, patchPage, patchTab, reorderTabs, type PagesApiDeps, type PagesStore } from "./pages-api";
 import { listTrash, restoreFromTrash } from "./trash-api";
 import { getVersion, listVersions, restoreVersion } from "./versions-api";
 
@@ -77,14 +77,16 @@ function memoryStore() {
       if (input.kind === "folder" && (parent !== null || (input.blocks?.length ?? 0) > 0)) throw new TypeError("editor-store: folder has no body");
       // 型は EditorStore の重ね書き（親なし＝Page）に合わせ、親があって入れられないときだけ null を返す
       if (parent !== null && visible(owner, parent)?.kind !== "folder") return null as unknown as Page;
-      const page: Page = { id: randomUUID(), kind: input.kind ?? "note", title: input.title ?? "", lang: input.lang ?? "ja", blocks: input.blocks ?? [], cover: null, lead: null, parent, recipe: null, stepStatus: null, sortOrder: 0, revision: 1, page: null, role: null, madeFrom: null, lastTab: null, createdAt: now, updatedAt: now };
+      const page: Page = { id: randomUUID(), kind: input.kind ?? "note", title: input.title ?? "", lang: input.lang ?? "ja", blocks: input.blocks ?? [], cover: null, lead: null, parent, recipe: null, stepStatus: null, sortOrder: 0, revision: 1, page: null, role: null, madeFrom: null, lastTab: null, tabName: null, createdAt: now, updatedAt: now };
       rows.set(page.id, { ...page, owner, deleted: false, deletedAt: null });
       return page;
     },
     /** cursor は前の区切りの最後の id（知らない id は読めない cursor）。 */
     async listPageChunk(owner: string, options: PageChunkOptions = {}): Promise<PageChunk> {
+      // 何を 1 行にするか（EditorStore の viewFilter と同じ）: tabs（既定）は入れ物を出さない、pages はタブを出さない、all は全部
+      const inView = (row: Row) => (options.view === "all" ? true : options.view === "pages" ? row.page === null : row.kind !== "page");
       const sorted = [...rows.values()]
-        .filter((row) => row.owner === owner && !row.deleted)
+        .filter((row) => row.owner === owner && !row.deleted && inView(row))
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
       let start = 0;
       if (options.cursor !== undefined && options.cursor !== null) {
@@ -200,10 +202,18 @@ function memoryStore() {
         rows.set(holder.id, holder);
         target.page = holder.id;
       }
-      const tab: Row = { ...holder, id: randomUUID(), kind: "note", title: input.title ?? "", lang: input.lang ?? holder.lang, blocks: [], page: holder.id, lastTab: null, createdAt: now, updatedAt: now };
+      // 題名はページの名前（入れ物と同じ）。名前は付けたときだけ（#308）
+      const tab: Row = { ...holder, id: randomUUID(), kind: "note", title: holder.title, lang: input.lang ?? holder.lang, blocks: [], page: holder.id, lastTab: null, tabName: input.name ?? null, createdAt: now, updatedAt: now };
       rows.set(tab.id, tab);
       holder.lastTab = tab.id;
       return strip(tab);
+    },
+    async renameTab(owner: string, id: string, name: string | null): Promise<boolean | null> {
+      const row = visible(owner, id);
+      if (!row) return null;
+      if (!row.page) return false;
+      Object.assign(row, { tabName: name === null || name.trim() === "" ? null : name.trim() });
+      return true;
     },
     async resolvePage(owner: string, id: string): Promise<ResolvedPage | null> {
       if (!UUID.test(id)) return null;
@@ -212,7 +222,7 @@ function memoryStore() {
       const tabsOf = (holder: string): PageSummary[] =>
         [...rows.values()]
           .filter((r) => r.owner === owner && !r.deleted && r.page === holder)
-          .map(({ id, kind, title, lang, parent, stepStatus, sortOrder, page, role, createdAt, updatedAt }) => ({ id, kind, title, lang, parent, stepStatus, sortOrder, page, role, createdAt, updatedAt, publication: null }));
+          .map(({ id, kind, title, lang, parent, stepStatus, sortOrder, page, role, tabName, createdAt, updatedAt }, index) => ({ id, kind, title, lang, parent, stepStatus, sortOrder, page, role, tabName, tabPos: index + 1, createdAt, updatedAt, publication: null }));
       if (row.kind === "page") {
         const tabs = tabsOf(row.id);
         const chosen = tabs.find((t) => t.id === row.lastTab) ?? tabs[0];
@@ -511,6 +521,9 @@ describe("/api/pages", () => {
     }
     expect((await listPages(request("GET", "/api/pages?limit=500"), deps("user-a", store))).status).toBe(200);
     expect((await listPages(request("GET", "/api/pages?limit=1"), deps("user-a", store))).status).toBe(200);
+    // 何を 1 行にするか（#307 #308）: tabs（既定）・pages・all。ほかは 400
+    for (const view of ["tabs", "pages", "all"]) expect((await listPages(request("GET", `/api/pages?view=${view}`), deps("user-a", store))).status, view).toBe(200);
+    expect((await listPages(request("GET", "/api/pages?view=x"), deps("user-a", store))).status).toBe(400);
   });
 
   it("answers 503 without a database and 500 without internal details when the store fails", async () => {
@@ -916,17 +929,28 @@ describe("/api/pages/{id}/tabs and /tab (#307)", () => {
   it("adds a blank tab to the page's holder, lists the tabs, remembers the last opened tab, reorders and moves tabs", async () => {
     const store = memoryStore();
     const first = await make(store, { title: "記事本文" });
-    const added = await createTab(request("POST", `/api/pages/${first.id}/tabs`, { title: "2" }), first.id, deps("user-a", store));
+    const added = await createTab(request("POST", `/api/pages/${first.id}/tabs`, { name: " 英語版 " }), first.id, deps("user-a", store));
     expect(added.status).toBe(201);
     const { page: tab } = (await added.json()) as { page: Page };
-    expect(tab).toMatchObject({ kind: "note", title: "2", blocks: [] });
+    // 題名はページの名前（入れ物と同じ）。名前は前後の空白を除く（#308）
+    expect(tab).toMatchObject({ kind: "note", title: "記事本文", blocks: [], tabName: "英語版" });
     expect(tab.page).toBeTruthy();
 
     const listed = await getTabs(request("GET", `/api/pages/${first.id}/tabs`), first.id, deps("user-a", store));
     expect(listed.status).toBe(200);
     const resolved = (await listed.json()) as ResolvedPage;
     expect(resolved.page?.id).toBe(tab.page);
-    expect(resolved.tabs.map((t) => t.id)).toEqual([first.id, tab.id]);
+    expect(resolved.tabs.map((t) => [t.id, t.tabName, t.tabPos])).toEqual([[first.id, null, 1], [tab.id, "英語版", 2]]);
+
+    // 名前を変える・外す（`{ name }`。空は外す）。入れ物・入れ物の無いページには付かない（409 not_page）
+    expect((await patchTab(request("PATCH", `/api/pages/${first.id}/tab`, { name: "下書き" }), first.id, deps("user-a", store))).status).toBe(200);
+    expect(store.rows.get(first.id)?.tabName).toBe("下書き");
+    expect((await patchTab(request("PATCH", `/api/pages/${first.id}/tab`, { name: "" }), first.id, deps("user-a", store))).status).toBe(200);
+    expect(store.rows.get(first.id)?.tabName).toBeNull();
+    expect((await patchTab(request("PATCH", `/api/pages/${tab.page}/tab`, { name: "x" }), tab.page!, deps("user-a", store))).status).toBe(409);
+    expect((await patchTab(request("PATCH", `/api/pages/${first.id}/tab`, { name: "あ".repeat(101) }), first.id, deps("user-a", store))).status).toBe(400);
+    expect((await patchTab(request("PATCH", `/api/pages/${first.id}/tab`, {}), first.id, deps("user-a", store))).status).toBe(400);
+    expect((await patchTab(request("PATCH", `/api/pages/${first.id}/tab`, { name: "x" }), first.id, deps("user-b", store))).status).toBe(404);
     // 入れ物の id で聞くと最後に開いたタブ（足したタブ）
     const byHolder = await getTabs(request("GET", `/api/pages/${tab.page}/tabs`), tab.page!, deps("user-a", store));
     expect(((await byHolder.json()) as ResolvedPage).tab.id).toBe(tab.id);
@@ -939,17 +963,18 @@ describe("/api/pages/{id}/tabs and /tab (#307)", () => {
     // 別の入れ物へ移す。入れ物でない・タブでないものは 409 not_page
     const other = await make(store, { title: "別" });
     await createTab(request("POST", `/api/pages/${other.id}/tabs`, {}), other.id, deps("user-a", store));
-    const moved = await moveTab(request("PATCH", `/api/pages/${tab.id}/tab`, { page: other.id }), tab.id, deps("user-a", store));
+    const moved = await patchTab(request("PATCH", `/api/pages/${tab.id}/tab`, { page: other.id }), tab.id, deps("user-a", store));
     expect(moved.status).toBe(200);
     const lone = await make(store, { title: "入れ物なし" });
-    expect((await moveTab(request("PATCH", `/api/pages/${lone.id}/tab`, { page: first.id }), lone.id, deps("user-a", store))).status).toBe(409);
-    expect((await moveTab(request("PATCH", `/api/pages/${tab.id}/tab`, { page: "x" }), tab.id, deps("user-a", store))).status).toBe(400);
+    expect((await patchTab(request("PATCH", `/api/pages/${lone.id}/tab`, { page: first.id }), lone.id, deps("user-a", store))).status).toBe(409);
+    expect((await patchTab(request("PATCH", `/api/pages/${tab.id}/tab`, { page: "x" }), tab.id, deps("user-a", store))).status).toBe(400);
   });
 
   it("answers 400 to unknown keys, a folder or kind 'page', 403 across origins, and the same 404 to others' pages", async () => {
     const store = memoryStore();
     const page = await make(store, {});
     expect((await createTab(request("POST", `/api/pages/${page.id}/tabs`, { blocks: [] }), page.id, deps("user-a", store))).status).toBe(400);
+    expect((await createTab(request("POST", `/api/pages/${page.id}/tabs`, { title: "2" }), page.id, deps("user-a", store))).status).toBe(400);
     const folder = await make(store, { kind: "folder" });
     expect((await createTab(request("POST", `/api/pages/${folder.id}/tabs`, {}), folder.id, deps("user-a", store))).status).toBe(400);
     expect((await createTab(request("POST", `/api/pages/${page.id}/tabs`, {}, { origin: "http://evil.test" }), page.id, deps("user-a", store))).status).toBe(403);

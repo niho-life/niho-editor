@@ -57,6 +57,13 @@ export type ShellListItem = {
   /** 手順が動いている行の回るマーク（設計 §7.2）。印だけでは状態を表さないので、sub の文字（「作成中…」）と一緒に渡す。 */
   busy?: boolean;
   sub?: { text: string; dest?: ShellDest };
+  /**
+   * ページ（入れ物）の行が持つタブの id（#308）。開いているページ（`currentId`）がこの中にあれば、この行が今の行。
+   * 右に並べる・本文へのドラッグは 1 つ目のタブで開く。
+   */
+  tabs?: readonly string[];
+  /** タブの数（2 つ以上のときだけ題名の横に数の印）。 */
+  count?: number;
 };
 
 export type ShellPublication = {

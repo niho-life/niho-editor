@@ -77,6 +77,7 @@ function memoryStore() {
       role: null,
       madeFrom: null,
       lastTab: null,
+      tabName: null,
       createdAt: now,
       updatedAt: now,
     };

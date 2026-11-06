@@ -209,12 +209,12 @@ describe("EditorFrame", () => {
       await intersect();
       await intersect();
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/pages?limit=100&cursor=cursor-1");
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/pages?limit=100&view=all&cursor=cursor-1");
       await act(async () => release(chunkResponse([page("b"), page("c")], "cursor-2")));
       expect(rows()).toEqual(["a", "b", "c"]);
 
       await intersect();
-      expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/pages?limit=100&cursor=cursor-2");
+      expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/pages?limit=100&view=all&cursor=cursor-2");
       await act(async () => release(chunkResponse([page("d")], null)));
       expect(rows()).toEqual(["a", "b", "c", "d"]);
       expect(observers.every((entry) => entry.disconnected)).toBe(true);
@@ -599,8 +599,8 @@ describe("EditorFrame", () => {
         ]),
       );
       expect(rows()).toEqual(["録音", "文字起こし修正", "記事方針"]);
-      // 済みの段階は 2 行目を出さず、作成中の段階は言葉（と回るマーク）を出す
-      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["録音", "作成中…"]);
+      // 済みの段階は 2 行目を出さず、作成中の段階は言葉（と回るマーク）を出す（録音の行に「録音」の 2 行目は無い。#308）
+      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["作成中…"]);
       expect(container!.querySelectorAll(".es-sb-list .es-busy")).toHaveLength(1);
     });
 
@@ -622,10 +622,10 @@ describe("EditorFrame", () => {
       await act(async () => send(REC, run));
       await act(async () => send(REC, run));
       expect(rows()).toEqual(["録音", "文字起こし修正"]);
-      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["録音", "作成中…"]);
+      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["作成中…"]);
       await act(async () => send(REC, [{ id: STEP_1, title: "文字起こし修正", stepStatus: "done" }]));
       expect(rows()).toEqual(["録音", "文字起こし修正"]);
-      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["録音"]);
+      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual([]);
     });
   });
 });

@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PageActionError,
+  createTabRequest,
   deletePageRequest,
   duplicatePageRequest,
+  listTabsRequest,
+  moveTabRequest,
+  renameTabRequest,
   exportPageToGoogleDoc,
   getPageShare,
   googleDocExportStatus,
@@ -70,18 +74,49 @@ describe("page actions client", () => {
 
   it("duplicates a page and returns the new id, title and kind (for the top of the list)", async () => {
     const newId = "7f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d12";
-    const fetchMock = mockFetch(201, { page: { id: newId, title: "合成のコピー", kind: "rec", blocks: [] } });
-    expect(await duplicatePageRequest(ID)).toEqual({ id: newId, title: "合成のコピー", kind: "rec" });
+    const fetchMock = mockFetch(201, { page: { id: newId, title: "合成のコピー", kind: "rec", blocks: [], parent: ID, page: ID, tabName: "1のコピー" } });
+    expect(await duplicatePageRequest(ID)).toEqual({ id: newId, title: "合成のコピー", kind: "rec", parent: ID, page: ID, tabName: "1のコピー" });
     expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${ID}/duplicate`, { method: "POST", credentials: "same-origin", cache: "no-store" });
-    // 読めない種類は note として扱う（複製はできているので失敗にしない）
-    mockFetch(201, { page: { id: newId, title: "", kind: "unknown" } });
-    expect(await duplicatePageRequest(ID)).toEqual({ id: newId, title: "", kind: "note" });
+    // 読めない種類は note として扱う（複製はできているので失敗にしない）。フォルダ・入れ物・名前が読めなければ null
+    mockFetch(201, { page: { id: newId, title: "", kind: "unknown", parent: "x", page: 3 } });
+    expect(await duplicatePageRequest(ID)).toEqual({ id: newId, title: "", kind: "note", parent: null, page: null, tabName: null });
     mockFetch(201, { page: { id: "not-a-uuid", title: "x" } });
     await expect(duplicatePageRequest(ID)).rejects.toMatchObject({ status: 500 });
     mockFetch(201, { page: { id: newId } });
     await expect(duplicatePageRequest(ID)).rejects.toMatchObject({ status: 500 });
     mockFetch(404, { error: "not_found" });
     await expect(duplicatePageRequest(ID)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("タブ（#308）: 足す（POST tabs）・名前（PATCH tab { name }）・移す（PATCH tab { page }）・一覧（GET tabs）。断られたら status と code", async () => {
+    const newId = "7f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d12";
+    const holder = "8f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d13";
+    let fetchMock = mockFetch(201, { page: { id: newId, page: holder, title: "x" } });
+    expect(await createTabRequest(ID)).toEqual({ id: newId, page: holder });
+    expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${ID}/tabs`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "content-type": "application/json" }, body: "{}" });
+    mockFetch(201, { page: { id: newId, page: "x" } });
+    expect(await createTabRequest(ID, "英語版")).toEqual({ id: newId, page: null });
+    mockFetch(201, { page: {} });
+    await expect(createTabRequest(ID)).rejects.toMatchObject({ status: 500 });
+
+    fetchMock = mockFetch(200, { page: null, name: "下書き" });
+    await renameTabRequest(ID, "下書き");
+    expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${ID}/tab`, expect.objectContaining({ method: "PATCH", body: JSON.stringify({ name: "下書き" }) }));
+    await renameTabRequest(ID, null);
+    expect(fetchMock).toHaveBeenLastCalledWith(`/api/pages/${ID}/tab`, expect.objectContaining({ body: JSON.stringify({ name: null }) }));
+    fetchMock = mockFetch(200, { page: holder, name: null });
+    await moveTabRequest(ID, holder);
+    expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${ID}/tab`, expect.objectContaining({ method: "PATCH", body: JSON.stringify({ page: holder }) }));
+    mockFetch(409, { error: "not_page" });
+    await expect(moveTabRequest(ID, holder)).rejects.toMatchObject({ status: 409, code: "not_page" });
+
+    mockFetch(200, { page: { id: holder }, tab: { id: ID }, tabs: [{ id: ID, kind: "note", title: "t", tabName: null, tabPos: 1, stepStatus: null }, { id: "bad" }, { id: newId, kind: "odd", title: "u", tabName: "英語版", tabPos: 2, stepStatus: "run" }] });
+    expect(await listTabsRequest(ID)).toEqual([
+      { id: ID, kind: "note", title: "t", tabName: null, tabPos: 1, stepStatus: null },
+      { id: newId, kind: "note", title: "u", tabName: "英語版", tabPos: 2, stepStatus: "run" },
+    ]);
+    mockFetch(200, { tabs: "x" });
+    await expect(listTabsRequest(ID)).rejects.toMatchObject({ status: 500 });
   });
 
   it("deletes a page with DELETE (204), and keeps the status and code of a refusal", async () => {

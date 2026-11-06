@@ -11,14 +11,26 @@ type EditorProps = {
   onLeftEmpty?: (id: string, options: { keepalive: boolean }) => void;
 };
 const editors: EditorProps[] = [];
-const frame = { pageCreated: vi.fn(), pageTitleChanged: vi.fn(), pageSaved: vi.fn(), pageOpened: vi.fn(), pageLangChanged: vi.fn(), pageRemoved: vi.fn(), narrow: false };
+const frame = {
+  pageCreated: vi.fn(),
+  pageTitleChanged: vi.fn(),
+  pageSaved: vi.fn(),
+  pageOpened: vi.fn(),
+  pageLangChanged: vi.fn(),
+  pageRemoved: vi.fn(),
+  registerPageSaver: vi.fn(() => () => undefined),
+  openPage: vi.fn(),
+  pages: [] as unknown[],
+  narrow: false,
+};
 /** 手順の帯が「この段階の本文が入れ替わった」と知らせる口（PageSteps のモックが預かる）。 */
 const steps: { onBodyReplaced?: () => void } = {};
+const router = { refresh: vi.fn(), replace: vi.fn(), push: vi.fn() };
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/p/new",
   useSearchParams: () => new URLSearchParams(window.location.search),
-  useRouter: () => ({ refresh: vi.fn(), replace: vi.fn() }),
+  useRouter: () => router,
 }));
 vi.mock("./EditorFrame", () => ({ useEditorFrame: () => frame, isNarrowNow: () => false }));
 vi.mock("@/lib/last-page", () => ({ rememberLastPage: vi.fn() }));
@@ -39,16 +51,20 @@ vi.mock("./RecordingTranscript", () => ({
 }));
 // 手順の帯（#37）は PageSteps.test.tsx が見る。ここは、帯・文字起こし・本文の並びと渡す値だけを見る
 vi.mock("./PageSteps", () => ({
-  PageSteps: (props: { pageId: string; kind: string; parentId: string | null; media?: unknown; onBodyReplaced?: () => void; children?: unknown }) => {
+  PageSteps: (props: { pageId: string; kind: string; parentId: string | null; quiet?: boolean; media?: unknown; onBodyReplaced?: () => void; children?: unknown }) => {
     steps.onBodyReplaced = props.onBodyReplaced;
     return (
       <>
-        <div data-steps={`${props.pageId}:${props.kind}:${props.parentId ?? "none"}`} />
+        <div data-steps={`${props.pageId}:${props.kind}:${props.parentId ?? "none"}${props.quiet ? ":quiet" : ""}`} />
         {props.media as never}
         {props.children as never}
       </>
     );
   },
+}));
+vi.mock("@/lib/page-actions-client", async (original) => ({
+  ...(await original<typeof import("@/lib/page-actions-client")>()),
+  createTabRequest: vi.fn(),
 }));
 vi.mock("@/lib/pages-client", async (original) => ({
   ...(await original<typeof import("@/lib/pages-client")>()),
@@ -58,11 +74,13 @@ vi.mock("@/lib/pages-client", async (original) => ({
 
 import { rememberLastPage } from "@/lib/last-page";
 import { LEFT_EMPTY_PAGES_KEY, TAB_CREATED_PAGES_KEY } from "@/lib/left-empty-pages";
+import { createTabRequest } from "@/lib/page-actions-client";
 import { PageRequestError, discardPageRequest, readPageRequest } from "@/lib/pages-client";
 import { NewPage, OpenPage } from "./FramePages";
 
 const readPage = vi.mocked(readPageRequest);
 const discard = vi.mocked(discardPageRequest);
+const createTab = vi.mocked(createTabRequest);
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -170,39 +188,62 @@ describe("NewPage: a page left without anything added is discarded (owner decisi
   });
 });
 
-describe("OpenPage: the steps band, the transcript, then the title and body", () => {
+describe("OpenPage: the tab bar, the steps state (quiet), the transcript, then the title and body", () => {
   const PAGE = "33333333-3333-4333-8333-333333333333";
-  const summary = (kind: "note" | "rec" | "step" | "folder", parent: string | null = null) => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent, stepStatus: null, sortOrder: 0, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
+  const HOLDER = "55555555-5555-4555-8555-555555555555";
+  const OTHER = "66666666-6666-4666-8666-666666666666";
+  const summary = (kind: "note" | "rec" | "step" | "folder", parent: string | null = null) => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent, stepStatus: null, sortOrder: 0, page: kind === "folder" || kind === "step" ? null : HOLDER, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
+  const tab = (id: string, tabPos: number, tabName: string | null = null) => ({ id, kind: "note" as const, title: "録音", tabName, tabPos, stepStatus: null });
 
-  async function open(kind: "note" | "rec" | "step" | "folder", parent: string | null = null) {
+  async function open(kind: "note" | "rec" | "step" | "folder", parent: string | null = null, tabs: ReturnType<typeof tab>[] = [tab(PAGE, 1)]) {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
     await act(async () => {
-      root!.render(<OpenPage summary={summary(kind, parent)} blocks={[]} revision={1} />);
+      root!.render(<OpenPage summary={summary(kind, parent)} tabs={tabs} blocks={[]} revision={1} />);
     });
     return container;
   }
 
   const order = (host: HTMLElement) =>
-    [...host.children].map((node) => node.getAttribute("data-steps") ?? node.getAttribute("data-transcript") ?? (node.hasAttribute("data-recording-info") ? "info" : "editor"));
+    [...host.children].map((node) =>
+      node.classList.contains("es-tabbar") ? "tabbar" : (node.getAttribute("data-steps") ?? node.getAttribute("data-transcript") ?? (node.hasAttribute("data-recording-info") ? "info" : "editor")),
+    );
 
-  it("puts the steps band first, then この録音について and the transcript (kind=rec), then the page editor", async () => {
+  it("puts the tab bar first, the steps state quiet (no band), then この録音について and the transcript (kind=rec), then the page editor", async () => {
     const host = await open("rec");
-    expect(order(host)).toEqual([`${PAGE}:rec:none`, "info", PAGE, "editor"]);
+    expect(order(host)).toEqual(["tabbar", `${PAGE}:rec:none:quiet`, "info", PAGE, "editor"]);
     expect(frame.pageOpened).toHaveBeenCalledTimes(1);
   });
 
-  it("opens a folder as the folder screen (no page editor, no transcript)", async () => {
+  it("opens a folder as the folder screen (no page editor, no transcript, no tab bar)", async () => {
     const host = await open("folder");
     expect(host.querySelector(`[data-folder-page="${PAGE}"]`)).not.toBeNull();
     expect(host.querySelector("[data-editor]")).toBeNull();
     expect(host.querySelector("[data-steps]")).toBeNull();
+    expect(host.querySelector(".es-tabbar")).toBeNull();
   });
 
-  it("shows the band and the editor for an ordinary page, without the transcript", async () => {
+  it("タブの帯（#308）: 1 つなら ＋ だけ。＋ でまっさらなタブを足し、一覧に知らせて開く。2 つ以上なら名前と ▾", async () => {
+    createTab.mockResolvedValue({ id: OTHER, page: HOLDER });
+    let host = await open("note");
+    expect(host.querySelectorAll(".es-tab")).toHaveLength(0);
+    await act(async () => host.querySelector<HTMLButtonElement>(".es-tab-add")!.click());
+    expect(createTab).toHaveBeenCalledWith(PAGE);
+    expect(frame.pageCreated).toHaveBeenCalledWith(OTHER, "録音", "note", null, HOLDER);
+    expect(router.push).toHaveBeenCalledWith(`/p/${OTHER}`);
+    await act(async () => root?.unmount());
+    container?.remove();
+    host = await open("note", null, [tab(PAGE, 1, "下書き"), tab(OTHER, 2)]);
+    expect([...host.querySelectorAll(".es-tab")].map((el) => [el.textContent, el.getAttribute("aria-current")])).toEqual([["下書き", "true"], ["2", null]]);
+    expect(host.querySelector(".es-tab-menu")?.getAttribute("aria-label")).toBe("タブ「下書き」のメニュー");
+    act(() => [...host.querySelectorAll<HTMLButtonElement>(".es-tab")][1]!.click());
+    expect(frame.openPage).toHaveBeenCalledWith(OTHER);
+  });
+
+  it("shows the editor for an ordinary page, without the transcript", async () => {
     const host = await open("note");
-    expect(order(host)).toEqual([`${PAGE}:note:none`, "editor"]);
+    expect(order(host)).toEqual(["tabbar", `${PAGE}:note:none:quiet`, "editor"]);
     expect(host.querySelector("[data-transcript]")).toBeNull();
     // 既にあるページ（このタブの「新しいページ」で作っていない）は、空でも捨てない
     expect(editors.at(-1)!.onLeftEmpty).toBeUndefined();
@@ -222,9 +263,9 @@ describe("OpenPage: the steps band, the transcript, then the title and body", ()
     expect(JSON.parse(window.localStorage.getItem(LEFT_EMPTY_PAGES_KEY)!)).toEqual([PAGE]);
   });
 
-  it("gives the band the parent of a step subpage (the run belongs to the recording page)", async () => {
+  it("gives the steps state the parent of a step subpage (the run belongs to the recording page)", async () => {
     const host = await open("step", "44444444-4444-4444-8444-444444444444");
-    expect(order(host)).toEqual([`${PAGE}:step:44444444-4444-4444-8444-444444444444`, "editor"]);
+    expect(order(host)).toEqual(["tabbar", `${PAGE}:step:44444444-4444-4444-8444-444444444444:quiet`, "editor"]);
   });
 
   it("段階が終わって本文が入れ替わったら、読み直してエディタを開き直す（#37。帯だけ「済み」にしない）", async () => {

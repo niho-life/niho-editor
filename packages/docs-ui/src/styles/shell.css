@@ -121,9 +121,12 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;width:100%;padding:8px 10px;border-radius:10px;position:relative;text-align:left}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di--one{padding:9px 10px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di:hover{background:var(--ed-sand-2)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di--on{background:var(--ed-white);box-shadow:0 1px 3px rgba(28,28,26,.08),0 0 0 1px var(--ed-line)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-t{grid-column:1;font-size:13.5px;font-weight:600;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 今の行は網掛けせず、題名を太くするだけ（オーナー決定 2026-11-06、#308。モック editor-folder-pages-v1 の .row.on） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di--on .es-di-t{font-weight:700;color:var(--ed-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-t{grid-column:1;font-size:13.5px;font-weight:500;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-t--untitled{color:var(--ed-ink-mute)}
+/* タブの数の印（2 つ以上のときだけ。#308） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-n{display:inline-block;margin-left:6px;padding:0 6px;min-width:18px;height:18px;line-height:18px;border-radius:9px;font-size:12px;font-style:normal;font-weight:600;text-align:center;vertical-align:1px;color:var(--ed-ink-mute);background:var(--ed-sand-2)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-when{grid-column:2;grid-row:1;font-size:12px;color:var(--ed-ink-mute);white-space:nowrap}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-sub{grid-column:1/-1;font-size:12px;color:var(--ed-ink-mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* 進行中の回るマーク（サイドバーの行と、送っている間のボタン）。状態の言葉は横の文字が持つので、マークは支援技術から隠す */
@@ -218,6 +221,24 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc{display:flex;align-items:center;flex-wrap:wrap;gap:2px;min-width:0;font-size:13px;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc--head{flex:0 1 auto;flex-wrap:nowrap;margin:0 4px;overflow:hidden}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc--body{display:none}
+/* タブの帯（#308。モック editor-folder-pages-v1 の .tabbar）: ページ名の上、本文のコンテンツ幅（.es-canvas-in）いっぱいの薄い罫線。右端に ＋。
+   タブが 2 つ以上なら左に名前（tablist）。本文を送っても上に残る（sticky。背景は本文と同じ） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tabbar{position:sticky;top:0;z-index:5;display:flex;align-items:flex-end;gap:2px;min-height:38px;margin:0 0 10px;padding-top:6px;border-bottom:1px solid var(--ed-line-2);background:var(--ed-canvas)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tabbar-tabs{display:flex;align-items:flex-end;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab-w{display:flex;align-items:flex-end;flex:none;position:relative}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 12px;margin-bottom:-1px;border-bottom:2px solid transparent;border-radius:8px 8px 0 0;font-size:13.5px;font-weight:600;color:var(--ed-ink-mute);white-space:nowrap;max-width:46vw;overflow:hidden;text-overflow:ellipsis}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab:hover{background:var(--ed-sand);color:var(--ed-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab[aria-current]{color:var(--ed-ink);border-bottom-color:var(--ed-leaf)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab-menu{width:22px;height:36px;margin:0 0 -1px -8px;display:grid;place-items:center;color:var(--ed-ink-mute);border-radius:8px 8px 0 0;border-bottom:2px solid var(--ed-leaf)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab-menu svg{width:13px;height:13px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab-menu:hover{color:var(--ed-ink);background:var(--ed-sand)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab-name{height:30px;margin:0 2px 3px;padding:0 8px;width:12em;min-width:0;border:1px solid var(--ed-line-3);border-radius:8px;background:var(--ed-white);font:inherit;font-size:13.5px;font-weight:600;color:var(--ed-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab-add{margin-left:auto;width:30px;height:30px;margin-bottom:3px;display:grid;place-items:center;color:var(--ed-ink-mute);border-radius:8px;flex:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab-add:hover{background:var(--ed-sand);color:var(--ed-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab-add:disabled{opacity:.5}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab-add svg{width:16px;height:16px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tabbar .es-menu--tab{left:0;right:auto;top:38px;width:240px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tabbar-note{margin:-4px 0 10px;font-size:12.5px;line-height:1.5;color:var(--ed-ink-sub)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc-part{display:inline-flex;align-items:center;min-width:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc-sep{flex:none;margin:0 2px;color:var(--ed-line-3);font-style:normal}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc-btn{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:22vw;padding:3px 7px;border-radius:7px;color:var(--ed-ink-mute);font-size:13px}

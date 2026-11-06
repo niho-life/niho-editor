@@ -26,7 +26,8 @@ export default async function EditorLayout({ children }: { children: ReactNode }
   if (!store) return <StoreUnavailable />;
   const pool = getPool();
   const [chunk, recent, requestHeaders] = await Promise.all([
-    store.listPageChunk(session.userId, { limit: PAGE_CHUNK }),
+    // 一覧は入れ物もタブも読む（入れ物の行にして、タブを `page` で集める。lib/sidebar-items.ts。#308）
+    store.listPageChunk(session.userId, { limit: PAGE_CHUNK, view: "all" }),
     // 「最近」（#37。開いたページの記録。行が無ければ空）
     pool ? listRecentPages(pool, session.userId) : Promise.resolve([]),
     headers(),
