@@ -37,6 +37,11 @@ export type Step = {
   instruction: string;
   provider?: ProviderId;
   profile: string;
+  /**
+   * 長い入力は区切って処理する（全文を書き直す段階。editor.niho.life の手順だけが使う。#277）。
+   * 無ければ false。Mac アプリの工程の実行は見ない。
+   */
+  chunked?: boolean;
 };
 
 /**

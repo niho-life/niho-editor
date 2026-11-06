@@ -60,6 +60,15 @@ export function computeStepBasis(recipe: StepRecipe, index: number, materials: S
     step: digest(step.instruction.trim()),
   };
 }
+/**
+ * 区切りの基準（#277。`step_attempts.chunk_basis`）。段階の入力の基準（`computeStepBasis`）全体の sha256。
+ * 最初の区切りを始めたときの値と、次の区切り・やり直しの前の値が違えば、入力が変わったので止める。
+ * 欄の名前を並べ替えても同じ値になるよう、key の順を固定して数える。
+ */
+export function computeChunkBasis(basis: StepBasis): string {
+  const artifacts = Object.keys(basis.artifacts).sort().map((id) => [id, basis.artifacts[id]]);
+  return digest(JSON.stringify([basis.source, artifacts, basis.refs, basis.info, basis.guide, basis.step]));
+}
 export function parseStepBasis(value: unknown): StepBasis | undefined {
   if (!object(value) || Object.keys(value).sort().join(",") !== "artifacts,guide,info,refs,source,step" || !object(value.artifacts)) return undefined;
   if (![value.source, value.refs, value.info, value.guide, value.step, ...Object.values(value.artifacts)].every((item) => typeof item === "string" && HEX.test(item))) return undefined;

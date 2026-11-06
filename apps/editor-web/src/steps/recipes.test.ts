@@ -42,9 +42,16 @@ describe("recipes", () => {
   it("keeps the instructions and the guide of docs-core as they are", () => {
     for (const recipe of DEFAULT_RECIPES) {
       const template = FLOW_TEMPLATES.find((candidate) => candidate.id === recipe.id);
-      expect(recipe.steps).toEqual(template?.steps.map(({ id, name, instruction, profile }) => ({ id, name, instruction, profile })));
+      expect(recipe.steps).toEqual(template?.steps.map(({ id, name, instruction, profile, chunked }) => ({ id, name, instruction, profile, ...(chunked ? { chunked } : {}) })));
       expect(recipe.guide).toBe(template?.guide);
     }
+  });
+
+  it("turns on chunking only for the transcript fix of the article and coaching recipes (#277)", () => {
+    expect(DEFAULT_RECIPES.flatMap((recipe) => recipe.steps.filter((step) => step.chunked).map((step) => [recipe.id, step.name]))).toEqual([
+      ["tpl-1", "文字起こし修正"],
+      ["tpl-4", "文字起こし修正"],
+    ]);
   });
 
   it("hashes instructions in editor-store exactly like docs-core's stepHash (the input basis depends on it)", () => {

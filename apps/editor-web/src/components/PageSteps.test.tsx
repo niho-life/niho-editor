@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Block, SettingsRecipe } from "@niho/editor-store";
 import type { AuthProvider } from "@/auth/types";
-import { cancelStepRun, createStepRun, getStepPartialOutput, getSteps, updateStepRunRecipe, type StepsApiDeps } from "@/server/steps-api";
+import { cancelStepRun, createStepRun, getStepPartialOutput, getSteps, resumeStepRun, updateStepRunRecipe, type StepsApiDeps } from "@/server/steps-api";
 import { StepError, fakeBlocks, type StepExecutor } from "@/steps/executor";
 import { MemoryStepRunStore } from "@/steps/memory-store";
 import { MemoryTaskQueue } from "@/steps/queue";
@@ -25,7 +25,7 @@ import { PageSteps } from "./PageSteps";
 
 const ORIGIN = "http://editor.test";
 const TRANSCRIPT: Block[] = [{ type: "paragraph", content: [{ type: "text", text: "合成の文字起こし" }] }];
-const STEPS_PATH = /^\/api\/pages\/([^/]+)\/steps(?:\/runs(?:\/([^/]+)\/(cancel|update-recipe))?)?$/;
+const STEPS_PATH = /^\/api\/pages\/([^/]+)\/steps(?:\/runs(?:\/([^/]+)\/(cancel|update-recipe|resume))?)?$/;
 const PARTIAL_PATH = /^\/api\/pages\/([^/]+)\/steps\/runs\/([^/]+)\/steps\/(\d+)\/partial$/;
 
 const notUsed = async (): Promise<Response> => {
@@ -74,7 +74,9 @@ function server(saved: readonly SettingsRecipe[] = []) {
     if (method === "GET") return getSteps(request, id, deps);
     if (match[2]) return match[3] === "cancel"
       ? cancelStepRun(request, id, decodeURIComponent(match[2]), deps)
-      : updateStepRunRecipe(request, id, decodeURIComponent(match[2]), deps);
+      : match[3] === "resume"
+        ? resumeStepRun(request, id, decodeURIComponent(match[2]), deps)
+        : updateStepRunRecipe(request, id, decodeURIComponent(match[2]), deps);
     return createStepRun(request, id, deps);
   });
   /** 積まれている段階を、積まれなくなるまで実行する（本番は Cloud Tasks の worker）。 */
@@ -411,6 +413,42 @@ describe("PageSteps（手順の帯）", () => {
     expect(band().map((step) => step.say)).toEqual(["済み", "済み", "済み"]);
     // 段階 0 は作り直さず、前の結果をそのまま使う（reused）
     expect((await currentRun(api)).steps.map((step) => step.state)).toEqual(["reused", "succeeded", "succeeded"]);
+  });
+
+  it("受入: 長い録音の文字起こし修正が区切り 3 で失敗したら、区切り 3 から続きをやり直せる（#277）", async () => {
+    const api = server();
+    // 1 段落 1,000 字 × 75 = 5 区切り
+    api.store.pages.get(api.recording)!.blocks = Array.from({ length: 75 }, (_, index) => ({ type: "paragraph", content: [{ type: "text", text: `段落${index}`.padEnd(1000, "話") }] }));
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("記事にする");
+    await settle();
+    const chunks: number[] = [];
+    let failedOnce = false;
+    const flaky: StepExecutor = {
+      async run(input) {
+        if (input.chunk) chunks.push(input.chunk.index);
+        if (input.chunk?.index === 2 && !failedOnce) {
+          failedOnce = true;
+          throw new StepError("ai_bad_request", false);
+        }
+        return { blocks: fakeBlocks(input) };
+      },
+    };
+    await api.work(flaky);
+    await wait(60_000);
+    expect(band()[0]).toEqual({ label: "文字起こし修正", say: "区切り 3 で失敗", state: "failed" });
+    expect(bandActions()).toContain("区切り 3 からやり直す");
+    expect(bandActions()).toContain("「文字起こし修正」を最初から作り直す");
+
+    await pressAction("区切り 3 からやり直す");
+    await settle();
+    expect(api.calls).toContain(`POST /api/pages/${api.recording}/steps/runs/${(await currentRun(api)).id}/resume`);
+    await api.work(flaky);
+    await wait(60_000);
+    expect(band().map((step) => step.say)).toEqual(["済み", "済み", "済み"]);
+    // 区切り 1・2 はやり直さずに再利用する
+    expect(chunks).toEqual([0, 1, 2, 2, 3, 4]);
   });
 
   it("AI がまだ設定されていない失敗では、やり直しのボタンを出さない", async () => {

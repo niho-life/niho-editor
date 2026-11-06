@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type
 import { useRouter } from "next/navigation";
 import type { Block, PageKind } from "@niho/editor-store";
 import { ShellSteps, ShellStepsStart, type ShellStepsAction } from "niho-docs-ui/shell";
-import { StepsRequestError, cancelStepRun, getStepPartialOutput, getSteps, isStepRunDone, startStepRun, updateStepRunRecipe, type StepRecipeChoice, type StepRun, type StepRunStep } from "@/lib/steps-client";
+import { StepsRequestError, cancelStepRun, getStepPartialOutput, getSteps, isStepRunDone, resumeStepRun, startStepRun, updateStepRunRecipe, type StepRecipeChoice, type StepRun, type StepRunStep } from "@/lib/steps-client";
 import {
   isStepRunActive,
   maxStepFrom,
@@ -35,6 +35,8 @@ function messageOf(error: unknown): string {
     if (error.status === 401) return "ログインが切れています。もう一度ログインしてください。";
     if (error.error === "run_in_progress") return "いま別の手順が動いています。終わるまで待ってください。";
     if (error.error === "invalid_from_step") return "手前の段階が済んでいないので、ここからは作り直せません。";
+    if (error.error === "input_changed") return "入力が変わったので、区切りの続きからはやり直せません。この段階を最初から作り直してください。";
+    if (error.error === "not_resumable") return "この手順は区切りの続きからやり直せません。この段階を最初から作り直してください。";
     if (error.error === "steps_unavailable" || error.status === 503) return "いま手順を実行できません。しばらくしてからもう一度。";
     if (error.status === 404) return "このページの手順は見つかりませんでした。";
   }
@@ -306,6 +308,7 @@ export function PageSteps({
     // 設定の一覧の節へ（今月の使用量は「データ」、手順の指示とお手本は「手順」。節の id は docs-ui の EditorSettingsHub と同じ）
     if (action.settings) router.push(action.settings === "usage" ? "/settings#es-s-data" : "/settings#es-s-steps");
     else if (action.cancel) void send(() => cancelStepRun(root, run.id));
+    else if (action.resume) void send(() => resumeStepRun(root, run.id));
     else if (action.fromStep !== undefined) void start(run.recipe, action.fromStep);
   };
 

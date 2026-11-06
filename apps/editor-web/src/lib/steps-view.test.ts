@@ -320,3 +320,48 @@ describe("steps-view（手順の帯の見た目）", () => {
     expect(stepDoneMessage([{ id: "tpl-1", name: "記事（長め）", defaultName: "記事制作" }], run({ state: "succeeded" }))).toBe("記事（長め）の手順が終わりました。");
   });
 });
+
+describe("steps-view の区切り（#277）", () => {
+  it("作成中は「作成中 3/5」（区切りの合間の queued も作成中）、済みになったら今まで通り「済み」", () => {
+    const running = run({ steps: [step(0, { state: "running", stepStatus: "run", chunk: { index: 2, count: 5 } }), step(1), step(2)] });
+    expect(stepBandSteps(running)[0]).toEqual({ id: "page-0", label: "文字起こし修正", state: "run", notice: "作成中 3/5" });
+    expect(stepBandNote(running)).toBe("「文字起こし修正」を作成中です（区切り 3/5）。画面を閉じても進みます。");
+    const between = run({ steps: [step(0, { state: "queued", stepStatus: "run", chunk: { index: 3, count: 5 } }), step(1), step(2)] });
+    expect(stepStateOf(between.steps[0]!)).toBe("run");
+    expect(stepBandSteps(between)[0]?.notice).toBe("作成中 4/5");
+    expect(stepBandActions(between, "page-0")).toEqual([{ id: "cancel", label: "やめる", tone: "quiet", cancel: true }]);
+    // 区切りを始める前の queued は待機のまま
+    expect(stepStateOf(step(0, { state: "queued" }))).toBe("wait");
+    const done = run({ state: "succeeded", steps: [step(0, { state: "succeeded", stepStatus: "done" }), step(1, { state: "succeeded", stepStatus: "done" }), step(2, { state: "succeeded", stepStatus: "done" })] });
+    expect(stepBandSteps(done)[0]).toEqual({ id: "page-0", label: "文字起こし修正", state: "done" });
+  });
+
+  it("失敗は「区切り 3 で失敗 · 区切り 3 からやり直す」。作り直しは「最初から」と言う", () => {
+    const failed = run({ state: "failed", steps: [step(0, { state: "failed", stepStatus: "failed", errorCode: "ai_bad_request", chunk: { index: 2, count: 5 } }), step(1, { state: "canceled" }), step(2, { state: "canceled" })] });
+    expect(stepBandSteps(failed)[0]?.notice).toBe("区切り 3 で失敗");
+    expect(stepBandNote(failed)).toBe(`「文字起こし修正」が区切り 3 で失敗しました。${stepFailure("ai_bad_request").message}`);
+    expect(stepBandActions(failed, "parent").slice(0, 2)).toEqual([
+      { id: "resume", label: "区切り 3 からやり直す", tone: "primary", resume: true },
+      { id: "retry", label: "「文字起こし修正」を最初から作り直す", tone: "outline", fromStep: 0 },
+    ]);
+  });
+
+  it("入力が変わった・長すぎるときは続きからやり直せない（最初から作り直すだけ）", () => {
+    for (const errorCode of ["input_changed", "input_too_long"]) {
+      const failed = run({ state: "failed", steps: [step(0, { state: "failed", stepStatus: "failed", errorCode, chunk: { index: 1, count: 5 } }), step(1, { state: "canceled" }), step(2, { state: "canceled" })] });
+      const actions = stepBandActions(failed, "parent");
+      expect(actions.some((action) => action.resume)).toBe(false);
+      expect(actions[0]).toMatchObject({ id: "retry", tone: "primary", fromStep: 0 });
+      expect(stepFailure(errorCode).rerun).toBe(true);
+    }
+    expect(stepFailure("input_changed").message).toBe("入力が変わったので止めました。この段階を最初から作り直してください。");
+  });
+
+  it("今月の上限で区切りの途中に止まったら、使用量の案内と続きからの再開を出す", () => {
+    const failed = run({ state: "failed", steps: [step(0, { state: "failed", stepStatus: "failed", errorCode: "quota_exceeded", chunk: { index: 3, count: 5 } }), step(1, { state: "canceled" }), step(2, { state: "canceled" })] });
+    expect(stepBandActions(failed, "parent")).toEqual([
+      { id: "usage", label: "使用量を見る", tone: "primary", settings: "usage" },
+      { id: "resume", label: "区切り 4 からやり直す", tone: "outline", resume: true },
+    ]);
+  });
+});

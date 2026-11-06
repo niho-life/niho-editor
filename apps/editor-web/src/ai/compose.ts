@@ -44,7 +44,12 @@ export type ComposeBlock =
   | { kind: "bullets"; items: string[] };
 
 /** 資料 1 つ（`label` は何の資料かを示す短い名前。本文は untrusted の枠に入る）。 */
-export type ComposeSource = { label: string; text: string };
+export type ComposeSource = {
+  label: string;
+  text: string;
+  /** 区切って処理している対象の今の区切り（#277）。予算を先に全文分確保し、残りをほかの資料に配る（切らない）。 */
+  keepWhole?: boolean;
+};
 
 export type ComposeInput = {
   /** 手順の名前（例「記事制作」）。 */
@@ -68,6 +73,11 @@ export type ComposeInput = {
   about?: About;
   /** 自動参考ページ（同じフォルダの直下のほかのページ。無ければ入れない）。 */
   references?: readonly Reference[];
+  /**
+   * 長い資料を区切って処理しているときの今の区切り（#277。全文を書き直す段階）。`number` は 1 始まり。
+   * `target` は区切った資料の名前（`sources` の label と同じ）。`previousTail` は直前の区切りの出力の末尾（最初は空）。
+   */
+  chunk?: { number: number; count: number; target: string; previousTail: string };
 };
 
 /** 文字数（code point）。 */
@@ -114,9 +124,15 @@ function sourceSection(source: ComposeSource, budget: number): string {
 function sourceBudgets(sources: readonly ComposeSource[]): number[] {
   const lengths = sources.map((source) => countChars(source.text.trim()));
   const budgets = lengths.map(() => 0);
-  const ordered = lengths.map((length, index) => ({ length, index })).filter(({ length }) => length > 0)
-    .sort((a, b) => a.length - b.length || a.index - b.index);
   let remaining = MAX_COMPOSE_SOURCE_CHARS;
+  // 区切った対象の今の区切りは、全文分を先に確保する（ほかの資料との均等配分で切らない）
+  for (const [index, source] of sources.entries()) {
+    if (source.keepWhole !== true) continue;
+    budgets[index] = Math.min(lengths[index]!, remaining);
+    remaining -= budgets[index]!;
+  }
+  const ordered = lengths.map((length, index) => ({ length, index })).filter(({ length, index }) => length > 0 && sources[index]!.keepWhole !== true)
+    .sort((a, b) => a.length - b.length || a.index - b.index);
   let cursor = 0;
   while (cursor < ordered.length && remaining > 0) {
     const fair = Math.floor(remaining / (ordered.length - cursor));
@@ -179,6 +195,20 @@ export function buildComposePrompt(input: ComposeInput): AiPrompt {
   const references = referencesSection(input.references ?? []);
   const background = input.background.trim();
   const boundedBackground = clamp(background, MAX_COMPOSE_BACKGROUND_CHARS);
+  const chunk = input.chunk;
+  const previousTail = chunk?.previousTail.trim() ?? "";
+  const chunkSection = chunk
+    ? [
+        "",
+        "## 区切り",
+        `長い資料を区切って処理している。これは全 ${chunk.count} 区切りのうちの ${chunk.number} 番目。`,
+        `- 資料「${chunk.target}」は、この区切りの分だけを渡している。この区切りだけを書き直して返す。`,
+        "- ほかの区切りの内容は書かない（前の区切りの続きを繰り返さない・後ろを先取りしない）。",
+        ...(previousTail
+          ? ["- 前の区切りの終わり（下の「前の区切りの出力の末尾」）を参考に、話者名・表記・文体をそろえる。", "", "### 前の区切りの出力の末尾", wrapUntrusted(previousTail)]
+          : []),
+      ]
+    : [];
   const user = [
     "## 頼むこと",
     `手順「${input.recipeName}」の段階 ${input.stepNumber}/${input.stepCount}「${input.stepName}」の文書を作る。`,
@@ -188,6 +218,7 @@ export function buildComposePrompt(input: ComposeInput): AiPrompt {
     ...(guide ? ["", "### お手本（文書ガイド）", guide] : []),
     "",
     `出力の言語: ${input.lang}`,
+    ...chunkSection,
     ...(glossary ? ["", "## 固有名詞と誤りやすい表記", glossary] : []),
     ...(entities ? ["", "## 登場人物", wrapUntrusted(entities)] : []),
     ...(about ? ["", about] : []),

@@ -58,6 +58,24 @@ describe("SettingsRecipeView（/settings/recipes/{id}）", () => {
     expect(status()).toBe(SETTINGS_MESSAGES.saved);
   });
 
+  it("turns 長い入力は区切って処理する on and off in the stage sheet and saves it with the stage (#277)", async () => {
+    await open("tpl-1");
+    const [first, second] = DEFAULTS["tpl-1"]!.steps;
+    await clickRow(`段階 1 ${first!.name}`, "を開く");
+    const toggle = () => document.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${EDITOR_SETTINGS_TEXT.chunked}"]`);
+    // 既定の「文字起こし修正」は ON
+    expect(toggle()?.getAttribute("aria-checked")).toBe("true");
+    expect(shown()).toContain(EDITOR_SETTINGS_TEXT.chunkedHint);
+    toggle()!.click();
+    await Promise.resolve();
+    expect(toggle()?.getAttribute("aria-checked")).toBe("false");
+    await click("段階を保存");
+    expect(sentRecipe(0, "tpl-1")?.steps[0]).toEqual({ ...first, chunked: false });
+    // まとめる段階は OFF のまま
+    await clickRow(`段階 2 ${second!.name}`, "を開く");
+    expect(toggle()?.getAttribute("aria-checked")).toBe("false");
+  });
+
   it("does not send a stage whose instruction is empty", async () => {
     await open("tpl-1");
     await clickRow(`段階 1 ${DEFAULTS["tpl-1"]!.steps[0]!.name}`, "を開く");

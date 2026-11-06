@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   DEFAULT_LEASE_SECONDS,
   MAX_TRIES,
+  computeChunkBasis,
   computeStepBasis,
   parseStepBasis,
   stepStaleReasons,
@@ -49,6 +50,10 @@ type MemoryAttempt = {
   inputUsedChars: number | null;
   inputBasis: StepBasis | string | null;
   finishedAt: number | null;
+  chunkCount: number | null;
+  chunkIndex: number;
+  chunkBlocks: Block[][];
+  chunkBasis: string | null;
 };
 
 type MemoryRun = {
@@ -145,6 +150,9 @@ export class MemoryStepRunStore implements StepRunStore {
           ? { hasPartialOutput: true }
           : {}),
         ...(attempt.state === "succeeded" && attempt.inputUsedChars !== null ? { inputUsedChars: attempt.inputUsedChars } : {}),
+        ...((attempt.state === "queued" || attempt.state === "running" || attempt.state === "failed") && attempt.chunkCount !== null
+          ? { chunk: { index: attempt.chunkIndex, count: attempt.chunkCount } }
+          : {}),
       })),
     };
   }
@@ -202,7 +210,7 @@ export class MemoryStepRunStore implements StepRunStore {
     const prior = [...this.runs.values()].filter((run) => run.owner === owner && run.parent === parentId && run.recipe === recipe.id).sort((a, b) => b.seq - a.seq)[0];
     const recipeSnapshot = prior?.recipeSnapshot ?? snapshotOf({
       id: recipe.id, name: recipe.name ?? recipe.id, guide: recipe.guide ?? "",
-      steps: recipe.steps.map((step) => ({ id: step.id, name: step.name, instruction: step.instruction, profile: step.profile ?? "standard" })),
+      steps: recipe.steps.map((step) => ({ id: step.id, name: step.name, instruction: step.instruction, profile: step.profile ?? "standard", ...(step.chunked === true ? { chunked: true } : {}) })),
       terms: recipe.terms ?? [], samples: recipe.samples ?? [],
     });
     if (fromStep >= recipeSnapshot.steps.length) return { status: "invalid_from_step" };
@@ -244,6 +252,10 @@ export class MemoryStepRunStore implements StepRunStore {
         inputUsedChars: null,
         inputBasis: null,
         finishedAt: index < fromStep ? this.#now() : null,
+        chunkCount: null,
+        chunkIndex: 0,
+        chunkBlocks: [],
+        chunkBasis: null,
       })),
     };
     this.runs.set(run.id, run);
@@ -256,7 +268,7 @@ export class MemoryStepRunStore implements StepRunStore {
     if (ACTIVE.includes(latest.state) || latest.recipeRevision !== expectedRevision) return { status: "conflict" };
     latest.recipeSnapshot = snapshotOf({
       id: recipe.id, name: recipe.name ?? recipe.id, guide: recipe.guide ?? "",
-      steps: recipe.steps.map((step) => ({ id: step.id, name: step.name, instruction: step.instruction, profile: step.profile ?? "standard" })),
+      steps: recipe.steps.map((step) => ({ id: step.id, name: step.name, instruction: step.instruction, profile: step.profile ?? "standard", ...(step.chunked === true ? { chunked: true } : {}) })),
       terms: recipe.terms ?? [], samples: recipe.samples ?? [],
     });
     latest.recipeRevision = recipe.revision ?? 1;
@@ -385,6 +397,7 @@ export class MemoryStepRunStore implements StepRunStore {
         pageId: attempt.pageId,
         previousPageId: previous?.pageId ?? null,
         upstreamPageIds: run.attempts.slice(0, stepIndex).map((prior) => ({ id: prior.stepId, pageId: prior.pageId })),
+        chunk: { count: attempt.chunkCount, index: attempt.chunkIndex, basis: attempt.chunkBasis, blocks: attempt.chunkBlocks.map((blocks) => [...blocks]) },
       },
     };
   };
@@ -441,10 +454,72 @@ export class MemoryStepRunStore implements StepRunStore {
       return { ok: true, outcome: "retry", generation: attempt.generation, tries: attempt.tries };
     }
     attempt.state = "failed";
-    attempt.partialBlocks = input.partial === undefined ? null : [...input.partial];
+    // 区切りを始めていれば、終えた区切りの出力をつなぎ、今の区切りの書けたところまでを後ろに足す（editor-store と同じ）
+    attempt.partialBlocks = attempt.chunkBlocks.length > 0
+      ? [...attempt.chunkBlocks.flat(), ...(input.partial ?? [])]
+      : input.partial === undefined ? null : [...input.partial];
     attempt.finishedAt = this.#now();
     this.#setStatus(run.owner, attempt.pageId, "failed");
     this.#failRunFrom(run, input.stepIndex);
     return { ok: true, outcome: "failed" };
+  };
+
+  startChunks: StepRunStore["startChunks"] = async (input) => {
+    const found = this.#attempt(input.runId, input.stepIndex);
+    if (!found || found.attempt.state !== "running" || found.attempt.generation !== input.generation || found.attempt.chunkCount !== null) return false;
+    found.attempt.chunkCount = input.count;
+    found.attempt.chunkBasis = input.basis;
+    found.attempt.chunkIndex = 0;
+    found.attempt.chunkBlocks = [];
+    return true;
+  };
+
+  commitChunk: StepRunStore["commitChunk"] = async (input) => {
+    const found = this.#attempt(input.runId, input.stepIndex);
+    const attempt = found?.attempt;
+    if (!found || found.run.state !== "running" || !attempt || attempt.state !== "running" || attempt.generation !== input.generation ||
+        attempt.chunkCount === null || attempt.chunkIndex !== input.chunkIndex || attempt.chunkIndex + 1 >= attempt.chunkCount ||
+        attempt.chunkBlocks.length !== attempt.chunkIndex) {
+      return { ok: false, reason: "stale_generation" };
+    }
+    attempt.chunkBlocks.push([...input.blocks]);
+    attempt.chunkIndex += 1;
+    attempt.state = "queued";
+    attempt.leaseUntil = null;
+    attempt.tries = 0;
+    attempt.errorCode = null;
+    return { ok: true, generation: attempt.generation };
+  };
+
+  resumeRun: StepRunStore["resumeRun"] = async (owner, parentId, runId) => {
+    const run = this.runs.get(runId);
+    if (!isPageId(parentId) || !this.#page(owner, parentId) || !run || run.owner !== owner || run.parent !== parentId) return { status: "not_found" };
+    if ([...this.runs.values()].some((other) => other.owner === owner && other.parent === parentId && ACTIVE.includes(other.state))) return { status: "run_in_progress" };
+    const latest = [...this.runs.values()].filter((other) => other.owner === owner && other.parent === parentId).sort((a, b) => b.seq - a.seq)[0];
+    if (latest?.id !== runId || run.state !== "failed") return { status: "not_resumable" };
+    const failed = run.attempts.find((attempt) => attempt.state === "failed");
+    const step = failed ? run.recipeSnapshot.steps[failed.stepIndex] : undefined;
+    if (!failed || !step || step.chunked !== true || failed.chunkCount === null || failed.chunkBasis === null || !this.#page(owner, failed.pageId)) {
+      return { status: "not_resumable" };
+    }
+    const upstream = run.attempts.slice(0, failed.stepIndex).map((prior) => ({ id: prior.stepId, pageId: prior.pageId }));
+    const materials = this.#materials(owner, parentId, run.recipeSnapshot, failed.stepIndex, undefined, upstream);
+    if (!materials) return { status: "not_resumable" };
+    if (computeChunkBasis(computeStepBasis(run.recipeSnapshot, failed.stepIndex, materials)) !== failed.chunkBasis) return { status: "input_changed" };
+    failed.state = "queued";
+    failed.tries = 0;
+    failed.generation += 1;
+    failed.errorCode = null;
+    failed.partialBlocks = null;
+    failed.finishedAt = null;
+    for (const later of run.attempts.slice(failed.stepIndex + 1)) {
+      if (later.state === "canceled") {
+        later.state = "pending";
+        later.finishedAt = null;
+      }
+    }
+    run.state = "queued";
+    this.#setStatus(owner, failed.pageId, "wait");
+    return { status: "resumed", run: this.#view(run), stepIndex: failed.stepIndex, generation: failed.generation };
   };
 }

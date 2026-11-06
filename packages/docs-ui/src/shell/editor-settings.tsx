@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./icons";
 import { ShellMenu } from "./menu";
-import { linkTo } from "./settings-parts";
+import { ShellToggle, linkTo } from "./settings-parts";
 import { ShellSheet } from "./sheet";
 import type { EditorSettingsTermDraft } from "./terms-editor";
 import type { ShellMenuItem } from "./types";
@@ -25,7 +25,8 @@ export type EditorSettingsTerm = { term: string; reading: string; variants: stri
 
 export type EditorSettingsAbout = { name: string; text: string };
 
-export type EditorSettingsStep = { id: string; name: string; instruction: string; profile: string };
+/** `chunked`: 長い入力は区切って処理する（全文を書き直す段階。editor の手順だけ。無ければ false）。 */
+export type EditorSettingsStep = { id: string; name: string; instruction: string; profile: string; chunked?: boolean };
 
 export type EditorSettingsSample = { id: string; name: string; chars: number; truncatedFrom?: number; sourceUrl?: string };
 
@@ -89,6 +90,8 @@ export const EDITOR_SETTINGS_TEXT = {
   aiLang: { same: "書いた言語のまま", ja: "日本語", en: "English" },
   webSearch: { label: "Web を検索する", on: "する", off: "しない" },
   profile: { light: "軽量", standard: "標準", advanced: "高性能" } as Record<string, string>,
+  chunked: "長い入力は区切って処理する（全文を書き直す段階）",
+  chunkedHint: "1.8 万字を超える入力を約 1.6 万字ずつ順に書き直し、最後に 1 つにつなぎます。要約や方針など全体を見て書く段階では切ってください。",
   empty: "まだありません",
   aboutEmpty: "まだ書いていません",
   loading: "読み込んでいます…",
@@ -849,6 +852,15 @@ function StepSheet({ props, sheet }: { props: EditorSettingsRecipePageProps; she
             </span>
             <Choice label="重さ" value={profile} onChange={(next) => set({ profile: next })} options={PROFILES.map((id) => ({ id: id as string, label: EDITOR_SETTINGS_TEXT.profile[id]! }))} />
           </div>
+        </div>
+        <div className="es-field es-field--switch">
+          <div className="es-switch-row">
+            <span className="es-field-lbl" aria-hidden="true">
+              {EDITOR_SETTINGS_TEXT.chunked}
+            </span>
+            <ShellToggle checked={draft.chunked === true} label={EDITOR_SETTINGS_TEXT.chunked} onChange={(next) => set({ chunked: next })} />
+          </div>
+          <small className="es-cnt es-cnt--start">{EDITOR_SETTINGS_TEXT.chunkedHint}</small>
         </div>
         <div className="es-lab">
           <label htmlFor={textId}>指示</label>

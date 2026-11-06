@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from "pg";
 import { isPageId } from "./store.ts";
 import type { Block, OwnerId, Queryable, StepStatus } from "./types.ts";
 import { parseRecipeSnapshot, snapshotOf, type RecipeSnapshot } from "./recipe-snapshot.ts";
-import { computeStepBasis, parseStepBasis, stepStaleReasons, type StepBasis, type StepMaterials, type StepStaleReason } from "./step-basis.ts";
+import { computeChunkBasis, computeStepBasis, parseStepBasis, stepStaleReasons, type StepBasis, type StepMaterials, type StepStaleReason } from "./step-basis.ts";
 import { isPageEntity } from "./page-fields.ts";
 import { isSettingsTerm } from "./settings.ts";
 export { parseRecipeSnapshot, snapshotOf, type RecipeSnapshot } from "./recipe-snapshot.ts";
@@ -53,7 +53,7 @@ export type StepRecipe = {
   readonly revision?: number;
   readonly terms?: RecipeSnapshot["terms"];
   readonly samples?: RecipeSnapshot["samples"];
-  readonly steps: readonly { readonly id: string; readonly name: string; readonly instruction: string; readonly profile?: string }[];
+  readonly steps: readonly { readonly id: string; readonly name: string; readonly instruction: string; readonly profile?: string; readonly chunked?: boolean }[];
 };
 
 /** この層が使う pg の Pool の部分（transaction のために connect も使う）。 */
@@ -72,6 +72,8 @@ export type StepRunStepView = {
   hasPartialOutput?: boolean;
   /** 済みの段階で、資料を上限で切ったときだけ、実際に使った字数（code point。#277）。 */
   inputUsedChars?: number;
+  /** 区切って処理している（いた）段階の進み（`index` は終えた区切りの数）。待ち・実行中・失敗のときだけ（#277）。 */
+  chunk?: { index: number; count: number };
 };
 
 export type StepRunView = {
@@ -200,7 +202,7 @@ function snapshotFromRecipe(recipe: StepRecipe): RecipeSnapshot {
     id: recipe.id,
     name: recipe.name ?? recipe.id,
     guide: recipe.guide ?? "",
-    steps: recipe.steps.map((step) => ({ id: step.id, name: step.name, instruction: step.instruction, profile: step.profile ?? "standard" })),
+    steps: recipe.steps.map((step) => ({ id: step.id, name: step.name, instruction: step.instruction, profile: step.profile ?? "standard", ...(step.chunked === true ? { chunked: true } : {}) })),
     terms: recipe.terms ?? [],
     samples: recipe.samples ?? [],
   });
@@ -253,6 +255,8 @@ type ViewRow = {
   step_status: StepStatus | null;
   has_partial_output: boolean;
   input_used_chars: number | null;
+  chunk_count: number | null;
+  chunk_index: number;
 };
 
 async function loadRunView(db: Queryable, owner: OwnerId, runId: string): Promise<StepRunView | null> {
@@ -263,7 +267,9 @@ async function loadRunView(db: Queryable, owner: OwnerId, runId: string): Promis
             CASE WHEN r.state = 'failed' AND a.state = 'failed' AND p.id IS NOT NULL
                    AND jsonb_typeof(a.partial_blocks) = 'array'
                  THEN jsonb_array_length(a.partial_blocks) > 0 ELSE false END AS has_partial_output,
-            CASE WHEN a.state = 'succeeded' THEN a.input_used_chars END AS input_used_chars
+            CASE WHEN a.state = 'succeeded' THEN a.input_used_chars END AS input_used_chars,
+            CASE WHEN a.state IN ('queued', 'running', 'failed') THEN a.chunk_count END AS chunk_count,
+            a.chunk_index
        FROM step_runs r
        JOIN step_attempts a ON a.run_id = r.id
        LEFT JOIN pages p ON p.id = a.page_id AND p.owner = r.owner AND p.deleted_at IS NULL
@@ -294,6 +300,7 @@ async function loadRunView(db: Queryable, owner: OwnerId, runId: string): Promis
       errorCode: row.error_code,
       ...(row.has_partial_output ? { hasPartialOutput: true } : {}),
       ...(row.input_used_chars !== null && row.input_used_chars !== undefined ? { inputUsedChars: row.input_used_chars } : {}),
+      ...(row.chunk_count !== null && row.chunk_count !== undefined ? { chunk: { index: row.chunk_index, count: row.chunk_count } } : {}),
     })),
   };
 }
@@ -600,7 +607,14 @@ export type StepClaim = {
   previousPageId: string | null;
   /** この run の上流段階と成果物ページ。並べ替え後も段階 ID とページ ID の対応を保つ。 */
   upstreamPageIds: { id: string; pageId: string }[];
+  /**
+   * 区切りの状態（#277）。`count` が null なら区切りを始めていない。`index` は終えた区切りの数、
+   * `blocks` は終えた区切りごとの出力、`basis` は最初の区切りを始めたときの入力の基準。
+   */
+  chunk: StepChunkState;
 };
+
+export type StepChunkState = { count: number | null; index: number; basis: string | null; blocks: Block[][] };
 
 export type ClaimResult =
   | { ok: true; claim: StepClaim }
@@ -630,7 +644,7 @@ export async function claimAttempt(
     if (!runRow || (runRow.state !== "queued" && runRow.state !== "running")) {
       return { ok: false, reason: "run_inactive" } satisfies ClaimResult;
     }
-    const claimed = await client.query<{ generation: number; tries: number; step_id: string; page_id: string }>(
+    const claimed = await client.query<{ generation: number; tries: number; step_id: string; page_id: string; chunk_count: number | null; chunk_index: number; chunk_basis: string | null; chunk_blocks: unknown }>(
       `UPDATE step_attempts a
           SET state = 'running',
               generation = a.generation + 1,
@@ -647,7 +661,7 @@ export async function claimAttempt(
                 SELECT 1 FROM step_attempts prev
                  WHERE prev.run_id = a.run_id AND prev.step_index = a.step_index - 1
                    AND prev.state IN ('succeeded', 'reused')))
-        RETURNING a.generation, a.tries, a.step_id, a.page_id`,
+        RETURNING a.generation, a.tries, a.step_id, a.page_id, a.chunk_count, a.chunk_index, a.chunk_basis, a.chunk_blocks`,
       [runId, stepIndex, leaseSeconds],
     );
     const attempt = claimed.rows[0];
@@ -682,6 +696,12 @@ export async function claimAttempt(
         pageId: attempt.page_id,
         previousPageId: upstream.at(-1)?.pageId ?? null,
         upstreamPageIds: upstream,
+        chunk: {
+          count: attempt.chunk_count,
+          index: attempt.chunk_index,
+          basis: attempt.chunk_basis,
+          blocks: Array.isArray(attempt.chunk_blocks) ? (attempt.chunk_blocks as unknown[]).filter(Array.isArray) as Block[][] : [],
+        },
       },
     } satisfies ClaimResult;
   });
@@ -827,6 +847,177 @@ export async function commitAttempt(db: StepRunsDb, input: CommitInput): Promise
   });
 }
 
+// ---------------------------------------------------------------------------
+// 区切り（#277。全文を書き直す段階の長い入力。docs/architecture/editor-steps-execution.md §5）
+
+/** 区切りの数の上限（migration 20261106211229_steps_chunks の CHECK と同じ）。 */
+export const MAX_STEP_CHUNKS = 60;
+
+/**
+ * 最後の失敗のときに `partial_blocks` へ残す本文。終えた区切りの出力（`chunk_blocks`）を順につなぎ、
+ * その後ろに今の区切りの書けたところまで（`extra`）を足す。区切りを始めていなければ `extra` のまま。
+ * UPDATE step_attempts の SET の中で使う（対象の行の `chunk_blocks` を読む）。
+ */
+function FINAL_PARTIAL_SQL(extra: string): string {
+  return `CASE WHEN jsonb_typeof(step_attempts.chunk_blocks) = 'array' AND jsonb_array_length(step_attempts.chunk_blocks) > 0
+    THEN COALESCE((SELECT jsonb_agg(piece.block ORDER BY chunk.ord, piece.ord)
+                     FROM jsonb_array_elements(step_attempts.chunk_blocks) WITH ORDINALITY AS chunk(blocks, ord)
+                     CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(chunk.blocks) = 'array' THEN chunk.blocks ELSE '[]'::jsonb END)
+                       WITH ORDINALITY AS piece(block, ord)), '[]'::jsonb) || COALESCE(${extra}, '[]'::jsonb)
+    ELSE ${extra} END`;
+}
+
+const CHUNK_BASIS_PATTERN = /^[0-9a-f]{64}$/;
+
+export type StartChunksInput = AttemptRef & { count: number; basis: string };
+
+/**
+ * 区切りを始める（最初の区切りの前に 1 回だけ）。区切りの数と入力の基準を記録する。
+ * claim の世代で実行中で、まだ区切りを始めていないときだけ通る（遅れた実行・二重の開始は false）。
+ */
+export async function startChunks(db: Queryable, input: StartChunksInput): Promise<boolean> {
+  if (!Number.isInteger(input.count) || input.count < 1 || input.count > MAX_STEP_CHUNKS) throw new RangeError("editor-store: chunk count must be 1..60");
+  if (!CHUNK_BASIS_PATTERN.test(input.basis)) throw new TypeError("editor-store: chunk basis must be a sha256 hex digest");
+  if (!isPageId(input.runId)) return false;
+  const result = await db.query(
+    `UPDATE step_attempts
+        SET chunk_count = $4, chunk_basis = $5, chunk_index = 0, chunk_blocks = '[]'::jsonb
+      WHERE run_id = $1 AND step_index = $2 AND generation = $3 AND state = 'running' AND chunk_count IS NULL`,
+    [input.runId, input.stepIndex, input.generation, input.count, input.basis],
+  );
+  return result.rowCount === 1;
+}
+
+export type CommitChunkInput = AttemptRef & {
+  /** 終えた区切りの番号（0 始まり。今の `chunk_index` と同じでなければ通らない）。 */
+  chunkIndex: number;
+  blocks: readonly Block[];
+};
+
+export type CommitChunkResult =
+  /** 次の区切りを待つ（attempt は queued。`generation` は task の名前に入れる今の世代）。 */
+  | { ok: true; generation: number }
+  /** 世代が古い・実行中でない・区切りの番号が合わない・最後の区切り（最後は commitAttempt で 1 版にする）。何も書いていない。 */
+  | { ok: false; reason: "stale_generation" };
+
+/**
+ * 途中の区切りの確定（最後の区切りは `commitAttempt`）。claim の世代・状態・区切りの番号の CAS で、出力を
+ * `chunk_blocks` に追記して `chunk_index` を進め、attempt を queued に戻して lease を外す。
+ * `tries` は 0 に戻す（再試行の上限は区切りごとに数える。失敗した区切りだけを繰り返す）。サブページの本文には書かない。
+ */
+export async function commitChunk(db: StepRunsDb, input: CommitChunkInput): Promise<CommitChunkResult> {
+  if (!Number.isInteger(input.chunkIndex) || input.chunkIndex < 0) throw new RangeError("editor-store: chunkIndex must be a non-negative integer");
+  if (!isPageId(input.runId)) return { ok: false, reason: "stale_generation" };
+  return inTransaction<CommitChunkResult>(db, async (client) => {
+    const run = await client.query<{ state: RunState }>("SELECT state FROM step_runs WHERE id = $1 FOR UPDATE", [input.runId]);
+    if (run.rows[0]?.state !== "running") return { ok: false, reason: "stale_generation" } satisfies CommitChunkResult;
+    const updated = await client.query<{ generation: number }>(
+      `UPDATE step_attempts
+          SET chunk_blocks = COALESCE(chunk_blocks, '[]'::jsonb) || jsonb_build_array($5::jsonb),
+              chunk_index = chunk_index + 1,
+              state = 'queued', lease_until = NULL, heartbeat_at = NULL, tries = 0, error_code = NULL
+        WHERE run_id = $1 AND step_index = $2 AND generation = $3 AND state = 'running'
+          AND chunk_count IS NOT NULL AND chunk_index = $4 AND chunk_index + 1 < chunk_count
+          AND COALESCE(jsonb_array_length(chunk_blocks), 0) = chunk_index
+        RETURNING generation`,
+      [input.runId, input.stepIndex, input.generation, input.chunkIndex, JSON.stringify(input.blocks)],
+    );
+    const generation = updated.rows[0]?.generation;
+    return generation === undefined ? { ok: false, reason: "stale_generation" } : { ok: true, generation };
+  });
+}
+
+export type ResumeRunResult =
+  /** 同じ run・同じ attempt を queued に戻した。`stepIndex`・`generation` で task を積む。 */
+  | { status: "resumed"; run: StepRunView; stepIndex: number; generation: number }
+  /** 本人のその親ページの run でない。404。 */
+  | { status: "not_found" }
+  /** 同じ録音ページで進行中の run がある（この run を含む）。409。 */
+  | { status: "run_in_progress" }
+  /** 最新の run でない・失敗していない・失敗した段階が区切っていない・結果のページが無い。409。 */
+  | { status: "not_resumable" }
+  /** 入力が最初の区切りを始めたときと違う。最初から作り直す。409。 */
+  | { status: "input_changed" };
+
+/**
+ * 失敗した run を「区切り i からやり直す」（#277）。入力の基準が `chunk_basis` と同じときだけ、同じ run・同じ attempt を
+ * failed → queued に戻す（`tries` は 0、`chunk_*` は保つ、世代を 1 つ進めて新しい task の名前にする）。後続の段階は
+ * pending に戻し、run は queued にする。親・run を lock し、入力の読み・比較・書き込みを 1 transaction で行う。
+ */
+export async function resumeRun(db: StepRunsDb, owner: OwnerId, parentId: string, runId: string): Promise<ResumeRunResult> {
+  assertOwner(owner);
+  if (!isPageId(parentId) || !isPageId(runId)) return { status: "not_found" };
+  return inTransaction<ResumeRunResult>(db, async (client) => {
+    // createRun と同じ順（親 → run）で lock する。進行中の run の作成と直列にする
+    const parent = await client.query("SELECT id FROM pages WHERE owner = $1 AND id = $2 AND kind = 'rec' AND deleted_at IS NULL FOR UPDATE", [owner, parentId]);
+    if (!parent.rowCount) return { status: "not_found" } satisfies ResumeRunResult;
+    const run = await client.query<{ state: RunState; recipe: string; recipe_snapshot: unknown }>(
+      "SELECT state, recipe, recipe_snapshot FROM step_runs WHERE owner = $1 AND id = $2 AND parent = $3 FOR UPDATE",
+      [owner, runId, parentId],
+    );
+    const runRow = run.rows[0];
+    if (!runRow) return { status: "not_found" } satisfies ResumeRunResult;
+    const active = await client.query("SELECT 1 FROM step_runs WHERE owner = $1 AND parent = $2 AND state IN ('queued', 'running')", [owner, parentId]);
+    if (active.rowCount) return { status: "run_in_progress" } satisfies ResumeRunResult;
+    const latest = await client.query<{ id: string }>(
+      "SELECT id FROM step_runs WHERE owner = $1 AND parent = $2 ORDER BY created_at DESC, id DESC LIMIT 1",
+      [owner, parentId],
+    );
+    if (latest.rows[0]?.id !== runId || runRow.state !== "failed") return { status: "not_resumable" } satisfies ResumeRunResult;
+    const snapshot = parseRecipeSnapshot(runRow.recipe_snapshot);
+    if (!snapshot || snapshot.id !== runRow.recipe) return { status: "not_resumable" } satisfies ResumeRunResult;
+    const attempts = await client.query<{ step_index: number; step_id: string; page_id: string; state: AttemptState; generation: number; chunk_count: number | null; chunk_index: number; chunk_basis: string | null }>(
+      "SELECT step_index, step_id, page_id, state, generation, chunk_count, chunk_index, chunk_basis FROM step_attempts WHERE run_id = $1 ORDER BY step_index FOR UPDATE",
+      [runId],
+    );
+    const failed = attempts.rows.find((row) => row.state === "failed");
+    const step = failed ? snapshot.steps[failed.step_index] : undefined;
+    if (!failed || !step || step.id !== failed.step_id || step.chunked !== true || failed.chunk_count === null || failed.chunk_basis === null) {
+      return { status: "not_resumable" } satisfies ResumeRunResult;
+    }
+    const page = await client.query("SELECT 1 FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL", [owner, failed.page_id]);
+    if (!page.rowCount) return { status: "not_resumable" } satisfies ResumeRunResult;
+    const upstreamPageIds = attempts.rows.filter((row) => row.step_index < failed.step_index).map((row) => ({ id: row.step_id, pageId: row.page_id }));
+    const input = await readStepInput(client, {
+      owner, parentId, previousPageId: upstreamPageIds.at(-1)?.pageId ?? null, recipe: runRow.recipe,
+      stepIndex: failed.step_index, recipeSnapshot: snapshot, upstreamPageIds,
+    });
+    if (!input) return { status: "not_resumable" } satisfies ResumeRunResult;
+    if (computeChunkBasis(computeStepBasis(snapshot, failed.step_index, input)) !== failed.chunk_basis) {
+      return { status: "input_changed" } satisfies ResumeRunResult;
+    }
+    const resumed = await client.query<{ generation: number }>(
+      `UPDATE step_attempts
+          SET state = 'queued', tries = 0, generation = generation + 1, error_code = NULL, finished_at = NULL,
+              partial_blocks = NULL, lease_until = NULL, heartbeat_at = NULL
+        WHERE run_id = $1 AND step_index = $2 AND generation = $3 AND state = 'failed'
+        RETURNING generation`,
+      [runId, failed.step_index, failed.generation],
+    );
+    const generation = resumed.rows[0]?.generation;
+    if (generation === undefined) throw new Rollback<ResumeRunResult>({ status: "not_resumable" });
+    await client.query(
+      "UPDATE step_attempts SET state = 'pending', finished_at = NULL WHERE run_id = $1 AND step_index > $2 AND state = 'canceled'",
+      [runId, failed.step_index],
+    );
+    try {
+      await client.query(
+        `UPDATE step_runs SET state = 'queued', finished_at = NULL, updated_at = GREATEST(clock_timestamp(), updated_at)
+          WHERE id = $1 AND state = 'failed'`,
+        [runId],
+      );
+    } catch (error) {
+      // 進行中の run は親ごとに 1 つ（step_runs_active_idx）。読んだあとに別の run が始まった
+      if (typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505") {
+        throw new Rollback<ResumeRunResult>({ status: "run_in_progress" });
+      }
+      throw error;
+    }
+    await client.query("UPDATE pages SET step_status = 'wait' WHERE owner = $1 AND id = $2 AND deleted_at IS NULL", [owner, failed.page_id]);
+    return { status: "resumed", run: await requireRunView(client, owner, runId), stepIndex: failed.step_index, generation } satisfies ResumeRunResult;
+  });
+}
+
 /** run を失敗で終える（attempt は失敗にした後）。後続は canceled、サブページは失敗の段階が failed・後続が wait。 */
 async function failRunFrom(client: PoolClient, owner: OwnerId, runId: string, stepIndex: number, pageId: string): Promise<void> {
   const rest = await client.query<{ page_id: string }>(
@@ -891,7 +1082,7 @@ export async function failAttempt(db: StepRunsDb, input: FailInput): Promise<Fai
     const failed = await client.query<{ page_id: string }>(
       `UPDATE step_attempts
           SET state = 'failed', lease_until = NULL, error_code = $4, finished_at = clock_timestamp(),
-              partial_blocks = $5::jsonb
+              partial_blocks = ${FINAL_PARTIAL_SQL("$5::jsonb")}
         WHERE run_id = $1 AND step_index = $2 AND generation = $3 AND state = 'running'
         RETURNING page_id`,
       [input.runId, input.stepIndex, input.generation, input.code, input.partial === undefined ? null : JSON.stringify(input.partial)],
@@ -977,7 +1168,8 @@ export async function sweepExpiredLeases(db: StepRunsDb, options: { limit?: numb
         return "requeued" as const;
       }
       const failed = await client.query<{ page_id: string }>(
-        `UPDATE step_attempts SET state = 'failed', lease_until = NULL, error_code = 'lease_expired', finished_at = clock_timestamp()
+        `UPDATE step_attempts SET state = 'failed', lease_until = NULL, error_code = 'lease_expired', finished_at = clock_timestamp(),
+                partial_blocks = ${FINAL_PARTIAL_SQL("NULL::jsonb")}
           WHERE run_id = $1 AND step_index = $2 AND generation = $3 AND state = 'running'
             AND lease_until < clock_timestamp()
           RETURNING page_id`,

@@ -47,12 +47,29 @@ export function isStepRunActive(run: StepRun | null): boolean {
  * サブページを削除すると `stepStatus` が null になる。結果が無いので「前提変更」と同じ扱いにし、その段階から作り直せるようにする。
  */
 export function stepStateOf(step: StepRunStep): ShellStepState {
-  if (step.state === "running") return "run";
+  if (step.state === "running" || isBetweenChunks(step)) return "run";
   if (step.state === "failed") return "failed";
   const done = step.state === "succeeded" || step.state === "reused";
   if (step.stepStatus === "stale" || (done && step.stepStatus === null)) return "stale";
   if (done) return "done";
   return "wait";
+}
+
+/** 区切りの合間（終えた区切りがあり、次の区切りを待っている）。作成中として出す（#277）。 */
+function isBetweenChunks(step: StepRunStep): boolean {
+  return step.state === "queued" && step.chunk !== undefined && step.chunk.index > 0;
+}
+
+/**
+ * 区切って処理している段階の一言（#277）。作成中は「作成中 3/5」（分子は今処理中の区切りの番号）、
+ * 失敗は「区切り 3 で失敗」。区切っていない段階・済みの段階では null。
+ */
+export function stepChunkNotice(step: StepRunStep): string | null {
+  if (!step.chunk) return null;
+  const current = step.chunk.index + 1;
+  if (step.state === "failed") return `区切り ${current} で失敗`;
+  if (step.state === "running" || isBetweenChunks(step)) return `作成中 ${current}/${step.chunk.count}`;
+  return null;
 }
 
 /**
@@ -70,7 +87,7 @@ export function stepBandSteps(run: StepRun): ShellStep[] {
     const state = stepStateOf(step);
     const cut = state === "done" ? stepInputCutNotice(step) : null;
     // 済みの言葉は残し、切ったことを続けて出す（状態を文字でも出す決まりを崩さない）
-    const notice = state === "stale" ? staleNoticeText(step.staleReasons ?? []) : cut ? `済み · ${cut}` : null;
+    const notice = state === "stale" ? staleNoticeText(step.staleReasons ?? []) : cut ? `済み · ${cut}` : stepChunkNotice(step);
     return { id: step.pageId, label: step.name, state, ...(notice ? { notice } : {}) };
   });
 }
@@ -123,6 +140,9 @@ const FAILURES: Readonly<Record<string, StepFailure>> = {
   input_missing: FIX("もとになる本文が空でした。前の段階のページを書いてからやり直してください。"),
   invalid_input: FIX("もとになる本文を読めませんでした。前の段階のページを確かめてください。"),
   page_missing: FIX("結果を書くページが見つかりませんでした。はじめから作り直してください。"),
+  // 長い入力を区切って処理する段階（#277）
+  input_too_long: FIX("入力が長すぎて区切りきれませんでした（60 区切りまで）。録音を分けてから作り直してください。"),
+  input_changed: FIX("入力が変わったので止めました。この段階を最初から作り直してください。"),
   lease_expired: RETRY(`時間がかかりすぎて止まりました。${LATER}`),
   aborted: RETRY(`途中で止まりました。${LATER}`),
   internal: RETRY(`思わぬ失敗で止まりました。${LATER}`),
@@ -144,24 +164,31 @@ const quoted = (name: string) => `「${name}」`;
  * 「画面を閉じても進みます」は受入の約束（閉じても実行は続く）を利用者に伝える一言。
  */
 export function stepBandNote(run: StepRun): string {
-  const running = run.steps.find((step) => step.state === "running");
+  const running = run.steps.find((step) => step.state === "running" || isBetweenChunks(step));
   const failed = run.steps.find((step) => step.state === "failed");
   const stale = run.steps.find((step) => stepStateOf(step) === "stale");
   if (run.state === "queued" || run.state === "running") {
-    if (running) return `${quoted(running.name)}を作成中です。画面を閉じても進みます。`;
+    if (running) {
+      const progress = running.chunk ? `（区切り ${running.chunk.index + 1}/${running.chunk.count}）` : "";
+      return `${quoted(running.name)}を作成中です${progress}。画面を閉じても進みます。`;
+    }
     return "順番を待っています。画面を閉じても進みます。";
   }
   if (run.state === "canceled") return "手順を取消しました。もう一度始められます。";
   if (run.state === "failed" && failed) {
     // 何が起きたかと、次にできることは、code ごとの文が持つ（code そのものは出さない）
-    return `${quoted(failed.name)}が失敗しました。${stepFailure(failed.errorCode).message}`;
+    const where = failed.chunk ? `区切り ${failed.chunk.index + 1} で` : "";
+    return `${quoted(failed.name)}が${where}失敗しました。${stepFailure(failed.errorCode).message}`;
   }
   if (stale) return `${staleNoticeText(stale.staleReasons ?? []) ?? "元にした内容が変わりました。"}${quoted(stale.name)}から作り直すと印が消えます。`;
   if (run.state === "succeeded") return "すべての段階が済みました。";
   return "";
 }
 
-/** 帯のボタン。`fromStep` を持つものはその段階からの再実行、`cancel` は取消、`settings` は設定の画面への案内。 */
+/**
+ * 帯のボタン。`fromStep` を持つものはその段階からの再実行、`cancel` は取消、`settings` は設定の画面への案内、
+ * `resume` は失敗した区切りからのやり直し（同じ run。#277）。
+ */
 export type StepBandAction = {
   id: string;
   label: string;
@@ -169,7 +196,17 @@ export type StepBandAction = {
   fromStep?: number;
   cancel?: boolean;
   settings?: "usage" | "steps";
+  resume?: boolean;
 };
+
+/** 区切りの続きからやり直せない失敗（入力が変わった・長すぎる）。最初から作り直すしかない。 */
+const NOT_RESUMABLE = new Set(["input_changed", "input_too_long"]);
+
+/** 失敗した区切りからのやり直し（区切って処理していた段階の失敗だけ）。 */
+function resumeAction(step: StepRunStep | undefined, tone: "primary" | "outline"): StepBandAction | null {
+  if (!step || step.state !== "failed" || !step.chunk || (step.errorCode !== null && NOT_RESUMABLE.has(step.errorCode))) return null;
+  return { id: "resume", label: `区切り ${step.chunk.index + 1} からやり直す`, tone, resume: true };
+}
 
 /**
  * サーバーが受け付ける作り直しの始点の上限。`createRun` は手前の段階すべてのサブページが済みであることを要求するので、
@@ -218,10 +255,22 @@ export function stepBandActions(run: StepRun, currentPageId: string): StepBandAc
   const failure = target?.state === "failed" ? stepFailure(target.errorCode) : null;
   if (failure && !failure.rerun) {
     if (failure.settings) actions.push(settingsAction(failure.settings, "primary"));
+    // 今月の上限など待つしかない失敗でも、区切りの途中なら、直ったあとに続きから再開できる
+    const resume = resumeAction(target, failure.settings ? "outline" : "primary");
+    if (resume) actions.push(resume);
     return actions;
   }
+  const resume = resumeAction(target, "primary");
+  if (resume) actions.push(resume);
   if (target) {
-    actions.push({ id: "retry", label: `${quoted(target.name)}からやり直す`, tone: "primary", fromStep: target.index });
+    // 区切りの途中で失敗した段階は、続きからのやり直しを主にし、作り直しは「最初から」と言う
+    const chunked = target.state === "failed" && target.chunk !== undefined;
+    actions.push({
+      id: "retry",
+      label: chunked ? `${quoted(target.name)}を最初から作り直す` : `${quoted(target.name)}からやり直す`,
+      tone: resume ? "outline" : "primary",
+      fromStep: target.index,
+    });
   }
   const here = run.steps.find((step) => step.pageId === currentPageId);
   // 開いている段階が、すでに主ボタンになっている段階と同じなら二度出さない。サーバーが断る始点も出さない

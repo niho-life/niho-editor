@@ -64,7 +64,7 @@ export type SettingsRecipeInput = {
   id: string;
   name: string;
   guide: string;
-  steps: (SettingsRecipe["steps"][number] & { profile?: string })[];
+  steps: (SettingsRecipe["steps"][number] & { profile?: string; chunked?: boolean })[];
   terms?: SettingsTerm[];
   samples?: RecipeSample[];
 };
@@ -73,7 +73,8 @@ export type SettingsRecipeContent = {
   id: string;
   name: string;
   guide: string;
-  steps: (SettingsRecipe["steps"][number] & { profile: string })[];
+  /** `chunked`: 長い入力は区切って処理する（全文を書き直す段階。#277）。 */
+  steps: (SettingsRecipe["steps"][number] & { profile: string; chunked: boolean })[];
   terms: SettingsTerm[];
   samples: RecipeSample[];
 };
@@ -106,7 +107,7 @@ function toSettingsRecipe(recipe: RecipeDef): SettingsRecipeContent {
     id: recipe.id,
     name: recipe.name,
     guide: recipe.guide,
-    steps: recipe.steps.map((step) => ({ id: step.id, name: step.name, instruction: step.instruction, profile: step.profile })),
+    steps: recipe.steps.map((step) => ({ id: step.id, name: step.name, instruction: step.instruction, profile: step.profile, chunked: step.chunked === true })),
     terms: recipe.terms.map((term) => ({ ...term, variants: [...term.variants] })),
     samples: recipe.samples.map((sample) => ({ ...sample })),
   };
@@ -117,7 +118,7 @@ function sameRecipe(a: SettingsRecipeContent, b: SettingsRecipeContent): boolean
   if (JSON.stringify(a.terms) !== JSON.stringify(b.terms) || JSON.stringify(a.samples) !== JSON.stringify(b.samples)) return false;
   return a.steps.every((step, index) => {
     const other = b.steps[index]!;
-    return step.id === other.id && step.name === other.name && step.instruction === other.instruction && step.profile === other.profile;
+    return step.id === other.id && step.name === other.name && step.instruction === other.instruction && step.profile === other.profile && step.chunked === other.chunked;
   });
 }
 
@@ -145,7 +146,7 @@ export function settingsDto(settings: EditorSettings, recipes: readonly RecipeDe
 }
 
 /**
- * 古いpayloadが省略したprofile・terms・samplesは既存値を保つ。新しいpayloadでは各項目を更新する。
+ * 古いpayloadが省略したprofile・chunked・terms・samplesは既存値を保つ。新しいpayloadでは各項目を更新する。
  */
 export function mergeRecipes(current: readonly RecipeDef[], sent: readonly SettingsRecipeInput[]): RecipeDef[] {
   return sent.map((recipe) => {
@@ -164,10 +165,14 @@ export function mergeRecipes(current: readonly RecipeDef[], sent: readonly Setti
         : recipe.samples.map((sample) => ({ ...sample })),
       steps: recipe.steps.map((step) => {
         const prior = priorSteps.get(step.id);
+        const { chunked: sentChunked, ...rest } = step;
+        // 区切りの印は true のときだけ持つ（無い古い行は false。#277）
+        const chunked = sentChunked ?? prior?.chunked === true;
         return {
-          ...step,
+          ...rest,
           profile: step.profile ?? prior?.profile ?? "standard",
           ...(prior?.provider === undefined ? {} : { provider: prior.provider }),
+          ...(chunked ? { chunked: true } : {}),
         };
       }),
     };
@@ -192,8 +197,9 @@ function recipeInputProblem(value: unknown): boolean {
   };
   if (!isSettingsRecipe(legacy)) return true;
   const steps = value.steps as unknown[];
-  if (steps.some((step) => plainObject(step) && (Object.keys(step).some((key) => !["id", "name", "instruction", "profile"].includes(key)) ||
-    (step.profile !== undefined && (!isSettingsText(step.profile, RECIPE_LIMITS.profileChars) || step.profile.trim() === ""))))) return true;
+  if (steps.some((step) => plainObject(step) && (Object.keys(step).some((key) => !["id", "name", "instruction", "profile", "chunked"].includes(key)) ||
+    (step.profile !== undefined && (!isSettingsText(step.profile, RECIPE_LIMITS.profileChars) || step.profile.trim() === "")) ||
+    (step.chunked !== undefined && typeof step.chunked !== "boolean")))) return true;
   if (value.terms !== undefined && (!Array.isArray(value.terms) || value.terms.length > RECIPE_LIMITS.terms || !value.terms.every(isSettingsTerm))) return true;
   if (value.samples !== undefined && (!Array.isArray(value.samples) || value.samples.length > RECIPE_LIMITS.samples || !value.samples.every(isRecipeSample))) return true;
   if (Array.isArray(value.samples) && new Set((value.samples as { id: string }[]).map((sample) => sample.id)).size !== value.samples.length) return true;
