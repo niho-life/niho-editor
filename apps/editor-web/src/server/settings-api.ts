@@ -1,5 +1,6 @@
 import {
   SETTINGS_LIMITS,
+  SETTINGS_PATCH_KEYS,
   RECIPE_LIMITS,
   isRecipeSample,
   isSettingsRecipe,
@@ -23,7 +24,7 @@ import { errorResponse, guarded, isSameOriginRequest, jsonResponse, notFoundResp
  * アカウントの設定の API（Issue #108。`GET /api/settings`・`PATCH /api/settings`）。
  *
  * - 本人のものだけ。未認証は 401、DB が使えないときは 503。更新は同じ origin の画面からだけ（違えば 403）。
- * - 持つのは画面から変えられるものだけ（AI の提案の言語・固有名詞・手順）。文字起こしのエンジンはサーバーの設定、
+ * - 持つのは画面から変えられるものだけ（AI の提案の言語・固有名詞・手順・公開用の著者紹介など）。文字起こしのエンジンはサーバーの設定、
  *   保存先は NIHO から毎回読むので、この API では変えられない（画面は読むだけ。設計 §2.1）。
  * - 手順は「効いている手順の全部」を送り受けする（実体は表 `recipes`。migration 20261101001500_recipes）。既定の値をそのまま送れば
  *   「既定に戻す」になる。既定でない手順を送らなければ、その手順は消える。
@@ -98,6 +99,9 @@ export type SettingsDto = {
   about: string;
   /** AI チャットが Web を検索してよいか（既定 ON。#283）。 */
   webSearch: boolean;
+  /** 公開用の著者紹介（肩書・紹介文。空は null）。公開のとき公開版の authorProfile に固定する。 */
+  authorRole: string | null;
+  authorBio: string | null;
   limits: typeof SETTINGS_LIMITS;
 };
 
@@ -130,6 +134,8 @@ export function settingsDto(settings: EditorSettings, recipes: readonly RecipeDe
     aboutName: settings.aboutName,
     about: settings.about,
     webSearch: settings.webSearch,
+    authorRole: settings.authorRole,
+    authorBio: settings.authorBio,
     recipes: contents.map((recipe) => {
       const base = findRecipeIn(DEFAULT_RECIPES, recipe.id);
       const defaults = base ? toSettingsRecipe(base) : null;
@@ -207,11 +213,11 @@ function recipeInputProblem(value: unknown): boolean {
 }
 
 /**
- * PATCH の本文（`{ aiLang?, glossary?, recipes?, about?, aboutName?, webSearch? }` だけ）。手順は既定の 3 つの id を 1 回ずつ含み、
+ * PATCH の本文（`{ aiLang?, glossary?, recipes?, about?, aboutName?, webSearch?, authorRole?, authorBio? }` だけ）。手順は既定の 3 つの id を 1 回ずつ含み、
  * 段階の id は既定の手順ではそのままでなければならない（成果物のサブページがその id に結んでいる）。
  */
 export function parseSettingsPatch(body: unknown): PatchResult {
-  if (!plainObject(body) || Object.keys(body).some((key) => !["aiLang", "glossary", "recipes", "about", "aboutName", "webSearch"].includes(key))) return { ok: false };
+  if (!plainObject(body) || Object.keys(body).some((key) => !(SETTINGS_PATCH_KEYS as readonly string[]).includes(key))) return { ok: false };
   const { recipes: rawRecipes, ...settingsPatch } = body;
   if (rawRecipes === undefined) {
     if (settingsProblem(settingsPatch) !== null) return { ok: false };

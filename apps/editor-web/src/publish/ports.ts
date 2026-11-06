@@ -29,7 +29,8 @@ import { DEV_DECLARATIONS } from "./dev-declarations";
  *
  * - roles: stub の方式は `EDITOR_STUB_ROLES`（既定 writer）。niho の方式は要求ごとに用途専用APIから読む。
  * - declarations: 本人のサイトは接続の設定から（editor-publish の siteDeclarationSource）、面は config.ts の DeclarationPlan に従う。
- * - authors: session の profile の名前（handle・url は null）。名前が無ければ公開を失敗にする。
+ * - authors: session の profile の名前（handle・url は null）。名前が無ければ公開を失敗にする。公開用の著者紹介（肩書・紹介文）は
+ *   設定から読み（options.authorProfile）、公開版の authorProfile に固定する。読めなければ公開を失敗にする（黙って落とさない）。
  * - facts: 関連する体験が掲載中かは、まだ読めない（null＝不明＝満たさない）。
  * - assetUrls: `EDITOR_ASSET_ORIGIN` から `${origin}/assets/${sha256}.${ext}`。未設定なら例外（写真のあるページの公開は失敗する）。
  *
@@ -59,7 +60,12 @@ export type PublishWiringOptions = {
   /** NIHO mode reads the current roles on every operation; never persisted or cached. */
   readonly roles?: RoleReader;
   readonly facts?: FactsSource;
+  /** 公開用の著者紹介（設定 › 公開用の著者紹介）。省略すると著者紹介なしで公開する。 */
+  readonly authorProfile?: AuthorProfileReader;
 };
+
+/** 本人の公開用の著者紹介（肩書・紹介文。空は null）。無ければ null。 */
+export type AuthorProfileReader = (actorId: string) => Promise<{ readonly role: string | null; readonly bio: string | null } | null>;
 
 export const systemClock: Clock = { now: () => new Date().toISOString() };
 
@@ -107,12 +113,13 @@ export function storageModeReaderOf(session: Session): StorageModeReader {
   };
 }
 
-export function sessionAuthors(session: Session): AuthorSource {
+export function sessionAuthors(session: Session, profile?: AuthorProfileReader): AuthorSource {
   return {
     async read(actorId) {
       const name = session.profile?.name.trim();
       if (actorId !== session.userId || !name) throw new Error("author profile is not available");
-      return { name, handle: null, url: null };
+      const introduction = profile ? await profile(actorId) : null;
+      return introduction ? { name, handle: null, url: null, profile: { role: introduction.role, bio: introduction.bio } } : { name, handle: null, url: null };
     },
   };
 }
@@ -182,7 +189,7 @@ export function wirePublishPorts(store: ConnectionStore, session: Session, optio
       storage: storageModeReaderOf(session),
       connections: connectionSource(store),
       declarations: siteDeclarationSource(store, faceDeclarations(config.declarations, options.fetch)),
-      authors: sessionAuthors(session),
+      authors: sessionAuthors(session, options.authorProfile),
       facts,
       assetUrls: assetUrlsOf(config.assetOrigin),
       clock,

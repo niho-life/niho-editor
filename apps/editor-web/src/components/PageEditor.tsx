@@ -20,7 +20,7 @@ import { getPageVersion } from "@/lib/page-actions-client";
 import { normalizePastedHtml } from "@/editor/paste";
 import { prepareAi, replaceForAi, type AiBridge, type AiBridgeDeps } from "@/lib/ai-bridge";
 import { createAutosave, type Autosave, type SaveState } from "@/lib/autosave";
-import { pageImages, getImageMetadata } from "@/lib/image-upload-client";
+import { pageImages, getImageMetadata, saveImageMeta } from "@/lib/image-upload-client";
 import { PAGE_MAX_BYTES } from "@/image/image-limits";
 import {
   NEW_PAGE_DRAFT_KEY,
@@ -283,8 +283,10 @@ function EditorScreen(props: ScreenProps) {
   const [cover, setCover] = useState<string | null>(page.cover ?? null);
   const [lead, setLead] = useState<string | null>(page.lead ?? null);
   const [coverOptions, setCoverOptions] = useState(() => imageAssetIds(page.blocks, page.cover ?? null));
-  const [coverMetadata, setCoverMetadata] = useState<{ assetId: string; consent: boolean } | null>(null);
+  // 掲載許諾（consent）と、共有画像（SNS・検索結果）にも使う許諾（share）。公開版は両方あるときだけカバーを共有画像にできると言う
+  const [coverMetadata, setCoverMetadata] = useState<{ assetId: string; consent: boolean; share: boolean } | null>(null);
   const coverConsent = coverMetadata?.assetId === cover ? coverMetadata.consent : null;
+  const coverShare = coverMetadata?.assetId === cover ? coverMetadata.share : null;
   const [coverMetaBusy, setCoverMetaBusy] = useState(false);
   const [coverError, setCoverError] = useState<string | null>(null);
   const [langNote, setLangNote] = useState<string | null>(null);
@@ -665,7 +667,7 @@ function EditorScreen(props: ScreenProps) {
     }
     void getImageMetadata(assetId).then(
       (image) => {
-        if (active && coverRef.current === assetId) setCoverMetadata({ assetId, consent: image.consent });
+        if (active && coverRef.current === assetId) setCoverMetadata({ assetId, consent: image.consent, share: image.share });
       },
       () => {
         if (active && coverRef.current === assetId) setCoverError("カバー画像の掲載情報を読み込めませんでした。");
@@ -829,14 +831,15 @@ function EditorScreen(props: ScreenProps) {
               const assetId = coverRef.current;
               if (!assetId) return;
               const previous = coverConsent === true;
+              const share = coverShare === true;
               const next = event.currentTarget.checked;
-              setCoverMetadata({ assetId, consent: next });
+              setCoverMetadata({ assetId, consent: next, share });
               setCoverMetaBusy(true);
               setCoverError(null);
               void pageImages.saveMeta(assetId, { consent: next }).then((saved) => {
                 if (coverRef.current !== assetId) return;
                 if (!saved) {
-                  setCoverMetadata({ assetId, consent: previous });
+                  setCoverMetadata({ assetId, consent: previous, share });
                   setCoverError("掲載許諾を保存できませんでした。");
                   return;
                 }
@@ -847,6 +850,40 @@ function EditorScreen(props: ScreenProps) {
             }}
           />
           この画像を公開先に掲載する許諾を確認しました
+        </label>
+      )}
+      {cover && (
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input
+            type="checkbox"
+            data-cover-share=""
+            checked={coverConsent === true && coverShare === true}
+            disabled={coverMetaBusy || coverConsent !== true || coverShare === null || !ready}
+            onChange={(event) => {
+              const assetId = coverRef.current;
+              if (!assetId || coverConsent !== true) return;
+              const previous = coverShare === true;
+              const next = event.currentTarget.checked;
+              setCoverMetadata({ assetId, consent: true, share: next });
+              setCoverMetaBusy(true);
+              setCoverError(null);
+              void saveImageMeta(assetId, { share: next }).then(() => true, () => false).then((saved) => {
+                if (coverRef.current !== assetId) return;
+                if (!saved) {
+                  setCoverMetadata({ assetId, consent: true, share: previous });
+                  setCoverError("共有画像の許諾を保存できませんでした。");
+                  return;
+                }
+                // 掲載許諾と同じく、資産の許諾の変更もページ revision に載せる（別端末の編集と競合を検出する）。
+                autosaveRef.current?.change({ cover: assetId });
+                keeperRef.current?.touch();
+              }).finally(() => setCoverMetaBusy(false));
+            }}
+          />
+          <span>
+            SNS や検索結果に出る共有画像にも使う許諾を確認しました
+            {coverConsent !== true && <small style={{ display: "block", fontSize: 12, color: "var(--ed-ink-mute)" }}>掲載の許諾を確認すると選べます</small>}
+          </span>
         </label>
       )}
       {cover && <button type="button" className="es-btn es-btn--quiet es-btn--sm" style={{ justifySelf: "start" }} disabled={!ready || unreadable} onClick={() => {
@@ -877,7 +914,7 @@ function EditorScreen(props: ScreenProps) {
       </div>
       {pageId && <PageTranslation pageId={pageId} lang={lang} saveFirst={flush} savedRevision={savedRevision} currentRevision={revision} />}
     </section>
-  ), [lead, leadCount, cover, ready, unreadable, coverOptions, refreshCoverOptions, coverConsent, coverMetaBusy, coverError, pageId, lang, changeLang, langNote, flush, savedRevision, revision, compositionStarted, compositionEnded]);
+  ), [lead, leadCount, cover, ready, unreadable, coverOptions, refreshCoverOptions, coverConsent, coverShare, coverMetaBusy, coverError, pageId, lang, changeLang, langNote, flush, savedRevision, revision, compositionStarted, compositionEnded]);
 
   // パネルから外した写真がカバーなら、カバーも外す（サーバーは外し済み。画面と保存の内容を揃える。同じ自動保存に載せる）
   const clearCover = useCallback((assetId: string) => {

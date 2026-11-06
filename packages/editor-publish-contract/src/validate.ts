@@ -25,6 +25,7 @@ import {
   TIMESTAMP_PATTERN,
   UUID_PATTERN,
   type Author,
+  type AuthorProfile,
   type Block,
   type Dest,
   type ErrorBody,
@@ -521,9 +522,37 @@ function categoryDisplayAt(value: unknown, path: string, issues: Issues): import
     : undefined;
 }
 
+/** Optional; when present it is exactly `true` (absence means "not confirmed"). */
+function coverShareableAt(value: unknown, path: string, issues: Issues): true | undefined {
+  if (value === undefined || value === true) return value;
+  return issues.add(path, typeof value === "boolean" ? "enum" : "type");
+}
+
+function profileTextAt(value: unknown, path: string, issues: Issues, max: number): string | null | undefined {
+  if (value === undefined) return issues.add(path, "required");
+  const text = nullableTextAt(value, path, issues);
+  if (typeof text === "string" && codePointLength(text) > max) return issues.add(path, "too-large");
+  return text;
+}
+
+/** Optional; `role` and `bio` only, each null or a non-blank single line within its limit, not both null. */
+function authorProfileAt(value: unknown, path: string, issues: Issues): AuthorProfile | undefined {
+  if (value === undefined) return undefined;
+  const fields = fieldsAt(value, path, issues, ["role", "bio"]);
+  if (!fields) return undefined;
+  const before = issues.count;
+  const role = profileTextAt(fields.role, child(path, "role"), issues, PUBLISHED_LIMITS.maxAuthorRoleChars);
+  const bio = profileTextAt(fields.bio, child(path, "bio"), issues, PUBLISHED_LIMITS.maxAuthorBioChars);
+  if (issues.count !== before || role === undefined || bio === undefined) return undefined;
+  if (role === null && bio === null) return issues.add(path, "empty");
+  return { role, bio };
+}
+
 function listItemAt(fields: Fields, path: string, issues: Issues): PublishedListItem | undefined {
   const before = issues.count;
   const categoryDisplay = categoryDisplayAt(fields.categoryDisplay, child(path, "categoryDisplay"), issues);
+  const coverShareable = coverShareableAt(fields.coverShareable, child(path, "coverShareable"), issues);
+  const authorProfile = authorProfileAt(fields.authorProfile, child(path, "authorProfile"), issues);
   const item = {
     id: patternAt(fields.id, UUID_PATTERN, child(path, "id"), issues),
     slug: slugAt(fields.slug, child(path, "slug"), issues),
@@ -532,11 +561,13 @@ function listItemAt(fields: Fields, path: string, issues: Issues): PublishedList
     title: textAt(fields.title, child(path, "title"), issues),
     lead: fields.lead === undefined ? issues.add(child(path, "lead"), "required") : nullableTextAt(fields.lead, child(path, "lead"), issues),
     cover: fields.cover === null ? null : assetAt(fields.cover, child(path, "cover"), issues),
+    ...(coverShareable === undefined ? {} : { coverShareable }),
     category: fields.category === undefined
       ? issues.add(child(path, "category"), "required")
       : nullableTextAt(fields.category, child(path, "category"), issues),
     ...(categoryDisplay === undefined ? {} : { categoryDisplay }),
     author: authorAt(fields.author, child(path, "author"), issues),
+    ...(authorProfile === undefined ? {} : { authorProfile }),
     range: enumAt(fields.range, RANGES, child(path, "range"), issues),
     version: positiveIntegerAt(fields.version, child(path, "version"), issues),
     publishedAt: timestampAt(fields.publishedAt, child(path, "publishedAt"), issues),
@@ -547,6 +578,8 @@ function listItemAt(fields: Fields, path: string, issues: Issues): PublishedList
   };
   if (fields.categoryDisplay !== undefined && categoryDisplay === undefined) issues.add(child(path, "categoryDisplay"), "format");
   if (categoryDisplay !== undefined && item.category === null) issues.add(child(path, "categoryDisplay"), "required");
+  // The share permission is the cover's: there is nothing to share without one.
+  if (coverShareable !== undefined && fields.cover === null) issues.add(child(path, "coverShareable"), "required");
   // Limited release ("unlisted") exists only on NIHO-operated faces.
   if (item.dest === "site" && item.range === "unlisted") issues.add(child(path, "range"), "unlisted-site");
   if (item.publishedAt && item.updatedAt && Date.parse(item.updatedAt) < Date.parse(item.publishedAt)) {

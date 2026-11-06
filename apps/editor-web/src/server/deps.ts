@@ -10,6 +10,7 @@ import {
   completeAudioUpload,
   completeImageUpload,
   countPageImages,
+  getEditorSettings,
   deletePageImage,
   createRecordingPage,
   duplicatePage,
@@ -228,6 +229,11 @@ export const publishDeps: PublishApiDeps = {
         return result.destinations.includes("exp") && result.roles.includes("writer") ? ["writer"] : [];
       }),
       ...(session.mode === "niho" ? { facts: experienceFactsSource(session.userId) } : {}),
+      // 公開用の著者紹介は設定の行から（公開のときに公開版へ固定する）
+      authorProfile: async (owner) => {
+        const settings = await getEditorSettings(pool, owner);
+        return { role: settings.authorRole, bio: settings.authorBio };
+      },
     }) : null;
   },
 };

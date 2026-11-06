@@ -41,6 +41,8 @@ import type { DraftContent, PublicApiSource, PublishedListRow, PublishedLookup, 
  * - プレビューは、ページ・資産・公開・公開版を 1 つの読み取りの transaction（REPEATABLE READ）で読み、現在の下書きから
  *   buildSnapshot で組む。version と時刻はページの保存の版（revision）と時刻（updated_at）。
  *   著者は token に結んだもの（発行したときの本人。0009）で、無ければいまの公開版の著者。どちらも無ければ組めない（404）。
+ *   公開用の著者紹介（authorProfile）はプレビューには入れない（token に結んでいない。公開版だけが持つ）。
+ *   共有画像の許諾（coverShareable）はいまの下書きの資産から組む（公開と同じ）。
  */
 
 export interface PgPublicApiOptions {
@@ -85,6 +87,7 @@ function toAssetRecord(row: DraftAssetRow): AssetRecord {
     alt: row.alt,
     credit: row.credit,
     consent: row.consent,
+    share: row.share,
   };
 }
 
@@ -222,6 +225,7 @@ export function pgPublicApiSource(db: Database, options: PgPublicApiOptions): Pu
         title: snapshot.title,
         lead: snapshot.lead,
         cover: snapshot.cover,
+        ...(snapshot.coverShareable === undefined ? {} : { coverShareable: snapshot.coverShareable }),
         category: snapshot.category,
         ...(snapshot.categoryDisplay === undefined ? {} : { categoryDisplay: snapshot.categoryDisplay }),
         author: snapshot.author,

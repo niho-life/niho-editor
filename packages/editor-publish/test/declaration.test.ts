@@ -38,10 +38,12 @@ function parsed(json: unknown): DestinationDeclaration {
 }
 
 describe("parseDestinationDeclaration: the fixture declarations (design §8.1)", () => {
-  it("accepts NIHO Experience with all seven condition kinds", () => {
+  it("accepts NIHO Experience with all nine condition kinds", () => {
     const exp = parsed(DECLARATIONS.exp);
     expect(exp.id).toBe("exp");
-    expect(exp.requires.map((condition) => condition.kind)).toEqual(["lang", "cover", "lead", "category", "headings", "noConfirm", "relatedLive"]);
+    expect(exp.requires.map((condition) => condition.kind)).toEqual(["lang", "cover", "lead", "category", "headings", "noConfirm", "relatedLive", "title", "images"]);
+    expect(exp.requires[7]).toEqual({ id: "title", kind: "title", max: 110, message: "題名を 110 字以内にしてください", fix: "body" });
+    expect(exp.requires[8]).toEqual({ id: "image-alt", kind: "images", alt: true, message: "写真に代替テキスト（alt）を入れてください", fix: "body" });
     expect(exp.accepts.blocks).not.toContain("quote");
     expect(destinationUrl(exp, "a-walk")).toBe("https://exp.example.com/guides/a-walk");
   });
@@ -58,6 +60,28 @@ describe("parseDestinationDeclaration: the fixture declarations (design §8.1)",
     expect(site.requires).toEqual([]);
     expect(site.ranges).toEqual(["live"]);
     expect(destinationUrl(site, "a-walk")).toBe("https://notes.example.net/a-walk");
+  });
+
+  it("accepts title (max at the limit) and images with alt false", () => {
+    const declaration = parsed({
+      ...DECLARATIONS.site,
+      requires: [
+        { id: "title", kind: "title", max: 500, message: "題名を短くしてください", fix: "body" },
+        { id: "image-alt", kind: "images", alt: false, message: "写真に代替テキストを入れてください", fix: "body" },
+      ],
+    });
+    expect(declaration.requires).toEqual([
+      { id: "title", kind: "title", max: 500, message: "題名を短くしてください", fix: "body" },
+      { id: "image-alt", kind: "images", alt: false, message: "写真に代替テキストを入れてください", fix: "body" },
+    ]);
+  });
+
+  it("rejects a fix outside the closed vocabulary on the new kinds", () => {
+    const result = parseDestinationDeclaration({
+      ...DECLARATIONS.site,
+      requires: [{ id: "title", kind: "title", max: 110, message: "題名を短くしてください", fix: "title" }],
+    });
+    expect(result).toEqual({ ok: false, errors: [{ path: "$.requires[0].fix", reason: "enum" }] });
   });
 
   it("accepts JSON text as well as parsed JSON", () => {

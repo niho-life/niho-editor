@@ -126,6 +126,7 @@ describe("images without a database", () => {
       [{ credit: "c".repeat(501) }, "credit"],
       [{ credit: "改行 入り" }, "credit"],
       [{ consent: "true" as unknown as boolean }, "consent"],
+      [{ share: 1 as unknown as boolean }, "share"],
     ];
     for (const [patch, problem] of cases) {
       await assert.rejects(

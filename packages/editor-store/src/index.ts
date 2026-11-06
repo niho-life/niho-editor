@@ -90,6 +90,7 @@ export {
   SETTINGS_AI_LANGS,
   SETTINGS_ID_PATTERN,
   SETTINGS_LIMITS,
+  SETTINGS_PATCH_KEYS,
   cleanSettingsPatch,
   getEditorSettings,
   isSettingsAiLang,

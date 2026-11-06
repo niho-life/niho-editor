@@ -75,7 +75,9 @@ prefix は `https://api.editor.niho.life`。メソッドは `GET` と `HEAD` だ
 ```
 PublishedListItem
   id, slug, dest, lang, title, lead|null, cover|null, category|null,
+  coverShareable?: true                    ← 任意。カバーを共有画像（OG 画像・Article.image）にも使ってよいときだけ
   author { name, handle|null, url|null }   ← 公開した時点のスナップショット
+  authorProfile?: { role|null, bio|null }  ← 任意。公開した時点の著者紹介（肩書・紹介文）
   range: live | unlisted
   version, publishedAt, updatedAt          ← updatedAt は「いまの公開版を公開した時刻」。下書きの編集は反映しない
   canonicalUrl, extras { app, news, xp }, related: ExperienceSlug[]
@@ -83,6 +85,12 @@ PublishedDoc = PublishedListItem + { blocks, markdown, assets, contractVersion }
 ```
 
 発信先の面は、公開版を受け取るときに自分で再確認する（体験が掲載中か、連携が有効か。[設計](../architecture/editor-niho-life-design.md) §10）。API の `related` は申告であり認可の根拠にならない。
+
+任意の項目（値があるときだけ出す。無い公開版の応答・`ETag` は前と同じ）：
+
+- `coverShareable`：`true` だけ。著者がカバーに「掲載許諾」と「共有画像にも使ってよい許諾」の両方を付けたときだけ出る。無ければ、発信先はカバーをページの中には載せてよいが、OG 画像・`Article.image` など共有画像には使わない。`cover` が `null` なのに出ていれば拒否する。
+- `authorProfile`：`{ role, bio }`（欄はこの 2 つだけ。どちらも `null` か空でない 1 行で、肩書は 120 字・紹介文は 600 字まで。両方 `null` は拒否）。`author` と同じく公開した時点の値で、あとで設定を変えても公開版は変わらない。プレビューには出ない。
+- どちらも**トップレベル**に置き、`cover`（`PublishedAsset`）や `author` の中には入れない。入れ子のオブジェクトは厳密（未知のキーは拒否）なので、中に足すとこの項目を知らない古い版の検証器が応答ごと拒否する。トップレベルの未知の項目は古い検証器が無視して落とすので、古い発信先はそのまま読める。
 
 ## キャッシュと条件つき request
 

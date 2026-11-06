@@ -11,7 +11,7 @@
  * transactions as publications. Keys are kept as the service hands them over: hash and last 4 only.
  */
 
-import { canonicalJson, type Author } from "@niho/editor-publish-contract";
+import { canonicalJson } from "@niho/editor-publish-contract";
 import {
   draftFingerprint,
   placeKey,
@@ -20,6 +20,7 @@ import {
   type AssetRecord,
   type AssetUrls,
   type AuthorSource,
+  type PublishAuthor,
   type Clock,
   type ConnectionRecord,
   type ConnectionSource,
@@ -430,16 +431,16 @@ export class MemoryDeclarations implements DeclarationSource {
 }
 
 export class MemoryAuthors implements AuthorSource {
-  private readonly authors = new Map<string, Author>();
+  private readonly authors = new Map<string, PublishAuthor>();
 
-  set(actorId: string, author: Author): void {
-    this.authors.set(actorId, { ...author });
+  set(actorId: string, author: PublishAuthor): void {
+    this.authors.set(actorId, JSON.parse(JSON.stringify(author)) as PublishAuthor);
   }
 
-  async read(actorId: string): Promise<Author> {
+  async read(actorId: string): Promise<PublishAuthor> {
     const author = this.authors.get(actorId);
     if (!author) throw new Error("unknown author");
-    return { ...author };
+    return JSON.parse(JSON.stringify(author)) as PublishAuthor;
   }
 }
 

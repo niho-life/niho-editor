@@ -65,6 +65,7 @@ function memoryStore(options: { pages?: Record<string, string>; trashed?: readon
         alt: null,
         credit: null,
         consent: false,
+        share: false,
         createdAt: new Date(0).toISOString(),
       };
       rows.push({ asset, owner, uploadKey: input.uploadKey, requestHash: input.requestHash });
@@ -95,7 +96,7 @@ function memoryStore(options: { pages?: Record<string, string>; trashed?: readon
       return rows
         .filter((row) => row.owner === owner && row.asset.pageId === pageId && row.asset.status === "ready")
         .reverse()
-        .map(({ asset }) => ({ assetId: asset.assetId, bytes: asset.bytes, contentType: asset.contentType, alt: asset.alt, credit: asset.credit, consent: asset.consent, createdAt: asset.createdAt }));
+        .map(({ asset }) => ({ assetId: asset.assetId, bytes: asset.bytes, contentType: asset.contentType, alt: asset.alt, credit: asset.credit, consent: asset.consent, share: asset.share, createdAt: asset.createdAt }));
     },
     imageAsset: async (owner, assetId) => find(owner, assetId)?.asset ?? null,
     updateImageMeta: async (owner, assetId, patch) => {
@@ -107,6 +108,7 @@ function memoryStore(options: { pages?: Record<string, string>; trashed?: readon
         alt: patch.alt === undefined ? row.asset.alt : patch.alt === "" ? null : patch.alt,
         credit: patch.credit === undefined ? row.asset.credit : patch.credit === "" ? null : patch.credit,
         consent: patch.consent === undefined ? row.asset.consent : patch.consent,
+        share: patch.share === undefined ? row.asset.share : patch.share,
       };
       return row.asset;
     },
@@ -418,7 +420,7 @@ describe("POST /api/pages/{id}/images/{assetId}/complete", () => {
     const response = await complete(assetId, d);
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.image).toEqual({ assetId, pageId: PAGE, status: "ready", bytes: 5, contentType: "image/png", alt: null, credit: null, consent: false });
+    expect(body.image).toEqual({ assetId, pageId: PAGE, status: "ready", bytes: 5, contentType: "image/png", alt: null, credit: null, consent: false, share: false });
     // object の場所・sha256 は応答に出さない
     expect(JSON.stringify(body)).not.toContain("image/" + assetId);
     expect(JSON.stringify(body)).not.toContain(SHA);
@@ -519,7 +521,7 @@ describe("GET /api/pages/{id}/images", () => {
     expect(response.headers.get("content-type")).toContain("application/json");
     const body = await response.json();
     expect(body.images.map((image: { assetId: string }) => image.assetId)).toEqual([second, first]);
-    expect(Object.keys(body.images[0]).sort()).toEqual(["alt", "assetId", "bytes", "consent", "contentType", "createdAt", "credit"]);
+    expect(Object.keys(body.images[0]).sort()).toEqual(["alt", "assetId", "bytes", "consent", "contentType", "createdAt", "credit", "share"]);
   });
 
   it("answers 401 without looking, and the same 404 for someone else's, a missing and a malformed page", async () => {
@@ -551,6 +553,20 @@ describe("PATCH /api/assets/{assetId}", () => {
     expect(metas.map((meta) => meta.patch)).toEqual([{ alt: "合成の写真", credit: "合成の提供元", consent: true }, { alt: null, consent: false }]);
   });
 
+  it("saves the share-image permission as its own field, apart from consent", async () => {
+    const { store, metas } = memoryStore();
+    const storage = createFakeStorage();
+    const d = deps("user-a", store, storage);
+    const assetId = await upload(storage, d);
+    await patch(assetId, { consent: true }, d);
+    const shared = await patch(assetId, { share: true }, d);
+    expect(shared.status).toBe(200);
+    expect((await shared.json()).image).toMatchObject({ assetId, consent: true, share: true });
+    const off = await patch(assetId, { share: false }, d);
+    expect((await off.json()).image).toMatchObject({ consent: true, share: false });
+    expect(metas.map((meta) => meta.patch)).toEqual([{ consent: true }, { share: true }, { share: false }]);
+  });
+
   it("refuses a body that is not the three fields, a long or multi-line value, and a non-boolean consent", async () => {
     const { store } = memoryStore();
     const storage = createFakeStorage();
@@ -566,6 +582,8 @@ describe("PATCH /api/assets/{assetId}", () => {
       [{ credit: "c".repeat(501) }, "credit"],
       [{ credit: "改行 入り" }, "credit"],
       [{ consent: "true" }, "consent"],
+      [{ share: "true" }, "share"],
+      [{ share: null }, "share"],
     ];
     for (const [body, reason] of cases) {
       const response = await patch(assetId, body, d);
@@ -663,7 +681,7 @@ describe("GET /api/assets/{assetId}/meta", () => {
     const response = await readMetadata(assetId, d);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      image: { assetId, pageId: PAGE, status: "ready", bytes: 5, contentType: "image/png", alt: null, credit: null, consent: true },
+      image: { assetId, pageId: PAGE, status: "ready", bytes: 5, contentType: "image/png", alt: null, credit: null, consent: true, share: false },
     });
     expect((await readMetadata(assetId, deps(null, store, storage))).status).toBe(401);
     expect((await readMetadata(assetId, deps("user-b", store, storage))).status).toBe(404);

@@ -44,6 +44,19 @@ describe("positive fixtures", () => {
     expect(parsePublishedDoc({ ...fixtures.doc, category: null, categoryDisplay: display }).ok).toBe(false);
   });
 
+  it("keeps the optional share permission and author profile at the top level, and drops nothing else", () => {
+    const profile = { role: "Coastal walk guide", bio: "Writes about mornings by the sea." };
+    const valid = parsePublishedDoc({ ...fixtures.doc, coverShareable: true, authorProfile: profile });
+    expect(valid.ok && valid.value.coverShareable).toBe(true);
+    expect(valid.ok && valid.value.authorProfile).toEqual(profile);
+    // Absent stays absent (no `coverShareable: false`, no empty profile), so old snapshots keep their shape.
+    const plain = parsePublishedDoc(fixtures.doc);
+    expect(plain.ok && "coverShareable" in plain.value).toBe(false);
+    expect(plain.ok && "authorProfile" in plain.value).toBe(false);
+    expect(parsePublishedDoc({ ...fixtures.doc, authorProfile: { role: null, bio: "b".repeat(601) } }).ok).toBe(false);
+    expect(parsePublishedDoc({ ...fixtures.doc, authorProfile: { role: "r".repeat(120), bio: null } }).ok).toBe(true);
+  });
+
   it("returns a fresh value that shares no prototype tricks", () => {
     const hostile = JSON.parse(JSON.stringify(fixtures.doc).replace('"contractVersion"', '"__proto__":{"polluted":true},"contractVersion"')) as unknown;
     const result = parsePublishedDoc(hostile);

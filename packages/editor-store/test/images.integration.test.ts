@@ -154,8 +154,9 @@ describe("page images on PostgreSQL", { skip: databaseUrl === undefined }, () =>
       sha256: SHA,
       alt: null,
       credit: null,
-      // 掲載許諾は false から始まる
+      // 掲載許諾も共有画像の許諾も false から始まる
       consent: false,
+      share: false,
       createdAt: pending!.createdAt,
     });
 
@@ -386,7 +387,12 @@ describe("page images on PostgreSQL", { skip: databaseUrl === undefined }, () =>
     assert.deepEqual([cleared?.alt, cleared?.credit, cleared?.consent], [null, null, true]);
     // 何も指定しなければ何も変わらない
     const same = await updateImageMeta(pool, OWNER, input.assetId, {});
-    assert.deepEqual([same?.alt, same?.credit, same?.consent], [null, null, true]);
+    assert.deepEqual([same?.alt, same?.credit, same?.consent, same?.share], [null, null, true, false]);
+    // 共有画像の許諾は掲載許諾と別の欄（片方だけ変えても他は変わらない）
+    const shared = await updateImageMeta(pool, OWNER, input.assetId, { share: true });
+    assert.deepEqual([shared?.consent, shared?.share], [true, true]);
+    const unconsented = await updateImageMeta(pool, OWNER, input.assetId, { consent: false });
+    assert.deepEqual([unconsented?.consent, unconsented?.share], [false, true]);
     // アップロードが済む前でも欄は直せる（本文の自動保存と同じ値を入れておける）
     assert.equal(same?.status, "uploading");
   });
@@ -475,6 +481,7 @@ describe("page images on PostgreSQL", { skip: databaseUrl === undefined }, () =>
       alt: "合成の写真",
       credit: "合成の提供元",
       consent: true,
+      share: false,
       createdAt: listed?.[0]?.createdAt,
     });
     assert.equal(Object.hasOwn(listed![0]!, "objectPath"), false, "the bucket location stays on the server");

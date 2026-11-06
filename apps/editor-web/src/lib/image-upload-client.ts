@@ -27,6 +27,12 @@ export type ImageUploadTicket = {
 /** 開始の結果。`upload` が null なら既に済んでいる（同じ Idempotency-Key の再送）。 */
 export type ImageStartResponse = { status: 200 | 201; assetId: string; upload: ImageUploadTicket | null };
 
+/**
+ * 共有画像（SNS・検索結果の OG 画像）にも使ってよい許諾。掲載許諾（consent）とは別の欄で、Web のカバーの欄だけが使う
+ * （本文のエディタの口 ImageMeta は Mac と共通なので足さない）。
+ */
+export type ImageShareMeta = { share: boolean };
+
 /** サーバーが返す画像の資産（object の場所・sha256 は含まれない）。 */
 export type ImageResponse = {
   assetId: string;
@@ -34,7 +40,7 @@ export type ImageResponse = {
   status: "uploading" | "ready";
   bytes: number;
   contentType: string;
-} & ImageMeta;
+} & ImageMeta & ImageShareMeta;
 
 /** API の失敗。`error` と `reason` はサーバーの短い code（`bad_request`・`too_many`・`incomplete` など）。 */
 export class ImageUploadError extends Error {
@@ -90,6 +96,7 @@ function toImage(value: unknown): ImageResponse | null {
     alt: typeof value.alt === "string" ? value.alt : null,
     credit: typeof value.credit === "string" ? value.credit : null,
     consent: value.consent === true,
+    share: value.share === true,
   };
 }
 
@@ -161,12 +168,13 @@ export async function getImageMetadata(assetId: string, fetchImpl: FetchLike = f
   return image;
 }
 
-/** alt・クレジット・掲載許諾を保存する（指定したものだけ）。 */
-export async function saveImageMeta(assetId: string, patch: Partial<ImageMeta>, fetchImpl: FetchLike = fetch): Promise<ImageResponse> {
+/** alt・クレジット・掲載許諾・共有画像の許諾を保存する（指定したものだけ）。 */
+export async function saveImageMeta(assetId: string, patch: Partial<ImageMeta & ImageShareMeta>, fetchImpl: FetchLike = fetch): Promise<ImageResponse> {
   const body: Record<string, unknown> = {};
   if (patch.alt !== undefined) body.alt = patch.alt;
   if (patch.credit !== undefined) body.credit = patch.credit;
   if (patch.consent !== undefined) body.consent = patch.consent;
+  if (patch.share !== undefined) body.share = patch.share;
   const response = await fetchImpl(`/api/assets/${encodeURIComponent(assetId)}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
