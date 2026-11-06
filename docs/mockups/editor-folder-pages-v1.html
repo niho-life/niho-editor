@@ -225,6 +225,11 @@ body.dragging .ph{cursor:grabbing}
 /* タブの帯: ページ名の上、本文のコンテンツ幅（680px）と同じ薄い罫線。右端に ＋。タブが 2 つ以上なら左にタブ */
 .tabbar{position:sticky;top:calc(var(--bar) + 52px);z-index:19;padding:0 56px;background:var(--canvas)}
 .tabbar .in{display:flex;align-items:flex-end;gap:2px;height:38px;max-width:680px;margin:auto;border-bottom:1px solid var(--line2)}
+/* タブが増えても帯の幅に収める: タブ一覧（.tl）だけが帯の内側で横にスクロールし、右端の操作（.act）は残る。
+   タブの下の 1px の重なり（margin-bottom:-1px）が切れないよう、.tl の下に 1px の余白を取って帯の罫線に重ねる */
+.tabbar .tl{display:flex;align-items:flex-end;gap:2px;flex:0 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;padding-bottom:1px;margin-bottom:-1px;scrollbar-width:none}
+.tabbar .tl::-webkit-scrollbar{display:none}
+.tabbar .act{display:flex;align-items:flex-end;gap:2px;margin-left:auto;flex:none}
 .tabbar .tb{display:flex;align-items:flex-end;flex:none;position:relative}
 .tabbar [role=tab]{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 12px;margin-bottom:-1px;border-bottom:2px solid transparent;border-radius:8px 8px 0 0;font-size:13.5px;font-weight:600;color:var(--mute);white-space:nowrap;max-width:46vw;overflow:hidden;text-overflow:ellipsis}
 .tabbar [role=tab]:hover{background:var(--sand);color:var(--ink)}
@@ -233,7 +238,9 @@ body.dragging .ph{cursor:grabbing}
 .tabbar .tm .ico{width:13px;height:13px}
 .tabbar .tb.on .tm{display:grid}
 .tabbar .tm:hover{color:var(--ink);background:var(--sand)}
-.tabbar .add{margin-left:auto;width:30px;height:30px;margin-bottom:3px;display:grid;place-items:center;color:var(--faint);border-radius:8px;flex:none}
+/* タブが 1 つのとき（タブ名は出さない）も、そのタブのメニュー（作り直す・もう 1 つ作る・複製・名前を変える）への入口 */
+.tabbar .tm.solo{display:grid;width:30px;height:30px;margin:0 0 3px;border-bottom:none;border-radius:8px}
+.tabbar .add{width:30px;height:30px;margin-bottom:3px;display:grid;place-items:center;color:var(--faint);border-radius:8px;flex:none}
 .tabbar .add:hover{background:var(--sand);color:var(--ink)}
 .tabbar .add .ico{width:16px;height:16px}
 .canvas{padding:36px 56px 140px;min-width:0;flex:1}
@@ -757,7 +764,9 @@ const seg = (labels, on) => `<div class="seg" role="group">${labels.map((l, i) =
 function tabbarHtml(p, tab) {
   const ts = tabsOf(p);
   const tabs = ts.length < 2 ? "" : ts.map((t) => `<span class="tb${t === tab ? " on" : ""}"><button role="tab" aria-selected="${t === tab}" data-open="${t.id}">${t.st === "run" ? '<i class="spin"></i>' : ""}${tl(t)}</button>${t === tab ? `<button class="tm" data-menu="tab" aria-label="タブ「${tl(t)}」のメニュー" aria-haspopup="menu">${svg("down")}</button>` : ""}</span>`).join("");
-  return `${tabs}<button class="add" data-make="tab" data-tip="タブを足す" aria-label="タブを足す">${svg("plus")}</button>`;
+  // タブが 1 つのときは名前を出さないが、そのタブのメニューへの入口は残す（生成のやり直しなどはここから）
+  const solo = ts.length < 2 && tab ? `<button class="tm solo" data-menu="tab" aria-label="タブのメニュー" aria-haspopup="menu">${svg("down")}</button>` : "";
+  return `<div class="tl">${tabs}</div><div class="act">${solo}<button class="add" data-make="tab" data-tip="タブを足す" aria-label="タブを足す">${svg("plus")}</button></div>`;
 }
 
 function recHtml(p, tab) {
@@ -910,6 +919,7 @@ function open(id) {
   $("#cv").classList.remove("wide");
   $("#tabbar").hidden = folder;
   $("#tabs").innerHTML = folder ? "" : tabbarHtml(p, tab);
+  $("#tabs .tb.on")?.scrollIntoView?.({ inline: "nearest", block: "nearest" });
   $("#canvas").innerHTML = folder ? folderHtml(p) : bodyHtml(p, tab);
   $("#crumbs").innerHTML = crumbsHtml(p);
   $("#loc").innerHTML = crumbsHtml(p);
