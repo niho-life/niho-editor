@@ -24,6 +24,7 @@ export const PARTS_TEXT = {
   misplacedPart: "niho-asset: の行は、前後を空行で区切った 1 行に置いてください（箇条書き・引用・囲み・表の中には置けません）。",
   recordingChanged: "録音は書き換えも削除もできません。[録音](niho-asset:…) の行はそのまま残してください。",
   removeUnknown: "remove_images に、このページの画像ではない id が入っています。read_page で読んだ画像の id だけを渡してください。",
+  repeatedPart: "このページは、同じ画像・録音を 2 か所以上に置いているので、この会話では書き換えられません（どの 1 か所を消したのか見分けられず、画像が黙って減るおそれがあるため）。画面で 1 か所にしてから頼んでください。",
 } as const;
 
 export type PartsResult<T> = { ok: true; value: T } | { ok: false; reason: string };
@@ -238,6 +239,17 @@ function partsIn(blocks: readonly Block[], into: Block[] = []): Block[] {
   return into;
 }
 
+/** 同じ画像・録音（assetId）が本文に 2 か所以上あるか。assetId ごとの Map にまとめると出現数が失われるので、先に断る。 */
+function hasRepeatedPart(blocks: readonly Block[]): boolean {
+  const seen = new Set<string>();
+  for (const block of partsIn(blocks)) {
+    const id = assetIdOf(block).toLowerCase();
+    if (seen.has(id)) return true;
+    seen.add(id);
+  }
+  return false;
+}
+
 function sameAttrs(a: Block, b: Block): boolean {
   const x = attrsOf(a);
   const y = attrsOf(b);
@@ -251,8 +263,10 @@ function sameAttrs(a: Block, b: Block): boolean {
  * - 録音は全部残り、属性も同じ（位置は動いてよい）。
  * - 元の画像が無くなっていれば、`removeImages` に入っているものだけ許す。
  * - `removeImages` は元の画像の id だけ。元に無い画像・録音は足せない。同じものが 2 回出るのも断る。
+ * - 元の本文が同じ画像・録音を 2 か所以上に置いているページは、どれが消えたか見分けられないので書き換えを断る。
  */
 export function checkParts(before: readonly Block[], after: readonly Block[], removeImages: readonly string[]): PartsResult<null> {
+  if (hasRepeatedPart(before)) return { ok: false, reason: PARTS_TEXT.repeatedPart };
   const was = new Map<string, Block>();
   for (const block of partsIn(before)) was.set(assetIdOf(block).toLowerCase(), block);
   const remove = new Set(removeImages.map((id) => id.toLowerCase()));
@@ -310,6 +324,8 @@ export function parsePartsMarkdown(markdown: string, nonce?: () => string): Part
 
 /** パースした本文の目印を元の画像・録音に戻し、`remove_images` の画像を外す。 */
 export function finishParts(parsed: ParsedPartsMarkdown, originals: readonly Block[], removeImages: readonly string[] = []): PartsResult<Block[]> {
+  // 元のページが同じ画像・録音を複数置いていると、assetId で元のブロックを引けない（保存の検査 checkParts でも断る）
+  if (hasRepeatedPart(originals)) return { ok: false, reason: PARTS_TEXT.repeatedPart };
   const restored = restoreParts(parsed.blocks, parsed, originals);
   if (!restored.ok) return restored;
   const remove = new Set(removeImages.map((id) => id.toLowerCase()));
