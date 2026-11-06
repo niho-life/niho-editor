@@ -295,6 +295,7 @@ export {
   listTranscriptVersions,
   restoreTranscriptVersion,
   transcriptEngineLabel,
+  transcriptRecordingOf,
   updateTranscript,
   writeTranscriptSegments,
   type RecordingHome,

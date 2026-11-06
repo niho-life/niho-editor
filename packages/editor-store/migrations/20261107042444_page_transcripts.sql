@@ -132,10 +132,18 @@ UPDATE pages h
   FROM tx_holders s
  WHERE h.id = s.id;
 
--- run の出力先: 案に書いた run はその案のタブ、正本に書いた run は正本のタブ（正本から作ったタブ。採用済みの案があればその案のタブ）
-UPDATE transcription_runs r SET target_tab = x.tab FROM tx_tabs x WHERE x.candidate IS NOT NULL AND r.candidate = x.candidate;
-UPDATE transcription_runs r SET target_tab = x.tab
+-- run の出力先: 案に書いた run はその案のタブ、正本に書いた run は正本のタブ（正本から作ったタブ。採用済みの案があればその案のタブ）。
+-- 確定（finishRun）はこれから base_revision をタブの revision と比べるので、照合用の値も移す:
+--   案に書く run は candidate_revision（開始時の案の revision。タブの revision は案の revision のまま）、
+--   正本に書く run は、録音の revision が開始時のままならタブの今の revision（変わっていれば古いまま＝これまでどおり superseded）。
+UPDATE transcription_runs r
+   SET target_tab = x.tab, base_revision = COALESCE(r.candidate_revision, r.base_revision)
   FROM tx_tabs x
+ WHERE x.candidate IS NOT NULL AND r.candidate = x.candidate;
+UPDATE transcription_runs r
+   SET target_tab = x.tab, base_revision = CASE WHEN r.base_revision = t.revision THEN x.revision ELSE r.base_revision END
+  FROM tx_tabs x
+  JOIN tx_recs t ON t.rec = x.rec AND t.owner = x.owner
  WHERE r.candidate IS NULL AND r.owner = x.owner AND r.page_id = x.rec
    AND (x.candidate IS NULL OR EXISTS (SELECT 1 FROM page_recording_candidates c WHERE c.id = x.candidate AND c.adopted));
 

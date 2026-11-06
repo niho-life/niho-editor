@@ -39,6 +39,8 @@ export type TranscriptStore = {
   restoreVersion: (owner: OwnerId, tabId: string, version: number, baseRevision: number) => Promise<UpdateTranscriptResult<"version_missing"> | null>;
   /** このタブに書く最新の run（server・Mac とも）。あれば GET の応答に `run`（無ければ null）を足す。 */
   run?: (owner: OwnerId, tabId: string) => Promise<TranscriptionRunView | null>;
+  /** 文字起こしのタブなら元の録音のタブの id（`/p/{id}` が画面の形を決めるのに読む。本文は読まない）。 */
+  recordingOf?: (owner: OwnerId, tabId: string) => Promise<string | null>;
 };
 
 export type TranscriptApiDeps = {

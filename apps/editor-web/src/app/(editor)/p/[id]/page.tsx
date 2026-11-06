@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { OpenPage } from "@/components/FramePages";
 import { StoreUnavailable } from "@/components/Notice";
 import { getStore } from "@/server/db";
-import { recordingDeps, shareDeps } from "@/server/deps";
+import { recordingDeps, shareDeps, transcriptDeps } from "@/server/deps";
 import { readRecordingSeconds } from "@/server/recordings-api";
 import { requireSession } from "@/server/session";
 import { readShareFlag } from "@/server/share-api";
@@ -15,9 +15,20 @@ const SIDE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * ページ。別の人のページ・存在しない id・UUID として不正な id はどれも同じ 404。
  * リンクで共有しているか（「…」の「共有中」の印）も一緒に読む。渡すのは真偽だけで、リンク（bearer）は HTML・RSC の payload に入れない。
  * 録音ページ（kind が rec）だけ、情報パネルの「録音」の長さ（秒）を読む。渡すのは長さだけで、段落・話者名は payload に入れない。
+ * 本文のページ（note）は、文字起こしのタブ（#310。本文 `page_transcripts` を持つ。複製したタブも）なら元の録音の id だけを読む（段落は画面が API で読む）。
  * id がタブの入れ物（kind='page'）なら最後に開いたタブへ（#307。URL はタブの id。`?side=` は保つ）。タブの帯（#308）のために、
  * 同じ入れ物のタブの一覧（本文なし）も渡す。
  */
+/** 文字起こしのタブなら元の録音の id。DB を使えない・読めなかったときは null（普通のページとして開く）。値（本文・SQL）は出さない。 */
+async function readTranscriptOf(owner: string, pageId: string): Promise<string | null> {
+  try {
+    return (await transcriptDeps.store()?.recordingOf?.(owner, pageId)) ?? null;
+  } catch (error) {
+    console.error("editor-web: transcript lookup failed", { name: error instanceof Error ? error.name : "unknown" });
+    return null;
+  }
+}
+
 export default async function PageView(props: { params: Promise<{ id: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const { id } = await props.params;
   const session = await requireSession(`/p/${id}`);
@@ -35,10 +46,11 @@ export default async function PageView(props: { params: Promise<{ id: string }>;
   const { kind, title, lang, cover, lead, parent, stepStatus, createdAt, updatedAt } = page;
   // 開いたページの行は題名の表示に使うだけ（一覧の 2 行目の公開は listPageChunk の行が持つ）
   const recordingSec = kind === "rec" ? await readRecordingSeconds(recordingDeps.store(), session.userId, page.id) : null;
+  const transcriptOf = kind === "note" ? await readTranscriptOf(session.userId, page.id) : null;
   return (
     <OpenPage
       key={page.id}
-      summary={{ id: page.id, kind, title, lang, parent, stepStatus, sortOrder: page.sortOrder, page: page.page, role: page.role, madeFrom: page.madeFrom, createdAt, updatedAt, publication: null }}
+      summary={{ id: page.id, kind, title, lang, parent, stepStatus, sortOrder: page.sortOrder, page: page.page, role: page.role, madeFrom: page.madeFrom, transcriptOf, createdAt, updatedAt, publication: null }}
       tabs={resolved.tabs.map(({ id: tabId, kind: tabKind, title: tabTitle, tabName, tabPos, stepStatus: tabStepStatus }) => ({
         id: tabId,
         kind: tabKind,

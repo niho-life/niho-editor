@@ -392,7 +392,7 @@ export type ChatWorkspacePage = {
   kind: string;
   parent: string | null;
   open: boolean;
-  /** 文字起こしのタブ（#310。`made_from.kind = 'transcript'`）なら元の録音のタブの id。read_page に文字起こしが添えられ、search_transcript で探せる。それ以外は null。 */
+  /** 文字起こしのタブ（#310。本文 `page_transcripts` を持つタブ。複製したタブも）なら元の録音のタブの id。read_page に文字起こしが添えられ、search_transcript で探せる。それ以外は null。 */
   transcriptOf: string | null;
 };
 
@@ -421,7 +421,7 @@ export async function listChatWorkspace(db: Queryable, owner: OwnerId, pageId: s
   if (!isPageId(pageId)) return null;
   const result = await db.query<{ id: string; title: string; kind: string; parent: string | null; transcript_of: string | null }>(
     `WITH folder AS (${FOLDER_OF})
-     SELECT p.id, p.title, p.kind, p.parent, CASE WHEN p.made_from->>'kind' = 'transcript' THEN p.made_from->>'recording' END AS transcript_of
+     SELECT p.id, p.title, p.kind, p.parent, (SELECT t.recording_page_id FROM page_transcripts t WHERE t.owner = p.owner AND t.page_id = p.id) AS transcript_of
        FROM pages p
       WHERE p.owner = $1 AND p.deleted_at IS NULL AND p.kind NOT IN ('folder', 'page')
         AND (

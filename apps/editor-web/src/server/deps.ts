@@ -35,6 +35,7 @@ import {
   listTranscriptTabs,
   listTranscriptVersions,
   restoreTranscriptVersion,
+  transcriptRecordingOf,
   rotateShare,
   searchPages,
   sharedImageAsset,
@@ -153,6 +154,7 @@ export const transcriptDeps: TranscriptApiDeps = {
       getVersion: (owner, tabId, version) => getTranscriptVersion(pool, owner, tabId, version),
       restoreVersion: (owner, tabId, version, baseRevision) => restoreTranscriptVersion(pool, owner, tabId, version, baseRevision),
       run: (owner, tabId) => tabRun(pool, owner, tabId),
+      recordingOf: (owner, tabId) => transcriptRecordingOf(pool, owner, tabId),
     };
   },
 };

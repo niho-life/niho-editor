@@ -172,8 +172,9 @@ export function OpenPage({
     />
   );
   // タブの帯（#308）はページのいちばん上。流れ（#309）の状態は FlowWatcher が読み続け、「ページ」パネルに出す（本文には帯もボタンも置かない）。
-  // 録音のタブ（「この録音について」・再生・文字起こしの開始・文字起こしのタブの一覧）と文字起こしのタブ（#310。段落）はその下
-  const transcriptOf = summary.madeFrom?.kind === "transcript" ? summary.madeFrom : null;
+  // 録音のタブ（「この録音について」・再生・文字起こしの開始・文字起こしのタブの一覧）と文字起こしのタブ（#310。段落）はその下。
+  // 文字起こしのタブかどうかは本文（page_transcripts）の有無で（複製したタブも。サーバーが `transcriptOf` に元の録音を入れる）
+  const transcriptOf = summary.transcriptOf ?? null;
   return (
     <>
       <PageTabs key={`tabs-${id}`} page={summary} tabs={tabs} saveNow={saveNow} />
@@ -184,7 +185,7 @@ export function OpenPage({
           <RecordingTranscript key={id} pageId={id} />
         </>
       )}
-      {transcriptOf && <TranscriptPage key={`transcript-${id}`} tabId={id} recording={transcriptOf.recording} />}
+      {transcriptOf && <TranscriptPage key={`transcript-${id}`} tabId={id} recording={transcriptOf} />}
       {editor}
     </>
   );

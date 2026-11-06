@@ -128,6 +128,17 @@ function toTranscript(row: TranscriptRow): Transcript {
   };
 }
 
+/** 文字起こしのタブ（本文 `page_transcripts` を持つタブ。複製したタブも）なら、元の録音のタブの id。それ以外・別の人・ゴミ箱は null。 */
+export async function transcriptRecordingOf(db: Queryable, owner: OwnerId, tabId: string): Promise<string | null> {
+  assertOwner(owner);
+  if (!isPageId(tabId)) return null;
+  const row = (await db.query<{ recording_page_id: string }>(
+    "SELECT t.recording_page_id FROM page_transcripts t JOIN pages p ON p.owner = t.owner AND p.id = t.page_id WHERE t.owner = $1 AND t.page_id = $2 AND p.deleted_at IS NULL",
+    [owner, tabId],
+  )).rows[0];
+  return row?.recording_page_id ?? null;
+}
+
 /** 本人の・ゴミ箱でないタブの文字起こし。無ければ null。 */
 export async function getTranscript(db: Queryable, owner: OwnerId, tabId: string): Promise<Transcript | null> {
   assertOwner(owner);

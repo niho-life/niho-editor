@@ -205,12 +205,19 @@ describe("migration page_transcripts on existing recordings and candidates", { s
       // 案の版（trigger が initial を入れている。もう 1 つ edit を足す）
       await client.query("SELECT set_config('niho.recording_candidate_reason', 'edit', false)");
       await client.query("UPDATE page_recording_candidates SET segments = $2::jsonb WHERE id = $1", [other, JSON.stringify([{ ...SEGMENTS[0]!, text: "直した段落" }])]);
-      const serverRun = await id("INSERT INTO transcription_runs (owner, page_id, engine, status, language, started_at, finished_at) VALUES ($1, $2, 'deepgram', 'succeeded', 'ja', clock_timestamp(), clock_timestamp()) RETURNING id", [OWNER, recA]);
+      // 正本に書いた run（base_revision は録音の revision 3）と、別案に書いた run（candidate_revision 1）
+      const serverRun = await id("INSERT INTO transcription_runs (owner, page_id, engine, status, language, base_revision, started_at, finished_at) VALUES ($1, $2, 'deepgram', 'succeeded', 'ja', 3, clock_timestamp(), clock_timestamp()) RETURNING id", [OWNER, recA]);
       const candidateRun = await id("INSERT INTO transcription_runs (owner, page_id, engine, status, language, candidate, candidate_revision, started_at, finished_at) VALUES ($1, $2, 'gemini', 'succeeded', 'ja', $3, 1, clock_timestamp(), clock_timestamp()) RETURNING id", [OWNER, recA, other]);
+      // 開始後に録音が直された run（base_revision 2 ≠ 3）は、移行後も合わないまま（superseded になる）
+      const staleServerRun = await id("INSERT INTO transcription_runs (owner, page_id, engine, status, language, base_revision, error_code, started_at, finished_at) VALUES ($1, $2, 'deepgram', 'failed', 'ja', 2, 'internal', clock_timestamp(), clock_timestamp()) RETURNING id", [OWNER, recA]);
+      // 移行の時点で動いている run（録音ごとに 1 つ）: 別案に書くもの（candidate_revision は案の今の revision 2）
+      const liveCandidateRun = await id("INSERT INTO transcription_runs (owner, page_id, engine, status, language, candidate, candidate_revision, base_revision) VALUES ($1, $2, 'gemini', 'queued', 'ja', $3, 2, 3) RETURNING id", [OWNER, recA, other]);
       // 2. フォルダの外の録音（正本だけ）
       const holderB = await id("INSERT INTO pages (owner, kind, title) VALUES ($1, 'page', '外の録音') RETURNING id", [OWNER]);
       const recB = await id("INSERT INTO pages (owner, kind, title, page) VALUES ($1, 'rec', '外の録音', $2) RETURNING id", [OWNER, holderB]);
       await client.query("INSERT INTO page_recordings (page_id, owner, source, language, engine, segments) VALUES ($1, $2, 'vtt', 'en', 'vtt-import', $3::jsonb)", [recB, OWNER, JSON.stringify(SEGMENTS)]);
+      // 移行の時点で正本に書いている run（base_revision は録音の revision 1 のまま）
+      const liveServerRun = await id("INSERT INTO transcription_runs (owner, page_id, engine, status, language, base_revision, started_at) VALUES ($1, $2, 'deepgram', 'running', 'en', 1, clock_timestamp()) RETURNING id", [OWNER, recB]);
       // 3. 段落も案も無い録音: 何も作らない
       const recC = await id("INSERT INTO pages (owner, kind, title, parent, page) VALUES ($1, 'rec', '空の録音', $2, $3) RETURNING id", [OWNER, folder, holderA]);
       await client.query("INSERT INTO page_recordings (page_id, owner, source, language, segments) VALUES ($1, $2, 'audio', 'ja', '[]'::jsonb)", [recC, OWNER]);
@@ -233,9 +240,15 @@ describe("migration page_transcripts on existing recordings and candidates", { s
       // 版は案の版から（initial と edit）
       assert.deepEqual((await listTranscriptVersions(client, OWNER, geminiTab)).map((version) => [version.version, version.reason]), [[2, "edit"], [1, "initial"]]);
       assert.deepEqual((await getTranscript(client, OWNER, geminiTab))?.segments, [{ ...SEGMENTS[0]!, text: "直した段落" }]);
-      // run は書き先のタブを指す
-      const runs = (await client.query<{ id: string; target_tab: string | null }>("SELECT id, target_tab FROM transcription_runs WHERE id = ANY($1::uuid[]) ORDER BY created_at", [[serverRun, candidateRun]])).rows;
-      assert.deepEqual(runs.map((row) => row.target_tab), [deepgramTab, geminiTab]);
+      // run は書き先のタブを指す。照合用の base_revision はタブの revision に合わせる（確定がタブの revision と比べるため）
+      const runs = (await client.query<{ id: string; target_tab: string | null; base_revision: number }>("SELECT id, target_tab, base_revision FROM transcription_runs WHERE id = ANY($1::uuid[]) ORDER BY created_at", [[serverRun, candidateRun, staleServerRun, liveCandidateRun]])).rows;
+      assert.deepEqual(runs.map((row) => row.target_tab), [deepgramTab, geminiTab, deepgramTab, geminiTab]);
+      const tabRevisions = Object.fromEntries((await client.query<{ page_id: string; revision: number }>("SELECT page_id, revision FROM page_transcripts WHERE page_id = ANY($1::uuid[])", [[deepgramTab, geminiTab]])).rows.map((row) => [row.page_id, row.revision]));
+      assert.deepEqual([tabRevisions[deepgramTab], tabRevisions[geminiTab]], [1, 2], "the tabs keep the candidates' revisions");
+      assert.equal(runs[0]!.base_revision, 1, "a run on the 正本 (recording revision unchanged) now checks against the adopted candidate's tab");
+      assert.equal(runs[1]!.base_revision, 1, "a run on a candidate carries its candidate_revision");
+      assert.equal(runs[2]!.base_revision, 2, "a run whose recording changed after it started stays stale");
+      assert.equal(runs[3]!.base_revision, 2, "a live run on a candidate carries the candidate's current revision");
       // 正本はそのまま（contract は後の migration）
       assert.deepEqual((await client.query<{ segments: unknown }>("SELECT segments FROM page_recordings WHERE page_id = $1", [recA])).rows[0]?.segments, SEGMENTS);
 
@@ -247,6 +260,9 @@ describe("migration page_transcripts on existing recordings and candidates", { s
       assert.equal((await client.query<{ parent: string | null }>("SELECT parent FROM pages WHERE id = $1", [holderB])).rows[0]?.parent, recBRow.parent);
       const tabsB = await listTranscriptTabs(client, OWNER, recB);
       assert.deepEqual(tabsB.map((tab) => [tab.tabName, tab.engine, tab.language, tab.segmentCount]), [["取り込んだ字幕", "vtt-import", "en", 2]]);
+      // 正本に書いている run は正本のタブへ（revision 1 のまま合う）
+      const liveB = (await client.query<{ target_tab: string | null; base_revision: number }>("SELECT target_tab, base_revision FROM transcription_runs WHERE id = $1", [liveServerRun])).rows[0];
+      assert.deepEqual(liveB, { target_tab: tabsB[0]!.id, base_revision: 1 });
       assert.equal((await client.query<{ parent: string }>("SELECT parent FROM pages WHERE id = $1", [tabsB[0]!.id])).rows[0]?.parent, recBRow.parent);
 
       // 録音 C: 何も作らない
