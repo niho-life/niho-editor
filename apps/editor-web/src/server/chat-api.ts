@@ -30,6 +30,7 @@ import type { AiComposeBackend } from "../ai/config";
 import {
   MAX_CHAT_INPUT_CHARS,
   MAX_TRANSCRIPT_QUERY_CHARS,
+  WEB_SEARCH_COST_MICRO_USD,
   buildChatMessages,
   buildChatSystem,
   isChatToolName,
@@ -38,8 +39,10 @@ import {
   type ChatHistoryTurn,
   type ChatItem,
   type ChatRun,
+  type ChatWebSearch,
   type ToolOutcome,
   paragraphLabel,
+  webSearchTool,
 } from "../ai/chat";
 import { wrapUntrusted } from "../ai/prompt";
 import type { AiUsageReport } from "../ai/model";
@@ -111,11 +114,16 @@ function count(value: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
+/**
+ * 1 往復の使用量。金額はトークン × 単価に、サーバー側の Web 検索の回数 × 1 回の費用を足す（#283。表の列は増やさない）。
+ * 検索の費用はサーバーの API の経路だけで数える（CLI はサブスクで従量が出ない）。
+ */
 function usageDelta(backend: AiComposeBackend, usage: AiUsageReport): AiUsageDelta {
   const inputTokens = count(usage.inputTokens);
   const outputTokens = count(usage.outputTokens);
   const usd = backend.provider ? estimateTokenCostUsd(backend.provider, usage.model, inputTokens, outputTokens) : null;
-  return { requests: 1, inputTokens, outputTokens, costMicroUsd: usd === null ? 0 : count(Math.round(usd * 1e6)) };
+  const searches = backend.route === "server" ? count(usage.webSearchRequests ?? 0) : 0;
+  return { requests: 1, inputTokens, outputTokens, costMicroUsd: (usd === null ? 0 : count(Math.round(usd * 1e6))) + searches * WEB_SEARCH_COST_MICRO_USD };
 }
 
 function overLimit(totals: AiUsageTotals, limitUsd: number | null): boolean {
@@ -581,6 +589,17 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
     if (backend.route === "server" && overLimit(await usage.get(owner, month), limitUsd)) return jsonResponse(429, { error: "quota_exceeded" });
 
     const settings = (await deps.settings?.()?.(owner)) ?? DEFAULT_EDITOR_SETTINGS;
+    // Web 検索（#283）はサーバーの API の経路だけ。設定で切っていれば道具を出さずに知らせる。
+    // 月の上限があるときは、残りが検索 1 回分の費用に満たなければ道具を出さない
+    const searchable = backend.route === "server";
+    const webSearch: ChatWebSearch | undefined = !searchable
+      ? undefined
+      : settings.webSearch
+        ? {
+            tool: webSearchTool(),
+            affordable: async () => limitUsd === null || Math.round(limitUsd * 1e6) - (await usage.get(owner, month)).costMicroUsd >= WEB_SEARCH_COST_MICRO_USD,
+          }
+        : "off";
     // 開いているのが録音ページなら「この録音について」（背景・登場人物・固有名詞）も指示の文脈に入れる（AI の欄の「読むもの」と同じ）
     const recordingInfo = open.kind === "rec" && chats.fields ? await chats.fields(owner, open.id) : null;
     const respond = async (onEvent?: (event: ChatEvent) => void): Promise<unknown> => {
@@ -592,6 +611,7 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
           about: { name: settings.aboutName, text: settings.about },
           ...(settings.aiLang === "same" ? {} : { lang: settings.aiLang }),
           ...(recordingInfo ? { recording: recordingInfo } : {}),
+          ...(webSearch !== undefined && webSearch !== "off" ? { webSearch: true } : {}),
         }),
         messages: buildChatMessages(historyOf(past?.messages ?? []), input.value.text, { id: open.id, title: open.title, kind: open.kind }),
         run: createToolRunner({ store, owner, workspace, changes, ...(chats.recording ? { recording: chats.recording } : {}) }),
@@ -603,6 +623,7 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
         },
         signal: request.signal,
         ...(onEvent ? { onEvent } : {}),
+        ...(webSearch ? { webSearch } : {}),
       });
 
       const written = [...changes.values()];
