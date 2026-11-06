@@ -89,17 +89,24 @@ export type EnqueueTranscriptionInput = {
   diarize: boolean;
   /** 固有名詞の表記（100 個まで・1 つ 64 文字まで・制御文字なし）。 */
   terms: readonly string[];
+  /**
+   * 書き先にする既存の文字起こしのタブ（「もう一度」。失敗した・空のタブに同じ録音で書き直す。#310）。
+   * 省けば新しいタブを作る。この録音のタブでなければ tab_missing。
+   */
+  tab?: string;
 };
 
 export type EnqueueTranscriptionResult =
-  /** run を作り、結果を書く新しいタブ（`tab`）を「文字起こし」ページに足した。 */
+  /** run を作り、結果を書くタブ（`tab`。省略時は「文字起こし」ページに足した新しいタブ）を決めた。 */
   | { status: "created"; run: TranscriptionRunView; tab: string }
   /** 有効な run（queued・running）が既にある（新しく作らない）。`tab` はその run の書き先。 */
   | { status: "existing"; run: TranscriptionRunView; tab: string | null }
   /** 音声のアップロードが済んでいない（uploading）か、音声の無い録音。 */
   | { status: "audio_not_ready" }
   /** 音声の保持の期限を過ぎた（保存先から消えている見込み）。 */
-  | { status: "audio_expired" };
+  | { status: "audio_expired" }
+  /** `tab` がこの録音の文字起こしのタブでない（別の録音・消えた・別の人）。 */
+  | { status: "tab_missing" };
 
 /** Mac の Antigravity CLI 実行で固定する設定。画面や native から任意のモデル・分割秒を渡さない。 */
 export const MAC_CLI_TRANSCRIPTION_SETTINGS = Object.freeze({ model: "gemini-3.8-flash", effort: "low", targetSec: 600 } as const);
@@ -238,6 +245,7 @@ function assertEnqueueInput(input: EnqueueTranscriptionInput): void {
   if (!Array.isArray(input.terms) || input.terms.length > TRANSCRIPTION_TERMS_MAX || !input.terms.every(isTranscriptionTerm)) {
     throw new TypeError("editor-store: terms are not valid");
   }
+  if (input.tab !== undefined && !isPageId(input.tab)) throw new TypeError("editor-store: tab must be a UUID");
 }
 
 function audioManifest(parts: readonly AudioPart[]): MacAudioManifestPart[] {
@@ -340,6 +348,14 @@ SELECT t.revision
   JOIN pages AS p ON p.owner = t.owner AND p.id = t.page_id
  WHERE t.owner = $1 AND t.page_id = $2 AND p.deleted_at IS NULL`;
 
+// $1 owner / $2 recording id / $3 tab id。この録音の文字起こしのタブ（本人の・ゴミ箱でない）を押さえ、今の revision を読む。
+const OWN_TAB_REVISION_SQL = `
+SELECT t.revision
+  FROM page_transcripts AS t
+  JOIN pages AS p ON p.owner = t.owner AND p.id = t.page_id
+ WHERE t.owner = $1 AND t.recording_page_id = $2 AND t.page_id = $3 AND p.deleted_at IS NULL
+   FOR UPDATE OF t`;
+
 const ACTIVE_INDEX = "transcription_runs_active_idx";
 
 function isActiveRunConflict(error: unknown): boolean {
@@ -358,8 +374,9 @@ async function activeRun(db: Pick<PoolClient, "query">, owner: OwnerId, pageId: 
  * - 本人の・ゴミ箱でないページの録音が無い（別の人・存在しない・不正な id・削除済み・録音の無いページ）: null
  * - 音声（複数あればそのどれか）のアップロードが済んでいない・音声が無い: audio_not_ready / 期限を過ぎた: audio_expired
  * - 有効な run（queued・running）がある: それを返す（existing。何も書かない）
- * - それ以外: 録音がフォルダの外ならフォルダに包み、「文字起こし」ページに新しいタブ（本文なし・札はエンジンの名前）を足し、
- *   そのタブを書き先にして run を作る（created。#310）
+ * - `tab` を指定した（「もう一度」）のに、この録音の文字起こしのタブでない: tab_missing
+ * - それ以外: 録音がフォルダの外ならフォルダに包み、「文字起こし」ページに新しいタブ（本文なし・札はエンジンの名前）を足し
+ *   （`tab` を指定していればそのタブ）、そのタブを書き先にして run を作る（created。#310）
  * 同じページの開始が並んでも、作られる run は 1 つだけ（行の lock と部分 unique index。unique で止まった側は既存を返す）。
  */
 export async function enqueueTranscription(
@@ -395,14 +412,28 @@ export async function enqueueTranscription(
         await rollback(client);
         return { status: "existing", run: existing.run, tab: existing.tab };
       }
-      // 書き先: 「文字起こし」ページの新しいタブ（録音がフォルダの外なら、まずフォルダに包む。#310）
-      const home = await ensureRecordingFolder(client, owner, pageId);
-      if (!home) {
-        await rollback(client);
-        return null;
-      }
       const language = input.language ?? recording.language;
-      const { tab } = await createTranscriptTab(client, owner, home, { engine: input.engine, language, durationSec: recording.duration_sec });
+      let tab: string;
+      let baseRevision: number;
+      if (input.tab !== undefined) {
+        // 「もう一度」: この録音の既存のタブに書き直す（開始後に直されたら finishRun が superseded にする）
+        const own = (await client.query<{ revision: number }>(OWN_TAB_REVISION_SQL, [owner, pageId, input.tab])).rows[0];
+        if (!own) {
+          await rollback(client);
+          return { status: "tab_missing" };
+        }
+        tab = input.tab;
+        baseRevision = own.revision;
+      } else {
+        // 書き先: 「文字起こし」ページの新しいタブ（録音がフォルダの外なら、まずフォルダに包む。#310）
+        const home = await ensureRecordingFolder(client, owner, pageId);
+        if (!home) {
+          await rollback(client);
+          return null;
+        }
+        tab = (await createTranscriptTab(client, owner, home, { engine: input.engine, language, durationSec: recording.duration_sec })).tab;
+        baseRevision = 1;
+      }
       const inserted = await client.query<RunRow>(INSERT_RUN_SQL, [
         owner,
         pageId,
@@ -410,7 +441,7 @@ export async function enqueueTranscription(
         language,
         input.diarize,
         JSON.stringify([...input.terms]),
-        1,
+        baseRevision,
         tab,
       ]);
       const row = inserted.rows[0];
@@ -1142,6 +1173,23 @@ SELECT ${RUN_COLUMNS}
      LIMIT 1
   ) AS t ON true
  WHERE r.owner = $1 AND r.page_id = $2 AND p.deleted_at IS NULL`;
+
+// 本人の・ゴミ箱でないタブに書く最新の run（server・Mac とも）。$1 owner / $2 tab id。
+const TAB_RUN_SQL = `
+SELECT ${RUN_COLUMNS}
+  FROM transcription_runs AS t
+  JOIN pages AS p ON p.owner = t.owner AND p.id = t.target_tab
+ WHERE t.owner = $1 AND t.target_tab = $2 AND p.deleted_at IS NULL
+ ORDER BY t.created_at DESC, t.id DESC
+ LIMIT 1`;
+
+/** 文字起こしのタブ（#310）に書く最新の run（server・Mac とも）。無ければ null（run の無いタブ・別の人・消えたタブ）。 */
+export async function tabRun(db: Queryable, owner: OwnerId, tabId: string): Promise<TranscriptionRunView | null> {
+  assertOwner(owner);
+  if (typeof tabId !== "string" || !isPageId(tabId)) return null;
+  const row = (await db.query<RunRow>(TAB_RUN_SQL, [owner, tabId])).rows[0];
+  return row ? toView(row) : null;
+}
 
 /**
  * 本人の・ゴミ箱でないページの録音の、文字起こしの状態（`{ run }`。run が無ければ run: null）。

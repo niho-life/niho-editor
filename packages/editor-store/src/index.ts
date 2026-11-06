@@ -256,6 +256,7 @@ export {
   resumeMacTranscription,
   resumeMacLocalTranscription,
   sweepStaleRuns,
+  tabRun,
   transcriptionStatus,
   startMacTranscription,
   startMacLocalTranscription,
