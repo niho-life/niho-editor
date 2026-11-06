@@ -12,16 +12,40 @@ ALTER TABLE step_runs
   ADD COLUMN input_tab uuid,
   ADD COLUMN input_revision integer CHECK (input_revision IS NULL OR input_revision >= 0);
 
+-- 同じフォルダに進行中の run が 2 つ以上集まると step_runs_active_idx に当たるので、フォルダごとに最新の 1 つだけ残し、古い進行中の run は取消にする
+WITH moving AS (
+  SELECT r.id, r.owner, f.id AS folder, r.created_at
+    FROM step_runs r
+    JOIN pages rec ON rec.owner = r.owner AND rec.id = r.parent AND rec.kind = 'rec'
+    JOIN pages f ON f.owner = rec.owner AND f.id = rec.parent AND f.kind = 'folder' AND f.deleted_at IS NULL
+   WHERE r.state IN ('queued', 'running')
+), losers AS (
+  SELECT id FROM (
+    SELECT id, row_number() OVER (PARTITION BY owner, folder ORDER BY created_at DESC, id DESC) AS rn FROM moving
+  ) ranked WHERE rn > 1
+)
+UPDATE step_runs SET state = 'canceled', finished_at = clock_timestamp(), updated_at = clock_timestamp()
+ WHERE id IN (SELECT id FROM losers);
+
+UPDATE step_attempts a
+   SET state = 'canceled', generation = generation + 1, lease_until = NULL, finished_at = clock_timestamp()
+  FROM step_runs r
+ WHERE r.id = a.run_id AND r.state = 'canceled' AND r.finished_at IS NOT NULL AND a.state IN ('pending', 'queued', 'running')
+   AND r.updated_at >= clock_timestamp() - interval '1 minute';
+
+-- 親の録音が**フォルダ**の中にある run だけを動かす（親がフォルダでない行はそのまま）
 UPDATE step_runs r
-   SET parent = rec.parent, input_tab = rec.id, input_revision = rec.revision
+   SET parent = f.id, input_tab = rec.id, input_revision = rec.revision
   FROM pages rec
- WHERE rec.owner = r.owner AND rec.id = r.parent AND rec.kind = 'rec' AND rec.parent IS NOT NULL;
+  JOIN pages f ON f.owner = rec.owner AND f.id = rec.parent AND f.kind = 'folder' AND f.deleted_at IS NULL
+ WHERE rec.owner = r.owner AND rec.id = r.parent AND rec.kind = 'rec';
 
 -- 段階のサブページ → 役割ページのタブ（生きているものだけ。ゴミ箱の中のサブページはそのまま）
 CREATE TEMP TABLE step_tab_map ON COMMIT DROP AS
-  SELECT p.id AS tab, p.owner, rec.parent AS folder, rec.id AS rec, p.recipe, p.title, p.lang, p.created_at, a.step_id, a.run_id
+  SELECT p.id AS tab, p.owner, f.id AS folder, rec.id AS rec, p.recipe, p.title, p.lang, p.created_at, a.step_id, a.run_id
     FROM pages p
-    JOIN pages rec ON rec.owner = p.owner AND rec.id = p.parent AND rec.kind = 'rec' AND rec.parent IS NOT NULL
+    JOIN pages rec ON rec.owner = p.owner AND rec.id = p.parent AND rec.kind = 'rec'
+    JOIN pages f ON f.owner = rec.owner AND f.id = rec.parent AND f.kind = 'folder' AND f.deleted_at IS NULL
     JOIN LATERAL (
       SELECT a.step_id, a.run_id
         FROM step_attempts a

@@ -81,6 +81,10 @@ export type AttachedFlow = {
   regenerate: (tabId: string, how: "regenerate" | "sibling") => Promise<{ ok: boolean; message: string }>;
   transcribe: (engine: string) => Promise<{ ok: boolean; message: string }>;
   changeRecipe: (recipeId: string) => Promise<{ ok: boolean; message: string }>;
+  /** 読み直す（手順の写しを更新したあとなど）。 */
+  refresh: () => void;
+  /** 開いているタブが段階の出力（`made_from.kind = 'step'`。▾ の「作り直す（AI）」はこのときだけ）。 */
+  generated: boolean;
 };
 
 /**

@@ -114,9 +114,15 @@ export function FlowWatcher({ pageId, kind, onBodyReplaced }: { pageId: string; 
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const ownerGeneration = useRef(0);
+  // 前に見た run が動いていたか（動いている → 終わったの境目でだけ通知する）
+  const wasActive = useRef(false);
+  // 開いているタブの段階が、前に見たとき実行の途中だったか（途中 → 済みの境目でだけ本文を読み直す）
+  const wasPending = useRef(false);
   useEffect(() => {
     const generation = ++ownerGeneration.current;
     busyRef.current = false;
+    wasActive.current = false;
+    wasPending.current = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the pending request belongs to the previous page
     setBusy(false);
     setState(null);
@@ -124,10 +130,7 @@ export function FlowWatcher({ pageId, kind, onBodyReplaced }: { pageId: string; 
   }, [pageId]);
   // 読み直しの合図（始めた・替えた直後にもう一度読む）
   const [tick, setTick] = useState(0);
-  // 前に見た run が動いていたか（動いている → 終わったの境目でだけ通知する）
-  const wasActive = useRef(false);
-  // 開いているタブの段階が、前に見たとき実行の途中だったか（途中 → 済みの境目でだけ本文を読み直す）
-  const wasPending = useRef(false);
+  const refresh = useCallback(() => setTick((value) => value + 1), []);
   const replaced = useRef(onBodyReplaced);
   useEffect(() => {
     replaced.current = onBodyReplaced;
@@ -279,8 +282,10 @@ export function FlowWatcher({ pageId, kind, onBodyReplaced }: { pageId: string; 
       regenerate,
       transcribe,
       changeRecipe,
+      refresh,
+      generated: state.rows.some((row) => row.current && row.tabs.some((tab) => tab.id === pageId && tab.generated)),
     };
-  }, [watched, state, pageId, busy, notice, onAction, open, make, regenerate, transcribe, changeRecipe]);
+  }, [watched, state, pageId, busy, notice, onAction, open, make, regenerate, transcribe, changeRecipe, refresh]);
 
   useEffect(() => (flow ? registerFlow(flow) : undefined), [flow, registerFlow]);
 

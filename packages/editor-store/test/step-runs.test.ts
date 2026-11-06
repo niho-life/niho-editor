@@ -314,10 +314,11 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     const flow = await readFlow(pool, OWNER, folder);
     const holder = flow?.holders.find((item) => item.role?.kind === "step" && item.role.stepId === RECIPE.steps[0]!.id);
     assert.deepEqual(holder?.tabs.map((tab) => [tab.id, tab.tabPos]), [[first.steps[0]!.pageId, 1], [rerun.steps[0]!.pageId, 2]]);
-    // 段階の範囲の外は 400
+    // 段階の範囲の外は 400。まだ済んでいない段階の出力（待ち・失敗）からも作れない
     await cancelRun(pool, OWNER, folder, rerun.id);
     assert.deepEqual(await createRun(pool, OWNER, folder, { recipe: RECIPE, inputTab: secondTab, toStep: 1 }), { status: "invalid_from_step" }, "toStep before the input's role");
     assert.deepEqual(await createRun(pool, OWNER, folder, { recipe: RECIPE, inputTab: rec, toStep: 3 }), { status: "invalid_from_step" }, "past the last step");
+    assert.deepEqual(await createRun(pool, OWNER, folder, { recipe: RECIPE, inputTab: rerun.steps[0]!.pageId, toStep: 2 }), { status: "invalid_from_step" }, "the canceled run's output never ran (wait)");
   });
 
   it("regenerates into the same tab and makes a sibling from the same input", async () => {
@@ -1051,6 +1052,11 @@ describe("migration 20261107021307_step_runs_folder on existing runs", { skip: d
       const snapshot = JSON.stringify(snapshotOf({ id: RECIPE.id, name: RECIPE.id, guide: "", steps: RECIPE.steps.map((step) => ({ ...step, profile: "standard" })), terms: [], samples: [] }));
       const run = await id("INSERT INTO step_runs (owner, parent, recipe, state, recipe_snapshot, recipe_revision) VALUES ($1, $2, $3, 'succeeded', $4::jsonb, 1) RETURNING id", [OWNER, rec, RECIPE.id, snapshot]);
       const topRun = await id("INSERT INTO step_runs (owner, parent, recipe, state, recipe_snapshot, recipe_revision) VALUES ($1, $2, $3, 'succeeded', $4::jsonb, 1) RETURNING id", [OWNER, top, RECIPE.id, snapshot]);
+      // 同じフォルダの 2 つ目の録音にも進行中の run: 最新の 1 つだけ残り、古い方は取消になる（step_runs_active_idx に当たらない）
+      const rec2 = await id("INSERT INTO pages (owner, kind, title, parent) VALUES ($1, 'rec', '録音 2', $2) RETURNING id", [OWNER, folder]);
+      const olderActive = await id("INSERT INTO step_runs (owner, parent, recipe, state, recipe_snapshot, recipe_revision, created_at) VALUES ($1, $2, $3, 'running', $4::jsonb, 1, clock_timestamp() - interval '1 hour') RETURNING id", [OWNER, rec, RECIPE.id, snapshot]);
+      const newerActive = await id("INSERT INTO step_runs (owner, parent, recipe, state, recipe_snapshot, recipe_revision) VALUES ($1, $2, $3, 'queued', $4::jsonb, 1) RETURNING id", [OWNER, rec2, RECIPE.id, snapshot]);
+      await client.query("INSERT INTO step_attempts (run_id, step_index, step_id, page_id, state, lease_until) VALUES ($1, 0, $2, $3, 'running', clock_timestamp() + interval '1 minute')", [olderActive, RECIPE.steps[0]!.id, rec]);
       const steps: string[] = [];
       for (const [index, step] of RECIPE.steps.entries()) {
         const page = await id("INSERT INTO pages (owner, kind, title, parent, recipe, step_status, blocks) VALUES ($1, 'step', $2, $3, $4, 'done', $5::jsonb) RETURNING id", [OWNER, step.name, rec, RECIPE.id, JSON.stringify(paragraph(`結果 ${index}`))]);
@@ -1069,6 +1075,9 @@ describe("migration 20261107021307_step_runs_folder on existing runs", { skip: d
       assert.deepEqual(runRow, { parent: folder, input_tab: rec, input_revision: 1 });
       const topRow = (await client.query<{ parent: string; input_tab: string | null }>("SELECT parent, input_tab FROM step_runs WHERE id = $1", [topRun])).rows[0]!;
       assert.deepEqual(topRow, { parent: top, input_tab: null }, "a recording outside a folder keeps its run as it was");
+      const actives = (await client.query<{ state: string; parent: string }>("SELECT state, parent FROM step_runs WHERE id = ANY($1::uuid[]) ORDER BY created_at", [[olderActive, newerActive]])).rows;
+      assert.deepEqual(actives.map((row) => [row.state, row.parent]), [["canceled", folder], ["queued", folder]]);
+      assert.equal((await client.query("SELECT state FROM step_attempts WHERE run_id = $1", [olderActive])).rows[0]?.state, "canceled");
       for (const [index, page] of steps.entries()) {
         const row = (await client.query<{ kind: string; parent: string | null; page: string | null; made_from: unknown; sort_order: number; blocks: Block[] }>("SELECT kind, parent, page, made_from, sort_order, blocks FROM pages WHERE id = $1", [page])).rows[0]!;
         assert.deepEqual([row.kind, row.parent, row.made_from, row.sort_order, row.blocks], ["note", folder, { kind: "step", run, input: rec, inputRevision: 0 }, 1, paragraph(`結果 ${index}`)]);

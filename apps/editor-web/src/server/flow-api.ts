@@ -134,7 +134,10 @@ export function createFlowRun(request: Request, id: string, deps: StepsApiDeps):
     }
     const recipes = await readRecipes(owner);
     const flow = await steps.readFlow(owner, folderId);
-    const recipe = recipeOfFolder(recipes, flow?.folder.recipe ?? null);
+    // 作り直す・もう 1 つは、そのタブの入れ物の役割の手順で（フォルダの手順を替えたあとでも、そのタブは元の手順の段階）
+    const role = flow?.holders.find((holder) => holder.tabs.some((tab) => tab.id === located.tab.id))?.role ?? null;
+    const recipeId = "inputTab" in input ? flow?.folder.recipe ?? null : role?.kind === "step" ? role.recipe : flow?.folder.recipe ?? null;
+    const recipe = recipeOfFolder(recipes, recipeId);
     if (!recipe || validateRecipeDefinition(recipe, recipes).unusableReason !== null) return stepsError("recipe_unusable");
     const runInput: CreateRunInput = { recipe, ...(key === null ? {} : { idempotencyKey: key }), ...input };
     const result = await steps.createRun(owner, folderId, runInput);

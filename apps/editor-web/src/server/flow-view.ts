@@ -18,7 +18,7 @@ export type FlowRowView = {
   /** 行の名前（入れ物があればその名前、無ければ役割の名前）。 */
   name: string;
   holder: { id: string; title: string } | null;
-  tabs: { id: string; kind: FlowTab["kind"]; label: string; status: StepStatus | null; running: boolean }[];
+  tabs: { id: string; kind: FlowTab["kind"]; label: string; status: StepStatus | null; running: boolean; /** 段階の出力（`made_from.kind = 'step'`）。 */ generated: boolean }[];
   /** 今開いているタブがこの入れ物のもの。 */
   current: boolean;
   /** 今の行だけ: 開いているタブが何から作られたか（「記事方針 2」。入力の無いタブ・系譜の外は null）。 */
@@ -78,7 +78,7 @@ export function flowRows(input: {
       ...(fallback.stepId === undefined ? {} : { stepId: fallback.stepId, stepIndex: fallback.stepIndex }),
       name: holder ? holder.title || fallback.name : fallback.name,
       holder: holder ? { id: holder.id, title: holder.title } : null,
-      tabs: holder ? holder.tabs.map((tab) => ({ id: tab.id, kind: tab.kind, label: tabLabel({ tabName: tab.tabName, tabPos: tab.tabPos }), status: tab.stepStatus, running: runningIds.has(tab.id) })) : [],
+      tabs: holder ? holder.tabs.map((tab) => ({ id: tab.id, kind: tab.kind, label: tabLabel({ tabName: tab.tabName, tabPos: tab.tabPos }), status: tab.stepStatus, running: runningIds.has(tab.id), generated: tab.madeFrom?.kind === "step" })) : [],
       current: isCurrent,
       from: isCurrent ? from : null,
       action: null,
@@ -93,7 +93,7 @@ export function flowRows(input: {
     recRow.holder = input.tab.holder ? { id: input.tab.holder, title: input.tab.title } : null;
     recRow.name = input.tab.title || "録音";
     recRow.current = true;
-    recRow.tabs = [{ id: input.tab.id, kind: "rec", label: "", status: null, running: false }];
+    recRow.tabs = [{ id: input.tab.id, kind: "rec", label: "", status: null, running: false, generated: false }];
   }
   rows.push(recRow);
   // 文字起こし（#310 までは録音のタブ＝文字起こし。行は入れ物を持たず、録音のタブを開いているときだけエンジンのメニュー）
@@ -104,11 +104,12 @@ export function flowRows(input: {
     transcript.action = "go";
   }
   rows.push(transcript);
-  // 段階
+  // 段階。開いているタブが段階の出力で、まだ済んでいない（待ち・作成中・失敗）なら、そこからは作れない
+  const unfinished = currentTab?.madeFrom?.kind === "step" && (currentTab.stepStatus === "wait" || currentTab.stepStatus === "run" || currentTab.stepStatus === "failed");
   for (const [index, step] of input.recipe.steps.entries()) {
     const holder = holders.find((item) => item.role?.kind === "step" && item.role.recipe === input.recipe.id && item.role.stepId === step.id) ?? null;
     const row = rowOf(holder, { kind: "step", name: step.name, stepId: step.id, stepIndex: index });
-    if (index > pos) row.action = holder && holder.tabs.some((tab) => derivedFrom(tabsById, tab, input.tab.id)) ? "done" : "go";
+    if (index > pos) row.action = holder && holder.tabs.some((tab) => derivedFrom(tabsById, tab, input.tab.id)) ? "done" : unfinished ? null : "go";
     rows.push(row);
   }
   return rows;

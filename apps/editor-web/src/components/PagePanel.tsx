@@ -127,7 +127,17 @@ export function PagePanel({ flow, onClose, drag }: { flow: AttachedFlow | null; 
             onTranscribe={(engine) => void run(() => flow.transcribe(engine))}
             onChangeRecipe={(id) => void run(() => flow.changeRecipe(id))}
           >
-            {flow.run && folderId && <RunRecipeNote folderId={folderId} run={flow.run} busy={flow.busy} onUpdated={(text) => setNote({ owner: flow.ownerId, text })} />}
+            {flow.run && folderId && (
+              <RunRecipeNote
+                folderId={folderId}
+                run={flow.run}
+                busy={flow.busy}
+                onUpdated={(text) => {
+                  setNote({ owner: flow.ownerId, text });
+                  flow.refresh();
+                }}
+              />
+            )}
             {flow.run && folderId && flow.run.steps.filter((step) => step.state === "failed" && step.hasPartialOutput).map((step) => (
               <StepPartialOutputDisclosure key={flow.run!.id + ":" + step.id + ":" + step.tries} folderId={folderId} runId={flow.run!.id} step={step} />
             ))}

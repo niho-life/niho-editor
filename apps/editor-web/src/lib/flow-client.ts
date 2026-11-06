@@ -7,7 +7,7 @@
 
 import { StepsRequestError, parseRecipeChoice, parseStepRun, type StepPageStatus, type StepRecipeChoice, type StepRun } from "./steps-client";
 
-export type FlowTabView = { id: string; kind: "note" | "rec" | "article"; label: string; status: StepPageStatus | null; running: boolean };
+export type FlowTabView = { id: string; kind: "note" | "rec" | "article"; label: string; status: StepPageStatus | null; running: boolean; /** 段階の出力。 */ generated: boolean };
 
 /** サーバーの FlowRowView と同じ形。 */
 export type FlowRow = {
@@ -57,11 +57,11 @@ const STATUSES = ["done", "run", "wait", "stale", "failed"] as const;
 
 function toTab(value: unknown): FlowTabView | null {
   if (!isPlainObject(value)) return null;
-  const { id, kind, label, status, running } = value;
+  const { id, kind, label, status, running, generated } = value;
   if (typeof id !== "string" || typeof label !== "string" || typeof running !== "boolean") return null;
   if (typeof kind !== "string" || !(TAB_KINDS as readonly string[]).includes(kind)) return null;
   if (status !== null && (typeof status !== "string" || !(STATUSES as readonly string[]).includes(status))) return null;
-  return { id, kind: kind as FlowTabView["kind"], label, status: status as StepPageStatus | null, running };
+  return { id, kind: kind as FlowTabView["kind"], label, status: status as StepPageStatus | null, running, generated: generated === true };
 }
 
 function toRow(value: unknown): FlowRow | null {

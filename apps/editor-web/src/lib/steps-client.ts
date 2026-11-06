@@ -60,9 +60,6 @@ export type StepRun = {
  */
 export type StepRecipeChoice = { id: string; name: string; defaultName: string | null; unusableReason?: string | null };
 
-/** `GET /api/pages/{id}/steps` の答え。 */
-export type StepsState = { run: StepRun | null; recipes: StepRecipeChoice[] };
-
 /** API の失敗。`error` はサーバーの短い code（`steps_unavailable`・`run_in_progress`・`invalid_from_step` など）。 */
 export class StepsRequestError extends Error {
   override readonly name = "StepsRequestError";
@@ -162,20 +159,6 @@ export function parseRecipeChoice(value: unknown): StepRecipeChoice | null {
 
 function stepsPath(parentId: string, rest = ""): string {
   return `/api/pages/${encodeURIComponent(parentId)}/steps${rest}`;
-}
-
-/** 最新の run（無ければ null）と、その人の手順。読むたびにサーバーが前提変更を測り直す。 */
-export async function getSteps(parentId: string, fetchImpl: FetchLike = fetch): Promise<StepsState> {
-  const response = await fetchImpl(stepsPath(parentId), { method: "GET", credentials: "same-origin", cache: "no-store" });
-  if (!response.ok) throw await failure(response);
-  const data = await readJson(response);
-  if (!isPlainObject(data) || !("run" in data) || !Array.isArray(data.recipes)) throw new StepsRequestError(500);
-  const recipes = data.recipes.map(parseRecipeChoice);
-  if (recipes.some((recipe) => recipe === null)) throw new StepsRequestError(500);
-  if (data.run === null) return { run: null, recipes: recipes as StepRecipeChoice[] };
-  const run = parseStepRun(data.run);
-  if (!run) throw new StepsRequestError(500);
-  return { run, recipes: recipes as StepRecipeChoice[] };
 }
 
 /** 開示を利用者が選んだときだけ、失敗した最新段階の途中出力を取得する。 */

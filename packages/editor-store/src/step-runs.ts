@@ -325,7 +325,12 @@ function startStepOf(role: PageRole | null, recipeId: string, steps: readonly { 
   return index < 0 ? 0 : index + 1;
 }
 
-type TargetTabRow = { id: string; revision: number; page: string | null; kind: PageKind; made_from: MadeFrom | null; role: PageRole | null };
+type TargetTabRow = { id: string; revision: number; page: string | null; kind: PageKind; step_status: StepStatus | null; made_from: MadeFrom | null; role: PageRole | null };
+
+/** 段階の出力のタブで、まだ済んでいない（待ち・作成中・失敗）。そこからは次の段階を作れない（本文が無い・途中）。 */
+function isUnfinishedOutput(tab: Pick<TargetTabRow, "step_status" | "made_from">): boolean {
+  return tab.made_from?.kind === "step" && (tab.step_status === "wait" || tab.step_status === "run" || tab.step_status === "failed");
+}
 
 /**
  * run を作る（#309）。フォルダ・入力のタブ・冪等・進行中の検査と、出力のタブの用意を同じ transaction で行う。
@@ -353,7 +358,7 @@ export async function createRun(db: StepRunsDb, owner: OwnerId, folderId: string
     if (!folderRow) throw new Rollback<CreateRunResult>({ status: "not_found" });
     // 対象のタブ（入力・作り直す・もう 1 つ）はそのフォルダの本文を持つ行
     const tab = await client.query<TargetTabRow>(
-      `SELECT t.id, t.revision, t.page, t.kind, t.made_from, h.role
+      `SELECT t.id, t.revision, t.page, t.kind, t.step_status, t.made_from, h.role
          FROM pages t
          LEFT JOIN pages h ON h.owner = t.owner AND h.id = t.page AND h.deleted_at IS NULL
         WHERE t.owner = $1 AND t.id = $2 AND t.parent = $3 AND t.deleted_at IS NULL AND t.kind IN ('note', 'rec', 'article')
@@ -404,7 +409,7 @@ export async function createRun(db: StepRunsDb, owner: OwnerId, folderId: string
       toStep = input.toStep;
       inputTab = tabRow.id;
       inputRevision = tabRow.revision;
-      if (toStep < fromStep || toStep >= snapshot.steps.length) throw new Rollback<CreateRunResult>({ status: "invalid_from_step" });
+      if (toStep < fromStep || toStep >= snapshot.steps.length || isUnfinishedOutput(tabRow)) throw new Rollback<CreateRunResult>({ status: "invalid_from_step" });
     } else {
       // 作り直す・同じ入力でもう 1 つ: 段階の出力のタブだけ。入力はそのタブの系譜（made_from.input）
       const made = tabRow.made_from;

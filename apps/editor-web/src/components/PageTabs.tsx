@@ -60,7 +60,7 @@ export function PageTabs({ page, tabs, saveNow }: { page: Pick<PageSummary, "id"
 
   // 段階の出力のタブなら、▾ に「作り直す（AI）」「同じ入力でもう 1 つ（AI）」（流れ。#309）
   const flow = frame.flow && frame.flow.ownerId === id ? frame.flow : null;
-  const stepOutput = flow !== null && flow.rows.some((row) => row.current && row.kind === "step");
+  const stepOutput = flow !== null && flow.generated;
   const regenerate = (how: "regenerate" | "sibling") =>
     run(async () => {
       if (!flow) return;

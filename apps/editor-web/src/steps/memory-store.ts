@@ -334,7 +334,8 @@ export class MemoryStepRunStore implements StepRunStore {
       toStep = input.toStep;
       inputTab = tab.id;
       inputRevision = tab.revision;
-      if (toStep < fromStep || toStep >= recipeSnapshot.steps.length) return { status: "invalid_from_step" };
+      const unfinished = tab.madeFrom?.kind === "step" && (tab.stepStatus === "wait" || tab.stepStatus === "run" || tab.stepStatus === "failed");
+      if (toStep < fromStep || toStep >= recipeSnapshot.steps.length || unfinished) return { status: "invalid_from_step" };
     } else {
       const made = tab.madeFrom;
       const stepIndex = role && role.kind === "step" && role.recipe === recipe.id ? recipeSnapshot.steps.findIndex((step) => step.id === role.stepId) : -1;

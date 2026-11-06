@@ -64,7 +64,9 @@ describe("flowRows（流れの行。#309）", () => {
     ]);
     expect(rows[1]?.engines).toBeUndefined();
     expect(rows[3]?.from).toBe("文字起こし修正");
-    expect(rows[4]?.tabs).toEqual([{ id: "t2", kind: "note", label: "1", status: "run", running: true }]);
+    expect(rows[4]?.tabs).toEqual([{ id: "t2", kind: "note", label: "1", status: "run", running: true, generated: true }]);
+    // まだ済んでいない段階の出力（作成中）からは次を作れない
+    expect(flowRows({ tab: at("t2", "note", "h2"), flow: flow(), recipe: RECIPE, run: running, engines: [] }).map((row) => row.action)).toEqual([null, null, null, null, null]);
     // 記事方針 1 からは記事本文を作っていない → 作成。文字起こし修正からは記事方針（2 つ）も記事本文（方針 2 経由）も済み
     expect(flowRows({ tab: at("t1a", "note", "h1"), flow: flow(), recipe: RECIPE, run: null, engines: [] }).map((row) => row.action)).toEqual([null, null, null, null, "go"]);
     expect(flowRows({ tab: at("t0", "note", "h0"), flow: flow(), recipe: RECIPE, run: null, engines: [] }).map((row) => row.action)).toEqual([null, null, null, "done", "done"]);
