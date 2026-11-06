@@ -206,6 +206,12 @@ describe("migration files", () => {
         assert.match(statements, backfill, `${file.name} must snapshot existing candidates`);
         statements = statements.replace(backfill, "");
       }
+      if (file.name.endsWith("_pages_tabs.sql")) {
+        // タブの導入（#307）は、本文を持つ既存の行ごとに入れ物を 1 行作る（既存の行から写す。固定レコードの埋め込みではない）
+        const holders = /\bINSERT\s+INTO\s+pages\s*\(\s*id,\s*owner,\s*kind,\s*title,\s*lang,\s*blocks,\s*parent,\s*sort_order,\s*created_at,\s*updated_at,\s*deleted_at,\s*last_tab\s*\)\s*SELECT\s+m\.page_id,\s*p\.owner,\s*'page',\s*p\.title,\s*p\.lang,\s*'\[\]'::jsonb,\s*p\.parent,\s*p\.sort_order,\s*p\.created_at,\s*p\.updated_at,\s*p\.deleted_at,\s*p\.id\s+FROM\s+pages\s+AS\s+p\s+JOIN\s+tab_map\s+AS\s+m\s+ON\s+m\.tab\s*=\s*p\.id\s*;/i;
+        assert.match(statements, holders, `${file.name} must make a holder from each existing page`);
+        statements = statements.replace(holders, "");
+      }
       assert.doesNotMatch(statements, /\bINSERT\s+INTO\b|\bCOPY\s/i, `${file.name} must not embed records`);
       assert.doesNotMatch(sql, /-----BEGIN [A-Z ]*PRIVATE KEY-----/);
       assert.doesNotMatch(sql, /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i, "credential URL");

@@ -25,7 +25,7 @@ const paragraph = (text: string) => ({ type: "paragraph", content: [{ type: "tex
 
 function pageOf(id: string, title: string, blocks: Block[] = [paragraph("合成の本文")]): Page {
   const at = "2026-11-01T00:00:00.000Z";
-  return { id, kind: "note", title, lang: "ja", blocks, cover: null, lead: null, parent: null, recipe: null, stepStatus: null, sortOrder: 0, revision: 1, createdAt: at, updatedAt: at };
+  return { id, kind: "note", title, lang: "ja", blocks, cover: null, lead: null, parent: null, recipe: null, stepStatus: null, sortOrder: 0, revision: 1, page: null, role: null, madeFrom: null, lastTab: null, createdAt: at, updatedAt: at };
 }
 
 const summaryOf = (page: Page): PageSummary => ({

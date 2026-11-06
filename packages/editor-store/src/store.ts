@@ -1,11 +1,15 @@
 import {
+  TAB_KINDS,
   VERSION_REASONS,
   type Block,
   type CreatePageInput,
+  type CreateTabInput,
   type Database,
   type DeleteResult,
+  type MadeFrom,
   type MoveOrderResult,
   type MovePageResult,
+  type MoveTabResult,
   type OrderMove,
   type OwnerId,
   type Page,
@@ -14,6 +18,7 @@ import {
   type PageKind,
   type PageLang,
   type PagePatch,
+  type PageRole,
   type PageSummary,
   type PageVersion,
   type PageVersionSummary,
@@ -21,6 +26,7 @@ import {
   type PublishRange,
   type PurgeResult,
   type Queryable,
+  type ResolvedPage,
   type RestoreOptions,
   type RestoreResult,
   type SaveOptions,
@@ -37,7 +43,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 export const PAGE_LIST_LIMIT = 500;
 /**
  * 親子の段の上限（docs/architecture/editor-recipes-and-folders.md §3）。0＝フォルダ、1＝その中のページ、
- * 2＝録音のサブページ（手順の成果物）。これより深くすると、一覧も検索も辿り切れなくなる。
+ * 2＝録音のサブページ（手順の成果物。#309 でフォルダ直下の役割ページのタブへ移す）。これより深くすると、一覧も検索も辿り切れなくなる。
+ * タブ（#307）は段ではない: 入れ物（`kind='page'`）と同じフォルダに並び、`page` で入れ物を指す。
  */
 export const MAX_PAGE_DEPTH = 2;
 
@@ -108,29 +115,60 @@ type PageRow = {
   step_status: StepStatus | null;
   sort_order: number;
   revision: number;
+  page: string | null;
+  role: PageRole | null;
+  made_from: MadeFrom | null;
+  last_tab: string | null;
   created_at: Date;
   updated_at: Date;
 };
 
-type SummaryRow = Pick<PageRow, "id" | "kind" | "title" | "lang" | "parent" | "step_status" | "sort_order" | "created_at" | "updated_at"> & {
+type SummaryRow = Pick<PageRow, "id" | "kind" | "title" | "lang" | "parent" | "step_status" | "sort_order" | "page" | "role" | "created_at" | "updated_at"> & {
   pub_dest: PublishDest | null;
   pub_handle: string | null;
   pub_range: PublishRange | null;
   pub_stopped: boolean | null;
+  tabs_count?: number | string | null;
 };
 
-/** 一覧の列（pages を p、公開を LEFT JOIN した publications を pub として読む）。 */
-const SUMMARY_COLUMNS = `p.id, p.kind, p.title, p.lang, p.parent, p.step_status, p.sort_order, p.created_at, p.updated_at,
+/**
+ * 一覧の列（pages を p、公開を LEFT JOIN した publications を pub、タブなら入れ物を h として読む）。
+ * タブの行の `sort_order` は**入れ物の並び**（一覧の行は入れ物で、タブは入れ物と一緒に動く。#307）。タブ自身の sort_order は入れ物の中の並び。
+ */
+const SUMMARY_COLUMNS = `p.id, p.kind, p.title, p.lang, p.parent, p.step_status, COALESCE(h.sort_order, p.sort_order) AS sort_order, p.page, p.role, p.created_at, p.updated_at,
        pub.dest AS pub_dest, pub.handle AS pub_handle, pub.range AS pub_range, pub.stopped_at IS NOT NULL AS pub_stopped`;
 
-const SUMMARY_FROM = "pages p LEFT JOIN publications pub ON pub.page_id = p.id";
+const SUMMARY_FROM = "pages p LEFT JOIN publications pub ON pub.page_id = p.id LEFT JOIN pages h ON h.owner = p.owner AND h.id = p.page";
+
+/** 入れ物のタブの一覧の列（`sort_order` はタブ自身＝入れ物の中の並び）。 */
+const TAB_COLUMNS = SUMMARY_COLUMNS.replace("COALESCE(h.sort_order, p.sort_order) AS sort_order", "p.sort_order");
+
+/**
+ * 一覧の並び（`orderOf` と同じ規則を、タブなら入れ物の値で）: 手動の並び → 上の段は更新の新しい順、中は作った順 → 同じ入れ物のタブは
+ * 入れ物の中の並び（タブの sort_order → 作った順）→ id。
+ */
+function summaryOrder(parent: string | null): string {
+  const holder = parent === null ? "COALESCE(h.updated_at, p.updated_at) DESC" : "COALESCE(h.created_at, p.created_at)";
+  return `COALESCE(h.sort_order, p.sort_order), ${holder}, COALESCE(h.id, p.id), p.sort_order, p.created_at, p.id`;
+}
+
+/**
+ * 一覧に出す行（#307）。`tabs`（既定）は本文を持つ行＝タブと入れ物の無いページ（入れ物 `kind='page'` は出さない。今までの一覧と同じ）。
+ * `pages` は入れ物・フォルダ・入れ物の無いページ（タブ＝`page IS NOT NULL` は出さない）。
+ */
+function viewFilter(view: "tabs" | "pages" | undefined): string {
+  return view === "pages" ? "p.page IS NULL" : "p.kind <> 'page'";
+}
+
+/** `view: 'pages'` の一覧で入れ物に添えるタブの数。 */
+const TABS_COUNT_COLUMN = "(SELECT count(*) FROM pages t WHERE t.owner = p.owner AND t.page = p.id AND t.deleted_at IS NULL) AS tabs_count";
 
 /** 一覧の区切りの行。cursor_time は updated_at の UTC の文字列（マイクロ秒まで）。 */
 type ChunkRow = SummaryRow & { cursor_time: string };
 
 type VersionRow = { version: number; reason: VersionReason; created_at: Date; block_count: number };
 
-const PAGE_COLUMNS = "id, kind, title, lang, blocks, cover, lead, parent, recipe, step_status, sort_order, revision, created_at, updated_at";
+const PAGE_COLUMNS = "id, kind, title, lang, blocks, cover, lead, parent, recipe, step_status, sort_order, revision, page, role, made_from, last_tab, created_at, updated_at";
 
 function toPage(row: PageRow): Page {
   return {
@@ -146,13 +184,17 @@ function toPage(row: PageRow): Page {
     stepStatus: row.step_status,
     sortOrder: row.sort_order,
     revision: row.revision,
+    page: row.page,
+    role: row.role,
+    madeFrom: row.made_from,
+    lastTab: row.last_tab,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
 }
 
 function toSummary(row: SummaryRow): PageSummary {
-  return {
+  const summary: PageSummary = {
     id: row.id,
     kind: row.kind,
     title: row.title,
@@ -160,6 +202,8 @@ function toSummary(row: SummaryRow): PageSummary {
     parent: row.parent,
     stepStatus: row.step_status,
     sortOrder: row.sort_order,
+    page: row.page,
+    role: row.role,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     publication:
@@ -167,6 +211,8 @@ function toSummary(row: SummaryRow): PageSummary {
         ? null
         : { dest: row.pub_dest, handle: row.pub_handle, range: row.pub_range, stopped: row.pub_stopped === true },
   };
+  if (row.tabs_count !== undefined && row.tabs_count !== null) summary.tabsCount = Number(row.tabs_count);
+  return summary;
 }
 
 function parseCursor(cursor: string): { time: string; id: string } {
@@ -239,6 +285,9 @@ export class EditorStore {
    *
    * - `parent` は本人の生きている `kind='folder'` だけ。それ以外（別の人・ゴミ箱・無い id・フォルダでない）は null（同じ 404）。
    * - `kind='folder'` は本文を持たず（`blocks` は空だけ）、`parent` も付けられない（入れ子にしない）。どちらも TypeError。
+   * - 本文を持つ種類（note・rec・article）は、入れ物（`kind='page'`。題名・役割・並び）と 1 つ目のタブを 1 つの transaction で作り、
+   *   **タブの行**を返す（#307。`page` が入れ物の id。`/p/<id>` も公開も共有もタブの id）。`kind='page'` を直に作ることはできない。
+   * - `kind='step'` は入れ物を作らない（手順のサブページ。#309 まで）。
    */
   async createPage(owner: OwnerId, input?: Omit<CreatePageInput, "parent"> & { parent?: null }): Promise<Page>;
   async createPage(owner: OwnerId, input: CreatePageInput): Promise<Page | null>;
@@ -248,44 +297,261 @@ export class EditorStore {
       throw new TypeError("editor-store: lead must be at most 160 characters or null");
     }
     const parent = input.parent ?? null;
-    if (input.kind === "folder") {
+    const kind: PageKind = input.kind ?? "note";
+    if (kind === "page") throw new TypeError("editor-store: a tab holder is made with its first tab");
+    if (kind === "folder") {
       if (parent !== null) throw new TypeError("editor-store: a folder cannot be inside a folder");
       if (input.blocks !== undefined && input.blocks.length > 0) throw new TypeError("editor-store: folder has no body");
     }
+    const role = input.role ?? null;
+    if (role !== null && !(TAB_KINDS as readonly string[]).includes(kind)) throw new TypeError("editor-store: only a page with a body has a role");
     if (pageSizeBytes(input.title ?? "", input.blocks ?? [], [], null, input.lead ?? null) > PAGE_MAX_BYTES) throw new RangeError("editor-store: page is too large");
+    const withHolder = (TAB_KINDS as readonly string[]).includes(kind);
     const insert = async (client: Queryable): Promise<Page> => {
+      // 入れ物（題名・言語・親・役割だけ。本文は空のまま）
+      let holder: string | null = null;
+      if (withHolder) {
+        const made = await client.query<{ id: string }>(
+          `INSERT INTO pages (owner, kind, title, lang, blocks, parent, role)
+           VALUES ($1, 'page', COALESCE($2, ''), COALESCE($3, 'ja'), '[]'::jsonb, $4::uuid, $5::jsonb)
+           RETURNING id`,
+          [owner, input.title ?? null, input.lang ?? null, parent, role === null ? null : JSON.stringify(role)],
+        );
+        holder = made.rows[0]?.id ?? null;
+        if (!holder) throw new Error("editor-store: insert returned no holder");
+      }
       const result = await client.query<PageRow>(
-        `INSERT INTO pages (owner, kind, title, lang, blocks, lead, parent)
-         VALUES ($1, COALESCE($2, 'note'), COALESCE($3, ''), COALESCE($4, 'ja'), COALESCE($5::jsonb, '[]'::jsonb), $6, $7::uuid)
+        `INSERT INTO pages (owner, kind, title, lang, blocks, lead, parent, page)
+         VALUES ($1, $2, COALESCE($3, ''), COALESCE($4, 'ja'), COALESCE($5::jsonb, '[]'::jsonb), $6, $7::uuid, $8::uuid)
          RETURNING ${PAGE_COLUMNS}`,
-        [owner, input.kind ?? null, input.title ?? null, input.lang ?? null, input.blocks === undefined ? null : JSON.stringify(input.blocks), input.lead ?? null, parent],
+        [owner, kind, input.title ?? null, input.lang ?? null, input.blocks === undefined ? null : JSON.stringify(input.blocks), input.lead ?? null, parent, holder],
       );
       const row = result.rows[0];
       if (!row) throw new Error("editor-store: insert returned no row");
+      if (holder !== null) await client.query("UPDATE pages SET last_tab = $2 WHERE owner = $1 AND id = $3", [owner, row.id, holder]);
       return toPage(row);
     };
-    if (parent === null) return insert(this.#db);
-    if (!isPageId(parent)) return null;
+    if (parent === null && !withHolder) return insert(this.#db);
+    if (parent !== null && !isPageId(parent)) return null;
     return this.#orNull(() =>
       this.#transaction(async (client): Promise<Page | null> => {
-        // 入れ先のフォルダを押さえる（作る間にゴミ箱へ入る・別の種類に変わるのを防ぐ）
-        const folder = await client.query<{ kind: PageKind }>(
-          "SELECT kind FROM pages WHERE owner = $1 AND deleted_at IS NULL AND id = $2 FOR SHARE",
-          [owner, parent],
-        );
-        if (folder.rows[0]?.kind !== "folder") return null;
+        if (parent !== null) {
+          // 入れ先のフォルダを押さえる（作る間にゴミ箱へ入る・別の種類に変わるのを防ぐ）
+          const folder = await client.query<{ kind: PageKind }>(
+            "SELECT kind FROM pages WHERE owner = $1 AND deleted_at IS NULL AND id = $2 FOR SHARE",
+            [owner, parent],
+          );
+          if (folder.rows[0]?.kind !== "folder") return null;
+        }
         return insert(client);
       }),
     );
   }
 
-  async listPages(owner: OwnerId, options: { limit?: number } = {}): Promise<PageSummary[]> {
+  /**
+   * 入れ物にタブを足す（#307。帯の右端の ＋）。まっさら（本文なし）。入れ物と同じフォルダに並び、`page` で入れ物を指す。
+   * `pageId` はタブの id でもよい（その入れ物に足す）。入れ物の無い 1 枚だけのページに足すときは、先に入れ物を作って両方を結ぶ。
+   * 本人の生きているページでなければ null（同じ 404）。フォルダには足せない（TypeError）。
+   */
+  async createTab(owner: OwnerId, pageId: string, input: CreateTabInput = {}): Promise<Page | null> {
+    assertOwner(owner);
+    if (!isPageId(pageId)) return null;
+    return this.#orNull(() =>
+      this.#transaction(async (client): Promise<Page | null> => {
+        const holder = await this.#lockHolder(client, owner, pageId);
+        if (!holder) return null;
+        const result = await client.query<PageRow>(
+          `INSERT INTO pages (owner, kind, title, lang, blocks, parent, page, sort_order)
+           SELECT $1, 'note', COALESCE($3, ''), COALESCE($4, h.lang), '[]'::jsonb, h.parent, h.id,
+                  COALESCE((SELECT max(t.sort_order) FROM pages t WHERE t.owner = h.owner AND t.page = h.id AND t.deleted_at IS NULL), 0) + 1
+             FROM pages h
+            WHERE h.owner = $1 AND h.id = $2
+           RETURNING ${PAGE_COLUMNS}`,
+          [owner, holder.id, input.title ?? null, input.lang ?? null],
+        );
+        const row = result.rows[0];
+        if (!row) throw new Error("editor-store: insert returned no tab");
+        await client.query("UPDATE pages SET last_tab = $3, updated_at = GREATEST(clock_timestamp(), updated_at) WHERE owner = $1 AND id = $2", [owner, holder.id, row.id]);
+        return toPage(row);
+      }),
+    );
+  }
+
+  /** 入れ物のタブ（並びの順。本文は含めない）。`pageId` はタブの id でもよい。本人の生きているページでなければ null。 */
+  async listTabs(owner: OwnerId, pageId: string): Promise<PageSummary[] | null> {
+    assertOwner(owner);
+    if (!isPageId(pageId)) return null;
+    return this.#orNull(async () => {
+      const target = await this.#db.query<{ id: string; kind: PageKind; page: string | null }>(
+        "SELECT id, kind, page FROM pages WHERE owner = $1 AND deleted_at IS NULL AND id = $2",
+        [owner, pageId],
+      );
+      const row = target.rows[0];
+      if (!row) return null;
+      const holder = row.kind === "page" ? row.id : row.page;
+      // 入れ物の無い 1 枚だけのページは、それ自身が唯一のタブ
+      if (holder === null) {
+        if (row.kind === "folder") return [];
+        const only = await this.#db.query<SummaryRow>(`SELECT ${SUMMARY_COLUMNS} FROM ${SUMMARY_FROM} WHERE p.owner = $1 AND p.deleted_at IS NULL AND p.id = $2`, [owner, row.id]);
+        return only.rows.map(toSummary);
+      }
+      return this.#tabsOf(this.#db, owner, holder);
+    });
+  }
+
+  /**
+   * ページを開くときの解決（#307）。id がタブならその入れ物と自分、入れ物なら最後に開いたタブ（無ければ 1 つ目）。
+   * 入れ物の無い 1 枚だけのページ・フォルダは `page` が null で `tab` がその行。本人の生きているページでなければ null。
+   */
+  async resolvePage(owner: OwnerId, id: string): Promise<ResolvedPage | null> {
+    assertOwner(owner);
+    if (!isPageId(id)) return null;
+    return this.#orNull(async () => {
+      const row = await this.getPage(owner, id);
+      if (!row) return null;
+      if (row.kind === "page") {
+        const tabs = await this.#tabsOf(this.#db, owner, row.id);
+        const chosen = (row.lastTab !== null && tabs.find((tab) => tab.id === row.lastTab)) || tabs[0];
+        if (!chosen) return null; // タブの無い入れ物（途中の状態）。無いページと同じ
+        const tab = await this.getPage(owner, chosen.id);
+        if (!tab) return null;
+        return { page: row, tab, tabs };
+      }
+      if (row.page !== null) {
+        const holder = await this.getPage(owner, row.page);
+        if (holder && holder.kind === "page") return { page: holder, tab: row, tabs: await this.#tabsOf(this.#db, owner, holder.id) };
+      }
+      const only = await this.listTabs(owner, row.id);
+      return { page: null, tab: row, tabs: only ?? [] };
+    });
+  }
+
+  /** 入れ物の「最後に開いたタブ」を進める（タブを開いたとき）。本人の生きているタブでなければ false。 */
+  async touchLastTab(owner: OwnerId, tabId: string): Promise<boolean> {
+    assertOwner(owner);
+    if (!isPageId(tabId)) return false;
+    const result = await this.#db.query(
+      `UPDATE pages h
+          SET last_tab = t.id
+         FROM pages t
+        WHERE t.owner = $1 AND t.deleted_at IS NULL AND t.id = $2 AND t.page IS NOT NULL
+          AND h.owner = t.owner AND h.id = t.page AND h.deleted_at IS NULL`,
+      [owner, tabId],
+    );
+    return result.rowCount === 1;
+  }
+
+  /**
+   * 入れ物のタブの並びを決める（`ids` は入れ物の生きているタブ全部を望む順に）。1 から振り直す。
+   * 足りない・余計な id・別の入れ物のタブが混ざれば何も書かず false。入れ物が無ければ null。
+   */
+  async reorderTabs(owner: OwnerId, pageId: string, ids: readonly string[]): Promise<boolean | null> {
+    assertOwner(owner);
+    if (!isPageId(pageId) || !ids.every((id) => typeof id === "string" && isPageId(id))) return null;
+    return this.#orNull(() =>
+      this.#transaction(async (client): Promise<boolean | null> => {
+        const holder = await this.#lockHolder(client, owner, pageId);
+        if (!holder) return null;
+        const tabs = await this.#tabsOf(client, owner, holder.id);
+        const want = ids.map((id) => id.toLowerCase());
+        if (want.length !== tabs.length || new Set(want).size !== want.length || !tabs.every((tab) => want.includes(tab.id))) return false;
+        await client.query(
+          `UPDATE pages AS p
+              SET sort_order = next.ord
+             FROM unnest($3::uuid[], $4::int[]) AS next(id, ord)
+            WHERE p.owner = $1 AND p.page = $2 AND p.id = next.id`,
+          [owner, holder.id, want, want.map((_, index) => index + 1)],
+        );
+        return true;
+      }),
+    );
+  }
+
+  /**
+   * タブを別の入れ物へ移す（タブの ▾「別のページへ移す」）。入れ先と同じフォルダに並べ直す（`parent` も入れ先に合わせる）。
+   * 元の入れ物にタブが残らなければ、元の入れ物は消す（空の入れ物は残さない）。
+   * 動かすものがタブでない・入れ先が入れ物でない（タブの id なら、その入れ物）ときは `not_page`。タブか入れ先が無ければ null。
+   */
+  async moveTab(owner: OwnerId, tabId: string, toPageId: string): Promise<MoveTabResult | null> {
+    assertOwner(owner);
+    if (!isPageId(tabId) || !isPageId(toPageId)) return null;
+    return this.#orNull(() =>
+      this.#transaction(async (client): Promise<MoveTabResult | null> => {
+        const tab = await lockPage(client, owner, tabId);
+        if (!tab) return null;
+        if (tab.page === null || tab.kind === "page" || tab.kind === "folder") return "not_page";
+        const to = await this.#lockHolder(client, owner, toPageId);
+        if (!to) return null;
+        if (to.id === tab.page) return "moved";
+        await client.query(
+          `UPDATE pages
+              SET page = $3, parent = $4,
+                  sort_order = COALESCE((SELECT max(t.sort_order) FROM pages t WHERE t.owner = $1 AND t.page = $3 AND t.deleted_at IS NULL), 0) + 1
+            WHERE owner = $1 AND id = $2`,
+          [owner, tab.id, to.id, to.parent],
+        );
+        await client.query("UPDATE pages SET last_tab = $3, updated_at = GREATEST(clock_timestamp(), updated_at) WHERE owner = $1 AND id = $2", [owner, to.id, tab.id]);
+        await this.#dropEmptyHolder(client, owner, tab.page);
+        return "moved";
+      }),
+    );
+  }
+
+  /** 入れ物のタブ（並びの順。ここでの `sortOrder` はタブ自身＝入れ物の中の並び）。 */
+  async #tabsOf(client: Queryable, owner: OwnerId, holder: string): Promise<PageSummary[]> {
+    const result = await client.query<SummaryRow>(
+      `SELECT ${TAB_COLUMNS}
+         FROM ${SUMMARY_FROM}
+        WHERE p.owner = $1 AND p.deleted_at IS NULL AND p.page = $2
+        ORDER BY p.sort_order, p.created_at, p.id`,
+      [owner, holder],
+    );
+    return result.rows.map(toSummary);
+  }
+
+  /**
+   * タブを足す・並べる先の入れ物を押さえる。`id` が入れ物ならそれ、タブならその入れ物、入れ物の無い 1 枚だけのページなら
+   * その場で入れ物を作って結ぶ（移行前に作られた行や、入れ物が完全に消えた行）。フォルダは TypeError。無ければ null。
+   */
+  async #lockHolder(client: Queryable, owner: OwnerId, id: string): Promise<PageRow | null> {
+    const row = await lockPage(client, owner, id);
+    if (!row) return null;
+    if (row.kind === "folder") throw new TypeError("editor-store: a folder has no tabs");
+    if (row.kind === "page") return row;
+    if (row.page !== null) {
+      const holder = await lockPage(client, owner, row.page);
+      if (holder && holder.kind === "page") return holder;
+    }
+    if (row.kind === "step") throw new TypeError("editor-store: a step page has no tabs");
+    const made = await client.query<PageRow>(
+      `INSERT INTO pages (owner, kind, title, lang, blocks, parent, sort_order, last_tab, created_at, updated_at)
+       VALUES ($1, 'page', $3, $4, '[]'::jsonb, $5::uuid, $6, $2::uuid, $7, $8)
+       RETURNING ${PAGE_COLUMNS}`,
+      [owner, row.id, row.title, row.lang, row.parent, row.sort_order, row.created_at, row.updated_at],
+    );
+    const holder = made.rows[0];
+    if (!holder) throw new Error("editor-store: insert returned no holder");
+    await client.query("UPDATE pages SET page = $3, sort_order = 0 WHERE owner = $1 AND id = $2", [owner, row.id, holder.id]);
+    return holder;
+  }
+
+  /** タブが 1 つも残らない入れ物を消す（ゴミ箱に入れない。入れ物は本文を持たない）。 */
+  async #dropEmptyHolder(client: Queryable, owner: OwnerId, holder: string): Promise<void> {
+    await client.query(
+      `DELETE FROM pages h
+        WHERE h.owner = $1 AND h.id = $2 AND h.kind = 'page'
+          AND NOT EXISTS (SELECT 1 FROM pages t WHERE t.owner = h.owner AND t.page = h.id)`,
+      [owner, holder],
+    );
+  }
+
+  async listPages(owner: OwnerId, options: { limit?: number; view?: PageChunkOptions["view"] } = {}): Promise<PageSummary[]> {
     assertOwner(owner);
     const limit = Math.max(1, Math.min(options.limit ?? PAGE_LIST_LIMIT, PAGE_LIST_LIMIT));
     const result = await this.#db.query<SummaryRow>(
-      `SELECT ${SUMMARY_COLUMNS}
+      `SELECT ${SUMMARY_COLUMNS}${options.view === "pages" ? `, ${TABS_COUNT_COLUMN}` : ""}
          FROM ${SUMMARY_FROM}
-        WHERE p.owner = $1 AND p.deleted_at IS NULL
+        WHERE p.owner = $1 AND p.deleted_at IS NULL AND ${viewFilter(options.view)}
         ORDER BY p.updated_at DESC, p.id
         LIMIT $2`,
       [owner, limit],
@@ -308,10 +574,10 @@ export class EditorStore {
     let rows: ChunkRow[];
     try {
       const result = await this.#db.query<ChunkRow>(
-        `SELECT ${SUMMARY_COLUMNS},
+        `SELECT ${SUMMARY_COLUMNS}${options.view === "pages" ? `, ${TABS_COUNT_COLUMN}` : ""},
                 to_char(p.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_time
            FROM ${SUMMARY_FROM}
-          WHERE p.owner = $1 AND p.deleted_at IS NULL${after ? " AND (p.updated_at, p.id) < ($3::timestamptz, $4::uuid)" : ""}
+          WHERE p.owner = $1 AND p.deleted_at IS NULL AND ${viewFilter(options.view)}${after ? " AND (p.updated_at, p.id) < ($3::timestamptz, $4::uuid)" : ""}
           ORDER BY p.updated_at DESC, p.id DESC
           LIMIT $2`,
         params,
@@ -366,11 +632,14 @@ export class EditorStore {
       this.#transaction(async (client): Promise<SaveResult | null> => {
         const current = await lockPage(client, owner, id);
         if (!current) return null;
-        // フォルダは入れ物で、ほかの種類と行き来せず、本文を持たない（§3.2。API はこれを bad_request にする）
+        // フォルダ・タブの入れ物は、ほかの種類と行き来せず、本文を持たない（§3.2。API はこれを bad_request にする）
         if (patch.kind !== undefined && patch.kind !== current.kind && (patch.kind === "folder" || current.kind === "folder")) {
           throw new TypeError("editor-store: kind cannot change to or from folder");
         }
-        if (current.kind === "folder" && patch.blocks !== undefined && patch.blocks.length > 0) throw new TypeError("editor-store: folder has no body");
+        if (patch.kind !== undefined && patch.kind !== current.kind && (patch.kind === "page" || current.kind === "page")) {
+          throw new TypeError("editor-store: kind cannot change to or from folder");
+        }
+        if ((current.kind === "folder" || current.kind === "page") && patch.blocks !== undefined && patch.blocks.length > 0) throw new TypeError("editor-store: folder has no body");
         if (current.revision !== options.baseRevision) return { status: "conflict", page: toPage(current) };
         const candidateTitle = patch.title ?? current.title;
         const candidateBlocks = patch.blocks ?? current.blocks;
@@ -414,6 +683,17 @@ export class EditorStore {
         );
         const row = result.rows[0];
         if (!row) throw new Error("editor-store: locked page vanished during save");
+        // タブの保存は入れ物の更新時刻も進める（一覧は入れ物の順で出す。#307）。入れ物が 1 つのタブだけなら題名も揃える
+        if (row.page !== null) {
+          await client.query(
+            `UPDATE pages h
+                SET updated_at = GREATEST(clock_timestamp(), h.updated_at),
+                    title = CASE WHEN $4::boolean AND NOT EXISTS (SELECT 1 FROM pages t WHERE t.owner = h.owner AND t.page = h.id AND t.deleted_at IS NULL AND t.id <> $2)
+                                 THEN $3::text ELSE h.title END
+              WHERE h.owner = $1 AND h.id = $5 AND h.deleted_at IS NULL`,
+            [owner, row.id, row.title, patch.title !== undefined, row.page],
+          );
+        }
         return { status: "saved", page: toPage(row) };
       }),
     );
@@ -437,8 +717,13 @@ export class EditorStore {
     if (parent === id) return "cycle";
     return this.#orNull(() =>
       this.#transaction(async (client): Promise<MovePageResult | null> => {
-        const current = await lockPage(client, owner, id);
+        let current = await lockPage(client, owner, id);
         if (!current) return null;
+        // タブを動かす要求は、その入れ物ごと動かす（タブは入れ物と同じフォルダに並ぶ。#307）
+        if (current.page !== null) {
+          const holder = await lockPage(client, owner, current.page);
+          if (holder && holder.kind === "page") current = holder;
+        }
         if (current.parent === parent) return "moved";
         // 入れ先の段（上へ辿る）。上の段へ出すなら -1（入れたページが 0 の段になる）
         let parentDepth = -1;
@@ -469,16 +754,17 @@ export class EditorStore {
         }
         // 動かすページの下の高さと、入れ先がその中にあるか（下へ辿る）。ゴミ箱の中の子も数える:
         // 戻す（restoreFromTrash）と親を保ったまま木に帰るので、数えないと動かしたあとに戻して上限を超える
+        // 入れ物を動かすなら、そのタブ（と、タブの下の手順のサブページ）も同じ高さの木として数える
         const down = await client.query<{ height: number | null; inside: boolean | null }>(
           `WITH RECURSIVE down AS (
-             SELECT id, 0 AS height FROM pages WHERE owner = $1 AND deleted_at IS NULL AND id = $2
+             SELECT id, 0 AS height FROM pages WHERE owner = $1 AND ((deleted_at IS NULL AND id = $2) OR page = $2)
              UNION ALL
              SELECT c.id, down.height + 1
                FROM pages c JOIN down ON c.parent = down.id
               WHERE c.owner = $1
            )
            SELECT max(height) AS height, bool_or(id = $3::uuid) AS inside FROM down`,
-          [owner, id, parent],
+          [owner, current.id, parent],
         );
         if (down.rows[0]?.inside === true) return "cycle";
         const height = Number(down.rows[0]?.height ?? 0);
@@ -487,9 +773,11 @@ export class EditorStore {
         if (parent !== null && (parentKind !== "folder" || current.kind === "folder")) return "not_folder";
         const moved = await client.query(
           "UPDATE pages SET parent = $3 WHERE owner = $1 AND deleted_at IS NULL AND id = $2",
-          [owner, id, parent],
+          [owner, current.id, parent],
         );
         if (moved.rowCount !== 1) throw new Error("editor-store: locked page vanished during move");
+        // 入れ物のタブも一緒に（ゴミ箱のタブも。戻したときに別のフォルダに現れない）
+        if (current.kind === "page") await client.query("UPDATE pages SET parent = $3 WHERE owner = $1 AND page = $2", [owner, current.id, parent]);
         return "moved";
       }),
     );
@@ -508,18 +796,23 @@ export class EditorStore {
     if (!isPageId(id)) return null;
     return this.#orNull(() =>
       this.#transaction(async (client): Promise<MoveOrderResult | null> => {
-        const current = await lockPage(client, owner, id);
+        let current = await lockPage(client, owner, id);
         if (!current) return null;
-        // 同じ親の行を今の並びで（親が無い行どうしも「同じ親」）
+        // タブの並びは入れ物の並び（タブは一覧の行ではない。#307）
+        if (current.page !== null) {
+          const holder = await lockPage(client, owner, current.page);
+          if (holder && holder.kind === "page") current = holder;
+        }
+        // 同じ親の行を今の並びで（親が無い行どうしも「同じ親」。タブは数えない）
         const siblings = await client.query<{ id: string }>(
           `SELECT id
              FROM pages
-            WHERE owner = $1 AND deleted_at IS NULL AND parent IS NOT DISTINCT FROM $2::uuid
+            WHERE owner = $1 AND deleted_at IS NULL AND parent IS NOT DISTINCT FROM $2::uuid AND page IS NULL
             ORDER BY ${orderOf(current.parent)}`,
           [owner, current.parent],
         );
         const ids = siblings.rows.map((row) => row.id);
-        const at = ids.indexOf(id);
+        const at = ids.indexOf(current.id);
         const to = move === "up" ? at - 1 : at + 1;
         if (at < 0 || to < 0 || to >= ids.length) return "edge";
         [ids[at], ids[to]] = [ids[to]!, ids[at]!];
@@ -544,12 +837,15 @@ export class EditorStore {
   async pageSiblingOrders(owner: OwnerId, id: string): Promise<{ id: string; sortOrder: number }[]> {
     assertOwner(owner);
     if (!isPageId(id)) return [];
+    // 並びは入れ物（と、入れ物の無いページ）の間で決まる。返す行は一覧の行＝タブ（入れ物の並びを添える）と入れ物の無いページ
+    // （画面が持つ行はタブの id。#307。入れ物そのものは返さない）
     const result = await this.#db.query<{ id: string; sort_order: number }>(
-      `SELECT s.id, s.sort_order
+      `SELECT COALESCE(t.id, s.id) AS id, s.sort_order
          FROM pages AS me
-         JOIN pages AS s ON s.owner = me.owner AND s.deleted_at IS NULL AND s.parent IS NOT DISTINCT FROM me.parent
-        WHERE me.owner = $1 AND me.id = $2 AND me.deleted_at IS NULL
-        ORDER BY s.id`,
+         JOIN pages AS s ON s.owner = me.owner AND s.deleted_at IS NULL AND s.parent IS NOT DISTINCT FROM me.parent AND s.page IS NULL
+         LEFT JOIN pages AS t ON t.owner = s.owner AND t.page = s.id AND t.deleted_at IS NULL
+        WHERE me.owner = $1 AND me.id = $2 AND me.deleted_at IS NULL AND (s.kind <> 'page' OR t.id IS NOT NULL)
+        ORDER BY 1`,
       [owner, id],
     );
     return result.rows.map((row) => ({ id: row.id, sortOrder: row.sort_order }));
@@ -559,15 +855,15 @@ export class EditorStore {
    * そのページの中の行（同じ親の並びの順）。フォルダの子を列挙する口（自動参考ページ・書き出し・画面が使う）。
    * `parent` に null を渡すと上の段。ページが無い・別の人のものなら空（親が本人のものかは呼ぶ側が先に確かめる）。
    */
-  async listPageChildren(owner: OwnerId, parent: string | null, options: { limit?: number } = {}): Promise<PageSummary[]> {
+  async listPageChildren(owner: OwnerId, parent: string | null, options: { limit?: number; view?: PageChunkOptions["view"] } = {}): Promise<PageSummary[]> {
     assertOwner(owner);
     if (parent !== null && !isPageId(parent)) return [];
     const limit = Math.max(1, Math.min(options.limit ?? PAGE_LIST_LIMIT, PAGE_LIST_LIMIT));
     const result = await this.#db.query<SummaryRow>(
-      `SELECT ${SUMMARY_COLUMNS}
+      `SELECT ${SUMMARY_COLUMNS}${options.view === "pages" ? `, ${TABS_COUNT_COLUMN}` : ""}
          FROM ${SUMMARY_FROM}
-        WHERE p.owner = $1 AND p.deleted_at IS NULL AND p.parent IS NOT DISTINCT FROM $2::uuid
-        ORDER BY ${orderOf(parent, "p.")}
+        WHERE p.owner = $1 AND p.deleted_at IS NULL AND p.parent IS NOT DISTINCT FROM $2::uuid AND ${viewFilter(options.view)}
+        ORDER BY ${summaryOrder(parent)}
         LIMIT $3`,
       [owner, parent, limit],
     );
@@ -589,12 +885,16 @@ export class EditorStore {
           WHERE owner = $1 AND deleted_at IS NULL AND id = $2
          UNION ALL
          SELECT ${PAGE_COLUMNS.split(", ").map((column) => `c.${column}`).join(", ")}, t.depth + 1,
-                -- 中の行は「手動の並び → 作った順 → id」（orderOf の親ありと同じ規則）を 1 つの文字列に畳んで並べる
-                t.path || to_char(c.sort_order, 'FM0000000000') || to_char(c.created_at, 'YYYYMMDDHH24MISSUS') || c.id::text
+                -- 中の行は「手動の並び → 作った順 → id」（orderOf の親ありと同じ規則）を 1 つの文字列に畳んで並べる。
+                -- タブは入れ物の並びの後ろに（入れ物の並び ＋ タブの並び）
+                t.path || COALESCE((SELECT to_char(h.sort_order, 'FM0000000000') || to_char(h.created_at, 'YYYYMMDDHH24MISSUS') || h.id::text
+                                       FROM pages h WHERE h.owner = c.owner AND h.id = c.page), '')
+                       || to_char(c.sort_order, 'FM0000000000') || to_char(c.created_at, 'YYYYMMDDHH24MISSUS') || c.id::text
            FROM pages c JOIN tree t ON c.parent = t.id
           WHERE c.owner = $1 AND c.deleted_at IS NULL AND t.depth < $3
        )
-       SELECT ${PAGE_COLUMNS}, depth FROM tree ORDER BY path LIMIT $4`,
+       -- 入れ物（kind='page'）は本文を持たないので出さない（書き出しはタブの本文）
+       SELECT ${PAGE_COLUMNS}, depth FROM tree WHERE kind <> 'page' OR depth = 0 ORDER BY path LIMIT $4`,
       [owner, rootId, MAX_PAGE_DEPTH, limit],
     );
     return result.rows.map(toPage);
@@ -728,15 +1028,21 @@ export class EditorStore {
     if (!isPageId(id)) return null;
     return this.#orNull(() =>
       this.#transaction(async (client): Promise<DeleteResult | null> => {
-        // 自分と子孫の行を id の順に 1 文で押さえる（親と子の同時の削除・purge と lock の順が食い違って deadlock しない）
+        // 自分と子孫の行を id の順に 1 文で押さえる（親と子の同時の削除・purge と lock の順が食い違って deadlock しない）。
+        // 入れ物（kind='page'）ならそのタブも、最後のタブならその入れ物も一緒に（#307。タブとその子孫は parent で辿る）
         const tree = await client.query<{ id: string }>(
           `WITH RECURSIVE tree AS (
              SELECT id FROM pages WHERE owner = $1 AND deleted_at IS NULL AND id = $2
              UNION
-             SELECT c.id FROM pages c JOIN tree t ON c.parent = t.id
+             SELECT c.id FROM pages c JOIN tree t ON c.parent = t.id OR c.page = t.id
               WHERE c.owner = $1 AND c.deleted_at IS NULL
+           ), holder AS (
+             -- 最後のタブを消すときは入れ物も
+             SELECT h.id FROM pages me JOIN pages h ON h.owner = me.owner AND h.id = me.page AND h.deleted_at IS NULL
+              WHERE me.owner = $1 AND me.id = $2 AND me.page IS NOT NULL
+                AND NOT EXISTS (SELECT 1 FROM pages t WHERE t.owner = h.owner AND t.page = h.id AND t.deleted_at IS NULL AND t.id <> me.id)
            )
-           SELECT p.id FROM pages p JOIN tree t ON t.id = p.id
+           SELECT p.id FROM pages p JOIN (SELECT id FROM tree UNION SELECT id FROM holder) t ON t.id = p.id
             WHERE p.owner = $1 AND p.deleted_at IS NULL
             ORDER BY p.id
             FOR UPDATE OF p`,
@@ -800,6 +1106,8 @@ export class EditorStore {
         if (!isBlankPageRow(current)) return { discarded: false };
         // 行は押さえてあるので、ここから中身（題名・本文など）は変わらない。関わる行が無いことを、新しい snapshot の 1 文で確かめて消す
         const deleted = await client.query(`DELETE FROM pages p WHERE p.owner = $1 AND p.id = $2 AND p.deleted_at IS NULL AND ${NO_RELATED_ROWS} RETURNING p.id`, [owner, id]);
+        // 最後のタブだったら入れ物も（入れ物は本文を持たない。#307）
+        if (deleted.rows.length > 0 && current.page !== null) await this.#dropEmptyHolder(client, owner, current.page);
         return { discarded: deleted.rows.length > 0 };
       }),
     );
@@ -809,10 +1117,11 @@ export class EditorStore {
   async listTrash(owner: OwnerId, options: { limit?: number } = {}): Promise<TrashedPage[]> {
     assertOwner(owner);
     const limit = Math.max(1, Math.min(options.limit ?? TRASH_LIST_LIMIT, TRASH_LIST_LIMIT));
+    // 入れ物（kind='page'）は出さない（タブを戻せば一緒に戻る。#307）
     const result = await this.#db.query<{ id: string; kind: PageKind; title: string; deleted_at: Date }>(
       `SELECT id, kind, title, deleted_at
          FROM pages
-        WHERE owner = $1 AND deleted_at IS NOT NULL
+        WHERE owner = $1 AND deleted_at IS NOT NULL AND kind <> 'page'
         ORDER BY deleted_at DESC, id
         LIMIT $2`,
       [owner, limit],
@@ -831,13 +1140,14 @@ export class EditorStore {
       this.#transaction(async (client) => {
         // 自分と、一緒にゴミ箱へ入った子孫（同じ deleted_at）の行を id の順に 1 文で押さえる（purge と同じ順。deadlock しない）。
         // deleted_at は µs まで持つので、JS の Date（ms）に戻さず SQL の中で比べる
+        // 一緒に入ったもの＝同じ deleted_at の 子孫（parent）・入れ物のタブ（page）・タブの入れ物（タブから上へ）
         const tree = await client.query<{ id: string }>(
           `WITH RECURSIVE root AS (
              SELECT id, deleted_at FROM pages WHERE owner = $1 AND deleted_at IS NOT NULL AND id = $2
            ), tree AS (
              SELECT id FROM root
              UNION
-             SELECT c.id FROM pages c JOIN tree t ON c.parent = t.id
+             SELECT c.id FROM pages c JOIN tree t ON c.parent = t.id OR c.page = t.id OR (c.kind = 'page' AND c.id = (SELECT page FROM pages x WHERE x.id = t.id))
               WHERE c.owner = $1 AND c.deleted_at = (SELECT deleted_at FROM root)
            )
            SELECT p.id FROM pages p JOIN tree t ON t.id = p.id
@@ -872,8 +1182,8 @@ export class EditorStore {
     const days = options.olderThanDays ?? TRASH_RETENTION_DAYS;
     if (!Number.isSafeInteger(days) || days < 1) throw new RangeError("editor-store: olderThanDays must be a positive integer");
     return this.#transaction(async (client) => {
-      const due = await client.query<{ id: string }>(
-        `SELECT id
+      const due = await client.query<{ id: string; kind: PageKind }>(
+        `SELECT id, kind
            FROM pages
           WHERE deleted_at IS NOT NULL
             AND deleted_at < clock_timestamp() - make_interval(days => $1::int)
@@ -882,6 +1192,8 @@ export class EditorStore {
           FOR UPDATE`,
         [days],
       );
+      // 数えるのは本文を持つ行とフォルダ（タブの入れ物は数えない。#307）
+      const holders = new Set(due.rows.filter((row) => row.kind === "page").map((row) => row.id));
       let ids = due.rows.map((row) => row.id);
       // 残るページのカバーが使っている資産を持つページは消さない（外すと残るページが変わる）。外した分で残るページが増えるので、変わらなくなるまで繰り返す
       for (;;) {
@@ -899,6 +1211,8 @@ export class EditorStore {
       }
       // 残る子は親を外す（消える親を指したままでは FK が親の削除を止める）
       await client.query("UPDATE pages SET parent = NULL WHERE parent = ANY($1::uuid[]) AND NOT (id = ANY($1::uuid[]))", [ids]);
+      // 残るタブは入れ物を外す（入れ物の無い 1 枚だけのページになる。#307。消えるタブどうしの参照も、1 文の DELETE に順序を持たせないよう先に外す）
+      await client.query("UPDATE pages SET page = NULL WHERE page = ANY($1::uuid[])", [ids]);
       const assets = await client.query<{ bucket_path: string }>(
         "SELECT bucket_path FROM assets WHERE page_id = ANY($1::uuid[]) ORDER BY bucket_path COLLATE \"C\"",
         [ids],
@@ -922,7 +1236,9 @@ export class EditorStore {
         }
         for (const row of deleted.rows) remaining.delete(row.id);
       }
-      return { pages: ids.length, assetPaths: assets.rows.map((row) => row.bucket_path) };
+      // タブを 1 つも持たない入れ物（kind='page'）は意味を持たないので、ついでに消す（タブだけが直に消されたとき。#307）
+      await client.query("DELETE FROM pages h WHERE h.kind = 'page' AND NOT EXISTS (SELECT 1 FROM pages t WHERE t.owner = h.owner AND t.page = h.id)");
+      return { pages: ids.filter((id) => !holders.has(id)).length, assetPaths: assets.rows.map((row) => row.bucket_path) };
     });
   }
 
@@ -1034,7 +1350,9 @@ function isBlankPageRow(row: PageRow): boolean {
     row.kind === "note" &&
     row.recipe === null &&
     row.step_status === null &&
-    row.sort_order === 0 &&
+    // タブの並び（2 つ目以降は 1 から）は中身ではない
+    (row.sort_order === 0 || row.page !== null) &&
+    row.made_from === null &&
     row.cover === null &&
     row.title.trim() === "" &&
     (row.lead === null || row.lead.trim() === "") &&
@@ -1051,6 +1369,7 @@ function isBlankPageRow(row: PageRow): boolean {
 const DISCARD_RELATED_ROWS = [
   "assets a WHERE a.owner = p.owner AND a.page_id = p.id",
   "pages c WHERE c.owner = p.owner AND c.parent = p.id",
+  "pages tb WHERE tb.owner = p.owner AND tb.page = p.id",
   "page_versions v WHERE v.page_id = p.id",
   "publications pub WHERE pub.page_id = p.id",
   "publication_versions pv WHERE pv.page_id = p.id",

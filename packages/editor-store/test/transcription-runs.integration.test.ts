@@ -9,7 +9,7 @@ import type { Pool as PgPool } from "pg";
 import { applyMigrations, defaultMigrationsDir, readMigrations } from "../src/migrate.ts";
 import { completeAudioUpload, startAudioRecording, type StartAudioRecordingInput } from "../src/recording-audio.ts";
 import { addRecordingCandidate, getRecordingCandidate, listRecordingCandidates } from "../src/recording-candidates.ts";
-import { InvalidRecordingError, createRecordingPage, getRecording, updateRecording, type Connectable, type RecordingSegment } from "../src/recordings.ts";
+import { InvalidRecordingError, getRecording, updateRecording, type Connectable, type RecordingSegment } from "../src/recordings.ts";
 import { EditorStore } from "../src/store.ts";
 import {
   claimRun,
@@ -235,12 +235,16 @@ describe("0012 on a database that has 0001 to 0011", { skip: databaseUrl === und
       // 0008 までの DB にある録音: アップロード済みの音声と VTT。音声の行は**当時の形の SQL** で入れる
       // （store の INSERT は今の列〔音声と案の migration の audio_duration_sec〕を書くので、0011 までの schema には入らない）
       const audioPage = await legacyUploadedRecording(pool);
-      const vtt = await createRecordingPage(pool, OWNER, {
-        lang: "ja",
-        source: "vtt",
-        engine: "vtt-import",
-        segments: [{ start: 0, end: 1, text: "合成の既存の段落", speaker: 1 }],
-      });
+      // VTT の録音も**当時の形の SQL**で入れる（今の createRecordingPage はタブの入れ物（kind='page'。#307）を書くので、0011 までの schema には入らない）
+      const vttId = (
+        await pool.query<{ id: string }>("INSERT INTO pages (owner, kind, title, lang, blocks) VALUES ($1, 'rec', '', 'ja', '[]'::jsonb) RETURNING id", [OWNER])
+      ).rows[0]!.id;
+      await pool.query(
+        `INSERT INTO page_recordings (page_id, owner, source, language, engine, segments, speaker_names)
+         VALUES ($1, $2, 'vtt', 'ja', 'vtt-import', $3::jsonb, '{}'::jsonb)`,
+        [vttId, OWNER, JSON.stringify([{ start: 0, end: 1, text: "合成の既存の段落", speaker: 1 }])],
+      );
+      const vtt = { page: { id: vttId } };
       const before = [await recordingRow(pool, audioPage), await recordingRow(pool, vtt.page.id)];
 
       await copyFile(join(migrations, "0012_transcription_runs.sql"), join(dir, "0012_transcription_runs.sql"));

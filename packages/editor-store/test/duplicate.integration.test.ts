@@ -71,7 +71,8 @@ describe("duplicatePage on PostgreSQL", { skip: databaseUrl === undefined }, () 
     const copy = await duplicatePage(pool, OWNER, source);
     assert.ok(copy);
     assert.notEqual(copy.id, source);
-    assert.deepEqual(Object.keys(copy).sort(), ["blocks", "cover", "createdAt", "id", "kind", "lang", "lead", "parent", "recipe", "stepStatus", "title", "updatedAt"]);
+    assert.deepEqual(Object.keys(copy).sort(), ["blocks", "cover", "createdAt", "id", "kind", "lang", "lead", "page", "parent", "recipe", "stepStatus", "title", "updatedAt"]);
+    assert.equal(copy.page, null, "入れ物の無い行の複製は入れ物の無い 1 枚（タブの複製は tabs.integration.test）");
     assert.equal(copy.title, "合成の題名のコピー");
     assert.equal(copy.kind, "article");
     assert.equal(copy.lang, "en");

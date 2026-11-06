@@ -300,7 +300,7 @@ export type AiPanelProps = {
  * ほかの段階、同じフォルダの直下に自分以外のページがあれば「◯◯ の N ページ」（参考として自動で読まれる）。
  */
 export type AiReads = {
-  kind: "note" | "rec" | "step" | "article";
+  kind: "note" | "rec" | "step" | "article" | "page";
   folder: { title: string; others: number } | null;
   /** 最新の run に文書ガイドがあれば、その手順の名前。チャットの指示に文書ガイドが入るときだけ札を出す（無ければ null）。 */
   guide?: string | null;

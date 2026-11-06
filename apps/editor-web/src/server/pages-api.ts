@@ -12,7 +12,7 @@ import {
   PAGE_BODY_MAX_BYTES,
   readJsonBody,
 } from "./http";
-import { parseCreatePage, parseListQuery, parseMoveParent, parsePageSave } from "./page-input";
+import { parseCreatePage, parseCreateTab, parseListQuery, parseMoveParent, parseMoveTab, parsePageSave, parseTabOrder } from "./page-input";
 
 /** API の route が使う store の操作。 */
 export type PagesStore = Pick<
@@ -29,10 +29,16 @@ export type PagesStore = Pick<
   | "restoreVersion"
   | "listTrash"
   | "restoreFromTrash"
+  | "createTab"
+  | "resolvePage"
+  | "reorderTabs"
+  | "moveTab"
+  | "touchLastTab"
 >;
 
-/** store がフォルダの規則で断ったときの TypeError の文言（store.ts の createPage・savePage）。 */
-const FOLDER_RULES = /^editor-store: (folder has no body|a folder cannot be inside a folder|kind cannot change to or from folder)$/;
+/** store がフォルダ・入れ物の規則で断ったときの TypeError の文言（store.ts の createPage・savePage・createTab）。 */
+const FOLDER_RULES =
+  /^editor-store: (folder has no body|a folder cannot be inside a folder|kind cannot change to or from folder|a tab holder is made with its first tab|only a page with a body has a role|a folder has no tabs|a step page has no tabs)$/;
 
 /** `/api/pages`・`/api/trash` が使うもの。route から渡す（テストでは差し替える）。 */
 export type PagesApiDeps = {
@@ -163,6 +169,100 @@ export function movePage(request: Request, id: string, deps: PagesApiDeps): Prom
     if (!result) return notFoundResponse();
     if (result === "moved") return jsonResponse(200, { parent: parent.value });
     return errorResponse(result);
+  });
+}
+
+/**
+ * GET /api/pages/{id}/tabs — 入れ物とタブ（#307）。id はタブでも入れ物でもよい。`{ page, tab, tabs }`:
+ * `page` は入れ物（入れ物の無い 1 枚だけのページなら null）、`tab` は開くタブ（タブの id ならそれ、入れ物なら最後に開いたタブ）、
+ * `tabs` は並びの順のタブ（本文は含めない）。自分のページでなければ同じ 404。
+ */
+export function getTabs(request: Request, id: string, deps: PagesApiDeps): Promise<Response> {
+  return guarded("GET /api/pages/[id]/tabs", async () => {
+    const session = await sessionOf(request, deps);
+    if (!session) return errorResponse("unauthorized");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    const resolved = await store.resolvePage(session.userId, id);
+    return resolved ? jsonResponse(200, resolved) : notFoundResponse();
+  });
+}
+
+/**
+ * POST /api/pages/{id}/tabs — 入れ物にまっさらなタブを足す（帯の右端の ＋。`{ title? }`）。id はタブでも入れ物でもよい。
+ * 201 `{ page }`（新しいタブ。`/p/<page.id>` で開く）。フォルダ・手順のサブページには足せない（400）。自分のページでなければ同じ 404。
+ */
+export function createTab(request: Request, id: string, deps: PagesApiDeps): Promise<Response> {
+  return guarded("POST /api/pages/[id]/tabs", async () => {
+    const session = await sessionOf(request, deps);
+    if (!session) return errorResponse("unauthorized");
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    const body = await readJsonBody(request);
+    if (!body.ok) return body.response;
+    const input = parseCreateTab(body.value);
+    if (!input.ok) return errorResponse("bad_request");
+    try {
+      const page = await store.createTab(session.userId, id, input.value);
+      if (!page) return notFoundResponse();
+      return jsonResponse(201, { page });
+    } catch (error) {
+      if (error instanceof TypeError && FOLDER_RULES.test(error.message)) return errorResponse("bad_request");
+      throw error;
+    }
+  });
+}
+
+/**
+ * PATCH /api/pages/{id}/tabs — タブの並びを決める（`{ ids: [...] }`。入れ物の生きているタブ全部を望む順に）。
+ * 足りない・余計な id が混ざれば 409 `order`（何も書かない）。200 `{ ids }`。自分のページでなければ同じ 404。
+ */
+export function reorderTabs(request: Request, id: string, deps: PagesApiDeps): Promise<Response> {
+  return guarded("PATCH /api/pages/[id]/tabs", async () => {
+    const session = await sessionOf(request, deps);
+    if (!session) return errorResponse("unauthorized");
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    const body = await readJsonBody(request);
+    if (!body.ok) return body.response;
+    const ids = parseTabOrder(body.value);
+    if (!ids.ok) return errorResponse("bad_request");
+    try {
+      const result = await store.reorderTabs(session.userId, id, ids.value);
+      if (result === null) return notFoundResponse();
+      return result ? jsonResponse(200, { ids: ids.value }) : errorResponse("order");
+    } catch (error) {
+      if (error instanceof TypeError && FOLDER_RULES.test(error.message)) return errorResponse("bad_request");
+      throw error;
+    }
+  });
+}
+
+/**
+ * PATCH /api/pages/{id}/tab — タブを別の入れ物へ移す（`{ page: id }`。入れ先はタブの id でもよい）。
+ * 動かすものがタブでない・入れ先が入れ物でないときは 409 `not_page`。200 `{ page }`。どちらかが自分のページでなければ同じ 404。
+ */
+export function moveTab(request: Request, id: string, deps: PagesApiDeps): Promise<Response> {
+  return guarded("PATCH /api/pages/[id]/tab", async () => {
+    const session = await sessionOf(request, deps);
+    if (!session) return errorResponse("unauthorized");
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    const body = await readJsonBody(request);
+    if (!body.ok) return body.response;
+    const target = parseMoveTab(body.value);
+    if (!target.ok) return errorResponse("bad_request");
+    try {
+      const result = await store.moveTab(session.userId, id, target.value);
+      if (result === null) return notFoundResponse();
+      return result === "moved" ? jsonResponse(200, { page: target.value }) : errorResponse(result);
+    } catch (error) {
+      if (error instanceof TypeError && FOLDER_RULES.test(error.message)) return errorResponse("bad_request");
+      throw error;
+    }
   });
 }
 

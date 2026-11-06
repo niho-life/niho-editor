@@ -165,7 +165,8 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
 
   it("creates a recording page and its transcript together, and reads them back", async () => {
     const created = await createRecordingPage(pool, OWNER, input());
-    assert.deepEqual(Object.keys(created.page).sort(), ["createdAt", "id", "kind", "lang", "title", "updatedAt"]);
+    assert.deepEqual(Object.keys(created.page).sort(), ["createdAt", "id", "kind", "lang", "page", "title", "updatedAt"]);
+    assert.ok(created.page.page, "録音のタブは入れ物（kind='page'）を指す（#307）");
     assert.equal(created.page.kind, "rec");
     assert.equal(created.page.title, "合成の会議");
     assert.equal(created.page.lang, "ja");
