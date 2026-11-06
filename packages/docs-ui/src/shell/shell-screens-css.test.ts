@@ -147,6 +147,9 @@ describe("shell.css（フェーズ2）", () => {
     // アプリ名と一覧の行の題名は token（fallback 付き）
     expect(bodyOf(".es-brand")).toContain("font-size:var(--ed-fs-brand,17px)");
     expect(bodyOf(".es-di-t")).toContain("font-size:var(--ed-fs-list,15px)");
+    // 本文の文字は包み .es-body が token から決める（editor.css は es- を読まない決まりなので shell.css に置く）
+    expect(bodyOf(".es-body")).toContain("font-size:var(--ed-fs-body,16px)");
+    expect(bodyOf(".es-body")).toContain("line-height:var(--ed-lh-body,1.9)");
     // 本文の列（.es-canvas-in）とタブの帯（#315）は同じ幅（680px・中央）
     expect(bodyOf(".es-canvas-in")).toContain("max-width:680px");
     expect(bodyOf(".es-tabbar")).toContain("max-width:680px");

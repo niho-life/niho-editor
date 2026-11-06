@@ -95,8 +95,8 @@ export function SidePage({ id, refresh = 0, onSwap, onClose }: { id: string; ref
         </div>
       )}
       {state.status === "ready" && (
-        // be--flush: 題名と本文の左端を揃える。be--ai-plain: AI の文を灰色にしない（「…」の切り替え。メインと同じ）
-        <ReadOnlyBody blocks={state.page.blocks} label="右のページの本文" className={aiGray ? "be be--flush" : "be be--flush be--ai-plain"} />
+        // be--flush: 題名と本文の左端を揃える。be--ai-plain: AI の文を灰色にしない（「…」の切り替え。メインと同じ）。es-body: 本文の文字の大きさ（メインと同じ）
+        <ReadOnlyBody blocks={state.page.blocks} label="右のページの本文" className={aiGray ? "be be--flush es-body" : "be be--flush be--ai-plain es-body"} />
       )}
     </ShellSidePane>
   );

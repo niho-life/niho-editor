@@ -7,18 +7,6 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be .doc {
   padding-left: 52px;
 }
-/*
- * 本文の文字（新しい枠 .es-root の中の文書。editor-web の PageEditor）。枠の基準（shell.css の 14px）を継がず、本文の token を読む。
- * 見出し・箇条書きは本文に対する em のままなので、ここだけで本文の大きさが決まる（見直し 2026-11-07）。
- */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .be .doc {
-  font-size: var(--ed-fs-body, 16px);
-  line-height: var(--ed-lh-body, 1.9);
-}
-/* 見出しは本文の行間（1.9）を継がず、詰める */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .be .doc :is(h1, h2, h3) {
-  line-height: 1.4;
-}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be {
   position: relative;
 }

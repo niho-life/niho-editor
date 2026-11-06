@@ -470,8 +470,10 @@ function RowHandles(props: { editor: Editor; wrapRef: RefObject<HTMLDivElement> 
  * 文書のページのタイトル（P1 の「文書のページ」で使う）。Enter（日本語入力の確定中は除く）か ↓ で本文の 1 行目の先頭へ移る。
  */
 /**
- * 題名の textarea を、書いた分だけの高さにする。幅が変わったら測り直す（高さだけを変えても幅は変わらないので、ResizeObserver が
- * 自分の変更で回り続けることはない）。返す関数で見張りをやめる。ResizeObserver が無い環境（テスト）では最初の 1 回だけ測る。
+ * 題名の textarea を、書いた分だけの高さにする。欄の幅が変わったら測り直す（高さだけを変えても幅は変わらないので、ResizeObserver が
+ * 自分の変更で回り続けることはない）。窓の resize でも測り直す: 本文の列が上限（680px）に達していると、900px の区切りで題名の
+ * 文字の大きさ（26px ↔ 30px）だけが変わって幅は変わらない（Codex P2）。返す関数で見張りをやめる。
+ * ResizeObserver が無い環境（テスト）では、窓の resize だけを見る。
  */
 export function fitTitleHeight(element: HTMLTextAreaElement): () => void {
   const fit = () => {
@@ -479,7 +481,8 @@ export function fitTitleHeight(element: HTMLTextAreaElement): () => void {
     if (element.scrollHeight > 0) element.style.height = `${element.scrollHeight}px`;
   };
   fit();
-  if (typeof ResizeObserver === "undefined") return () => undefined;
+  window.addEventListener("resize", fit);
+  if (typeof ResizeObserver === "undefined") return () => window.removeEventListener("resize", fit);
   let width = element.clientWidth;
   const observer = new ResizeObserver(() => {
     if (element.clientWidth === width) return;
@@ -487,7 +490,10 @@ export function fitTitleHeight(element: HTMLTextAreaElement): () => void {
     fit();
   });
   observer.observe(element);
-  return () => observer.disconnect();
+  return () => {
+    observer.disconnect();
+    window.removeEventListener("resize", fit);
+  };
 }
 
 export function PageTitle(props: { value: string; onChange: (value: string) => void; editor: Editor | null; placeholder?: string }) {

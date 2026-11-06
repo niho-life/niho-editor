@@ -57,15 +57,29 @@ describe("fitTitleHeight（題名の textarea を書いた分だけの高さに�
     observer.fire();
     expect(element.style.height).toBe("122px");
 
+    // 幅は同じでも窓の幅が 900px の区切りをまたぐと題名の文字が 26px ↔ 30px に変わる（本文の列が上限の 680px のとき）。窓の resize で測り直す
+    element.set({ scrollHeight: 81, clientWidth: 400 });
+    window.dispatchEvent(new Event("resize"));
+    expect(element.style.height).toBe("81px");
+
     stop();
     expect(observer.disconnected).toBe(true);
+    element.set({ scrollHeight: 500, clientWidth: 400 });
+    window.dispatchEvent(new Event("resize"));
+    expect(element.style.height).toBe("81px");
   });
 
-  it("ResizeObserver が無い環境では最初の 1 回だけ測る", () => {
+  it("ResizeObserver が無い環境では最初に測り、あとは窓の resize だけで測り直す", () => {
     vi.stubGlobal("ResizeObserver", undefined);
     const element = makeTextarea();
     const stop = fitTitleHeight(element);
     expect(element.style.height).toBe("41px");
-    expect(() => stop()).not.toThrow();
+    element.set({ scrollHeight: 81, clientWidth: 700 });
+    window.dispatchEvent(new Event("resize"));
+    expect(element.style.height).toBe("81px");
+    stop();
+    element.set({ scrollHeight: 500, clientWidth: 700 });
+    window.dispatchEvent(new Event("resize"));
+    expect(element.style.height).toBe("81px");
   });
 });
