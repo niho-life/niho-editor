@@ -1,9 +1,10 @@
 /**
- * ブラウザから録音と文字起こしの API（`/api/recordings/import-vtt`・`/api/pages/{id}/recording`）を呼ぶ（同じ origin。cookie・token は扱わない）。
+ * ブラウザから録音の API（`/api/recordings/import-vtt`・`/api/pages/{id}/recording`）を呼ぶ（同じ origin。cookie・token は扱わない）。
+ * 文字起こしのタブの本文は lib/transcript-client.ts（#310）。
  * 契約は src/server/recordings-api.ts。書き込みは `baseRevision`（直前の応答の revision）を付け、別の画面が先に直していたら
  * RecordingConflictError（何も書かれていない。`snapshot` が最新）を投げる。
  */
-import type { Recording, RecordingSegment } from "@niho/editor-store";
+import type { Recording } from "@niho/editor-store";
 import type { AudioPartView } from "./audio-upload-client";
 
 /** VTT のファイルの上限（server の VTT_IMPORT_MAX_BYTES と同じ。超える分は送る前に断る）。 */
@@ -17,60 +18,38 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 /** 話者の一覧の 1 行（段落の数つき）。name が null の話者は、表示で「話者N」と呼ぶ。 */
 export type RecordingSpeaker = { speaker: number; name: string | null; count: number };
-/** 文字起こしの案（#36 段 3b-4。一覧に出す分。本文は getCandidate で読む）。 */
-export type RecordingCandidateSummary = {
+/** この録音から作った文字起こしのタブ（#310。本文は lib/transcript-client.ts で読む）。 */
+export type TranscriptTabView = {
   id: string;
-  revision: number;
-  name: string;
-  engine: string | null;
-  /** 画面に出すエンジンの名前。 */
+  /** タブの帯と同じ札（付けた名前か、位置の番号）。 */
+  label: string;
+  engine: string;
   engineLabel: string;
   language: "ja" | "en";
   durationSec: number | null;
-  /** 採用中（この案の本文が正本に入っている）。 */
-  adopted: boolean;
-  /** pending=作っている・ready=できた・failed=できなかった。 */
-  state: "pending" | "ready" | "failed";
-  busy: boolean;
   segmentCount: number;
-  preview: string[];
-  createdAt: string;
+  revision: number;
   updatedAt: string;
 };
 
-export type RecordingCandidateFull = RecordingCandidateSummary & { segments: RecordingSegment[]; speakerNames: Record<string, string> };
-export type RecordingCandidateVersionSummary = {
-  version: number;
-  reason: "initial" | "edit" | "recording" | "asr" | "restore";
-  name: string;
-  segmentCount: number;
-  createdAt: string;
-};
-export type RecordingCandidateVersion = RecordingCandidateVersionSummary & {
-  engine: string | null;
-  language: "ja" | "en";
-  durationSec: number | null;
-  segments: RecordingSegment[];
-  speakerNames: Record<string, string>;
-};
-
 /**
- * 録音の読み取りの結果。`audios`（音声の列）と `candidates`（文字起こしの案）は GET のときだけ入る
+ * 録音の読み取りの結果。`audios`（音声の列）と `transcripts`（文字起こしのタブ）は GET のときだけ入る
  * （書き換えの応答には入らないので、画面は前の値を残す）。
  */
 export type RecordingSnapshot = {
   recording: Recording;
   speakers: RecordingSpeaker[];
   audios?: AudioPartView[];
-  candidates?: RecordingCandidateSummary[];
-  /** いま使えるエンジン（2 つ以上あれば、案のエンジンを選べる）。 */
+  transcripts?: TranscriptTabView[];
+  /** いま使えるエンジン（流れの「文字起こし 作成 ▾」の候補。「もう一度」が同じエンジンで書き直せるか）。 */
   engines?: string[];
   /** 通常の文字起こしの送信先。画面に正確な送信先を示す。 */
   defaultEngine?: string | null;
 };
 /** 取り込みで作った録音ページ。 */
 export type ImportedRecordingPage = { id: string; title: string; lang: "ja" | "en" };
-export type ImportedRecording = RecordingSnapshot & { page: ImportedRecordingPage };
+/** 取り込みの結果。`transcript` は段落を入れた文字起こしのタブ（画面はこれを開く。#310）。 */
+export type ImportedRecording = RecordingSnapshot & { page: ImportedRecordingPage; transcript: string };
 
 export type SegmentEditRequest = { index: number; text: string };
 
@@ -89,14 +68,6 @@ export class RecordingRequestError extends Error {
 export class RecordingConflictError extends RecordingRequestError {
   override readonly name: string = "RecordingConflictError";
   constructor(readonly snapshot: RecordingSnapshot) {
-    super(409, "conflict");
-  }
-}
-
-/** 候補が別の画面で先に直された。画面は自分の draft を保持し、candidate を最新表示に使う。 */
-export class RecordingCandidateConflictError extends RecordingRequestError {
-  override readonly name: string = "RecordingCandidateConflictError";
-  constructor(readonly candidate: RecordingCandidateFull) {
     super(409, "conflict");
   }
 }
@@ -138,46 +109,23 @@ function isAudioPart(value: unknown): value is AudioPartView {
   return typeof partIndex === "number" && (status === "uploading" || status === "uploaded") && typeof offsetSec === "number";
 }
 
-function isCandidate(value: unknown): value is RecordingCandidateSummary {
-  if (!isRecord(value)) return false;
-  const { id, revision, name, engine, engineLabel, language, durationSec, state, adopted, busy, segmentCount, preview, createdAt, updatedAt } = value;
-  return typeof id === "string" && UUID_PATTERN.test(id) && positiveInteger(revision) && typeof name === "string" &&
-    (engine === null || typeof engine === "string") && typeof engineLabel === "string" && (language === "ja" || language === "en") &&
-    isNullableNumber(durationSec) && (state === "pending" || state === "ready" || state === "failed") && typeof adopted === "boolean" &&
-    typeof busy === "boolean" && typeof segmentCount === "number" && Number.isSafeInteger(segmentCount) && segmentCount >= 0 &&
-    Array.isArray(preview) && preview.every((text) => typeof text === "string") && typeof createdAt === "string" && typeof updatedAt === "string";
-}
-
-function candidateSummariesOf(value: unknown): RecordingCandidateSummary[] | null {
-  if (!Array.isArray(value)) return null;
-  const byId = new Map<string, RecordingCandidateSummary>();
-  for (const candidate of value) {
-    if (!isCandidate(candidate)) continue;
-    const previous = byId.get(candidate.id);
-    if (!previous || candidate.revision > previous.revision) byId.set(candidate.id, candidate);
-  }
-  return [...byId.values()];
-}
-
 function positiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 }
 
-function fullCandidateOf(value: unknown): RecordingCandidateFull | null {
-  if (!isRecord(value)) return null;
-  const { segments, speakerNames } = value;
-  if (!isCandidate(value) || !Array.isArray(segments) || !isRecord(speakerNames)) return null;
-  if (!segments.every((segment: unknown) => isRecord(segment) && isNullableNumber(segment.start) && isNullableNumber(segment.end) && typeof segment.text === "string" && (segment.speaker === null || isSpeakerNumber(segment.speaker)))) return null;
-  if (!Object.values(speakerNames).every((name: unknown) => typeof name === "string")) return null;
-  return value as RecordingCandidateFull;
+function isTranscriptTab(value: unknown): value is TranscriptTabView {
+  if (!isRecord(value)) return false;
+  const { id, label, engine, engineLabel, language, durationSec, segmentCount, revision, updatedAt } = value;
+  return typeof id === "string" && UUID_PATTERN.test(id) && typeof label === "string" && typeof engine === "string" && typeof engineLabel === "string" &&
+    (language === "ja" || language === "en") && isNullableNumber(durationSec) && typeof segmentCount === "number" && Number.isSafeInteger(segmentCount) && segmentCount >= 0 &&
+    positiveInteger(revision) && typeof updatedAt === "string";
 }
 
 function snapshotOf(data: unknown): RecordingSnapshot | null {
   if (!isRecord(data) || !isRecording(data.recording) || !isSpeakers(data.speakers)) return null;
   const snapshot: RecordingSnapshot = { recording: data.recording, speakers: data.speakers };
   if (Array.isArray(data.audios)) snapshot.audios = data.audios.filter(isAudioPart);
-  const candidates = candidateSummariesOf(data.candidates);
-  if (candidates) snapshot.candidates = candidates;
+  if (Array.isArray(data.transcripts)) snapshot.transcripts = data.transcripts.filter(isTranscriptTab);
   if (Array.isArray(data.engines)) snapshot.engines = data.engines.filter((engine): engine is string => typeof engine === "string");
   if (data.defaultEngine === null || typeof data.defaultEngine === "string") snapshot.defaultEngine = data.defaultEngine;
   return snapshot;
@@ -187,7 +135,11 @@ function timeoutSignal(): AbortSignal | undefined {
   return typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(REQUEST_TIMEOUT_MS) : undefined;
 }
 
-async function request(path: string, method: "GET" | "POST" | "PATCH" | "DELETE", body?: unknown, retryNetwork = false): Promise<unknown> {
+/**
+ * 要求を送って JSON を読む（文字起こしのタブの API（lib/transcript-client.ts）も使う）。
+ * 2xx と 409 は `{ status, data }` を返す（409 の中身は呼ぶ側が競合の形に組む）。それ以外は RecordingRequestError（400 は reason つき）。
+ */
+export async function requestJson(path: string, method: "GET" | "POST" | "PATCH" | "DELETE", body?: unknown, retryNetwork = false): Promise<{ status: number; data: unknown }> {
   let response: Response;
   const serialized = body === undefined ? undefined : JSON.stringify(body);
   let attempts = retryNetwork ? 2 : 1;
@@ -207,25 +159,28 @@ async function request(path: string, method: "GET" | "POST" | "PATCH" | "DELETE"
       if (attempts <= 0) throw new RecordingRequestError(0);
     }
   }
-  if (response.status === 409) {
-    const body: unknown = await response.json().catch(() => null);
-    const snapshot = snapshotOf(body);
-    if (snapshot) throw new RecordingConflictError(snapshot);
-    const candidate = isRecord(body) ? fullCandidateOf(body.candidate) : null;
-    if (candidate) throw new RecordingCandidateConflictError(candidate);
-    // 競合の形でない 409（案が未完成・案が多すぎる・始められない）は、短い code を reason にして返す
-    const reason = isRecord(body) ? [body.reason, body.error].find((value) => typeof value === "string") : undefined;
-    throw new RecordingRequestError(409, typeof reason === "string" ? reason : null);
-  }
+  if (response.status === 409) return { status: 409, data: await response.json().catch(() => null) };
   if (!response.ok) {
     const data = (await response.json().catch(() => null)) as { reason?: unknown } | null;
     throw new RecordingRequestError(response.status, response.status === 400 && typeof data?.reason === "string" ? data.reason : null);
   }
   try {
-    return await response.json();
+    return { status: response.status, data: await response.json() };
   } catch {
     throw new RecordingRequestError(500);
   }
+}
+
+async function request(path: string, method: "GET" | "POST" | "PATCH" | "DELETE", body?: unknown, retryNetwork = false): Promise<unknown> {
+  const { status, data } = await requestJson(path, method, body, retryNetwork);
+  if (status === 409) {
+    const snapshot = snapshotOf(data);
+    if (snapshot) throw new RecordingConflictError(snapshot);
+    // 競合の形でない 409（始められない）は、短い code を reason にして返す
+    const reason = isRecord(data) ? [data.reason, data.error].find((value) => typeof value === "string") : undefined;
+    throw new RecordingRequestError(409, typeof reason === "string" ? reason : null);
+  }
+  return data;
 }
 
 function recordingPath(pageId: string): string {
@@ -238,14 +193,16 @@ function snapshotOrThrow(data: unknown): RecordingSnapshot {
   return snapshot;
 }
 
-/** VTT を取り込んで録音ページを作る。題名は name（ファイル名）から server が決める。 */
+/** VTT を取り込んで録音ページと文字起こしのタブを作る。題名は name（ファイル名）から server が決める。 */
 export async function importVtt(input: { name: string; vtt: string; lang?: "ja" | "en" }): Promise<ImportedRecording> {
   const data = await request("/api/recordings/import-vtt", "POST", input);
   const snapshot = snapshotOrThrow(data);
   const page = (data as { page?: Record<string, unknown> }).page;
+  const transcript = (data as { transcript?: unknown }).transcript;
   const { id, title, lang } = page ?? {};
   if (typeof id !== "string" || !UUID_PATTERN.test(id) || typeof title !== "string" || (lang !== "ja" && lang !== "en")) throw new RecordingRequestError(500);
-  return { ...snapshot, page: { id, title, lang } };
+  if (typeof transcript !== "string" || !UUID_PATTERN.test(transcript)) throw new RecordingRequestError(500);
+  return { ...snapshot, page: { id, title, lang }, transcript };
 }
 
 /** 録音を読む。録音の無いページ・ほかの人のページは 404（RecordingRequestError）。 */
@@ -276,135 +233,8 @@ export async function appendVtt(pageId: string, baseRevision: number, input: { n
   return snapshotOrThrow(await request(recordingPath(pageId), "PATCH", { baseRevision, appendVtt: input }));
 }
 
-/** 文字起こしの案（#36 段 3b-4）。 */
-function candidatePath(pageId: string, candidateId?: string): string {
-  const base = `${recordingPath(pageId)}/candidates`;
-  return candidateId === undefined ? base : `${base}/${encodeURIComponent(candidateId)}`;
-}
-
-function candidateOrThrow(data: unknown): RecordingCandidateFull {
-  const candidate = isRecord(data) ? data.candidate : null;
-  const full = fullCandidateOf(candidate);
-  if (!full) throw new RecordingRequestError(500);
-  return full;
-}
-
-function candidatesOf(data: unknown): RecordingCandidateSummary[] {
-  const list = isRecord(data) ? data.candidates : null;
-  return candidateSummariesOf(list) ?? [];
-}
-
-/** 案 1 つ（本文つき。見比べるときに読む）。 */
-export async function getCandidate(pageId: string, candidateId: string): Promise<RecordingCandidateFull> {
-  return candidateOrThrow(await request(candidatePath(pageId, candidateId), "GET"));
-}
-
-export type AddedCandidate = {
-  candidate: RecordingCandidateSummary;
-  candidates: RecordingCandidateSummary[];
-  /** 積んだ実行（積めなかったときは null。`cannotStart` に理由）。 */
-  started: boolean;
-  cannotStart: string | null;
-};
-
-/** 別のエンジンの案を作って、その案の文字起こしを始める（engine は使えるエンジンだけ。省けばサーバーの既定）。 */
-export async function addCandidate(pageId: string, engine?: string): Promise<AddedCandidate> {
-  const data = await request(candidatePath(pageId), "POST", engine === undefined ? {} : { engine });
-  const candidates = candidatesOf(data);
-  const candidate = isRecord(data) && isCandidate(data.candidate) ? data.candidate : null;
-  if (!candidate) throw new RecordingRequestError(500);
-  const cannotStart = isRecord(data) && typeof data.cannotStart === "string" ? data.cannotStart : null;
-  return { candidate, candidates, started: isRecord(data) && data.run !== null && data.run !== undefined, cannotStart };
-}
-
-/** 名前、または非採用案の本文・話者名を candidate revision CAS で保存する。 */
-export async function updateCandidate(
-  pageId: string,
-  candidateId: string,
-  input: { expectedRevision: number; name?: string; segments?: readonly RecordingSegment[]; speakerNames?: Readonly<Record<string, string>> },
-): Promise<RecordingCandidateFull> {
-  const data = await request(
-    candidatePath(pageId, candidateId),
-    "PATCH",
-    { ...input, operationId: crypto.randomUUID() },
-    true,
-  );
-  return candidateOrThrow(data);
-}
-
-/** その案を採用する（正本に写す）。candidate と recording の両 revision を確認する。 */
-export async function adoptCandidate(
-  pageId: string,
-  candidateId: string,
-  expectedCandidateRevision: number,
-  expectedRecordingRevision: number,
-): Promise<RecordingSnapshot & { candidates: RecordingCandidateSummary[] }> {
-  const data = await request(
-    `${candidatePath(pageId, candidateId)}/adopt`,
-    "POST",
-    { expectedCandidateRevision, expectedRecordingRevision, operationId: crypto.randomUUID() },
-    true,
-  );
-  return { ...snapshotOrThrow(data), candidates: candidatesOf(data) };
-}
-
-function isVersionSummary(value: unknown): value is RecordingCandidateVersionSummary {
-  if (!isRecord(value)) return false;
-  return positiveInteger(value.version) && ["initial", "edit", "recording", "asr", "restore"].includes(String(value.reason)) &&
-    typeof value.name === "string" && typeof value.segmentCount === "number" && Number.isSafeInteger(value.segmentCount) && value.segmentCount >= 0 &&
-    typeof value.createdAt === "string";
-}
-
-/** 候補の履歴（新しい順・current を含む最大 100 件）。 */
-export async function listCandidateVersions(pageId: string, candidateId: string): Promise<RecordingCandidateVersionSummary[]> {
-  const data = await request(`${candidatePath(pageId, candidateId)}/versions`, "GET");
-  const versions = isRecord(data) ? data.versions : null;
-  if (!Array.isArray(versions) || !versions.every(isVersionSummary)) throw new RecordingRequestError(500);
-  return versions;
-}
-
-/** 候補の版 1 件（本文つき）。 */
-export async function getCandidateVersion(pageId: string, candidateId: string, version: number): Promise<RecordingCandidateVersion> {
-  const data = await request(`${candidatePath(pageId, candidateId)}/versions/${version}`, "GET");
-  const found = isRecord(data) ? data.version : null;
-  if (!isRecord(found)) throw new RecordingRequestError(500);
-  const { engine, language, durationSec, segments, speakerNames } = found;
-  if (
-    !isVersionSummary(found) ||
-    (engine !== null && typeof engine !== "string") ||
-    (language !== "ja" && language !== "en") ||
-    !isNullableNumber(durationSec) ||
-    !Array.isArray(segments) ||
-    !segments.every((segment: unknown) => isRecord(segment) && isNullableNumber(segment.start) && isNullableNumber(segment.end) && typeof segment.text === "string" && (segment.speaker === null || isSpeakerNumber(segment.speaker))) ||
-    !isRecord(speakerNames) ||
-    !Object.values(speakerNames).every((name) => typeof name === "string")
-  ) throw new RecordingRequestError(500);
-  return found as RecordingCandidateVersion;
-}
-
-/** 旧版を新しい revision として復元する。 */
-export async function restoreCandidateVersion(pageId: string, candidateId: string, version: number, expectedRevision: number): Promise<RecordingCandidateFull> {
-  const data = await request(
-    `${candidatePath(pageId, candidateId)}/versions/${version}/restore`,
-    "POST",
-    { expectedRevision, operationId: crypto.randomUUID() },
-    true,
-  );
-  return candidateOrThrow(data);
-}
-
-/** その案の文字起こしをもう一度始める。 */
-export async function retryCandidate(pageId: string, candidateId: string): Promise<void> {
-  await request(`${candidatePath(pageId, candidateId)}/transcribe`, "POST");
-}
-
-/** 要らなくなった案を消す（採用中・実行中は消せない）。応答は残った案。 */
-export async function deleteCandidate(pageId: string, candidateId: string): Promise<RecordingCandidateSummary[]> {
-  return candidatesOf(await request(candidatePath(pageId, candidateId), "DELETE"));
-}
-
 /** 失敗が起きた操作（同じ reason でも、何についての失敗かで文言が替わる）。 */
-export type RecordingAction = "load" | "import" | "edit" | "rename" | "merge" | "append" | "candidate" | "adopt" | "delete_candidate";
+export type RecordingAction = "load" | "import" | "edit" | "rename" | "merge" | "append";
 
 export const CONFLICT_MESSAGE = "別の場所で先に直されました。最新に合わせました";
 
@@ -421,17 +251,9 @@ const REASON_MESSAGES: Record<string, string> = {
   append_empty: "この .vtt には発言がありません。文字起こしのある .vtt ファイルを選んでください。",
   append_too_large: "足すと文字起こしが大きすぎます。段落は 20,000 個まで、本文は合わせて 8 MiB までです。",
   append_invalid: "この .vtt の時刻か文字を読み取れませんでした。WebVTT の形式か確かめてください。",
-  // 案（#36 段 3b-4）
-  not_ready: "この案はまだできていません。できてから採用できます。",
-  too_many: "案はこれ以上作れません。使わない案を採用し直してから試してください。",
   audio_not_ready: "音声の取り込みが終わっていません。",
   audio_expired: "音声は削除されました。",
-  has_transcript: "文字起こしがすでにあります。",
-  other_run_active: "ほかの文字起こしを作っている途中です。できてから、もう一度試してください。",
-  adopted: "採用中の案は消せません。別の案を採用してから消してください。",
-  running: "この案は作っている途中です。できてから消してください。",
-  busy: "文字起こしを生成中です。完了してから編集・復元・採用してください。",
-  operation_conflict: "同じ操作番号で別の内容が送られました。ページを読み直してください。",
+  tab_missing: "この文字起こしのタブには書き直せません。ページを開き直してください。",
   transcription_unavailable: "いまは文字起こしを始められません。少ししてから、もう一度試してください。",
 };
 
@@ -439,21 +261,14 @@ const REASON_MESSAGES: Record<string, string> = {
 export function recordingErrorMessage(error: unknown, action: RecordingAction): string {
   if (!(error instanceof RecordingRequestError)) return "うまくいきませんでした。もう一度試してください。";
   const { status, reason } = error;
-  if (status === 409) {
-    // 案の 409 は競合ではなく、始められない・採用できない理由
-    const message = reason ? REASON_MESSAGES[reason] : undefined;
-    if ((action === "candidate" || action === "adopt" || action === "delete_candidate") && message) return message;
-    return CONFLICT_MESSAGE;
-  }
+  if (status === 409) return (reason && REASON_MESSAGES[reason]) || CONFLICT_MESSAGE;
   if (status === 0) return "つながりませんでした。ネットワークを確かめて、もう一度試してください。";
   if (status === 401) return "ログインが切れました。ログインし直してください。";
   if (status === 403) return "この画面からは変更できません。ページを開き直してください。";
   if (status === 404) return action === "load" ? "このページには文字起こしがありません。" : "この録音が見つかりません。ページを開き直してください。";
   if (status === 413 && action === "append") return "ファイルが大きすぎます。足せる .vtt は 4 MiB までです。";
   if (status === 413) return "ファイルが大きすぎます。.vtt は 4 MiB までです。";
-  if (status === 503) {
-    return action === "candidate" ? REASON_MESSAGES.transcription_unavailable! : "いまサーバーが使えません。少ししてから、もう一度試してください。";
-  }
+  if (status === 503) return "いまサーバーが使えません。少ししてから、もう一度試してください。";
   if (status === 400) {
     if (reason === "name") {
       if (action === "append") return "ファイル名が使えません。ファイル名を変えて、もう一度選んでください。";

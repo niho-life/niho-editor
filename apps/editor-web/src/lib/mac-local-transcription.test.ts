@@ -12,7 +12,7 @@ const manifest = [
 
 function run(status: "running" | "failed" | "succeeded" = "running", generation = 1) {
   return { run: { id: RUN, status, engine: "apple-local", executor: "mac-local", language: "ja", errorCode: null }, generation, operationId: OP,
-    settings: { engine: "apple-speech", speakerMode: "auto" }, audioManifest: manifest, candidateId: null };
+    settings: { engine: "apple-speech", speakerMode: "auto" }, audioManifest: manifest, tab: null };
 }
 
 function setup(options: { complete?: "ok" | "network" | "changed"; v2?: boolean; changedStage?: boolean; rangeContentType?: string; startStatus?: "running" | "failed"; resume?: "ok" | "stale" } = {}) {

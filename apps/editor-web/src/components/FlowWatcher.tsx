@@ -10,6 +10,7 @@ import { StepsRequestError, cancelStepRun, isStepRunDone, resumeStepRun, type St
 import { isStepRunActive, stepBandNote, stepDoneMessage, stepRunActions } from "@/lib/steps-view";
 import { TranscriptionRequestError, startTranscription } from "@/lib/transcription-client";
 import { notifyTranscriptionStarted } from "@/lib/use-transcription";
+import { transcriptionEngineLabel } from "@/recording/engine-names";
 import { useEditorFrame, type FrameFlowPage } from "./EditorFrame";
 
 /**
@@ -22,11 +23,9 @@ function pollDelay(round: number): number {
   return POLL_MS[Math.min(round, POLL_MS.length - 1)]!;
 }
 
-/** 文字起こしのエンジンの表示名（API の id は小文字。画面は製品の名前）。 */
-export const ENGINE_LABELS: Readonly<Record<string, string>> = { deepgram: "Deepgram", gemini: "Gemini", fake: "テスト用（偽物）" };
-
+/** 文字起こしのエンジンの表示名（API の id は小文字。画面は製品の名前。タブの札と同じ表）。 */
 export function engineLabel(engine: string): string {
-  return ENGINE_LABELS[engine] ?? engine;
+  return transcriptionEngineLabel(engine);
 }
 
 function messageOf(error: unknown): string {
@@ -42,10 +41,10 @@ function messageOf(error: unknown): string {
   }
   if (error instanceof TranscriptionRequestError) {
     if (error.status === 401) return "ログインが切れています。もう一度ログインしてください。";
-    if (error.status === 409 && (error.error === "has_transcript" || error.reason === "has_transcript")) {
-      return "この録音にはもう文字起こしがあります。置き換えるなら、本文の文字起こしの「もう一度」から確かめて進めてください。";
-    }
-    if (error.status === 409) return "いま文字起こしが動いています。終わるまで待ってください。";
+    if (error.status === 409 && error.reason === "audio_not_ready") return "音声の取り込みが終わっていません。";
+    if (error.status === 409 && error.reason === "audio_expired") return "音声は削除されたので、文字起こしできません。";
+    if (error.status === 409) return "いま文字起こしを始められません。";
+    if (error.status === 404) return "この録音が見つかりません。";
     if (error.status === 503) return "いま文字起こしを始められません。しばらくしてからもう一度。";
     return "文字起こしを始められませんでした。";
   }
@@ -244,12 +243,15 @@ export function FlowWatcher({ pageId, kind, onBodyReplaced }: { pageId: string; 
     return how === "regenerate" ? "このタブを作り直しています。" : "同じ入力から、もう 1 つ作っています。";
   }), [pageId, send, open]);
 
+  /** 「文字起こし 作成 ▾」: 行の録音を選んだエンジンで文字起こしし、結果を書く新しいタブを開く（#310）。 */
   const transcribe = useCallback((engine: string) => send(async () => {
-    // #310 までは録音のタブ＝文字起こし。段落があれば置き換えない（サーバーが has_transcript で断る。置き換えは本文の「もう一度」が確かめてから）
-    await startTranscription(pageId, { engine });
-    notifyTranscriptionStarted(pageId);
+    const recording = state?.rows.find((row) => row.kind === "transcript")?.recording;
+    if (!recording) throw new TranscriptionRequestError(404);
+    const result = await startTranscription(recording, { engine });
+    notifyTranscriptionStarted(recording);
+    if (result.tab && result.tab !== pageId) open(result.tab);
     return `${engineLabel(engine)} で文字起こしを始めました。`;
-  }), [pageId, send]);
+  }), [state, pageId, send, open]);
 
   const changeRecipe = useCallback((recipeId: string) => send(async () => {
     await setFlowRecipe(pageId, recipeId);
@@ -301,7 +303,7 @@ export function FlowWatcher({ pageId, kind, onBodyReplaced }: { pageId: string; 
       id: `step:${row.stepId}`,
       label: row.name,
       hint: `${state.recipe.name} · このタブからここまで作る`,
-      disabledReason: commonReason ?? (row.action === "done" ? "このタブからは作成済みです。" : row.action === null ? "今のタブより前の段階です。" : null),
+      disabledReason: commonReason ?? (row.action === "done" ? "このタブからは作成済みです。" : row.action === null ? (state.tab.kind === "rec" ? "録音のタブからは作れません。文字起こしのタブを開いてから。" : "今のタブより前の段階です。") : null),
     }));
     return {
       ownerId: pageId,

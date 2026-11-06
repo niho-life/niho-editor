@@ -38,7 +38,7 @@ export default async function PageView(props: { params: Promise<{ id: string }>;
   return (
     <OpenPage
       key={page.id}
-      summary={{ id: page.id, kind, title, lang, parent, stepStatus, sortOrder: page.sortOrder, page: page.page, role: page.role, createdAt, updatedAt, publication: null }}
+      summary={{ id: page.id, kind, title, lang, parent, stepStatus, sortOrder: page.sortOrder, page: page.page, role: page.role, madeFrom: page.madeFrom, createdAt, updatedAt, publication: null }}
       tabs={resolved.tabs.map(({ id: tabId, kind: tabKind, title: tabTitle, tabName, tabPos, stepStatus: tabStepStatus }) => ({
         id: tabId,
         kind: tabKind,

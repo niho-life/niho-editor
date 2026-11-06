@@ -31,7 +31,7 @@ export function speakerTone(speaker: number | null): ShellTone {
  * 録音の段落。id は段落の位置（0 始まり）。drafts は、まだ保存されていない（確定した）文章。
  * currentId は、いま再生している段落の id（#36 段 3b-2。その段落だけ current）。
  */
-export function shellSegments(recording: Recording, drafts: Readonly<Record<number, string>>, currentId: string | null = null): ShellSegment[] {
+export function shellSegments(recording: Pick<Recording, "segments" | "speakerNames">, drafts: Readonly<Record<number, string>>, currentId: string | null = null): ShellSegment[] {
   return recording.segments.map((segment, index) => ({
     id: String(index),
     who: segment.speaker === null ? NO_SPEAKER_LABEL : speakerLabel(segment.speaker, recording.speakerNames[String(segment.speaker)]),
@@ -48,7 +48,7 @@ export function shellSpeakers(speakers: readonly RecordingSpeaker[]): ShellSpeak
 }
 
 /** 録音の長さ（ヘッダーに出す。無ければ出さない）。 */
-export function durationLabel(recording: Recording): string | undefined {
+export function durationLabel(recording: Pick<Recording, "durationSec">): string | undefined {
   const clock = formatClock(recording.durationSec);
   return clock ? `長さ ${clock}` : undefined;
 }

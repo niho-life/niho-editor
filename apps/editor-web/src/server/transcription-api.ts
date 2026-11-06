@@ -15,11 +15,12 @@ import type { TranscriptionEngineName } from "../transcription/engine";
 import { errorResponse, folderResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
 
 /**
- * 録音の文字起こし（#36 段 2b）の API: 開始（「もう一度」を含む）と状態の取得。
+ * 録音の文字起こし（#36 段 2b → #310）の API: 開始（「もう一度」を含む）と状態の取得。
  *
  * - 開始: 本人の・ゴミ箱でないページの、アップロード済みの音声の録音に run（queued）を作り、応答のあとに実行の呼び出し口へ渡す。
- *   エンジンは設定（`EDITOR_TRANSCRIBE_ENGINE`）で決まり、要求からは選ばせない。有効な run があればそれを返す（200。積み直さない）。
- *   段落が既にある録音は、`replace: true` が無ければ 409（直した文章を失わせない）。
+ *   結果は「文字起こし」ページの**新しいタブ**に書く（#310。応答の `tab`。札はエンジンの名前）。`tab` を添えれば、この録音の
+ *   既存のタブ（失敗した・空のタブ）に書き直す（「もう一度」）。エンジンは `engine`（いま使えるものだけ）、省けば設定の既定。
+ *   有効な run があればそれを返す（200。積み直さない。`tab` はその run の書き先）。
  * - 作法は録音の API（recordings-api.ts）と同じ: 未認証 401、更新系は同じ origin からだけ（403）、別の人・存在しない・不正な id・
  *   削除済み・録音の無いページは同じ 404、エラーの本文は短い code と理由だけ。音声・鍵・bucket 名・object の場所は出さない。
  * - 呼び出し口が無いときは 503 `transcription_unavailable`（本番は `EDITOR_TRANSCRIBE_MODE=cloud-tasks` と
@@ -56,12 +57,14 @@ export type TranscriptionApiDeps = {
 /** 開始の要求の本文の上限（固有名詞 100 個 × 64 文字を JSON にしても収まる）。超えたら 413。 */
 export const TRANSCRIBE_BODY_MAX_BYTES = 64 * 1024;
 
-const START_KEYS = ["lang", "diarize", "replace", "terms", "engine"] as const;
+const START_KEYS = ["lang", "diarize", "terms", "engine", "tab"] as const;
 
-export type TranscribeBadRequestReason = "body" | "lang" | "diarize" | "replace" | "terms" | "engine";
+export type TranscribeBadRequestReason = "body" | "lang" | "diarize" | "terms" | "engine" | "tab";
 
-/** 開始できない理由（409）。candidate_missing は、案に書く実行で案が見つからないとき（#36 段 3b-4）。 */
-export type TranscribeConflictReason = "audio_not_ready" | "audio_expired" | "has_transcript" | "candidate_missing";
+/** 開始できない理由（409）。tab_missing は、書き直す先の `tab` がこの録音の文字起こしのタブでないとき（#310）。 */
+export type TranscribeConflictReason = "audio_not_ready" | "audio_expired" | "tab_missing";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /** 応答に載せる run（決まった項目だけ。store が何を足しても他の値を出さない）。録音の GET（recordings-api.ts）も使う。 */
 export function transcriptionRunBody(run: TranscriptionRunView) {
@@ -74,6 +77,8 @@ export function transcriptionRunBody(run: TranscriptionRunView) {
     createdAt: run.createdAt,
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
+    /** 結果を書く文字起こしのタブ（#310。古い run は null）。 */
+    tab: run.tab,
   };
 }
 
@@ -108,11 +113,11 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-type StartRequest = { language?: PageLang; diarize: boolean; replace: boolean; terms: string[]; engine?: TranscriptionEngineName; termsGiven: boolean };
+type StartRequest = { language?: PageLang; diarize: boolean; terms: string[]; engine?: TranscriptionEngineName; tab?: string; termsGiven: boolean };
 
 /**
- * `{ lang?, diarize?, replace?, terms?, engine? }` だけを受ける。既定は diarize: true・replace: false・terms: []・
- * 言語は録音の言語・エンジンは設定の既定。`engine` は**いま使えるエンジン**だけ（鍵の無いエンジンは 400 engine）。
+ * `{ lang?, diarize?, terms?, engine?, tab? }` だけを受ける。既定は diarize: true・terms: []・言語は録音の言語・
+ * エンジンは設定の既定・書き先は新しいタブ。`engine` は**いま使えるエンジン**だけ（鍵の無いエンジンは 400 engine）。`tab` は UUID。
  */
 function parseStart(body: unknown, engines: readonly TranscriptionEngineName[]): { ok: true; value: StartRequest } | { ok: false; reason: TranscribeBadRequestReason } {
   if (!isPlainObject(body) || !Object.keys(body).every((key) => (START_KEYS as readonly string[]).includes(key))) return { ok: false, reason: "body" };
@@ -123,7 +128,7 @@ function parseStart(body: unknown, engines: readonly TranscriptionEngineName[]):
     language = body.lang;
   }
   if (body.diarize !== undefined && typeof body.diarize !== "boolean") return { ok: false, reason: "diarize" };
-  if (body.replace !== undefined && typeof body.replace !== "boolean") return { ok: false, reason: "replace" };
+  if (body.tab !== undefined && (typeof body.tab !== "string" || !UUID.test(body.tab))) return { ok: false, reason: "tab" };
   let terms: string[] = [];
   if (body.terms !== undefined) {
     if (!Array.isArray(body.terms) || body.terms.length > TRANSCRIPTION_TERMS_MAX) return { ok: false, reason: "terms" };
@@ -144,18 +149,18 @@ function parseStart(body: unknown, engines: readonly TranscriptionEngineName[]):
     value: {
       ...(language === undefined ? {} : { language }),
       diarize: body.diarize ?? true,
-      replace: body.replace ?? false,
       terms,
       termsGiven: body.terms !== undefined,
       ...(engine === undefined ? {} : { engine }),
+      ...(body.tab === undefined ? {} : { tab: body.tab as string }),
     },
   };
 }
 
 /**
- * POST /api/pages/{id}/recording/transcribe — 文字起こしを始める（「もう一度」も同じ）。
- * 202 `{ run }`（作った。応答のあとに実行を始める）・200 `{ run }`（有効な run が既にある）。
- * 409 `{ error: "cannot_start", reason }`（audio_not_ready・audio_expired・has_transcript）。
+ * POST /api/pages/{id}/recording/transcribe — 文字起こしを始める（「もう一度」は `tab` を添えて同じ）。
+ * 202 `{ run, tab }`（作った。`tab` は結果を書く文字起こしのタブ。応答のあとに実行を始める）・200 `{ run, tab }`（有効な run が既にある）。
+ * 409 `{ error: "cannot_start", reason }`（audio_not_ready・audio_expired・tab_missing）。
  */
 export function startTranscriptionRoute(request: Request, id: string, deps: TranscriptionApiDeps): Promise<Response> {
   return guarded("POST /api/pages/[id]/recording/transcribe", async () => {
@@ -185,16 +190,15 @@ export function startTranscriptionRoute(request: Request, id: string, deps: Tran
     switch (result.status) {
       case "audio_not_ready":
       case "audio_expired":
-      case "has_transcript":
-      case "candidate_missing":
+      case "tab_missing":
         return cannotStart(result.status);
       case "existing":
         // 有効な run が既にある: 積み直さない
-        return jsonResponse(200, { run: transcriptionRunBody(result.run) });
+        return jsonResponse(200, { run: transcriptionRunBody(result.run), tab: result.tab });
       case "created":
         break;
     }
-    const { run } = result;
+    const { run, tab } = result;
     try {
       await runner.dispatcher.dispatch(run.id);
     } catch (error) {
@@ -202,9 +206,9 @@ export function startTranscriptionRoute(request: Request, id: string, deps: Tran
       console.error("editor-web: transcription dispatch failed", { name: error instanceof Error ? error.name : "unknown" });
       await store.failRun(run.id, 0, "internal");
       const current = (await store.status(owner, id))?.run;
-      return jsonResponse(202, { run: transcriptionRunBody(current && current.id === run.id ? current : run) });
+      return jsonResponse(202, { run: transcriptionRunBody(current && current.id === run.id ? current : run), tab });
     }
-    return jsonResponse(202, { run: transcriptionRunBody(run) });
+    return jsonResponse(202, { run: transcriptionRunBody(run), tab });
   });
 }
 

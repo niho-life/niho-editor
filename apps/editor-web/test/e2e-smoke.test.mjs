@@ -941,7 +941,7 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.equal(stored.rows[0].asset_kind, "audio");
   });
 
-  it("transcribes the uploaded audio with the fake engine, keeps an edited transcript unless replace is asked, and answers the same 404 for others (#36 段 2b)", async () => {
+  it("transcribes the uploaded audio with the fake engine into a tab of the 文字起こし page, edits the tab, adds a second tab, rewrites the first on もう一度, and answers the same 404 for others (#36 段 2b → #310)", async () => {
     // EDITOR_TRANSCRIBE_ENGINE・EDITOR_STORAGE は未設定（next dev なので、どちらも偽物）。合成の名前・小さなバイト列だけを使う
     const pageId = await uploadAudio(base, write, "合成の文字起こし e2e.m4a");
     createdIds.push(pageId);
@@ -954,45 +954,85 @@ describe("editor-web e2e (stub, next dev)", () => {
     const first = await write("POST", `/api/pages/${pageId}/recording/transcribe`, {});
     assert.equal(first.status, 202);
     assert.equal(first.headers.get("cache-control"), "private, no-store");
-    const firstRun = (await first.json()).run;
+    const firstBody = await first.json();
+    const firstRun = firstBody.run;
+    const firstTab = firstBody.tab;
     assert.equal(firstRun.engine, "fake");
     assert.equal(firstRun.language, "ja");
+    assert.equal(firstRun.tab, firstTab);
+    assert.match(firstTab, /^[0-9a-f-]{36}$/);
+    createdIds.push(firstTab);
     const done = await waitForRun(base, pageId, firstRun.id);
     assert.equal(done.status, "succeeded");
     assert.equal(done.errorCode, null);
 
+    // 録音のタブ: 正本に段落は入らず、文字起こしのタブの一覧に 1 つ（札はエンジンの名前）
     const read = await fetch(`${base}/api/pages/${pageId}/recording`);
     assert.equal(read.status, 200);
     const readBody = await read.json();
     assert.deepEqual(readBody.transcription, done);
-    const { recording } = readBody;
-    assert.equal(recording.engine, "fake");
-    assert.equal(recording.revision, 2);
-    assert.equal(recording.audio.status, "uploaded", "the audio stays");
-    assert.deepEqual(recording.segments.map((segment) => segment.speaker), [1, 2, 1], "speakers are numbered from 1");
-    assert.ok(recording.segments.every((segment) => segment.text.startsWith("[fake] ")));
-    assert.deepEqual(readBody.speakers.map((speaker) => speaker.speaker), [1, 2]);
+    assert.equal(readBody.recording.audio.status, "uploaded", "the audio stays");
+    assert.deepEqual(readBody.recording.segments, [], "the recording row holds no transcript (the tab does)");
+    assert.deepEqual(readBody.transcripts.map((tab) => [tab.id, tab.label, tab.engine, tab.segmentCount]), [[firstTab, "開発の偽物", "fake", 3]]);
+    // 録音はフォルダに包まれ、文字起こしのタブは同じフォルダの「文字起こし」ページのタブ
+    const placed = await pool.query("SELECT kind, parent, page, made_from FROM pages WHERE id = ANY($1::uuid[]) ORDER BY kind", [[pageId, firstTab]]);
+    assert.deepEqual(placed.rows.map((row) => row.kind), ["note", "rec"]);
+    assert.equal(placed.rows[0].parent, placed.rows[1].parent);
+    assert.deepEqual(placed.rows[0].made_from, { kind: "transcript", recording: pageId, engine: "fake" });
+    const holder = await pool.query("SELECT title, role, parent FROM pages WHERE id = $1", [placed.rows[0].page]);
+    assert.deepEqual(holder.rows[0], { title: "文字起こし", role: { kind: "transcript" }, parent: placed.rows[1].parent });
 
-    // 段落を直せる（段 1 の PATCH）
-    const edited = await write("PATCH", `/api/pages/${pageId}/recording`, { baseRevision: 2, edits: [{ index: 0, text: "直した合成の段落" }] });
+    // 文字起こしのタブの本文
+    const tabRead = await fetch(`${base}/api/pages/${firstTab}/transcript`);
+    assert.equal(tabRead.status, 200);
+    assert.equal(tabRead.headers.get("cache-control"), "private, no-store");
+    const tabBody = await tabRead.json();
+    assert.equal(tabBody.transcript.recording, pageId);
+    assert.equal(tabBody.transcript.engine, "fake");
+    assert.equal(tabBody.transcript.revision, 2);
+    assert.deepEqual(tabBody.transcript.segments.map((segment) => segment.speaker), [1, 2, 1], "speakers are numbered from 1");
+    assert.ok(tabBody.transcript.segments.every((segment) => segment.text.startsWith("[fake] ")));
+    assert.deepEqual(tabBody.speakers.map((speaker) => speaker.speaker), [1, 2]);
+    assert.deepEqual(tabBody.run, done);
+
+    // 段落を直せる（文字起こしのタブの PATCH。録音の正本は触らない）
+    const edited = await write("PATCH", `/api/pages/${firstTab}/transcript`, { baseRevision: 2, edits: [{ index: 0, text: "直した合成の段落" }] });
     assert.equal(edited.status, 200);
-    assert.equal((await edited.json()).recording.revision, 3);
+    assert.equal((await edited.json()).transcript.revision, 3);
+    const stale = await write("PATCH", `/api/pages/${firstTab}/transcript`, { baseRevision: 2, edits: [{ index: 1, text: "古い revision" }] });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).transcript.segments[0].text, "直した合成の段落");
 
-    // もう一度: 段落があるので replace が無ければ断る（直した文章は残る）
-    const refused = await write("POST", `/api/pages/${pageId}/recording/transcribe`, {});
-    assert.equal(refused.status, 409);
-    assert.equal(await refused.text(), '{"error":"cannot_start","reason":"has_transcript"}');
-    assert.equal((await (await fetch(`${base}/api/pages/${pageId}/recording`)).json()).recording.segments[0].text, "直した合成の段落");
+    // もう一度: 新しいタブ（直したタブはそのまま）
+    const second = await write("POST", `/api/pages/${pageId}/recording/transcribe`, {});
+    assert.equal(second.status, 202);
+    const secondBody = await second.json();
+    assert.notEqual(secondBody.run.id, firstRun.id);
+    assert.notEqual(secondBody.tab, firstTab);
+    createdIds.push(secondBody.tab);
+    assert.equal((await waitForRun(base, pageId, secondBody.run.id)).status, "succeeded");
+    const tabs = (await (await fetch(`${base}/api/pages/${pageId}/recording`)).json()).transcripts;
+    assert.deepEqual(tabs.map((tab) => [tab.id, tab.label, tab.segmentCount]), [[firstTab, "開発の偽物", 3], [secondBody.tab, "開発の偽物 2", 3]]);
+    assert.equal((await (await fetch(`${base}/api/pages/${firstTab}/transcript`)).json()).transcript.segments[0].text, "直した合成の段落");
 
-    const replace = await write("POST", `/api/pages/${pageId}/recording/transcribe`, { replace: true });
-    assert.equal(replace.status, 202);
-    const replaceRun = (await replace.json()).run;
-    assert.notEqual(replaceRun.id, firstRun.id);
-    assert.equal((await waitForRun(base, pageId, replaceRun.id)).status, "succeeded");
-    const replaced = (await (await fetch(`${base}/api/pages/${pageId}/recording`)).json()).recording;
-    assert.equal(replaced.revision, 4);
-    assert.ok(replaced.segments[0].text.startsWith("[fake] "));
-    assert.equal((await pool.query("SELECT count(*)::int AS n FROM transcription_runs WHERE page_id = $1", [pageId])).rows[0].n, 2);
+    // 同じタブに書き直す（`tab` を添える）。直す前の本文は版（asr）に残る
+    const rewrite = await write("POST", `/api/pages/${pageId}/recording/transcribe`, { tab: firstTab });
+    assert.equal(rewrite.status, 202);
+    assert.equal((await rewrite.json()).tab, firstTab);
+    assert.equal((await waitForRun(base, pageId, (await (await fetch(`${base}/api/pages/${firstTab}/transcript`)).json()).run.id)).status, "succeeded");
+    const rewritten = (await (await fetch(`${base}/api/pages/${firstTab}/transcript`)).json()).transcript;
+    assert.ok(rewritten.segments[0].text.startsWith("[fake] "));
+    assert.equal(rewritten.revision, 4);
+    const versions = (await (await fetch(`${base}/api/pages/${firstTab}/transcript/versions`)).json()).versions;
+    assert.deepEqual(versions.map((version) => [version.version, version.reason]), [[2, "asr"], [1, "edit"]]);
+    const restored = await write("POST", `/api/pages/${firstTab}/transcript/versions/2/restore`, { baseRevision: 4 });
+    assert.equal(restored.status, 200);
+    assert.equal((await restored.json()).transcript.segments[0].text, "直した合成の段落");
+    // 別の録音のタブには書き直せない
+    const foreign = await write("POST", `/api/pages/${pageId}/recording/transcribe`, { tab: randomUUID() });
+    assert.equal(foreign.status, 409);
+    assert.equal(await foreign.text(), '{"error":"cannot_start","reason":"tab_missing"}');
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM transcription_runs WHERE page_id = $1", [pageId])).rows[0].n, 3);
 
     // 別の owner の音声のページは、存在しない id と同じ 404（run も作らない）
     const theirs = await pool.query("INSERT INTO pages (owner, kind, title) VALUES ($1, 'rec', 'synthetic other transcription') RETURNING id", [OTHER_OWNER]);
@@ -1176,11 +1216,16 @@ describe("editor-web e2e (stub, next dev, the fake transcription engine fails) (
     assert.deepEqual(read.recording.segments, []);
     assert.equal(read.recording.revision, 1);
     assert.deepEqual(read.transcription, failed);
+    // 書き先のタブは空のまま残る（#310）。「もう一度」は同じタブに書き直す
+    assert.deepEqual(read.transcripts.map((tab) => [tab.id, tab.segmentCount]), [[failed.tab, 0]]);
+    createdIds.push(failed.tab);
 
-    // もう一度（新しい run。偽物は同じ理由でまた失敗する）
-    const again = await write("POST", `/api/pages/${pageId}/recording/transcribe`, {});
+    // もう一度（新しい run・同じタブ。偽物は同じ理由でまた失敗する）
+    const again = await write("POST", `/api/pages/${pageId}/recording/transcribe`, { tab: failed.tab });
     assert.equal(again.status, 202);
-    const againRun = (await again.json()).run;
+    const againBody = await again.json();
+    const againRun = againBody.run;
+    assert.equal(againBody.tab, failed.tab);
     assert.notEqual(againRun.id, firstRun.id);
     assert.equal((await waitForRun(base, pageId, againRun.id)).errorCode, "engine_unavailable");
     const runs = await pool.query("SELECT status, error_code FROM transcription_runs WHERE page_id = $1 ORDER BY created_at", [pageId]);

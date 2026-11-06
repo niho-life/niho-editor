@@ -77,13 +77,15 @@ describe("flowRows（流れの行。#309）", () => {
     expect(column.map((row) => [row.current, row.action])).toEqual([[false, null], [false, null], [false, "go"], [false, "go"], [false, "go"]]);
     expect(column[1]?.engines).toBeUndefined();
     const outside = flowRows({ tab: { id: "lone", kind: "rec", title: "外の録音", holder: "h-lone", folder: null }, flow: null, recipe: RECIPE, run: null, engines: ["gemini"] });
+    // 録音のタブからは段階を作らない（入力は文字起こしのタブ。#310）。文字起こしの行はこの録音にエンジンのメニュー
     expect(outside.map((row) => [row.name, row.current, row.action, row.holder?.id ?? null])).toEqual([
       ["外の録音", true, null, "h-lone"],
       ["文字起こし", false, "go", null],
-      ["文字起こし修正", false, "go", null],
-      ["記事方針", false, "go", null],
-      ["記事本文", false, "go", null],
+      ["文字起こし修正", false, null, null],
+      ["記事方針", false, null, null],
+      ["記事本文", false, null, null],
     ]);
     expect(outside[1]?.engines).toEqual([{ id: "gemini", used: false }]);
+    expect(outside[1]?.recording).toBe("lone");
   });
 });

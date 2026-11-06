@@ -26,6 +26,7 @@ const run = (status: TranscriptionRun["status"], errorCode: string | null = null
   createdAt: "2030-01-01T00:00:00.000Z",
   startedAt: null,
   finishedAt: null,
+  tab: null,
 });
 
 const play = (events: TranscriptionEvent[], from: TranscriptionState = INITIAL_TRANSCRIPTION_STATE) => events.reduce(transcriptionReducer, from);
@@ -107,7 +108,7 @@ describe("transcription view words", () => {
     expect(startErrorMessage(new TranscriptionRequestError(502))).toContain("いまは始められません");
     expect(startErrorMessage(new TranscriptionRequestError(409, "cannot_start", "audio_not_ready"))).toBe("音声の取り込みが終わっていません。");
     expect(startErrorMessage(new TranscriptionRequestError(409, "cannot_start", "audio_expired"))).toBe("音声は削除されました。");
-    expect(startErrorMessage(new TranscriptionRequestError(409, "cannot_start", "has_transcript"))).toContain("文字起こしがすでにあります");
+    expect(startErrorMessage(new TranscriptionRequestError(409, "cannot_start", "tab_missing"))).toContain("書き直せません");
     expect(startErrorMessage(new TranscriptionRequestError(401))).toContain("ログイン");
     expect(startErrorMessage(new TypeError("offline"))).toContain("つながりませんでした");
   });

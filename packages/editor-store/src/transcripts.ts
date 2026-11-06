@@ -354,6 +354,37 @@ export async function restoreTranscriptVersion(pool: Connectable & Queryable, ow
   }
 }
 
+export type TranscriptText = { segments: RecordingSegment[]; speakerNames: Record<string, string> };
+
+// $1 owner / $2 page id（文字起こしのタブか録音のタブ）。タブ自身を最優先、録音なら段落のある最新のタブ。
+const TEXT_SQL = `
+SELECT t.segments, t.speaker_names
+  FROM page_transcripts AS t
+  JOIN pages AS p ON p.owner = t.owner AND p.id = t.page_id
+ WHERE t.owner = $1 AND p.deleted_at IS NULL AND (t.page_id = $2 OR t.recording_page_id = $2)
+ ORDER BY (t.page_id = $2) DESC, (jsonb_array_length(t.segments) > 0) DESC, p.updated_at DESC, p.id DESC
+ LIMIT 1`;
+
+const LEGACY_TEXT_SQL = `
+SELECT r.segments, r.speaker_names
+  FROM page_recordings AS r
+  JOIN pages AS p ON p.owner = r.owner AND p.id = r.page_id
+ WHERE r.owner = $1 AND r.page_id = $2 AND p.deleted_at IS NULL`;
+
+/**
+ * 読むための文字起こしの本文（AI チャットの read_page・search_transcript）: 文字起こしのタブならその本文、録音のタブなら
+ * その録音の段落のある最新の文字起こしのタブ、どちらも無ければ正本（#310 より前の録音）。本人の・ゴミ箱でないものだけ。無ければ null。
+ */
+export async function readTranscriptText(db: Queryable, owner: OwnerId, pageId: string): Promise<TranscriptText | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId)) return null;
+  const row = (await db.query<{ segments: RecordingSegment[]; speaker_names: Record<string, string> }>(TEXT_SQL, [owner, pageId])).rows[0]
+    ?? (await db.query<{ segments: RecordingSegment[]; speaker_names: Record<string, string> }>(LEGACY_TEXT_SQL, [owner, pageId])).rows[0];
+  if (!row) return null;
+  const data = copyData({ segments: row.segments, speakerNames: row.speaker_names });
+  return { segments: data.segments, speakerNames: data.speakerNames };
+}
+
 // ---------------------------------------------------------------------------
 // 入れ物とタブを作る（文字起こしの開始・VTT の取り込みが transaction の中で呼ぶ）
 

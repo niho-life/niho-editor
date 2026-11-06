@@ -111,7 +111,7 @@ export function canRetry(run: TranscriptionRun | null): boolean {
   return run?.status === "failed" && run.errorCode !== "audio_expired";
 }
 
-/** 開始の失敗の文言。has_transcript は呼ぶ側が録音を読み直す。 */
+/** 開始の失敗の文言。 */
 export function startErrorMessage(error: unknown): string {
   if (!(error instanceof TranscriptionRequestError)) return "つながりませんでした。ネットワークを確かめて、もう一度試してください。";
   const { status, reason } = error;
@@ -120,7 +120,7 @@ export function startErrorMessage(error: unknown): string {
   if (status === 404) return "この録音が見つかりません。ページを開き直してください。";
   if (status === 409 && reason === "audio_not_ready") return "音声の取り込みが終わっていません。";
   if (status === 409 && reason === "audio_expired") return "音声は削除されました。";
-  if (status === 409 && reason === "has_transcript") return "文字起こしがすでにあります。最新の文字起こしを読み込みました。";
+  if (status === 409 && reason === "tab_missing") return "この文字起こしのタブには書き直せません。ページを開き直してください。";
   if (status === 502 || status === 503) return "いまは始められません。少ししてから、もう一度試してください。";
   return "いまは始められません。少ししてから、もう一度試してください。";
 }

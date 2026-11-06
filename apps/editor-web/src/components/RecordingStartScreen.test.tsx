@@ -22,8 +22,11 @@ import { RecordingStartScreen } from "./RecordingStartScreen";
 const PAGE_ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
 const VTT = "WEBVTT\n\n00:00:00.000 --> 00:00:04.000\n<v Takuya>こんにちは\n";
 
+const TRANSCRIPT = "7a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d";
 const created = {
   page: { id: PAGE_ID, kind: "rec", title: "dinner", lang: "ja", createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" },
+  // 段落を入れた文字起こしのタブ（#310。画面はこれを開く）
+  transcript: TRANSCRIPT,
   recording: {
     revision: 1,
     source: "vtt",
@@ -281,7 +284,7 @@ describe("RecordingStartScreen", () => {
     expect(alertText()).toBe("");
   });
 
-  it("imports the chosen .vtt: posts its name and text once, adds the page to the list, and moves to it", async () => {
+  it("imports the chosen .vtt: posts its name and text once, adds the page to the list, and moves to the transcript tab", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => respond(201, created));
     vi.stubGlobal("fetch", fetchMock);
     await mount();
@@ -294,7 +297,7 @@ describe("RecordingStartScreen", () => {
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({ name: "dinner.vtt", vtt: VTT });
     expect(frame.pageCreated).toHaveBeenCalledWith(PAGE_ID, "dinner", "rec", null);
-    expect(router.push).toHaveBeenCalledWith(`/p/${PAGE_ID}`);
+    expect(router.push).toHaveBeenCalledWith(`/p/${TRANSCRIPT}`);
   });
 
   it("does not send twice while importing", async () => {
@@ -384,7 +387,7 @@ describe("RecordingStartScreen", () => {
     await start();
     await settle();
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(router.push).toHaveBeenCalledWith(`/p/${PAGE_ID}`);
+    expect(router.push).toHaveBeenCalledWith(`/p/${TRANSCRIPT}`);
     expect(alertText()).toBe("");
   });
 

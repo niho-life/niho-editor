@@ -66,14 +66,16 @@ describe("GET /api/pages/{id}/flow（流れ。#309）", () => {
     expect(body.tab).toEqual({ id: recording, kind: "rec", holder: store.holderOf(recording)!.id, folder: { id: folder, title: "取材" } });
     expect(body.recipe).toMatchObject({ id: "tpl-1", name: "記事制作" });
     expect(body.recipes.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3", "tpl-4"]);
+    // 録音のタブからは段階を作らない（段階の入力は文字起こしのタブ。#310）。文字起こしの行はエンジンのメニュー（この録音に）
     expect(body.rows.map((row) => [row.kind, row.name, row.current, row.action])).toEqual([
       ["rec", "合成の録音", true, null],
       ["transcript", "文字起こし", false, "go"],
-      ["step", "文字起こし修正", false, "go"],
-      ["step", "記事方針", false, "go"],
-      ["step", "記事本文", false, "go"],
+      ["step", "文字起こし修正", false, null],
+      ["step", "記事方針", false, null],
+      ["step", "記事本文", false, null],
     ]);
     expect(body.rows[1]?.engines).toEqual([{ id: "gemini", used: false }, { id: "deepgram", used: false }]);
+    expect(body.rows[1]?.recording).toBe(recording);
     expect(body.run).toBeNull();
     // フォルダの id と ?tab= でも同じ。別のフォルダの id・タブで無い id は 404
     expect(await flowOf(await flow(folder, deps("user-a", store), `?tab=${recording}`))).toEqual(body);
@@ -95,7 +97,7 @@ describe("GET /api/pages/{id}/flow（流れ。#309）", () => {
       ["文字起こし", "go", null, []],
       ["文字起こし修正", "done", "文字起こし修正", ["done"]],
       ["記事方針", "done", "記事方針", ["done"]],
-      ["記事本文", "go", null, []],
+      ["記事本文", null, null, []],
     ]);
     expect(body.rows[1]?.engines).toEqual([{ id: "gemini", used: true }, { id: "deepgram", used: false }]);
     expect(body.run?.id).toBe(created.run.id);

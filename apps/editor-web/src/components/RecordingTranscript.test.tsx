@@ -1,116 +1,97 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { RecordingData } from "@niho/editor-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendTranscript } from "@/recording/append-transcript";
-import { editSegments } from "@/recording/edit-segments";
-import { listSpeakers, mergeSpeakers, renameSpeaker } from "@/recording/speakers";
-import { readVtt } from "@/recording/vtt-import";
 import { RecordingTranscript } from "./RecordingTranscript";
 
+const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }));
+const frame = vi.hoisted(() => ({ openPage: null as null | ((id: string) => void) }));
 const macCompletion = vi.hoisted(() => ({ onSucceeded: null as (() => void) | null }));
+vi.mock("next/navigation", () => ({ useRouter: () => router }));
+vi.mock("./EditorFrame", () => ({ useEditorFrame: () => ({ openPage: frame.openPage }) }));
 vi.mock("./MacGeminiTranscription", () => ({
   MacGeminiTranscription: ({ onSucceeded }: { onSucceeded: () => void }) => {
     macCompletion.onSucceeded = onSucceeded;
     return null;
   },
 }));
-
-const PAGE_ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
-const CONFLICT_TEXT = "別の場所で先に直されました。最新に合わせました";
+vi.mock("./MacLocalTranscription", () => ({ MacLocalTranscription: () => null }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type Patch = {
-  baseRevision: number;
-  edits?: { index: number; text: string }[];
-  renameSpeaker?: { speaker: number; name: string | null };
-  mergeSpeakers?: { from: number; into: number };
-  appendVtt?: { name: string; vtt: string };
-};
+// 合成の値だけ（実在の人名・音声は使わない）
+const PAGE_ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
+const TAB = "7a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d";
+const TAB2 = "8b2c3d4e-5f6a-4b7c-9d8e-9f0a1b2c3d4e";
+const RUN_ID = "0b6c9a4e-3f0a-4c5e-9d1e-2a7b8c9d0e1f";
+const NOW = Date.parse("2030-01-10T03:00:00.000Z");
+const EXPIRES = "2030-01-31T03:00:00.000Z";
 
-/** 本物の純粋な関数（edit-segments・speakers）で動く、revision つきの録音の API の代わり。 */
-function createServer(initial?: Partial<RecordingData>) {
+type Run = { id: string; status: "queued" | "running" | "succeeded" | "failed"; engine: string; language: "ja"; errorCode: string | null; createdAt: string; startedAt: null; finishedAt: null; tab: string | null };
+const runOf = (status: Run["status"], errorCode: string | null = null, tab: string | null = TAB): Run => ({ id: RUN_ID, status, engine: "fake", language: "ja", errorCode, createdAt: "2030-01-10T00:00:00.000Z", startedAt: null, finishedAt: null, tab });
+type TabRow = { id: string; label: string; engine: string; engineLabel: string; language: "ja"; durationSec: number | null; segmentCount: number; revision: number; updatedAt: string };
+const tabOf = (id: string, label: string, engine: string, segmentCount: number): TabRow => ({ id, label, engine, engineLabel: engine === "fake" ? "開発の偽物" : "Deepgram", language: "ja", durationSec: 125, segmentCount, revision: 1, updatedAt: "2030-01-10T00:00:00.000Z" });
+
+/** 音声のある録音の API の偽物。runs は GET transcription が順に返す run（最後は繰り返す）。 */
+function createServer(options: { audio?: null | { status: "uploading" | "uploaded"; expiresAt?: string }; runs?: (Run | null)[]; start?: () => Response; defaultEngine?: string | null; transcripts?: TabRow[]; transcriptsAfter?: TabRow[] } = {}) {
   const state = {
-    revision: 1,
-    durationSec: 125 as number | null,
-    data: {
-      segments: [
-        { start: 0, end: 4, text: "最初の段落です。", speaker: 1 },
-        { start: 4, end: 9, text: "二つ目の段落です。", speaker: 2 },
-        { start: 9, end: 12, text: "三つ目の段落です。", speaker: 1 },
-        { start: 12, end: 15, text: "四つ目の段落です。", speaker: 3 },
-      ],
-      speakerNames: { "1": "Takuya", "2": "Mika" },
-      ...initial,
-    } as RecordingData,
-    patches: [] as Patch[],
-    gets: 0,
-    status: 200,
-    /** 値を入れると、次の PATCH はそれが呼ばれるまで返さない。 */
-    hold: null as Promise<void> | null,
-    /** 読み取り（GET）の応答にだけ付く欄（音声の列・案の一覧。変更の応答には入らない）と、録音の audio。 */
-    getOnly: null as null | { audio: unknown; audios: unknown[]; candidates: unknown[] },
+    runs: [...(options.runs ?? [null])],
+    posts: [] as unknown[],
+    gets: { recording: 0, transcription: 0 },
+    transcripts: options.transcripts ?? [],
   };
   const snapshot = () => ({
     recording: {
-      revision: state.revision,
-      source: "vtt",
+      revision: 1,
+      source: options.audio === null ? "vtt" : "audio",
       language: "ja",
       engine: null,
-      durationSec: state.durationSec,
-      sourceName: "dinner.vtt",
+      durationSec: 125,
+      sourceName: "合成の会議.m4a",
       sourceSha256: null,
-      segments: state.data.segments,
-      speakerNames: state.data.speakerNames,
-      audio: state.getOnly?.audio ?? null,
-      createdAt: "2026-10-30T00:00:00.000Z",
-      updatedAt: "2026-10-30T00:00:00.000Z",
+      segments: [],
+      speakerNames: {},
+      audio: options.audio === null ? null : { status: options.audio?.status ?? "uploaded", bytes: 3, contentType: "audio/mp4", expiresAt: options.audio?.expiresAt ?? EXPIRES },
+      createdAt: "2030-01-01T00:00:00.000Z",
+      updatedAt: "2030-01-01T00:00:00.000Z",
     },
-    speakers: listSpeakers(state.data),
+    speakers: [],
+    audios: [],
+    transcripts: state.transcripts,
+    engines: ["deepgram", "fake"],
+    defaultEngine: options.defaultEngine === undefined ? "deepgram" : options.defaultEngine,
   });
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-  const fetchMock = vi.fn(async (_path: string, init?: RequestInit) => {
-    if (state.status !== 200) return json(state.status, { error: "x" });
-    if (init?.method === "GET") {
-      state.gets += 1;
-      return json(200, state.getOnly ? { ...snapshot(), audios: state.getOnly.audios, candidates: state.getOnly.candidates } : snapshot());
+  const fetchMock = vi.fn(async (resource: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(resource);
+    if (path === `/api/pages/${PAGE_ID}/recording` && init?.method === "GET") {
+      state.gets.recording += 1;
+      return json(200, snapshot());
     }
-    const patch = JSON.parse(init!.body as string) as Patch;
-    state.patches.push(patch);
-    if (state.hold) await state.hold;
-    if (patch.baseRevision !== state.revision) return json(409, { error: "conflict", ...snapshot() });
-    const appended = patch.appendVtt ? readVtt(patch.appendVtt) : null;
-    if (appended && !appended.ok) return json(400, { error: "bad_request", reason: appended.reason });
-    const result = patch.edits
-      ? editSegments(state.data, patch.edits)
-      : patch.renameSpeaker
-        ? renameSpeaker(state.data, patch.renameSpeaker.speaker, patch.renameSpeaker.name)
-        : appended
-          ? appendTranscript({ ...state.data, durationSec: state.durationSec }, appended.value)
-          : mergeSpeakers(state.data, patch.mergeSpeakers!.from, patch.mergeSpeakers!.into);
-    if ("rejected" in result) return json(400, { error: "bad_request", reason: result.rejected });
-    state.data = { segments: result.segments, speakerNames: result.speakerNames };
-    if (result.durationSec !== undefined && result.durationSec !== null) state.durationSec = result.durationSec;
-    state.revision += 1;
-    return json(200, snapshot());
+    if (path === `/api/pages/${PAGE_ID}/recording/transcription`) {
+      state.gets.transcription += 1;
+      const next = state.runs.length > 1 ? state.runs.shift()! : state.runs[0]!;
+      if (next?.status === "succeeded" && options.transcriptsAfter) state.transcripts = options.transcriptsAfter;
+      return json(200, { run: next });
+    }
+    if (path === `/api/pages/${PAGE_ID}/recording/transcribe`) {
+      state.posts.push(JSON.parse(String(init?.body ?? "{}")));
+      return options.start ? options.start() : json(202, { run: runOf("queued"), tab: TAB });
+    }
+    throw new Error(`unexpected ${init?.method} ${path}`);
   });
-  /** 別の画面が先に直した（この画面は知らない）。 */
-  const external = (mutate: (data: RecordingData) => RecordingData) => {
-    state.data = mutate(state.data);
-    state.revision += 1;
-  };
-  return { state, fetchMock, external };
+  return { state, fetchMock };
 }
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
-const MEDIA_DESCRIPTOR_NAMES = ["paused", "currentTime", "duration"] as const;
-const ORIGINAL_MEDIA_DESCRIPTORS = new Map(MEDIA_DESCRIPTOR_NAMES.map((name) => [name, Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, name)]));
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+  vi.setSystemTime(NOW);
   window.localStorage.clear();
+  router.push.mockClear();
+  frame.openPage = null;
   macCompletion.onSucceeded = null;
 });
 afterEach(async () => {
@@ -119,28 +100,16 @@ afterEach(async () => {
   root = null;
   container = null;
   vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-  for (const name of MEDIA_DESCRIPTOR_NAMES) {
-    const descriptor = ORIGINAL_MEDIA_DESCRIPTORS.get(name);
-    if (descriptor) Object.defineProperty(HTMLMediaElement.prototype, name, descriptor);
-    else Reflect.deleteProperty(HTMLMediaElement.prototype, name);
-  }
+  vi.useRealTimers();
 });
 
-async function settle(ms = 0) {
+async function flush(ms = 0) {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, ms));
+    await vi.advanceTimersByTimeAsync(ms);
   });
 }
-async function until(check: () => boolean) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (check()) return;
-    await settle();
-  }
-  throw new Error("condition not met");
-}
 
-async function mount(server = createServer()) {
+async function mount(server: ReturnType<typeof createServer>) {
   vi.stubGlobal("fetch", server.fetchMock);
   container = document.createElement("div");
   document.body.append(container);
@@ -148,694 +117,218 @@ async function mount(server = createServer()) {
   await act(async () => {
     root!.render(<RecordingTranscript pageId={PAGE_ID} />);
   });
-  return server;
+  await flush();
+  await flush();
 }
 
-const paragraphs = () => [...container!.querySelectorAll<HTMLElement>(".es-seg p")];
-const seekSlider = () => container!.querySelector<HTMLInputElement>('input[aria-label="再生位置"]');
-const whoOf = () => [...container!.querySelectorAll(".es-who > span")].map((node) => node.textContent);
-const status = () => container!.querySelector("[data-save-state]")!;
-const chip = (name: string) => container!.querySelector<HTMLButtonElement>(`button[aria-label="${name} の名前を変える"]`)!;
-const buttonByText = (text: string) => [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === text)!;
-const notice = () => container!.querySelector("[data-transcript-notice]")?.textContent ?? "";
-
-function installAudioMedia() {
-  type State = { paused: boolean; currentTime: number; duration: number };
-  const states = new WeakMap<HTMLMediaElement, State>();
-  const state = (audio: HTMLMediaElement) => {
-    let current = states.get(audio);
-    if (!current) {
-      current = { paused: true, currentTime: 0, duration: 600 };
-      states.set(audio, current);
-    }
-    return current;
-  };
-  Object.defineProperties(HTMLMediaElement.prototype, {
-    paused: { configurable: true, get() { return state(this).paused; } },
-    currentTime: { configurable: true, get() { return state(this).currentTime; }, set(value: number) { state(this).currentTime = value; } },
-    duration: { configurable: true, get() { return state(this).duration; } },
-  });
-  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
-  vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(function (this: HTMLMediaElement) {
-    state(this).paused = false;
-    this.dispatchEvent(new Event("play"));
-    return Promise.resolve();
-  });
-  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(function (this: HTMLMediaElement) {
-    state(this).paused = true;
-    this.dispatchEvent(new Event("pause"));
-  });
-  return {
-    finish(audio: HTMLMediaElement) {
-      state(audio).paused = true;
-      audio.dispatchEvent(new Event("ended"));
-    },
-    currentTime(audio: HTMLMediaElement) { return state(audio).currentTime; },
-    setDuration(audio: HTMLMediaElement, duration: number) { state(audio).duration = duration; },
-  };
-}
-
-function write(element: HTMLElement, text: string) {
-  act(() => {
-    element.textContent = text;
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-const blur = (element: HTMLElement) => act(() => element.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
-const compose = (element: HTMLElement, type: "compositionstart" | "compositionend") => act(() => element.dispatchEvent(new Event(type, { bubbles: true })));
-async function edit(index: number, text: string) {
-  write(paragraphs()[index]!, text);
-  blur(paragraphs()[index]!);
-  await settle();
-}
-function setValue(input: HTMLInputElement, value: string) {
-  act(() => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-const submitName = async () => {
-  await act(async () => container!.querySelector<HTMLFormElement>(".es-spkform")!.requestSubmit());
-  await settle();
+const text = () => container!.textContent ?? "";
+const buttonByText = (label: string) => [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === label) ?? null;
+const statusOf = () => container!.querySelector('[data-transcription] [role="status"]')?.textContent ?? "";
+const alerts = () => [...container!.querySelectorAll('[role="alert"]')].map((node) => node.textContent ?? "");
+const click = async (label: string) => {
+  const button = buttonByText(label);
+  if (!button) throw new Error(`no button ${label}`);
+  await act(async () => button.click());
+  await flush();
 };
 
-describe("RecordingTranscript: loading", () => {
-  it("shows a loading state, then the transcript: paragraphs, speakers, length, timestamps, saved", async () => {
-    const server = createServer();
-    vi.stubGlobal("fetch", server.fetchMock);
-    container = document.createElement("div");
-    document.body.append(container);
-    root = createRoot(container);
-    await act(async () => {
-      root!.render(<RecordingTranscript pageId={PAGE_ID} />);
-    });
-    await until(() => paragraphs().length === 4);
-    expect(server.fetchMock).toHaveBeenCalledWith(`/api/pages/${PAGE_ID}/recording`, expect.objectContaining({ method: "GET" }));
-    expect(paragraphs().map((node) => node.textContent)).toEqual(["最初の段落です。", "二つ目の段落です。", "三つ目の段落です。", "四つ目の段落です。"]);
-    // 名前の無い話者は「話者N」。色は番号の順
-    expect(whoOf()).toEqual(["Takuya", "Mika", "Takuya", "話者3"]);
-    expect([...container!.querySelectorAll(".es-seg .es-tone")].map((node) => node.className.match(/es-tone--(\w)/)![1])).toEqual(["a", "b", "a", "c"]);
-    expect([...container!.querySelectorAll(".es-who time")].map((node) => node.textContent)).toEqual(["00:00", "00:04", "00:09", "00:12"]);
-    expect(container!.querySelector(".es-time")?.textContent).toBe("長さ 02:05");
-    expect(status().textContent).toBe("保存済み");
-    // 再生は無い
-    expect(container!.querySelector('[aria-label="再生"]')).toBeNull();
-    expect(container!.querySelector(".es-wave")).toBeNull();
-    // 手順の入口（この録音から）は出さない
-    expect(container!.textContent).not.toContain("この録音から");
-  });
-
-  it("says so when the page has no transcript (404)", async () => {
-    const server = createServer();
-    server.state.status = 404;
+describe("録音のタブ: 文字起こしのタブの一覧（#310）", () => {
+  it("lists the transcript tabs made from this recording with their engine, size and length, and opens one when pressed", async () => {
+    const server = createServer({ transcripts: [tabOf(TAB, "Deepgram", "deepgram", 12), tabOf(TAB2, "開発の偽物", "fake", 0)] });
     await mount(server);
-    await until(() => container!.querySelector("[data-transcript=missing]") !== null);
-    expect(container!.textContent).toContain("このページには文字起こしがありません。");
+    const list = container!.querySelector('[data-transcripts="2"]')!;
+    expect(list).not.toBeNull();
+    expect([...list.querySelectorAll("li")].map((item) => item.textContent)).toEqual(["文字起こし DeepgramDeepgram · 12 区間 · 長さ 02:05", "文字起こし 開発の偽物開発の偽物 · まだ空 · 長さ 02:05"]);
+    // 段落はここでは出さない（本文はタブ）
+    expect(container!.querySelector(".es-seg")).toBeNull();
+    await click("文字起こし Deepgram");
+    expect(router.push).toHaveBeenCalledWith(`/p/${TAB}`);
   });
 
-  it("shows a failure in Japanese and loads again on request", async () => {
+  it("opens a tab through the frame (openPage) when the frame offers it", async () => {
+    frame.openPage = vi.fn();
+    await mount(createServer({ transcripts: [tabOf(TAB2, "開発の偽物", "fake", 0)] }));
+    await click("文字起こし 開発の偽物");
+    expect(frame.openPage).toHaveBeenCalledWith(TAB2);
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it("says there is none yet and how to start, and does not offer a start for a recording without audio (VTT import)", async () => {
+    await mount(createServer({ audio: null }));
+    expect(container!.querySelector('[data-transcripts="none"]')?.textContent).toBe("まだ文字起こしがありません。");
+    expect(buttonByText("文字起こしをはじめる")).toBeNull();
+    await act(async () => root?.unmount());
+    root = null;
+    await mount(createServer());
+    expect(container!.querySelector('[data-transcripts="none"]')?.textContent).toContain("「ページ」パネルの流れでエンジンを選んで始めます");
+  });
+
+  it("says so when the page has no recording (404) and when it cannot be read", async () => {
+    const missing = createServer();
+    missing.fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: "not_found" }), { status: 404 }));
+    await mount(missing);
+    expect(container!.querySelector("[data-transcript=missing]")?.textContent).toBe("このページには録音がありません。");
+    await act(async () => root?.unmount());
+    root = null;
+    const failing = createServer();
+    failing.fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: "x" }), { status: 503 }));
+    await mount(failing);
+    expect(container!.querySelector("[data-transcript=failed]")?.textContent).toContain("サーバーが使えません");
+  });
+});
+
+describe("録音のタブ: 文字起こしの開始と状態（#36 段 3b-1 → #310）", () => {
+  it("offers to start when the audio is uploaded, with the external-service note and the deletion date", async () => {
     const server = createServer();
-    server.state.status = 503;
     await mount(server);
-    await until(() => container!.querySelector("[data-transcript=failed]") !== null);
-    expect(container!.querySelector('[role="alert"]')?.textContent).toContain("サーバーが使えません");
-    server.state.status = 200;
-    await act(async () => buttonByText("もう一度読み込む").click());
-    await until(() => paragraphs().length === 4);
-    expect(server.state.gets).toBe(1);
-  });
-});
-
-describe("RecordingTranscript: editing paragraphs", () => {
-  it("saves a fixed paragraph on blur with the loaded revision, and the next one with the revision it got back", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    await edit(1, "二つ目の段落を直しました。");
-    expect(server.state.patches).toEqual([{ baseRevision: 1, edits: [{ index: 1, text: "二つ目の段落を直しました。" }] }]);
-    expect(status().textContent).toBe("保存済み");
-    expect(server.state.data.segments[1]!.text).toBe("二つ目の段落を直しました。");
-    await edit(3, "四つ目も直しました。");
-    expect(server.state.patches[1]).toEqual({ baseRevision: 2, edits: [{ index: 3, text: "四つ目も直しました。" }] });
-    expect(paragraphs()[1]!.textContent).toBe("二つ目の段落を直しました。");
-    expect(paragraphs()[3]!.textContent).toBe("四つ目も直しました。");
+    expect(buttonByText("文字起こしをはじめる")).not.toBeNull();
+    expect(text()).toContain("文字起こしを始めると、音声は Deepgram に送られます");
+    expect(text()).toContain("音声は 1月31日に削除されます");
+    expect(container!.querySelector('[data-transcription] [role="status"]')!.getAttribute("aria-live")).toBe("polite");
+    expect(server.state.gets.transcription).toBe(1);
   });
 
-  it("does not send when nothing changed", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    blur(paragraphs()[0]!);
-    write(paragraphs()[0]!, "別の文章");
-    write(paragraphs()[0]!, "最初の段落です。");
-    blur(paragraphs()[0]!);
-    await settle();
-    expect(server.state.patches).toEqual([]);
+  it("does not start when the server cannot identify a transcription recipient", async () => {
+    const server = createServer({ defaultEngine: null });
+    await mount(server);
+    expect(buttonByText("文字起こしをはじめる")).toBeNull();
+    expect(text()).toContain("送信先を確認できません");
+    expect(server.state.posts).toEqual([]);
   });
 
-  it("sends the same operations one at a time: the second waits for the first and uses its revision", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    let release!: () => void;
-    server.state.hold = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    write(paragraphs()[0]!, "一回目");
-    blur(paragraphs()[0]!);
-    await settle();
-    write(paragraphs()[2]!, "二回目");
-    blur(paragraphs()[2]!);
-    await settle();
-    expect(status().textContent).toBe("保存中");
-    // 一回目がまだ返っていない間は、二回目を送らない
-    expect(server.state.patches).toHaveLength(1);
-    server.state.hold = null;
-    release();
-    await until(() => server.state.patches.length === 2);
-    await until(() => status().textContent === "保存済み");
-    expect(server.state.patches[1]).toEqual({ baseRevision: 2, edits: [{ index: 2, text: "二回目" }] });
-    expect(server.state.data.segments.map((segment) => segment.text)).toEqual(["一回目", "二つ目の段落です。", "二回目", "四つ目の段落です。"]);
+  it("starts without asking (the result goes to a new tab), opens that tab, and keeps the start button hidden while it runs", async () => {
+    const server = createServer({ runs: [null, runOf("running")] });
+    await mount(server);
+    await click("文字起こしをはじめる");
+    expect(server.state.posts).toEqual([{}]);
+    expect(router.push).toHaveBeenCalledWith(`/p/${TAB}`);
+    expect(statusOf()).toBe("待機中（開発の偽物）");
+    expect(buttonByText("文字起こしをはじめる")).toBeNull();
+    await flush(3000);
+    expect(statusOf()).toBe("文字起こし中（開発の偽物）");
   });
 
-  it("does not confirm while composing (IME): it sends after the composition ends", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    const first = paragraphs()[0]!;
-    compose(first, "compositionstart");
-    write(first, "にゅうりょくちゅう");
-    blur(first);
-    await settle();
-    expect(server.state.patches).toEqual([]);
-    compose(first, "compositionend");
-    await settle();
-    expect(server.state.patches).toEqual([{ baseRevision: 1, edits: [{ index: 0, text: "にゅうりょくちゅう" }] }]);
-  });
-});
-
-describe("RecordingTranscript: someone fixed it elsewhere first (409)", () => {
-  it("keeps what I wrote, takes the latest for the rest, says so, and sends again on request", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    // 別の画面が、3 つ目の段落を直し、話者の名前も変えた
-    server.external((data) => ({
-      segments: data.segments.map((segment, index) => (index === 2 ? { ...segment, text: "別の画面で直した三つ目。" } : segment)),
-      speakerNames: { ...data.speakerNames, "2": "Mika Sato" },
-    }));
-    await edit(1, "私が直した二つ目。");
-    // 自分の文章は消えない。ほかの段落と話者の名前は最新になる
-    expect(paragraphs()[1]!.textContent).toBe("私が直した二つ目。");
-    expect(paragraphs()[2]!.textContent).toBe("別の画面で直した三つ目。");
-    expect(whoOf()[1]).toBe("Mika Sato");
-    expect(notice()).toContain(CONFLICT_TEXT);
-    expect(status().textContent).toContain("保存されていない段落が 1 つあります");
-    // サーバーには書かれていない。自動では送り直さない
-    expect(server.state.data.segments[1]!.text).toBe("二つ目の段落です。");
-    expect(server.state.patches).toHaveLength(1);
-
-    await act(async () => buttonByText("もう一度保存").click());
-    await settle();
-    expect(server.state.patches[1]).toEqual({ baseRevision: 2, edits: [{ index: 1, text: "私が直した二つ目。" }] });
-    expect(server.state.data.segments[1]!.text).toBe("私が直した二つ目。");
-    expect(status().textContent).toBe("保存済み");
-    expect(notice()).toBe("");
-    expect(paragraphs()[1]!.textContent).toBe("私が直した二つ目。");
+  it("reloads the list of tabs when a run it watches succeeds, then stops reading", async () => {
+    const server = createServer({ runs: [runOf("running"), runOf("succeeded")], transcriptsAfter: [tabOf(TAB, "開発の偽物", "fake", 3)] });
+    await mount(server);
+    expect(statusOf()).toBe("文字起こし中（開発の偽物）");
+    await flush(3000);
+    await flush();
+    expect(container!.querySelector('[data-transcripts="1"]')).not.toBeNull();
+    expect(statusOf()).toBe("");
+    expect(server.state.gets.recording).toBe(2);
+    const reads = server.state.gets.transcription;
+    await flush(30_000);
+    expect(server.state.gets.transcription).toBe(reads);
   });
 
-  it("confirming another paragraph does not send the held one; confirming the same one again does", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    server.external((data) => ({ segments: data.segments, speakerNames: { ...data.speakerNames, "1": "T" } }));
-    await edit(0, "止められた文章");
-    expect(server.state.patches).toHaveLength(1);
-    await edit(3, "別の段落");
-    expect(server.state.patches[1]).toEqual({ baseRevision: 2, edits: [{ index: 3, text: "別の段落" }] });
-    expect(server.state.data.segments[0]!.text).toBe("最初の段落です。");
-    expect(status().textContent).toContain("保存されていない段落が 1 つあります");
-    // 書き直して確定すると送る
-    await edit(0, "止められた文章を書き直した");
-    expect(server.state.patches[2]).toEqual({ baseRevision: 3, edits: [{ index: 0, text: "止められた文章を書き直した" }] });
-    expect(status().textContent).toBe("保存済み");
+  it("explains each failure with role=alert and offers もう一度 that rewrites the same tab (not when the audio is gone)", async () => {
+    const expectations: [string, string][] = [
+      ["audio_missing", "音声が見つかりませんでした。"],
+      ["engine_unavailable", "文字起こしのサービスにつながりませんでした。"],
+      ["engine_rejected", "文字起こしのサービスがこの音声を受け付けませんでした。"],
+      ["engine_timeout", "時間内に終わりませんでした。"],
+      ["engine_bad_response", "文字起こしの結果を読み取れませんでした。"],
+      ["too_large", "文字起こしの結果が大きすぎました。"],
+      ["internal", "サーバーで問題が起きました。"],
+    ];
+    for (const [code, reason] of expectations) {
+      const server = createServer({ runs: [runOf("failed", code)] });
+      await mount(server);
+      expect(alerts()).toContain(`文字起こしに失敗しました。${reason}`);
+      expect(buttonByText("もう一度"), code).not.toBeNull();
+      await click("もう一度");
+      expect(server.state.posts).toEqual([{ engine: "fake", tab: TAB }]);
+      await act(async () => root?.unmount());
+      root = null;
+    }
+    const gone = createServer({ runs: [runOf("failed", "audio_expired")] });
+    await mount(gone);
+    expect(alerts()).toContain("文字起こしに失敗しました。音声は削除されました。");
+    expect(buttonByText("もう一度")).toBeNull();
   });
 
-  it("holds every draft on a conflict, including paragraphs fixed while the save was in flight: none is laid over the latest without asking", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    let release!: () => void;
-    server.state.hold = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    // 別の画面が 2 つ目の段落を直した（この画面は知らない）。1 つ目を送ると競合になる
-    server.external((data) => ({
-      segments: data.segments.map((segment, index) => (index === 1 ? { ...segment, text: "別の画面で直した二つ目。" } : segment)),
-      speakerNames: data.speakerNames,
-    }));
-    await edit(0, "私の一つ目");
-    expect(server.state.patches).toHaveLength(1);
-    // 送っている間に、別の段落（別の画面が直したもの）と、送っている段落をもう一度直す。どちらも順番を待つ
-    await edit(1, "私の二つ目");
-    await edit(0, "私の一つ目（書き直し）");
-    server.state.hold = null;
-    release();
-    await until(() => status().textContent?.includes("保存されていない段落") ?? false);
-    await settle(20);
-    // 待っていた送信は出ない（別の画面の二つ目を、確かめないまま上書きしない）
-    expect(server.state.patches).toHaveLength(1);
-    expect(server.state.data.segments[1]!.text).toBe("別の画面で直した二つ目。");
-    expect(status().textContent).toContain("保存されていない段落が 2 つあります");
-    expect(paragraphs()[0]!.textContent).toBe("私の一つ目（書き直し）");
-    expect(paragraphs()[1]!.textContent).toBe("私の二つ目");
-    // 確かめて「もう一度保存」を押すと、2 つとも最新の版の上に送る
-    await act(async () => buttonByText("もう一度保存").click());
-    await settle();
-    expect(server.state.patches[1]).toEqual({
-      baseRevision: 2,
-      edits: [
-        { index: 0, text: "私の一つ目（書き直し）" },
-        { index: 1, text: "私の二つ目" },
-      ],
-    });
-    expect(status().textContent).toBe("保存済み");
+  it("says it cannot start now (503) and keeps the button", async () => {
+    const unavailable = createServer({ start: () => new Response(JSON.stringify({ error: "transcription_unavailable" }), { status: 503 }) });
+    await mount(unavailable);
+    await click("文字起こしをはじめる");
+    expect(alerts()).toContain("いまは始められません。少ししてから、もう一度試してください。");
+    expect(buttonByText("文字起こしをはじめる")).not.toBeNull();
+    expect(router.push).not.toHaveBeenCalled();
   });
 
-  it("keeps the text and offers to try again when the save fails (not a conflict)", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    server.state.status = 503;
-    await edit(0, "失敗する文章");
-    expect(paragraphs()[0]!.textContent).toBe("失敗する文章");
-    expect(notice()).toContain("サーバーが使えません");
-    expect(status().textContent).toContain("保存されていない段落が 1 つあります");
-    server.state.status = 200;
-    await act(async () => buttonByText("もう一度保存").click());
-    await settle();
-    expect(server.state.data.segments[0]!.text).toBe("失敗する文章");
-    expect(status().textContent).toBe("保存済み");
-  });
-
-  it("explains a rejected paragraph (too long) and keeps it", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    await edit(0, "あ".repeat(5001));
-    expect(notice()).toContain("5,000 字");
-    expect(paragraphs()[0]!.textContent).toHaveLength(5001);
-    expect(server.state.data.segments[0]!.text).toBe("最初の段落です。");
-  });
-});
-
-describe("RecordingTranscript: leaving with unsaved writing", () => {
-  const unload = () => {
-    const event = new Event("beforeunload", { cancelable: true });
-    window.dispatchEvent(event);
-    return event.defaultPrevented;
-  };
-
-  it("counts a paragraph I am still typing in (not confirmed yet): it says so and closing the tab asks first", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    expect(status().textContent).toBe("保存済み");
-    expect(unload()).toBe(false);
-
-    write(paragraphs()[1]!, "書いている途中");
-    expect(server.state.patches).toHaveLength(0);
-    expect(status().textContent).toBe("保存待ち");
-    expect(unload()).toBe(true);
-
-    // 確定すると下書きになり、送られて、保存済みに戻る
-    blur(paragraphs()[1]!);
-    await until(() => status().textContent === "保存済み");
-    expect(server.state.patches).toHaveLength(1);
-    expect(unload()).toBe(false);
-  });
-
-  it("does not ask after typing is undone before it is confirmed", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    write(paragraphs()[0]!, "変えた");
-    write(paragraphs()[0]!, "最初の段落です。");
-    expect(unload()).toBe(true);
-    blur(paragraphs()[0]!);
-    await settle();
-    expect(server.state.patches).toHaveLength(0);
-    expect(status().textContent).toBe("保存済み");
-    expect(unload()).toBe(false);
-  });
-
-  it("keeps asking while composing (IME) with focus gone, until the composition ends", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    compose(paragraphs()[2]!, "compositionstart");
-    write(paragraphs()[2]!, "へんかんちゅう");
-    blur(paragraphs()[2]!);
-    expect(unload()).toBe(true);
-    expect(server.state.patches).toHaveLength(0);
-    compose(paragraphs()[2]!, "compositionend");
-    await until(() => status().textContent === "保存済み");
-    expect(server.state.patches).toHaveLength(1);
-    expect(unload()).toBe(false);
-  });
-});
-
-describe("RecordingTranscript: speakers", () => {
-  it("Macの別案が完成しても、保存に失敗した下書きと競合通知を消さず一覧だけ更新する", async () => {
+  it("reloads the list when the Mac CLI saves its result", async () => {
     const server = createServer();
-    server.state.getOnly = {
-      audio: { status: "uploaded", bytes: 64, contentType: "audio/mp4", expiresAt: "2030-02-01T00:00:00.000Z" },
-      audios: [],
-      candidates: [],
-    };
     await mount(server);
-    await until(() => paragraphs().length === 4);
-    server.external((data) => ({ ...data, speakerNames: { ...data.speakerNames, "1": "T" } }));
-    await edit(0, "まだ保存できていない私の文章");
-    expect(status().textContent).toContain("保存されていない段落が 1 つあります");
-    server.state.getOnly.candidates = [{
-      id: "11111111-1111-4111-8111-111111111111", name: "Gemini（このMacのCLI）", engine: "gemini-cli",
-      revision: 1, busy: false,
-      engineLabel: "Gemini（このMacのCLI）", language: "ja", durationSec: 125,
-      adopted: false, state: "ready", segmentCount: 4, preview: [],
-      createdAt: "2030-01-01T00:00:00.000Z", updatedAt: "2030-01-01T00:00:00.000Z",
-    }];
     expect(macCompletion.onSucceeded).not.toBeNull();
+    server.state.transcripts = [tabOf(TAB, "Gemini（このMacのCLI）", "gemini-cli", 9)];
     await act(async () => macCompletion.onSucceeded!());
-    await until(() => container!.querySelector('[data-recording-candidates="1"]') !== null);
-    expect(paragraphs()[0]!.textContent).toBe("まだ保存できていない私の文章");
-    expect(status().textContent).toContain("保存されていない段落が 1 つあります");
-    expect(notice()).toContain(CONFLICT_TEXT);
-    expect(server.state.patches).toHaveLength(1);
+    await flush();
+    expect(container!.querySelector('[data-transcripts="1"]')).not.toBeNull();
   });
 
-  it("変更の応答には音声の列と案の一覧が入らないので、直したあとも直前のものを残す（空に戻さない）", async () => {
-    const server = createServer();
-    server.state.getOnly = {
-      audio: { status: "uploaded", bytes: 64, contentType: "audio/mp4", expiresAt: "2030-02-01T00:00:00.000Z" },
-      audios: [{ index: 0, status: "uploaded", durationSec: 125, offsetSec: 0, sourceName: "dinner.m4a", expiresAt: "2030-02-01T00:00:00.000Z" }],
-      candidates: [
-        {
-          id: "11111111-1111-4111-8111-111111111111",
-          revision: 1,
-          name: "Deepgram",
-          engine: "deepgram",
-          engineLabel: "Deepgram",
-          language: "ja",
-          durationSec: 125,
-          adopted: true,
-          state: "ready",
-          busy: false,
-          segmentCount: 4,
-          preview: [],
-          createdAt: "2030-01-01T00:00:00.000Z",
-          updatedAt: "2030-01-01T00:00:00.000Z",
-        },
-      ],
-    };
+  it("stops reading when the page goes away", async () => {
+    const server = createServer({ runs: [runOf("running")] });
     await mount(server);
-    await until(() => paragraphs().length === 4);
-    expect(container!.querySelector('[data-recording-candidates="1"]')).not.toBeNull();
-    const audiosBefore = container!.querySelector("[data-recording-audios]")?.outerHTML ?? "";
-
-    await edit(1, "二つ目の段落を直しました。");
-    expect(server.state.patches).toHaveLength(1);
-    // 直したあとも、案の一覧（1 件）と音声の列がそのまま出ている
-    expect(container!.querySelector('[data-recording-candidates="1"]')).not.toBeNull();
-    expect(container!.querySelector("[data-recording-audios]")?.outerHTML ?? "").toBe(audiosBefore);
-    // 話者の名前を変えたあとも同じ
-    act(() => chip("話者3").click());
-    setValue(container!.querySelector<HTMLInputElement>(".es-spkform input")!, "Haruka");
-    await submitName();
-    expect(container!.querySelector('[data-recording-candidates="1"]')).not.toBeNull();
+    expect(statusOf()).toBe("文字起こし中（開発の偽物）");
+    await act(async () => root?.unmount());
+    root = null;
+    const reads = server.state.gets.transcription;
+    await flush(30_000);
+    expect(server.state.gets.transcription).toBe(reads);
   });
 
-  it("renames a speaker; every paragraph shows the new name", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    act(() => chip("話者3").click());
-    setValue(container!.querySelector<HTMLInputElement>(".es-spkform input")!, "Haruka");
-    await submitName();
-    expect(server.state.patches).toEqual([{ baseRevision: 1, renameSpeaker: { speaker: 3, name: "Haruka" } }]);
-    expect(whoOf()).toEqual(["Takuya", "Mika", "Takuya", "Haruka"]);
-    expect(container!.querySelector(".es-spkform")).toBeNull();
-    // 名前を外すと「話者N」に戻る
-    act(() => chip("Haruka").click());
-    setValue(container!.querySelector<HTMLInputElement>(".es-spkform input")!, "");
-    await submitName();
-    expect(server.state.patches[1]).toEqual({ baseRevision: 2, renameSpeaker: { speaker: 3, name: null } });
-    expect(whoOf()[3]).toBe("話者3");
-  });
-
-  it("shows why a name cannot be used and keeps the form open with what was typed", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    act(() => chip("Mika").click());
-    setValue(container!.querySelector<HTMLInputElement>(".es-spkform input")!, "話者5");
-    await submitName();
-    expect(container!.querySelector(".es-spkform")).not.toBeNull();
-    expect(container!.querySelector(".es-spkform [role=alert]")?.textContent).toContain("「話者1」の形");
-    expect(container!.querySelector<HTMLInputElement>(".es-spkform input")!.value).toBe("話者5");
-    expect(server.state.data.speakerNames["2"]).toBe("Mika");
-  });
-
-  it("on a conflict while renaming, takes the latest, tells me, and lets me decide again", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    server.external((data) => ({
-      segments: data.segments.map((segment, index) => (index === 0 ? { ...segment, text: "別の画面の一つ目" } : segment)),
-      speakerNames: data.speakerNames,
-    }));
-    act(() => chip("Mika").click());
-    setValue(container!.querySelector<HTMLInputElement>(".es-spkform input")!, "Mika Sato");
-    await submitName();
-    expect(container!.querySelector(".es-spkform [role=alert]")?.textContent).toContain(CONFLICT_TEXT);
-    expect(paragraphs()[0]!.textContent).toBe("別の画面の一つ目");
-    expect(container!.querySelector<HTMLInputElement>(".es-spkform input")!.value).toBe("Mika Sato");
-    await submitName();
-    expect(server.state.patches[1]).toEqual({ baseRevision: 2, renameSpeaker: { speaker: 2, name: "Mika Sato" } });
-    expect(whoOf()[1]).toBe("Mika Sato");
-  });
-
-  it("merges one speaker into another after one confirmation: their paragraphs move and the speaker disappears", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    act(() => chip("話者3").click());
-    const select = container!.querySelector<HTMLSelectElement>('select[aria-label="まとめる先の話者"]')!;
-    expect([...select.options].map((option) => option.textContent)).toEqual(["Takuya", "Mika"]);
-    act(() => buttonByText("まとめる").click());
-    expect(server.state.patches).toEqual([]);
-    expect(container!.querySelector(".es-spkform-merge")?.textContent).toContain("「話者3」の段落をすべて「Takuya」にまとめます。元には戻せません。");
-    await act(async () => buttonByText("まとめる").click());
-    await settle();
-    expect(server.state.patches).toEqual([{ baseRevision: 1, mergeSpeakers: { from: 3, into: 1 } }]);
-    expect(whoOf()).toEqual(["Takuya", "Mika", "Takuya", "Takuya"]);
-    expect(chip("話者3")).toBeNull();
-    expect(container!.querySelector(".es-spkform")).toBeNull();
-    // まとめたあとの段落の色は、まとめ先の話者の色
-    expect([...container!.querySelectorAll(".es-seg .es-tone")].map((node) => node.className.match(/es-tone--(\w)/)![1])).toEqual(["a", "b", "a", "a"]);
-  });
-});
-
-describe("RecordingTranscript: timestamps", () => {
-  it("hides and shows the times, and remembers the choice on this device", async () => {
-    await mount();
-    await until(() => paragraphs().length === 4);
-    expect(container!.querySelectorAll(".es-who time")).toHaveLength(4);
-    const toggle = buttonByText("タイムスタンプ");
-    expect(toggle.getAttribute("aria-pressed")).toBe("true");
-    act(() => toggle.click());
-    expect(container!.querySelectorAll(".es-who time")).toHaveLength(0);
-    expect(buttonByText("タイムスタンプ").getAttribute("aria-pressed")).toBe("false");
-    expect(window.localStorage.getItem("editor:transcript-timestamps")).toBe("off");
-    // 開き直しても隠れたまま
-    await act(async () => root!.unmount());
-    container!.remove();
-    await mount();
-    await until(() => paragraphs().length === 4);
-    expect(container!.querySelectorAll(".es-who time")).toHaveLength(0);
-    act(() => buttonByText("タイムスタンプ").click());
-    expect(container!.querySelectorAll(".es-who time")).toHaveLength(4);
-    expect(window.localStorage.getItem("editor:transcript-timestamps")).toBe("on");
-  });
-
-  it("works when the device blocks storage", async () => {
-    vi.stubGlobal("localStorage", {
-      getItem: () => {
-        throw new Error("blocked");
-      },
-      setItem: () => {
-        throw new Error("blocked");
-      },
-    });
-    await mount();
-    await until(() => paragraphs().length === 4);
-    expect(container!.querySelectorAll(".es-who time")).toHaveLength(4);
-    act(() => buttonByText("タイムスタンプ").click());
-    expect(container!.querySelectorAll(".es-who time")).toHaveLength(0);
-  });
-});
-
-describe("RecordingTranscript: multiple audio parts", () => {
-  const audio = { status: "uploaded", bytes: 64, contentType: "audio/mp4", expiresAt: "2030-02-01T00:00:00.000Z" };
-  const part = (partIndex: number, offsetSec: number, durationSec: number | null, extra: Record<string, unknown> = {}) => ({
-    partIndex, status: "uploaded", bytes: 64, contentType: "audio/mp4", durationSec, offsetSec, sourceName: `part-${partIndex}.m4a`, expiresAt: "2030-02-01T00:00:00.000Z", ...extra,
-  });
-
-  it("uses browser metadata for a single part when saved and transcript lengths are unknown", async () => {
-    const media = installAudioMedia();
-    const server = createServer();
-    server.state.durationSec = null;
-    server.state.getOnly = { audio, audios: [part(0, 0, null)], candidates: [] };
+  it("reads less often while the page is hidden", async () => {
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const server = createServer({ runs: [runOf("running")] });
     await mount(server);
-    await until(() => seekSlider() !== null);
-    const element = container!.querySelector<HTMLAudioElement>("audio")!;
-
-    media.setDuration(element, Number.POSITIVE_INFINITY);
-    act(() => element.dispatchEvent(new Event("durationchange")));
-    expect(seekSlider()!.disabled).toBe(true);
-
-    media.setDuration(element, 37);
-    act(() => element.dispatchEvent(new Event("loadedmetadata")));
-    expect(seekSlider()!.max).toBe("37");
-    expect(seekSlider()!.disabled).toBe(false);
-  });
-
-  it("does not use one part's metadata as the total when multiple part lengths are unknown", async () => {
-    const media = installAudioMedia();
-    const server = createServer();
-    server.state.durationSec = null;
-    server.state.getOnly = { audio, audios: [part(0, 0, null), part(1, 600, null)], candidates: [] };
-    await mount(server);
-    await until(() => seekSlider() !== null);
-    const element = container!.querySelector<HTMLAudioElement>("audio")!;
-    media.setDuration(element, 37);
-    act(() => element.dispatchEvent(new Event("loadedmetadata")));
-    expect(seekSlider()!.max).toBe("600");
-    expect(seekSlider()!.disabled).toBe(false);
-  });
-
-  it("plays the next uploaded part automatically at the boundary", async () => {
-    const media = installAudioMedia();
-    const server = createServer();
-    server.state.getOnly = { audio, audios: [part(0, 0, 600), part(1, 600, 300)], candidates: [] };
-    await mount(server);
-    await until(() => container!.querySelector('[data-playback-part]') !== null);
-    const element = container!.querySelector<HTMLAudioElement>("audio")!;
-    expect(element.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio?part=0`);
-    act(() => container!.querySelector<HTMLButtonElement>('[aria-label="再生"]')!.click());
-    expect(container!.querySelector('[data-playback-part]')?.textContent).toBe("音声 1を再生中");
-
-    await act(async () => media.finish(element));
-    await settle();
-    expect(element.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio?part=1`);
+    expect(server.state.gets.transcription).toBe(1);
+    await flush(3000);
+    expect(server.state.gets.transcription).toBe(1);
+    await flush(12_000);
+    expect(server.state.gets.transcription).toBe(2);
+    hidden.mockReturnValue(false);
     await act(async () => {
-      element.dispatchEvent(new Event("loadedmetadata"));
-      element.dispatchEvent(new Event("seeked"));
+      document.dispatchEvent(new Event("visibilitychange"));
     });
-    await settle();
-    expect(container!.querySelector('[data-playback-part]')?.textContent).toBe("音声 2を再生中");
-    expect(media.currentTime(element)).toBe(0);
+    await flush();
+    expect(server.state.gets.transcription).toBe(3);
   });
 
-  it("seeks on the full recording timeline and translates the position into the selected part", async () => {
-    const media = installAudioMedia();
-    const server = createServer({ segments: [{ start: 650, end: 660, text: "後半の段落です。", speaker: 1 }] });
-    server.state.getOnly = { audio, audios: [part(0, 0, 600), part(1, 600, 300)], candidates: [] };
+  it("stops after three failed reads in a row with 更新できません, and reads again on request", async () => {
+    const server = createServer({ runs: [runOf("running")] });
     await mount(server);
-    await until(() => container!.querySelector('[data-playback-part]') !== null);
-    const element = container!.querySelector<HTMLAudioElement>("audio")!;
-    await act(async () => container!.querySelector<HTMLButtonElement>('[aria-label="10:50 から再生"]')!.click());
-    await settle();
-    expect(element.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio?part=1`);
-    await act(async () => {
-      element.dispatchEvent(new Event("loadedmetadata"));
-      element.dispatchEvent(new Event("seeked"));
+    const original = server.fetchMock.getMockImplementation()!;
+    server.fetchMock.mockImplementation(async (resource, init) => {
+      if (String(resource).endsWith("/transcription")) throw new TypeError("offline");
+      return original(resource, init);
     });
-    expect(media.currentTime(element)).toBe(50);
-    expect(container!.querySelector('[data-playback-part]')?.textContent).toBe("音声 2を再生中");
-    expect(container!.querySelector<HTMLInputElement>('[aria-label="再生位置"]')?.max).toBe("900");
-    expect(container!.querySelector<HTMLInputElement>('[aria-label="再生位置"]')?.getAttribute("aria-valuetext")).toBe("10:50 / 15:00");
+    await flush(3000);
+    await flush(3000);
+    await flush(3000);
+    expect(alerts().some((alert) => alert.includes("文字起こしの状態を更新できません。"))).toBe(true);
+    server.fetchMock.mockImplementation(original);
+    const reads = server.state.gets.transcription;
+    await flush(30_000);
+    expect(server.state.gets.transcription).toBe(reads);
+    await click("更新する");
+    expect(server.state.gets.transcription).toBe(reads + 1);
+    expect(statusOf()).toBe("文字起こし中（開発の偽物）");
   });
 
-  it("moves between available parts with labelled keyboard-operable buttons", async () => {
-    installAudioMedia();
-    const server = createServer();
-    server.state.getOnly = { audio, audios: [part(0, 0, 600), part(1, 600, 300)], candidates: [] };
+  it("says the audio was deleted after the date (the tabs stay), and offers nothing to start", async () => {
+    const server = createServer({ audio: { status: "uploaded", expiresAt: "2030-01-09T03:00:00.000Z" }, transcripts: [tabOf(TAB, "Deepgram", "deepgram", 12)] });
     await mount(server);
-    await until(() => container!.querySelector('[data-playback-part]') !== null);
-    const element = container!.querySelector<HTMLAudioElement>("audio")!;
-    const next = container!.querySelector<HTMLButtonElement>('[aria-label="次の音声Part"]')!;
-    expect(next.disabled).toBe(false);
-    expect(next.tagName).toBe("BUTTON");
-    act(() => next.click());
-    await settle();
-    expect(element.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio?part=1`);
-    await act(async () => element.dispatchEvent(new Event("loadedmetadata")));
-    act(() => container!.querySelector<HTMLButtonElement>('[aria-label="前の音声Part"]')!.click());
-    await settle();
-    expect(element.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio?part=0`);
-    expect(container!.querySelector('[data-playback-part]')?.textContent).toBe("音声 1を選択中");
+    expect(text()).toContain("音声は削除されました");
+    expect(container!.querySelector('[data-transcripts="1"]')).not.toBeNull();
+    expect(buttonByText("文字起こしをはじめる")).toBeNull();
   });
 
-  it("does not jump across a missing part when seeking, and announces its state", async () => {
-    const media = installAudioMedia();
-    const server = createServer({ segments: [{ start: 650, end: 660, text: "欠落区間の段落です。", speaker: 1 }] });
-    server.state.getOnly = { audio, audios: [part(0, 0, 600), part(2, 1200, 300)], candidates: [] };
+  it("does not read the transcription state while the audio is still uploading, and says so", async () => {
+    const server = createServer({ audio: { status: "uploading" } });
     await mount(server);
-    await until(() => container!.querySelector('[data-playback-part]') !== null);
-    const element = container!.querySelector<HTMLAudioElement>("audio")!;
-    await act(async () => container!.querySelector<HTMLButtonElement>('[aria-label="10:50 から再生"]')!.click());
-    expect(element.getAttribute("src")).toBe(`/api/pages/${PAGE_ID}/recording/audio?part=0`);
-    expect(container!.querySelector("[data-playback-notice]")?.textContent).toContain("音声 2 が見つかりません");
-    expect(media.currentTime(element)).toBe(0);
-  });
-});
-
-describe("RecordingTranscript（あとの .vtt を足す）", () => {
-  const VTT = (text: string) => ["WEBVTT", "", "00:00:00.000 --> 00:00:03.000", `<v Takuya>${text}`, "", ""].join("\n");
-  const appendInput = () => container!.querySelector<HTMLInputElement>('[data-recording-append] input[type="file"]')!;
-  const appendError = () => container!.querySelector('[data-recording-append-error=""]')?.textContent ?? "";
-
-  async function pick(files: File[]) {
-    const input = appendInput();
-    Object.defineProperty(input, "files", { value: files, configurable: true });
-    await act(async () => {
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-  }
-
-  it("複数の .vtt を選んだ順に足し、前の音声の長さだけ時刻をずらしてつなぐ", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    expect(appendInput().multiple).toBe(true);
-
-    await pick([new File([VTT("続きです")], "2.vtt", { type: "text/vtt" }), new File([VTT("もっと続きます")], "3.vtt", { type: "text/vtt" })]);
-    await until(() => paragraphs().length === 6);
-    expect(server.state.patches.map((patch) => [patch.baseRevision, patch.appendVtt?.name])).toEqual([
-      [1, "2.vtt"],
-      [2, "3.vtt"],
-    ]);
-    // 1 本目の録音は 125 秒。2 本目は 125 秒から、3 本目は 128 秒から
-    expect(server.state.data.segments.slice(4).map((segment) => [segment.start, segment.end, segment.text])).toEqual([
-      [125, 128, "続きです"],
-      [128, 131, "もっと続きます"],
-    ]);
-    // 同じ名前の話者（Takuya）は 1 本目と同じ番号のまま
-    expect(server.state.data.segments.slice(4).map((segment) => segment.speaker)).toEqual([1, 1]);
-    expect(server.state.durationSec).toBe(131);
-    expect(container!.textContent).toContain("2 件の文字起こしを足しました");
-    expect(appendError()).toBe("");
-  });
-
-  it("途中で失敗したら、そこで止めて何件足せたかを知らせる", async () => {
-    const server = await mount();
-    await until(() => paragraphs().length === 4);
-    await pick([new File([VTT("続きです")], "2.vtt", { type: "text/vtt" }), new File(["これは字幕ではありません"], "3.vtt", { type: "text/vtt" })]);
-    await until(() => appendError() !== "");
-    expect(appendError()).toContain("1 件足しました");
-    expect(appendError()).toContain("3.vttは足せませんでした");
-    expect(server.state.data.segments).toHaveLength(5);
-  });
-
-  it("音声ファイルは足せないと言う（足せるのは .vtt）", async () => {
-    await mount();
-    await until(() => paragraphs().length === 4);
-    await pick([new File([new Uint8Array([1])], "音声.m4a", { type: "audio/mp4" })]);
-    await until(() => appendError() !== "");
-    expect(appendError()).toBe("足せるのは文字起こし済みの .vtt ファイルです。");
+    expect(text()).toContain("音声の取り込みが終わっていません");
+    expect(buttonByText("文字起こしをはじめる")).toBeNull();
+    expect(server.state.gets.transcription).toBe(0);
   });
 });

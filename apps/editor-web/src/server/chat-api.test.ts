@@ -159,11 +159,12 @@ function memoryConversations(store: MemoryStore) {
       const open = store.rows.get(pageId);
       if (!open || open.owner !== owner || open.deleted || open.kind === "folder") return null;
       const folder = folderOf(open);
-      const pages: ChatWorkspacePage[] = [{ id: open.id, title: open.title, kind: open.kind, parent: open.parent, open: true }];
+      const transcriptOf = (row: { madeFrom?: { kind?: string } | null }) => row.madeFrom?.kind === "transcript";
+      const pages: ChatWorkspacePage[] = [{ id: open.id, title: open.title, kind: open.kind, parent: open.parent, open: true, transcript: transcriptOf(open) }];
       for (const row of store.rows.values()) {
         if (row.owner !== owner || row.deleted || row.id === open.id || row.kind === "folder" || folder === null) continue;
         const parent = row.parent ? store.rows.get(row.parent) : undefined;
-        if (row.parent === folder || (parent?.kind === "rec" && parent.parent === folder)) pages.push({ id: row.id, title: row.title, kind: row.kind, parent: row.parent, open: false });
+        if (row.parent === folder || (parent?.kind === "rec" && parent.parent === folder)) pages.push({ id: row.id, title: row.title, kind: row.kind, parent: row.parent, open: false, transcript: transcriptOf(row) });
       }
       return pages;
     },
@@ -1145,7 +1146,7 @@ describe("edit_page と読んだ版（#278）", () => {
       ...workspace,
       workspace: async (owner, pageId) => [
         ...((await workspace.workspace(owner, pageId)) ?? []),
-        { id: photo.id, title: photo.title, kind: photo.kind, parent: null, open: false },
+        { id: photo.id, title: photo.title, kind: photo.kind, parent: null, open: false, transcript: false },
       ],
     };
     await chat(page.id, { text: "直して" }, deps("user-a", store, { ai, conversations: both }));

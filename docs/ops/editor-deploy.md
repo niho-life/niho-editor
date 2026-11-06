@@ -303,13 +303,13 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 
 **VTT の取り込みは、鍵も呼び出し口も必要としません。** 既に文字起こし済みのファイルを持ち込む経路は、どちらが閉じていても動きます。
 
-#### 3 つ目（任意）: Gemini の案
+#### 3 つ目（任意）: Gemini のタブ
 
-同じ音声を**別のエンジンでも起こして見比べる**（#36 段 3b-4）ための鍵です。**既定のエンジンは変わりません**（上の `deepgram` のまま）。
+同じ音声を**別のエンジンでも起こして見比べる**（#36 段 3b-4 → #310。エンジンごとに「文字起こし」ページのタブ）ための鍵です。**既定のエンジンは変わりません**（上の `deepgram` のまま）。
 
 - 鍵は Secret Manager の `niho-editor-gemini-key`（実行 ID だけが読める）。最新の版が有効なときだけ `deploy.sh` が
   `GEMINI_API_KEY` を足し、ログに `gemini candidates: on` / `off` と出す。
-- 版が無ければ、画面に出るエンジンは Deepgram だけ（案は「別の案を作る」で同じエンジンの 2 本目になる）。
+- 版が無ければ、流れの「文字起こし 作成 ▾」に出るエンジンは Deepgram だけ（同じエンジンでもう 1 つ起こすと札は「Deepgram 2」）。
 - モデルは任意の `deploy.env` の `GEMINI_MODEL`（空ならアプリの既定 `gemini-3.8-flash`）。`deploy.sh` は `EDITOR_GEMINI_MODEL`
   としてだけ渡す（鍵は env に出さない）。形が規則に合わなければ配備を止める（新しい revision が起動しない値を通さない）。
 - 入れ方: ① （初回だけ）`gcp-bootstrap.sh resources`（Secret を版なしで作り、実行 ID に読む権限を付ける）→

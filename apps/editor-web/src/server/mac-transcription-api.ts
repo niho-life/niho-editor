@@ -1,17 +1,13 @@
 import type {
-  AddRecordingCandidateInput,
-  AddRecordingCandidateResult,
   FinishTranscriptionResult,
   MacTranscriptionRun,
   OwnerId,
   Recording,
-  RecordingCandidateView,
   StartMacTranscriptionResult,
   TranscriptionErrorCode,
   TranscriptionOutput,
 } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
-import { nextCandidateName, primaryCandidateName } from "../recording/candidate-names";
 import { EngineError } from "../transcription/engine";
 import { normalizeEngineResult } from "../transcription/normalize";
 import { errorResponse, guarded, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
@@ -22,9 +18,8 @@ export const MAC_TRANSCRIPTION_BODY_MAX_BYTES = 9 * 1024 * 1024;
 
 export type MacTranscriptionStore = {
   getRecording: (owner: OwnerId, pageId: string) => Promise<Recording | null>;
-  listCandidates: (owner: OwnerId, pageId: string) => Promise<RecordingCandidateView[]>;
-  addCandidate: (owner: OwnerId, pageId: string, input: AddRecordingCandidateInput) => Promise<AddRecordingCandidateResult | null>;
-  start: (owner: OwnerId, pageId: string, input: { operationId: string; candidate?: string | null; terms: readonly string[] }) => Promise<StartMacTranscriptionResult | null>;
+  /** 開始は「文字起こし」ページに新しいタブ（札「Gemini（このMacのCLI）」）を作り、そのタブを書き先にする（#310）。 */
+  start: (owner: OwnerId, pageId: string, input: { operationId: string; terms: readonly string[] }) => Promise<StartMacTranscriptionResult | null>;
   status: (owner: OwnerId, pageId: string) => Promise<MacTranscriptionRun | null>;
   finish: (owner: OwnerId, pageId: string, runId: string, operationId: string, generation: number, output: TranscriptionOutput) => Promise<FinishTranscriptionResult>;
   resume: (owner: OwnerId, pageId: string, runId: string, operationId: string, generation: number) => Promise<MacTranscriptionRun | null>;
@@ -61,7 +56,8 @@ function body(run: MacTranscriptionRun) {
     operationId: run.operationId,
     settings: run.settings,
     audioManifest: run.audioManifest.map((part) => ({ ...part })),
-    candidateId: run.candidateId,
+    /** 結果を書く文字起こしのタブ（#310）。 */
+    tab: run.tab,
   };
 }
 
@@ -76,31 +72,10 @@ function startResponse(result: StartMacTranscriptionResult): Response {
   return conflict(result.status);
 }
 
-async function startFor(
-  store: MacTranscriptionStore,
-  owner: OwnerId,
-  pageId: string,
-  operationId: string,
-): Promise<Response> {
-  const first = await store.start(owner, pageId, { operationId, terms: [] });
-  if (!first) return notFoundResponse();
-  if (first.status !== "has_transcript") return startResponse(first);
-
-  // 既存本文は上書きしない。今の正本を採用中の案として保存し、Mac の結果は新しい案へ入れる。
-  const [recording, candidates] = await Promise.all([store.getRecording(owner, pageId), store.listCandidates(owner, pageId)]);
-  if (!recording) return notFoundResponse();
-  const name = nextCandidateName(candidates.map((candidate) => candidate.name), "gemini-cli");
-  const added = await store.addCandidate(owner, pageId, {
-    name,
-    primaryName: primaryCandidateName(recording.engine),
-    engine: "gemini-cli",
-    language: recording.language,
-  });
-  if (!added) return notFoundResponse();
-  if (added.status === "too_many") return conflict("too_many_candidates");
-  const started = await store.start(owner, pageId, { operationId, candidate: added.candidate.id, terms: [] });
-  if (!started) return notFoundResponse();
-  return startResponse(started);
+async function startFor(store: MacTranscriptionStore, owner: OwnerId, pageId: string, operationId: string): Promise<Response> {
+  // タブの作成と run の作成は store の同じ transaction（既存の本文には触らない。結果は新しいタブへ）
+  const started = await store.start(owner, pageId, { operationId, terms: [] });
+  return started ? startResponse(started) : notFoundResponse();
 }
 
 /** POST /recording/transcription/mac — start / complete / fail / stop。server runner や API key には依存しない。 */

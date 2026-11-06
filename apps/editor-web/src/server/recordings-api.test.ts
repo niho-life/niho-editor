@@ -59,7 +59,7 @@ function memoryStore(rows: Row[] = []) {
       };
       const id = randomUUID();
       rows.push({ id, owner, deleted: false, recording });
-      return { page: { id, kind: "rec", title: input.title ?? "", lang: input.lang, page: null, createdAt: now, updatedAt: now }, recording };
+      return { page: { id, kind: "rec", title: input.title ?? "", lang: input.lang, page: null, createdAt: now, updatedAt: now }, recording, transcript: randomUUID() };
     },
     getRecording: async (owner, id) => {
       calls.push(`get:${owner}`);
@@ -139,7 +139,8 @@ describe("POST /api/recordings/import-vtt", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     const body = await response.json();
-    expect(Object.keys(body).sort()).toEqual(["page", "recording", "speakers"]);
+    expect(Object.keys(body).sort()).toEqual(["page", "recording", "speakers", "transcript"]);
+    expect(body.transcript).toMatch(/^[0-9a-f-]{36}$/);
     expect(body.page).toMatchObject({ kind: "rec", title: "合成の会議", lang: "en" });
     expect(Object.keys(body.recording).sort()).toEqual(
       ["audio", "createdAt", "durationSec", "engine", "language", "revision", "segments", "source", "sourceName", "sourceSha256", "speakerNames", "updatedAt"].sort(),

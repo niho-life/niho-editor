@@ -386,7 +386,15 @@ export async function appendTurn(db: Database, owner: OwnerId, input: AiTurnInpu
 }
 
 /** AI チャットが読み書きできるページ（作業場）。 */
-export type ChatWorkspacePage = { id: string; title: string; kind: string; parent: string | null; open: boolean };
+export type ChatWorkspacePage = {
+  id: string;
+  title: string;
+  kind: string;
+  parent: string | null;
+  open: boolean;
+  /** 文字起こしのタブ（#310。`made_from.kind = 'transcript'`。read_page に文字起こしが添えられ、search_transcript で探せる）。 */
+  transcript: boolean;
+};
 
 /** 作業場に入れるページの数の上限（開いているページのフォルダの中のページ）。 */
 export const CHAT_WORKSPACE_LIMIT = 50;
@@ -411,9 +419,9 @@ const FOLDER_OF = `SELECT CASE
 export async function listChatWorkspace(db: Queryable, owner: OwnerId, pageId: string): Promise<ChatWorkspacePage[] | null> {
   assertOwner(owner);
   if (!isPageId(pageId)) return null;
-  const result = await db.query<{ id: string; title: string; kind: string; parent: string | null }>(
+  const result = await db.query<{ id: string; title: string; kind: string; parent: string | null; transcript: boolean }>(
     `WITH folder AS (${FOLDER_OF})
-     SELECT p.id, p.title, p.kind, p.parent
+     SELECT p.id, p.title, p.kind, p.parent, (p.made_from->>'kind' = 'transcript') AS transcript
        FROM pages p
       WHERE p.owner = $1 AND p.deleted_at IS NULL AND p.kind NOT IN ('folder', 'page')
         AND (
@@ -430,7 +438,7 @@ export async function listChatWorkspace(db: Queryable, owner: OwnerId, pageId: s
       LIMIT $3`,
     [owner, pageId, CHAT_WORKSPACE_LIMIT],
   );
-  const pages = result.rows.map((row) => ({ id: row.id, title: row.title, kind: row.kind, parent: row.parent, open: row.id === pageId }));
+  const pages = result.rows.map((row) => ({ id: row.id, title: row.title, kind: row.kind, parent: row.parent, open: row.id === pageId, transcript: row.transcript === true }));
   return pages.some((page) => page.open) ? pages : null;
 }
 

@@ -20,7 +20,8 @@ export type MacLocalTranscriptionRun = {
   operationId: string;
   settings: { engine: "apple-speech"; speakerMode: "auto" };
   audioManifest: MacLocalAudioManifestPart[];
-  candidateId: string | null;
+  /** 結果を書く文字起こしのタブ（#310）。 */
+  tab: string | null;
 };
 
 export class MacLocalTranscriptionRequestError extends Error {
@@ -55,7 +56,7 @@ function parseRun(value: unknown): MacLocalTranscriptionRun | null {
   if ((run.language !== "ja" && run.language !== "en") || (run.errorCode !== null && typeof run.errorCode !== "string")) return null;
   if (!Number.isSafeInteger(value.generation) || (value.generation as number) < 1 || typeof value.operationId !== "string" || !UUID.test(value.operationId)) return null;
   if (value.settings.engine !== "apple-speech" || value.settings.speakerMode !== "auto") return null;
-  if (value.candidateId !== null && (typeof value.candidateId !== "string" || !UUID.test(value.candidateId))) return null;
+  if (value.tab !== null && (typeof value.tab !== "string" || !UUID.test(value.tab))) return null;
   return value as unknown as MacLocalTranscriptionRun;
 }
 

@@ -15,6 +15,7 @@ import { PageEditor } from "./PageEditor";
 import { PageTabs, type OpenPageTab } from "./PageTabs";
 import { RecordingInfo } from "./RecordingInfo";
 import { RecordingTranscript } from "./RecordingTranscript";
+import { TranscriptPage } from "./TranscriptPage";
 
 export { RecordingStartScreen } from "./RecordingStartScreen";
 export type { OpenPageTab };
@@ -171,18 +172,19 @@ export function OpenPage({
     />
   );
   // タブの帯（#308）はページのいちばん上。流れ（#309）の状態は FlowWatcher が読み続け、「ページ」パネルに出す（本文には帯もボタンも置かない）。
-  // 録音ページの文字起こし（設計 §7.1。本文の上）はその下
+  // 録音のタブ（「この録音について」・再生・文字起こしの開始・文字起こしのタブの一覧）と文字起こしのタブ（#310。段落）はその下
+  const transcriptOf = summary.madeFrom?.kind === "transcript" ? summary.madeFrom : null;
   return (
     <>
       <PageTabs key={`tabs-${id}`} page={summary} tabs={tabs} saveNow={saveNow} />
       <FlowWatcher pageId={id} kind={summary.kind} onBodyReplaced={onBodyReplaced} />
-      {/* 録音ページ: 「この録音について」（§3.3）と、録音ブロック・見出し「文字起こし」の下の文字起こし */}
       {summary.kind === "rec" && (
         <>
           <RecordingInfo key={`info-${id}`} pageId={id} />
           <RecordingTranscript key={id} pageId={id} />
         </>
       )}
+      {transcriptOf && <TranscriptPage key={`transcript-${id}`} tabId={id} recording={transcriptOf.recording} />}
       {editor}
     </>
   );

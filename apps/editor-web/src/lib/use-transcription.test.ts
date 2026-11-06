@@ -13,7 +13,9 @@ const run = (status: TranscriptionRun["status"], errorCode: string | null = null
   createdAt: "2030-01-01T00:00:00.000Z",
   startedAt: null,
   finishedAt: null,
+  tab: null,
 });
+const TAB_ID = "7a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d";
 
 /** 読むたびに answers の先頭を返す（Error なら失敗）。最後の答えは繰り返す。 */
 function watcher(answers: (TranscriptionRun | null | Error)[], overrides: Partial<TranscriptionWatcherDeps> = {}) {
@@ -26,10 +28,9 @@ function watcher(answers: (TranscriptionRun | null | Error)[], overrides: Partia
   });
   const deps: TranscriptionWatcherDeps = {
     get,
-    start: vi.fn(async () => ({ run: run("queued") })),
+    start: vi.fn(async () => ({ run: run("queued"), tab: TAB_ID })),
     onChange: (state) => states.push(state),
     onSucceeded: vi.fn(),
-    onHasTranscript: vi.fn(),
     hasTranscript: () => false,
     isHidden: () => hidden,
     ...overrides,
@@ -133,50 +134,49 @@ describe("TranscriptionWatcher", () => {
     expect(instance.state).toMatchObject({ phase: "active", failures: 0 });
   });
 
-  it("starts (replace only when asked), then watches; explains a refusal and reloads when there is already a transcript", async () => {
+  it("starts (passing the options through, including the tab to rewrite), returns the tab, then watches; explains a refusal", async () => {
     const { instance, deps, get } = watcher([null, run("running")]);
     instance.begin();
     await tick(0);
-    await instance.start(false);
+    expect(await instance.start()).toEqual({ run: run("queued"), tab: TAB_ID });
     expect(deps.start).toHaveBeenCalledWith(PAGE_ID, {});
     expect(instance.state.phase).toBe("active");
     await tick(3000);
     expect(get).toHaveBeenCalledTimes(2);
     instance.dispose();
 
-    const replace = watcher([run("failed", "engine_timeout")]);
-    replace.instance.begin();
+    const again = watcher([run("failed", "engine_timeout")]);
+    again.instance.begin();
     await tick(0);
-    await replace.instance.start(true);
-    expect(replace.deps.start).toHaveBeenCalledWith(PAGE_ID, { replace: true });
-    replace.instance.dispose();
+    await again.instance.start({ tab: TAB_ID, engine: "fake" });
+    expect(again.deps.start).toHaveBeenCalledWith(PAGE_ID, { tab: TAB_ID, engine: "fake" });
+    again.instance.dispose();
 
     const refused = watcher([null], { start: vi.fn(async () => Promise.reject(new TranscriptionRequestError(503, "transcription_unavailable"))) });
     refused.instance.begin();
     await tick(0);
-    await refused.instance.start(false);
+    expect(await refused.instance.start()).toBeNull();
     expect(refused.instance.state).toMatchObject({ phase: "idle", startError: "いまは始められません。少ししてから、もう一度試してください。" });
-    expect(refused.deps.onHasTranscript).not.toHaveBeenCalled();
 
-    const conflict = watcher([null], { start: vi.fn(async () => Promise.reject(new TranscriptionRequestError(409, "cannot_start", "has_transcript"))) });
-    conflict.instance.begin();
+    const missing = watcher([null], { start: vi.fn(async () => Promise.reject(new TranscriptionRequestError(409, "cannot_start", "tab_missing"))) });
+    missing.instance.begin();
     await tick(0);
-    await conflict.instance.start(false);
-    expect(conflict.deps.onHasTranscript).toHaveBeenCalledTimes(1);
+    await missing.instance.start({ tab: TAB_ID });
+    expect(missing.instance.state).toMatchObject({ phase: "idle", startError: "この文字起こしのタブには書き直せません。ページを開き直してください。" });
   });
 
   it("does not start twice while starting or running", async () => {
-    let finish!: (value: { run: TranscriptionRun }) => void;
-    const start = vi.fn(() => new Promise<{ run: TranscriptionRun }>((resolve) => (finish = resolve)));
+    let finish!: (value: { run: TranscriptionRun; tab: string | null }) => void;
+    const start = vi.fn(() => new Promise<{ run: TranscriptionRun; tab: string | null }>((resolve) => (finish = resolve)));
     const { instance } = watcher([null], { start });
     instance.begin();
     await tick(0);
-    const first = instance.start(false);
-    void instance.start(false);
+    const first = instance.start();
+    void instance.start();
     expect(start).toHaveBeenCalledTimes(1);
-    finish({ run: run("queued") });
+    finish({ run: run("queued"), tab: TAB_ID });
     await first;
-    await instance.start(false);
+    expect(await instance.start()).toBeNull();
     expect(start).toHaveBeenCalledTimes(1);
     instance.dispose();
   });

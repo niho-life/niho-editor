@@ -45,13 +45,13 @@ function shell(supported: boolean): ShellBridge {
 
 describe("Mac Gemini transcription control", () => {
   it("is absent in a normal browser and in an older unsupported Mac shell", async () => {
-    await act(async () => root.render(<MacGeminiTranscription pageId="p1" hasTranscript={false} onSucceeded={() => undefined} />));
+    await act(async () => root.render(<MacGeminiTranscription pageId="p1" onSucceeded={() => undefined} />));
     await flush();
     expect(host.textContent).toBe("");
 
     (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {};
     native.shell = shell(false);
-    await act(async () => root.render(<MacGeminiTranscription pageId="p2" hasTranscript={false} onSucceeded={() => undefined} />));
+    await act(async () => root.render(<MacGeminiTranscription pageId="p2" onSucceeded={() => undefined} />));
     await flush();
     expect(host.textContent).toBe("");
   });
@@ -63,7 +63,7 @@ describe("Mac Gemini transcription control", () => {
     runMock.mockImplementation(async ({ onProgress }: { onProgress: (value: unknown) => void }) => {
       onProgress({ phase: "transcribing", completed: 1, total: 3 });
     });
-    await act(async () => root.render(<MacGeminiTranscription pageId="p3" hasTranscript={false} onSucceeded={succeeded} />));
+    await act(async () => root.render(<MacGeminiTranscription pageId="p3" onSucceeded={succeeded} />));
     await flush();
     expect(host.textContent).toContain("Gemini（このMacのCLI）で文字起こし");
     expect(host.textContent).toContain("Google Geminiへ送ります");
@@ -77,7 +77,7 @@ describe("Mac Gemini transcription control", () => {
     (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {};
     native.shell = shell(true);
     statusMock.mockResolvedValue({ run: { status: "failed" }, operationId: "00000000-0000-4000-8000-000000000003" });
-    await act(async () => root.render(<MacGeminiTranscription pageId="p4" hasTranscript onSucceeded={() => undefined} />));
+    await act(async () => root.render(<MacGeminiTranscription pageId="p4" onSucceeded={() => undefined} />));
     await flush();
     expect(host.textContent).toContain("Gemini（このMacのCLI）で続ける");
   });
@@ -89,7 +89,7 @@ describe("Mac Gemini transcription control", () => {
       signal.addEventListener("abort", () => reject(new MacGeminiTranscriptionError("stopped")), { once: true });
     }));
     statusMock.mockResolvedValue({ run: { status: "failed" }, operationId: "00000000-0000-4000-8000-000000000003" });
-    await act(async () => root.render(<MacGeminiTranscription pageId="p5" hasTranscript={false} onSucceeded={() => undefined} />));
+    await act(async () => root.render(<MacGeminiTranscription pageId="p5" onSucceeded={() => undefined} />));
     await flush();
     await act(async () => host.querySelector("button")!.click());
     expect(host.textContent).toContain("止める");
@@ -104,7 +104,7 @@ describe("Mac Gemini transcription control", () => {
     native.shell = shell(true);
     statusMock.mockResolvedValue({ run: { status: "failed" }, operationId: "00000000-0000-4000-8000-000000000003" });
     runMock.mockRejectedValue(new MacGeminiTranscriptionError("changed"));
-    await act(async () => root.render(<MacGeminiTranscription pageId="p6" hasTranscript={false} onSucceeded={() => undefined} />));
+    await act(async () => root.render(<MacGeminiTranscription pageId="p6" onSucceeded={() => undefined} />));
     await flush();
     expect(host.textContent).toContain("続ける");
     await act(async () => host.querySelector("button")!.click());
@@ -121,7 +121,7 @@ describe("Mac Gemini transcription control", () => {
     statusMock.mockResolvedValue(previous);
     runMock.mockRejectedValueOnce(new MacGeminiTranscriptionError("changed")).mockResolvedValueOnce(undefined);
     const succeeded = vi.fn();
-    await act(async () => root.render(<MacGeminiTranscription pageId="p8" hasTranscript={false} onSucceeded={succeeded} />));
+    await act(async () => root.render(<MacGeminiTranscription pageId="p8" onSucceeded={succeeded} />));
     await flush();
 
     await act(async () => host.querySelector("button")!.click());
@@ -142,7 +142,7 @@ describe("Mac Gemini transcription control", () => {
     native.shell = shell(true);
     statusMock.mockResolvedValue({ run: { status: "running" }, operationId: "00000000-0000-4000-8000-000000000003" });
     runMock.mockRejectedValue(new MacGeminiTranscriptionError("saving"));
-    await act(async () => root.render(<MacGeminiTranscription pageId="p7" hasTranscript={false} onSucceeded={() => undefined} />));
+    await act(async () => root.render(<MacGeminiTranscription pageId="p7" onSucceeded={() => undefined} />));
     await flush();
     await act(async () => host.querySelector("button")!.click());
     await flush();
@@ -158,10 +158,10 @@ describe("Mac Gemini transcription control", () => {
       oldProgress = onProgress;
       signal.addEventListener("abort", () => reject(new MacGeminiTranscriptionError("stopped")), { once: true });
     }));
-    await act(async () => root.render(<MacGeminiTranscription pageId="old" hasTranscript={false} onSucceeded={() => undefined} />));
+    await act(async () => root.render(<MacGeminiTranscription pageId="old" onSucceeded={() => undefined} />));
     await flush();
     await act(async () => host.querySelector("button")!.click());
-    await act(async () => root.render(<MacGeminiTranscription pageId="new" hasTranscript={false} onSucceeded={() => undefined} />));
+    await act(async () => root.render(<MacGeminiTranscription pageId="new" onSucceeded={() => undefined} />));
     await flush();
     await act(async () => { oldProgress?.({ phase: "transcribing", completed: 9, total: 9 }); });
     expect(host.textContent).not.toContain("9/9");

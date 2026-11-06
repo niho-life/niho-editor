@@ -11,7 +11,9 @@ const RUN: TranscriptionRun = {
   createdAt: "2030-01-01T00:00:00.000Z",
   startedAt: null,
   finishedAt: null,
+  tab: null,
 };
+const TAB = "7a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d";
 
 function fakeFetch(response: Response) {
   const fn = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => response);
@@ -21,20 +23,21 @@ function fakeFetch(response: Response) {
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 describe("startTranscription", () => {
-  it("POSTs only the given options as JSON to the same origin and returns the run", async () => {
-    const { fetch, fn } = fakeFetch(json(202, { run: RUN }));
-    const result = await startTranscription(PAGE, { replace: true, terms: ["合成語"] }, fetch);
-    expect(result).toEqual({ status: 202, run: RUN });
+  it("POSTs only the given options as JSON to the same origin and returns the run and the tab", async () => {
+    const { fetch, fn } = fakeFetch(json(202, { run: { ...RUN, tab: TAB }, tab: TAB }));
+    const result = await startTranscription(PAGE, { tab: TAB, terms: ["合成語"] }, fetch);
+    expect(result).toEqual({ status: 202, run: { ...RUN, tab: TAB }, tab: TAB });
     const [url, init] = fn.mock.calls[0]!;
     expect(url).toBe(`/api/pages/${PAGE}/recording/transcribe`);
     expect(init?.method).toBe("POST");
     expect(init?.credentials).toBe("same-origin");
     expect(init?.cache).toBe("no-store");
     expect(init?.headers).toEqual({ "content-type": "application/json" });
-    expect(JSON.parse(String(init?.body))).toEqual({ replace: true, terms: ["合成語"] });
+    expect(JSON.parse(String(init?.body))).toEqual({ tab: TAB, terms: ["合成語"] });
 
-    const existing = fakeFetch(json(200, { run: { ...RUN, status: "running", startedAt: "2030-01-01T00:00:01.000Z" } }));
-    expect((await startTranscription(PAGE, {}, existing.fetch)).status).toBe(200);
+    const existing = fakeFetch(json(200, { run: { ...RUN, status: "running", startedAt: "2030-01-01T00:00:01.000Z" }, tab: null }));
+    const again = await startTranscription(PAGE, {}, existing.fetch);
+    expect([again.status, again.tab]).toEqual([200, null]);
     expect(JSON.parse(String(existing.fn.mock.calls[0]![1]?.body))).toEqual({});
     const escaped = fakeFetch(json(202, { run: RUN }));
     await startTranscription("a/../b", {}, escaped.fetch);
@@ -42,8 +45,8 @@ describe("startTranscription", () => {
   });
 
   it("throws the server's code and reason, and a 500 for a body it cannot read", async () => {
-    const conflict = startTranscription(PAGE, {}, fakeFetch(json(409, { error: "cannot_start", reason: "has_transcript" })).fetch);
-    await expect(conflict).rejects.toMatchObject({ name: "TranscriptionRequestError", status: 409, error: "cannot_start", reason: "has_transcript" });
+    const conflict = startTranscription(PAGE, {}, fakeFetch(json(409, { error: "cannot_start", reason: "tab_missing" })).fetch);
+    await expect(conflict).rejects.toMatchObject({ name: "TranscriptionRequestError", status: 409, error: "cannot_start", reason: "tab_missing" });
     await expect(startTranscription(PAGE, {}, fakeFetch(json(503, { error: "transcription_unavailable" })).fetch)).rejects.toMatchObject({
       status: 503,
       error: "transcription_unavailable",

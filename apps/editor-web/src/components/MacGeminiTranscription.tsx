@@ -33,8 +33,8 @@ function progressText(progress: MacGeminiProgress | null): string | null {
 
 type MacGeminiTranscriptionProps = {
   pageId: string;
-  hasTranscript: boolean;
   disabled?: boolean;
+  /** 保存した（結果は「文字起こし」ページの新しいタブ。呼ぶ側は一覧を読み直す）。 */
   onSucceeded: () => void;
 };
 
@@ -42,7 +42,7 @@ export function MacGeminiTranscription(props: MacGeminiTranscriptionProps) {
   return <MacGeminiTranscriptionPage key={props.pageId} {...props} />;
 }
 
-function MacGeminiTranscriptionPage({ pageId, hasTranscript, disabled, onSucceeded }: MacGeminiTranscriptionProps) {
+function MacGeminiTranscriptionPage({ pageId, disabled, onSucceeded }: MacGeminiTranscriptionProps) {
   const [shell, setShell] = useState<ShellBridge | null>(null);
   const [supported, setSupported] = useState(false);
   const [running, setRunning] = useState(false);
@@ -130,7 +130,7 @@ function MacGeminiTranscriptionPage({ pageId, hasTranscript, disabled, onSucceed
       <div style={ROW}>
         {!running ? (
           <button type="button" className="es-btn es-btn--outline es-btn--sm" disabled={disabled} onClick={() => void start()}>
-            {savePending ? "生成結果の保存を再試行" : resumable ? "Gemini（このMacのCLI）で続ける" : hasTranscript ? "Gemini（このMacのCLI）で別案を作る" : "Gemini（このMacのCLI）で文字起こし"}
+            {savePending ? "生成結果の保存を再試行" : resumable ? "Gemini（このMacのCLI）で続ける" : "Gemini（このMacのCLI）で文字起こし"}
           </button>
         ) : (
           <button type="button" className="es-btn es-btn--quiet es-btn--sm" onClick={() => controller.current?.abort()}>
