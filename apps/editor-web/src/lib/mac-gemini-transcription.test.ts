@@ -18,7 +18,7 @@ function runBody(status: "running" | "failed" | "succeeded" = "running", generat
     operationId: OP,
     settings: { model: "gemini-3.8-flash", effort: "low", targetSec: 600 },
     audioManifest: manifest,
-    candidateId: null,
+    tab: null,
   };
 }
 
@@ -29,7 +29,7 @@ function runFingerprint(): string {
     runId: RUN,
     operationId: OP,
     language: value.run.language,
-    candidateId: value.candidateId,
+    tab: value.tab,
     settings: value.settings,
     audioManifest: manifest,
   });

@@ -50,15 +50,15 @@ export const CHAT_TOOLS: readonly unknown[] = [
   {
     name: "read_page",
     description:
-      "ページの本文を Markdown で読む。本文は段落（最上位のブロック）ごとに 1 始まりの番号（`n`）つきで返る。`from`・`to` で段落の範囲だけを読める（省くと全体）。返った `revision` を、書くときの `base_revision` に渡す。読めるのは一覧に出たページだけ。画像は `![代替文](niho-asset:ID \"キャプション\")`、録音は `[録音](niho-asset:ID)` の 1 行の段落で返る（中身は見えない）。録音のページでは、文字起こしが `transcript`（区間ごとの番号 `n`・時刻・話者・文。読み取り専用）として添えられる。`transcript_from`・`transcript_to` で区間の範囲を読める（省くと 1 から最大 60 区間・12,000 字まで。`total` が全区間の数）。",
+      "ページの本文を Markdown で読む。本文は段落（最上位のブロック）ごとに 1 始まりの番号（`n`）つきで返る。`from`・`to` で段落の範囲だけを読める（省くと全体）。返った `revision` を、書くときの `base_revision` に渡す。読めるのは一覧に出たページだけ。画像は `![代替文](niho-asset:ID \"キャプション\")`、録音は `[録音](niho-asset:ID)` の 1 行の段落で返る（中身は見えない）。録音のページと文字起こしのタブ（「文字起こし」ページのタブ）では、文字起こしが `transcript`（区間ごとの番号 `n`・時刻・話者・文。読み取り専用）として添えられる。`transcript_from`・`transcript_to` で区間の範囲を読める（省くと 1 から最大 60 区間・12,000 字まで。`total` が全区間の数）。",
     input_schema: {
       type: "object",
       properties: {
         page_id: { type: "string", description: "一覧の id" },
         from: { type: "integer", minimum: 1, description: "読み始める段落の番号（1 始まり。省くと 1）" },
         to: { type: "integer", minimum: 1, description: "読み終える段落の番号（この段落まで含む。省くと最後）" },
-        transcript_from: { type: "integer", minimum: 1, description: "録音のページで、読み始める文字起こしの区間の番号（1 始まり。省くと 1）" },
-        transcript_to: { type: "integer", minimum: 1, description: "録音のページで、読み終える文字起こしの区間の番号（省くと上限まで）" },
+        transcript_from: { type: "integer", minimum: 1, description: "録音のページ・文字起こしのタブで、読み始める文字起こしの区間の番号（1 始まり。省くと 1）" },
+        transcript_to: { type: "integer", minimum: 1, description: "録音のページ・文字起こしのタブで、読み終える文字起こしの区間の番号（省くと上限まで）" },
       },
       required: ["page_id"],
       additionalProperties: false,
@@ -115,7 +115,7 @@ export const CHAT_TOOLS: readonly unknown[] = [
       type: "object",
       properties: {
         query: { type: "string", description: `探す語句（${MAX_TRANSCRIPT_QUERY_CHARS} 字まで）` },
-        page_id: { type: "string", description: "探す録音のページの id（省くと触れる録音の全部）" },
+        page_id: { type: "string", description: "探す文字起こしのタブ（または録音のページ）の id（省くと触れる文字起こしの全部）" },
       },
       required: ["query"],
       additionalProperties: false,

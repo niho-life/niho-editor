@@ -102,6 +102,10 @@ export type PageSummary = Pick<Page, "id" | "kind" | "title" | "lang" | "parent"
   page?: string | null;
   /** 入れ物の役割（#307。無い・分からないときは省く）。 */
   role?: PageRole | null;
+  /** 何から作られたタブか（#309/#310。開いているページの行だけ。無い・分からないときは省く）。 */
+  madeFrom?: MadeFrom | null;
+  /** 文字起こしのタブ（#310。本文 `page_transcripts` を持つ。複製したタブも）なら元の録音のタブの id（開いているページの行だけ。無い・分からないときは省く）。 */
+  transcriptOf?: string | null;
   /** 入れ物のタブの数（入れ物の行だけ。`view: 'pages'` の一覧で添える）。 */
   tabsCount?: number;
   /** タブの名前（タブの行だけ。付けていなければ null。#308）。 */

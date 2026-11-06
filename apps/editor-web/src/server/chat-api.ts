@@ -19,7 +19,7 @@ import {
   type Page,
   type PageFields,
   type PageVersionSummary,
-  type Recording,
+  type TranscriptText,
   type RestoreResult,
   type SaveResult,
 } from "@niho/editor-store";
@@ -88,8 +88,8 @@ export type ChatConversationStore = {
   workspace: (owner: OwnerId, pageId: string) => Promise<ChatWorkspacePage[] | null>;
   /** 開いているページの文脈の手がかり（元の録音・フォルダの手順。#312）。渡さなければ録音ページとその段階だけが録音の文脈を持つ。 */
   context?: (owner: OwnerId, pageId: string) => Promise<ChatContextOf | null>;
-  /** 録音ページの文字起こし（search_transcript。渡さなければ探せない）。他人の・無いページは null。 */
-  recording?: (owner: OwnerId, pageId: string) => Promise<Recording | null>;
+  /** 文字起こしの本文（read_page・search_transcript。文字起こしのタブならその本文、録音のタブなら最新のタブ。#310）。渡さなければ探せない。他人の・無いページは null。 */
+  recording?: (owner: OwnerId, pageId: string) => Promise<TranscriptText | null>;
   /** 録音ページの「この録音について」（背景・登場人物・固有名詞）。開いているページが元にしている録音のものを、指示の文脈に入れる。 */
   fields?: (owner: OwnerId, pageId: string) => Promise<PageFields>;
   /** 最新の run の文書ガイドと手順の固有名詞（録音ページで。run が無ければ null）。フォルダに手順が無いとき、指示の文脈に入れる。 */
@@ -257,12 +257,12 @@ function paragraphRange(parts: readonly string[], at: number, length: number): {
 }
 
 /** 区間の話者の名前（名前が無ければ「話者 N」。話者が無ければ null）。 */
-function speakerOf(recording: Recording, segment: Recording["segments"][number]): string | null {
+function speakerOf(recording: TranscriptText, segment: TranscriptText["segments"][number]): string | null {
   return segment.speaker === null ? null : recording.speakerNames[String(segment.speaker)]?.trim() || `話者 ${segment.speaker}`;
 }
 
 /** 区間の時刻（`hh:mm:ss`。無ければ null）。 */
-function timeOf(segment: Recording["segments"][number]): string | null {
+function timeOf(segment: TranscriptText["segments"][number]): string | null {
   return segment.start === null ? null : clock(segment.start);
 }
 
@@ -272,7 +272,7 @@ type TranscriptRead = { total: number; from: number; to: number; segments: { n: 
  * read_page に添える文字起こし（読み取り専用。本文の paragraphs とは別）。`from`〜`to` は 1 始まりの区間の番号。
  * 一度に返すのは TRANSCRIPT_READ_SEGMENTS_MAX 区間・合計 TRANSCRIPT_READ_CHARS_MAX 字まで（`to` は実際に返した最後の区間）。
  */
-function readTranscript(recording: Recording, from: number, to: number): TranscriptRead {
+function readTranscript(recording: TranscriptText, from: number, to: number): TranscriptRead {
   const total = recording.segments.length;
   const segments: TranscriptRead["segments"] = [];
   let chars = 0;
@@ -289,7 +289,7 @@ function readTranscript(recording: Recording, from: number, to: number): Transcr
 type TranscriptMatch = { page_id: string; title: string; time: string | null; speaker: string | null; before: string; match: string; after: string };
 
 /** 録音の文字起こしの中を語句で探す（大文字・小文字は区別しない）。 */
-function searchRecording(page: { id: string; title: string }, recording: Recording, query: string, room: number): { total: number; matches: TranscriptMatch[] } {
+function searchRecording(page: { id: string; title: string }, recording: TranscriptText, query: string, room: number): { total: number; matches: TranscriptMatch[] } {
   const offsets: number[] = [];
   let text = "";
   for (const segment of recording.segments) {
@@ -475,8 +475,8 @@ function createToolRunner(deps: {
         paragraphs.push({ n: index + 1, markdown: one.value });
       }
       const body = { id: page.id, title: page.title, revision: page.revision, total, from: Math.min(from, total), to, paragraphs };
-      // 録音ページは文字起こしも添える（読み取り専用。本文の paragraphs とは別のキーで、書き込みの道具は触らない）
-      const recording = target.kind === "rec" && deps.recording ? await deps.recording(owner, target.id) : null;
+      // 録音のページと文字起こしのタブ（#310）は文字起こしも添える（読み取り専用。本文の paragraphs とは別のキーで、書き込みの道具は触らない）
+      const recording = (target.kind === "rec" || target.transcriptOf !== null) && deps.recording ? await deps.recording(owner, target.id) : null;
       if (!recording || recording.segments.length === 0) return { ok: true, result: toolJson(body), page: page.title };
       const segments = recording.segments.length;
       const transcriptFrom = isRevision(input.transcript_from) ? input.transcript_from : 1;
@@ -556,10 +556,12 @@ function createToolRunner(deps: {
       const query = typeof input.query === "string" ? input.query.trim() : "";
       const length = Array.from(query).length;
       if (length === 0 || length > MAX_TRANSCRIPT_QUERY_CHARS) return { ok: false, result: `query に探す語句（1〜${MAX_TRANSCRIPT_QUERY_CHARS} 字）を渡してください。` };
-      let candidates = deps.workspace.filter((page) => page.kind === "rec");
+      // 探すのは文字起こしのタブ（#310）。タブの無い録音のページ（移行前の正本）も探す（タブのある録音は、タブと二重に探さない）
+      const hasTranscript = (page: WorkspaceEntry) => page.transcriptOf !== null || (page.kind === "rec" && !deps.workspace.some((tab) => tab.transcriptOf === page.id));
+      let candidates = deps.workspace.filter(hasTranscript);
       if (input.page_id !== undefined) {
         const target = find(input.page_id);
-        if (!target || target.kind !== "rec") return { ok: false, result: "そのページは、この会話で探せる録音ではありません。list_pages の kind が rec のページの id を使ってください。" };
+        if (!target || !(target.transcriptOf !== null || target.kind === "rec")) return { ok: false, result: "そのページは、この会話で探せる文字起こしではありません。list_pages の文字起こしのタブか、kind が rec のページの id を使ってください。" };
         candidates = [target];
       }
       if (candidates.length === 0 || !deps.recording) return { ok: false, result: "このフォルダには録音のページが無いので、文字起こしを探せません。" };
@@ -596,7 +598,7 @@ function createToolRunner(deps: {
     const chars = Array.from(input.markdown).length;
     deps.changes.set(created.id, { pageId: created.id, title: created.title, change: "created", version: null, revision: created.revision, chars, delta: chars });
     // 作ったページも、その依頼の中では読み書きできる
-    deps.workspace.push({ id: created.id, title: created.title, kind: created.kind, parent: created.parent, open: false, writable: true });
+    deps.workspace.push({ id: created.id, title: created.title, kind: created.kind, parent: created.parent, open: false, transcriptOf: null, writable: true });
     return { ok: true, result: toolJson({ id: created.id, title: created.title, revision: created.revision, chars }), page: created.title };
   };
 }

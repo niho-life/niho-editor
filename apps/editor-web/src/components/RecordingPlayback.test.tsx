@@ -3,7 +3,7 @@ import { StrictMode, act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as recordingView from "@/lib/recording-view";
-import { RecordingTranscript } from "./RecordingTranscript";
+import { TranscriptPage } from "./TranscriptPage";
 
 // 段落の欄を描き直した回数を数える（再生位置が段落の中で動くだけなら描き直さない）
 vi.mock("@/lib/recording-view", async (importOriginal) => {
@@ -13,8 +13,9 @@ vi.mock("@/lib/recording-view", async (importOriginal) => {
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// 合成の値だけ（実在の人名・音声は使わない）
+// 合成の値だけ（実在の人名・音声は使わない）。再生は文字起こしのタブ（TAB）で、音声は元の録音のタブ（PAGE_ID）から
 const PAGE_ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
+const TAB = "7a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d";
 const FUTURE = "2099-01-31T03:00:00.000Z";
 const PAST = "2000-01-09T03:00:00.000Z";
 const SEGMENTS = [
@@ -31,28 +32,40 @@ type AudioShape = { status: "uploading" | "uploaded"; bytes: number; contentType
 function createServer(options: { audio?: AudioShape; segments?: typeof SEGMENTS; durationSec?: number | null } = {}) {
   const segments = options.segments ?? SEGMENTS;
   const audio = options.audio === undefined ? { status: "uploaded" as const, bytes: 10, contentType: "audio/mp4", expiresAt: FUTURE } : options.audio;
-  const snapshot = () => ({
+  const durationSec = options.durationSec === undefined ? 125 : options.durationSec;
+  const speakers = [1, 2].map((speaker) => ({ speaker, name: null, count: segments.filter((segment) => segment.speaker === speaker).length }));
+  const recording = () => ({
     recording: {
       revision: 1,
       source: audio ? "audio" : "vtt",
       language: "ja",
       engine: null,
-      durationSec: options.durationSec === undefined ? 125 : options.durationSec,
+      durationSec,
       sourceName: "合成の会議.m4a",
       sourceSha256: null,
-      segments,
+      segments: [],
       speakerNames: {},
       audio,
       createdAt: "2030-01-01T00:00:00.000Z",
       updatedAt: "2030-01-01T00:00:00.000Z",
     },
-    speakers: [1, 2].map((speaker) => ({ speaker, name: null, count: segments.filter((segment) => segment.speaker === speaker).length })),
+    speakers: [],
+    audios: audio ? [{ partIndex: 0, status: audio.status, bytes: audio.bytes, contentType: audio.contentType, durationSec, offsetSec: 0, sourceName: null, expiresAt: audio.expiresAt }] : [],
+    transcripts: [],
+    engines: ["fake"],
+    defaultEngine: "fake",
+  });
+  const transcript = () => ({
+    transcript: { revision: 1, recording: PAGE_ID, engine: "fake", engineLabel: "開発の偽物", language: "ja", durationSec, segments, speakerNames: {}, createdAt: "2030-01-01T00:00:00.000Z", updatedAt: "2030-01-01T00:00:00.000Z" },
+    speakers,
+    run: null,
   });
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
   const fetchMock = vi.fn(async (resource: RequestInfo | URL, init?: RequestInit) => {
     const path = String(resource);
-    if (path === `/api/pages/${PAGE_ID}/recording` && init?.method === "GET") return json(200, snapshot());
-    if (path === `/api/pages/${PAGE_ID}/recording/transcription`) return json(200, { run: null });
+    if (path === `/api/pages/${PAGE_ID}/recording` && init?.method === "GET") return json(200, recording());
+    if (path === `/api/pages/${TAB}/transcript` && init?.method === "GET") return json(200, transcript());
+    if (path === `/api/pages/${TAB}/transcript/versions`) return json(200, { versions: [] });
     throw new Error(`unexpected ${init?.method} ${path}`);
   });
   return { fetchMock };
@@ -148,9 +161,11 @@ async function mount(server = createServer()) {
   document.body.append(container);
   root = createRoot(container);
   await act(async () => {
-    root!.render(<RecordingTranscript pageId={PAGE_ID} />);
+    root!.render(<TranscriptPage tabId={TAB} recording={PAGE_ID} />);
   });
   for (let attempt = 0; attempt < 20 && !container.querySelector('[data-transcript="ready"]'); attempt += 1) await settle();
+  // 元の録音（音声の列）は別の要求。それが届くまで待つ
+  for (let attempt = 0; attempt < 20 && !container.querySelector("audio") && !container.querySelector("[data-transcript-audio]"); attempt += 1) await settle();
   await settle();
   return server;
 }
@@ -196,7 +211,7 @@ describe("録音ページの再生（#36 段 3b-2）: 出すとき・出さな�
     await act(async () => {
       root!.render(
         <StrictMode>
-          <RecordingTranscript pageId={PAGE_ID} />
+          <TranscriptPage tabId={TAB} recording={PAGE_ID} />
         </StrictMode>,
       );
     });
@@ -220,7 +235,7 @@ describe("録音ページの再生（#36 段 3b-2）: 出すとき・出さな�
       expect(timeButtons(), label).toEqual([]);
       expect(slider(), label).toBeNull();
       if (options.audio === null) expect(container!.querySelector(".es-time")?.textContent).toBe("長さ 02:05");
-      if (options.audio?.expiresAt === PAST) expect(container!.textContent).toContain("音声は削除されました");
+      if (options.audio?.expiresAt === PAST) expect(container!.textContent).toContain("音声は削除されたので、再生できません");
       await act(async () => root!.unmount());
       container!.remove();
       root = null;

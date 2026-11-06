@@ -17,15 +17,15 @@ import {
 
 const ORIGIN = "http://editor.test";
 
-type Page = { id: string; owner: string; deleted: boolean; audio: "none" | "uploading" | "uploaded"; expired: boolean; segments: number; language: "ja" | "en" };
+type Page = { id: string; owner: string; deleted: boolean; audio: "none" | "uploading" | "uploaded"; expired: boolean; /** この録音の文字起こしのタブ（#310）。 */ tabs: string[]; language: "ja" | "en" };
 type Run = TranscriptionRunView & { pageId: string; generation: number; input: EnqueueTranscriptionInput };
 
-/** メモリの中だけの合成の store（packages/editor-store と同じ約束: 自分の・ゴミ箱でない録音だけ、前提の順、有効な run は 1 つ）。 */
+/** メモリの中だけの合成の store（packages/editor-store と同じ約束: 自分の・ゴミ箱でない録音だけ、前提の順、有効な run は 1 つ、結果はタブへ）。 */
 function memoryStore(pages: Page[] = []) {
   const runs: Run[] = [];
   const calls: string[] = [];
   const find = (owner: string, id: string) => pages.find((page) => page.id === id && page.owner === owner && !page.deleted) ?? null;
-  const view = ({ id, status, engine, language, errorCode, createdAt, startedAt, finishedAt }: Run): TranscriptionRunView => ({
+  const view = ({ id, status, engine, language, errorCode, createdAt, startedAt, finishedAt, tab }: Run): TranscriptionRunView => ({
     id,
     status,
     engine,
@@ -34,6 +34,7 @@ function memoryStore(pages: Page[] = []) {
     createdAt,
     startedAt,
     finishedAt,
+    tab,
   });
   const store: TranscriptionStore = {
     enqueue: async (owner, id, input) => {
@@ -43,8 +44,11 @@ function memoryStore(pages: Page[] = []) {
       if (page.audio !== "uploaded") return { status: "audio_not_ready" };
       if (page.expired) return { status: "audio_expired" };
       const active = runs.find((run) => run.pageId === id && (run.status === "queued" || run.status === "running"));
-      if (active) return { status: "existing", run: view(active), candidate: active.input.candidate ?? null };
-      if (page.segments > 0 && !input.replace) return { status: "has_transcript" };
+      if (active) return { status: "existing", run: view(active), tab: active.tab };
+      // 書き先: 指定のタブ（この録音のものだけ）か、新しいタブ
+      if (input.tab !== undefined && !page.tabs.includes(input.tab)) return { status: "tab_missing" };
+      const tab = input.tab ?? randomUUID();
+      if (input.tab === undefined) page.tabs.push(tab);
       const run: Run = {
         id: randomUUID(),
         status: "queued",
@@ -54,12 +58,13 @@ function memoryStore(pages: Page[] = []) {
         createdAt: new Date(runs.length * 1000).toISOString(),
         startedAt: null,
         finishedAt: null,
+        tab,
         pageId: id,
         generation: 0,
         input,
       };
       runs.push(run);
-      return { status: "created", run: view(run) };
+      return { status: "created", run: view(run), tab };
     },
     status: async (owner, id) => {
       calls.push(`status:${owner}`);
@@ -81,7 +86,7 @@ function memoryStore(pages: Page[] = []) {
 }
 
 function page(extra: Partial<Page> = {}): Page {
-  return { id: randomUUID(), owner: "user-a", deleted: false, audio: "uploaded", expired: false, segments: 0, language: "ja", ...extra };
+  return { id: randomUUID(), owner: "user-a", deleted: false, audio: "uploaded", expired: false, tabs: [], language: "ja", ...extra };
 }
 
 const notUsed = async (): Promise<Response> => {
@@ -130,7 +135,7 @@ afterEach(() => {
 });
 
 describe("POST /api/pages/{id}/recording/transcribe", () => {
-  it("creates a run for the signed-in owner with the configured engine, answers 202, and dispatches it once", async () => {
+  it("creates a run for the signed-in owner with the configured engine, answers 202 with the tab that receives the result, and dispatches it once", async () => {
     const target = page({ language: "en" });
     const { store, runs } = memoryStore([target]);
     const { dispatcher: d, dispatched } = dispatcher();
@@ -139,13 +144,15 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     const body = await response.json();
-    expect(Object.keys(body)).toEqual(["run"]);
-    expect(Object.keys(body.run).sort()).toEqual(["createdAt", "engine", "errorCode", "finishedAt", "id", "language", "startedAt", "status"]);
+    expect(Object.keys(body)).toEqual(["run", "tab"]);
+    expect(Object.keys(body.run).sort()).toEqual(["createdAt", "engine", "errorCode", "finishedAt", "id", "language", "startedAt", "status", "tab"]);
     expect(body.run.status).toBe("queued");
     expect(body.run.engine).toBe("deepgram");
     expect(body.run.language).toBe("en");
+    expect(body.tab).toBe(target.tabs[0]);
+    expect(body.run.tab).toBe(body.tab);
     expect(runs).toHaveLength(1);
-    expect(runs[0]!.input).toEqual({ engine: "deepgram", diarize: false, replace: false, terms: ["合成語", "Synthetic"] });
+    expect(runs[0]!.input).toEqual({ engine: "deepgram", diarize: false, terms: ["合成語", "Synthetic"] });
     expect(dispatched).toEqual([body.run.id]);
   });
 
@@ -154,7 +161,7 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
     const { store, runs } = memoryStore([target]);
     const runner = { engine: "deepgram" as const, engines: ["deepgram" as const, "gemini" as const], dispatcher: dispatcher().dispatcher };
     expect((await start(target.id, { engine: "gemini" }, deps("user-a", store, runner))).status).toBe(202);
-    expect(runs[0]!.input).toEqual({ engine: "gemini", diarize: true, replace: false, terms: [] });
+    expect(runs[0]!.input).toEqual({ engine: "gemini", diarize: true, terms: [] });
   });
 
   it("uses the recording's own 固有名詞 as terms when the screen sends none, and the screen's terms when it does", async () => {
@@ -183,15 +190,19 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
     expect(runs).toEqual([]);
   });
 
-  it("uses the defaults for an empty body and passes the asked language", async () => {
+  it("uses the defaults for an empty body, passes the asked language, and rewrites the given tab (「もう一度」) instead of making a new one", async () => {
     const target = page();
     const { store, runs } = memoryStore([target]);
     expect((await start(target.id, {}, deps("user-a", store, { engine: "fake", engines: ["fake"], dispatcher: dispatcher().dispatcher }))).status).toBe(202);
-    expect(runs[0]!.input).toEqual({ engine: "fake", diarize: true, replace: false, terms: [] });
-    const other = page();
+    expect(runs[0]!.input).toEqual({ engine: "fake", diarize: true, terms: [] });
+    const existing = randomUUID();
+    const other = page({ tabs: [existing] });
     const second = memoryStore([other]);
-    expect((await start(other.id, { lang: "en", replace: true }, deps("user-a", second.store, { engine: "fake", engines: ["fake"], dispatcher: dispatcher().dispatcher }))).status).toBe(202);
-    expect(second.runs[0]!.input).toEqual({ engine: "fake", language: "en", diarize: true, replace: true, terms: [] });
+    const again = await start(other.id, { lang: "en", tab: existing }, deps("user-a", second.store, { engine: "fake", engines: ["fake"], dispatcher: dispatcher().dispatcher }));
+    expect(again.status).toBe(202);
+    expect((await again.json()).tab).toBe(existing);
+    expect(second.runs[0]!.input).toEqual({ engine: "fake", language: "en", diarize: true, terms: [], tab: existing });
+    expect(other.tabs).toEqual([existing]);
   });
 
   it("returns an active run with 200 without dispatching again", async () => {
@@ -199,9 +210,9 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
     const { store, runs } = memoryStore([target]);
     const { dispatcher: d, dispatched } = dispatcher();
     const first = await (await start(target.id, {}, deps("user-a", store, { engine: "fake", engines: ["fake"], dispatcher: d }))).json();
-    const again = await start(target.id, { replace: true }, deps("user-a", store, { engine: "fake", engines: ["fake"], dispatcher: d }));
+    const again = await start(target.id, {}, deps("user-a", store, { engine: "fake", engines: ["fake"], dispatcher: d }));
     expect(again.status).toBe(200);
-    expect((await again.json()).run).toEqual(first.run);
+    expect(await again.json()).toEqual({ run: first.run, tab: first.tab });
     expect(runs).toHaveLength(1);
     expect(dispatched).toHaveLength(1);
   });
@@ -224,28 +235,28 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
     expect(JSON.stringify((console.error as unknown as { mock: { calls: unknown[] } }).mock.calls)).not.toContain("synthetic dispatch failure");
   });
 
-  it("answers 409 cannot_start with the reason for audio that is not ready, expired audio, and an existing transcript", async () => {
+  it("answers 409 cannot_start with the reason for audio that is not ready, expired audio, and a tab that is not this recording's", async () => {
     const uploading = page({ audio: "uploading" });
     const vtt = page({ audio: "none" });
     const expired = page({ expired: true });
-    const transcribed = page({ segments: 3 });
-    const { store, runs } = memoryStore([uploading, vtt, expired, transcribed]);
+    const other = page({ tabs: [randomUUID()] });
+    const { store, runs } = memoryStore([uploading, vtt, expired, other]);
     const { dispatcher: d, dispatched } = dispatcher();
     const runner = { engine: "fake" as const, engines: ["fake" as const], dispatcher: d };
-    for (const [target, reason] of [
-      [uploading, "audio_not_ready"],
-      [vtt, "audio_not_ready"],
-      [expired, "audio_expired"],
-      [transcribed, "has_transcript"],
+    for (const [target, body, reason] of [
+      [uploading, {}, "audio_not_ready"],
+      [vtt, {}, "audio_not_ready"],
+      [expired, {}, "audio_expired"],
+      [other, { tab: randomUUID() }, "tab_missing"],
     ] as const) {
-      const response = await start(target.id, {}, deps("user-a", store, runner));
+      const response = await start(target.id, body, deps("user-a", store, runner));
       expect(response.status).toBe(409);
       expect(await response.text()).toBe(`{"error":"cannot_start","reason":"${reason}"}`);
     }
     expect(runs).toHaveLength(0);
     expect(dispatched).toHaveLength(0);
-    // replace なら段落があっても作る
-    expect((await start(transcribed.id, { replace: true }, deps("user-a", store, runner))).status).toBe(202);
+    // この録音のタブなら書き直せる
+    expect((await start(other.id, { tab: other.tabs[0] }, deps("user-a", store, runner))).status).toBe(202);
   });
 
   it("answers the same 404 (body and headers) for another owner's page, an unknown id, a malformed id, a page in the trash, and a page without a recording", async () => {
@@ -300,7 +311,8 @@ describe("POST /api/pages/{id}/recording/transcribe", () => {
       [{ model: "gemini-3.8-flash" }, "body"],
       [{ lang: "fr" }, "lang"],
       [{ diarize: "yes" }, "diarize"],
-      [{ replace: 1 }, "replace"],
+      [{ tab: "not-a-uuid" }, "tab"],
+      [{ tab: 1 }, "tab"],
       [{ terms: "語" }, "terms"],
       [{ terms: Array.from({ length: 101 }, (_, index) => `語${index}`) }, "terms"],
       [{ terms: ["a".repeat(65)] }, "terms"],
@@ -390,6 +402,7 @@ describe("GET /api/pages/{id}/recording with the transcription", () => {
     createdAt: new Date(0).toISOString(),
     startedAt: new Date(0).toISOString(),
     finishedAt: new Date(0).toISOString(),
+    tab: null,
   };
   const recordingsStore = (latest: TranscriptionRunView | null): RecordingsStore => ({
     createRecordingPage: async () => {
@@ -404,8 +417,8 @@ describe("GET /api/pages/{id}/recording with the transcription", () => {
 
   it("adds the latest run (only the documented fields), or null", async () => {
     const withRun = await (await get(recordingsStore(run))).json();
-    // 音声の列・文字起こしの案・使えるエンジン（#36 段 3b-4）も同じ応答に入る
-    expect(Object.keys(withRun).sort()).toEqual(["audios", "candidates", "defaultEngine", "engines", "recording", "speakers", "transcription"]);
+    // 音声の列・文字起こしのタブ（#310）・使えるエンジン（#36 段 3b-4）も同じ応答に入る
+    expect(Object.keys(withRun).sort()).toEqual(["audios", "defaultEngine", "engines", "recording", "speakers", "transcription", "transcripts"]);
     expect(withRun.defaultEngine).toBeNull();
     expect(withRun.transcription).toEqual(run);
     expect((await (await get(recordingsStore(null))).json()).transcription).toBeNull();

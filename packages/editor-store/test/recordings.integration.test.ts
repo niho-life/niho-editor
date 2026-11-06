@@ -19,6 +19,7 @@ import {
 } from "../src/recordings.ts";
 import { duplicatePage } from "../src/duplicate.ts";
 import { EditorStore } from "../src/store.ts";
+import { getTranscript } from "../src/transcripts.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 
@@ -98,6 +99,19 @@ const editText = (index: number, text: string) => (data: RecordingData): Recordi
   speakerNames: data.speakerNames,
 });
 
+/**
+ * 段落を正本（page_recordings）に持つ録音（#310 より前の形。migration が残した行と同じ）。取り込みは段落を文字起こしのタブに入れるので、
+ * 正本の書き換え（updateRecording）を試すテストはここで段落を正本に置く。
+ */
+async function seeded(pool: PgPool, owner = OWNER, extra: Partial<CreateRecordingInput> = {}) {
+  const created = await createRecordingPage(pool, owner, input(extra));
+  const seed = input(extra);
+  await pool.query("UPDATE page_recordings SET segments = $3::jsonb, speaker_names = $4::jsonb WHERE owner = $1 AND page_id = $2", [owner, created.page.id, JSON.stringify(seed.segments), JSON.stringify(seed.speakerNames ?? {})]);
+  const recording = await getRecording(pool, owner, created.page.id);
+  assert.ok(recording);
+  return { ...created, recording };
+}
+
 describe("0007 on a database that has 0001 to 0006", { skip: databaseUrl === undefined }, () => {
   let pool: PgPool;
   let drop: () => Promise<void>;
@@ -163,7 +177,7 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
     await drop();
   });
 
-  it("creates a recording page and its transcript together, and reads them back", async () => {
+  it("creates a recording page in a folder of its own, with the imported transcript as a tab of the 文字起こし page (#310)", async () => {
     const created = await createRecordingPage(pool, OWNER, input());
     assert.deepEqual(Object.keys(created.page).sort(), ["createdAt", "id", "kind", "lang", "page", "title", "updatedAt"]);
     assert.ok(created.page.page, "録音のタブは入れ物（kind='page'）を指す（#307）");
@@ -178,15 +192,28 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
     assert.equal(recording.durationSec, 7.5);
     assert.equal(recording.sourceName, "合成の会議.vtt");
     assert.equal(recording.sourceSha256, SHA);
-    assert.deepEqual(recording.segments, input().segments);
-    assert.deepEqual(Object.keys(recording.segments[0]!), ["start", "end", "text", "speaker"], "segments keep their documented field order");
-    assert.deepEqual(recording.speakerNames, { "1": "司会役" });
+    assert.deepEqual(recording.segments, [], "the recording row holds no transcript (the tab does)");
+    assert.deepEqual(recording.speakerNames, {});
     assert.equal(recording.createdAt, created.page.createdAt);
-
     assert.deepEqual(await getRecording(pool, OWNER, created.page.id), recording, "read back from a new query");
-    const page = await new EditorStore(pool).getPage(OWNER, created.page.id);
+
+    const store = new EditorStore(pool);
+    const page = await store.getPage(OWNER, created.page.id);
     assert.equal(page?.kind, "rec");
     assert.deepEqual(page?.blocks, [], "the page body is empty");
+    // 題名のフォルダに包まれ、文字起こしのタブ（札「取り込んだ字幕」）が同じフォルダの「文字起こし」ページにある
+    assert.ok(page?.parent);
+    const folder = await store.getPage(OWNER, page.parent);
+    assert.deepEqual([folder?.kind, folder?.title], ["folder", "合成の会議"]);
+    const tab = await store.getPage(OWNER, created.transcript);
+    assert.deepEqual([tab?.kind, tab?.title, tab?.tabName, tab?.parent, tab?.madeFrom], ["note", "文字起こし", "取り込んだ字幕", page.parent, { kind: "transcript", recording: created.page.id, engine: "vtt-import" }]);
+    const holder = await store.getPage(OWNER, tab!.page!);
+    assert.deepEqual([holder?.role, holder?.parent, holder?.lastTab], [{ kind: "transcript" }, page.parent, created.transcript]);
+    const transcript = await getTranscript(pool, OWNER, created.transcript);
+    assert.deepEqual([transcript?.revision, transcript?.engine, transcript?.language, transcript?.durationSec, transcript?.recordingPageId], [1, "vtt-import", "ja", 7.5, created.page.id]);
+    assert.deepEqual(transcript?.segments, input().segments);
+    assert.deepEqual(Object.keys(transcript!.segments[0]!), ["start", "end", "text", "speaker"], "segments keep their documented field order");
+    assert.deepEqual(transcript?.speakerNames, { "1": "司会役" });
   });
 
   it("creates neither the page nor the recording when the second insert fails", async () => {
@@ -227,7 +254,7 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
   it("answers null to another owner's page, an unknown or malformed id, a page in the trash, and a page without a recording", async () => {
     const theirs = await insertPage(pool, { owner: OTHER });
     await insertRecording(pool, theirs, OTHER);
-    const trashed = (await createRecordingPage(pool, OWNER, input())).page.id;
+    const trashed = (await seeded(pool)).page.id;
     await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [trashed]);
     const plain = await insertPage(pool, { kind: "note" });
     const rowsBefore = (await pool.query("SELECT page_id, revision, segments, speaker_names FROM page_recordings ORDER BY page_id")).rows;
@@ -241,7 +268,7 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
   });
 
   it("saves with the current revision and moves it on; an old revision is a conflict that returns the latest and changes nothing", async () => {
-    const { page, recording } = await createRecordingPage(pool, OWNER, input());
+    const { page, recording } = await seeded(pool);
     const first = await updateRecording(pool, OWNER, page.id, 1, editText(0, "おはようございます。直した"));
     assert.equal(first?.status, "ok");
     assert.ok(first?.status === "ok");
@@ -273,7 +300,7 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
   });
 
   it("writes a new length only when the change returns one（音声・字幕を足して長くなるとき）", async () => {
-    const { page } = await createRecordingPage(pool, OWNER, input());
+    const { page } = await seeded(pool);
     // 長さを返さない書き換え（文章・話者）は今の長さのまま
     const edited = await updateRecording(pool, OWNER, page.id, 1, editText(0, "直した"));
     assert.ok(edited?.status === "ok");
@@ -297,7 +324,7 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
   });
 
   it("lets only one of two concurrent writes with the same revision through", async () => {
-    const { page } = await createRecordingPage(pool, OWNER, input());
+    const { page } = await seeded(pool);
     const results = await Promise.all([
       updateRecording(pool, OWNER, page.id, 1, editText(0, "画面 A の文")),
       updateRecording(pool, OWNER, page.id, 1, editText(0, "画面 B の文")),
@@ -314,7 +341,7 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
   });
 
   it("writes nothing when the change is refused or has the wrong shape", async () => {
-    const { page } = await createRecordingPage(pool, OWNER, input());
+    const { page } = await seeded(pool);
     const before = await rowOf(pool, page.id);
     const refused = await updateRecording(pool, OWNER, page.id, 1, () => ({ rejected: "name" }));
     assert.deepEqual(refused, { status: "rejected", reason: "name" });
@@ -384,7 +411,7 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
   });
 
   it("removes the recording when the page itself is deleted, and keeps it while the page is in the trash", async () => {
-    const { page } = await createRecordingPage(pool, OWNER, input());
+    const { page } = await seeded(pool);
     await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [page.id]);
     assert.ok(await rowOf(pool, page.id), "the trash keeps the recording");
     await pool.query("UPDATE pages SET deleted_at = NULL WHERE id = $1", [page.id]);
@@ -394,7 +421,7 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
   });
 
   it("moves the page's update time on when the transcript is edited, but not on a conflict", async () => {
-    const { page, recording } = await createRecordingPage(pool, OWNER, input());
+    const { page, recording } = await seeded(pool);
     const store = new EditorStore(pool);
     const before = await store.getPage(OWNER, page.id);
     assert.ok(before);
@@ -412,7 +439,7 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
   });
 
   it("copies the transcript with a recording page when it is duplicated, as an independent recording", async () => {
-    const { page, recording } = await createRecordingPage(pool, OWNER, input());
+    const { page, recording } = await seeded(pool);
     const edited = await updateRecording(pool, OWNER, page.id, recording.revision, (data) => ({
       segments: data.segments,
       speakerNames: { ...data.speakerNames, "2": "聞き手" },

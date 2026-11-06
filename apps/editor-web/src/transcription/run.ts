@@ -21,8 +21,8 @@ import { normalizeEngineResult } from "./normalize";
  * - 音声が複数ある録音（#36 段 3b-4）は、**すべての音声を順に**文字起こしして 1 本につなぐ（compose-parts.ts。前の音声の
  *   長さだけ時刻をずらし、話者の番号は音声ごとに振り直す）。1 回の実行の時間切れ（既定 20 分）は全部で共有する
  *   （1 つの task の締め切りを超えないため。足りなければ `EDITOR_TRANSCRIBE_TIMEOUT_SEC` を上げる）。
- * - run に案（candidate）が付いていれば、確定で書くのは正本ではなくその案（store の finishRun が分ける）。
- * - エンジンは **run に記録された名前**で引く（案を別のエンジンで作れるため）。その鍵がサーバーに無ければ engine_unavailable。
+ * - 確定で書くのは run の書き先の文字起こしのタブ（`run.tab`。#310。古い run は正本。store の finishRun が分ける）。
+ * - エンジンは **run に記録された名前**で引く（タブごとに別のエンジンで作れるため）。その鍵がサーバーに無ければ engine_unavailable。
  *
  * - 途中の失敗は短い code にして run を failed にする（failRun。世代が一致するときだけ）。音声は消さないので「もう一度」ができる。
  *   音声の資産が無い・アップロードが済んでいない・保存先に無い → audio_missing、期限切れ → audio_expired、
@@ -107,7 +107,7 @@ export async function executeRun(deps: ExecuteRunDeps): Promise<ExecuteRunOutcom
     return { status: "failed", errorCode: code };
   };
 
-  // run に記録されたエンジン（案を別のエンジンで作れるので、run ごとに違う）
+  // run に記録されたエンジン（タブごとに別のエンジンで作れるので、run ごとに違う）
   const engine = deps.engines(run.engine);
   if (!engine) return fail("engine_unavailable");
   // 音声の列（part 0 から。古い claim の口しか無いときは part 0 だけ）
@@ -141,7 +141,7 @@ export async function executeRun(deps: ExecuteRunDeps): Promise<ExecuteRunOutcom
     const finished = await deps.store.finishRun(deps.runId, generation, normalized);
     if (finished === "succeeded") return { status: "succeeded" };
     if (finished === "superseded") {
-      // replace でない run の間に段落が入っていた: store が書かずに failed（internal）にした
+      // 開始後にタブ（古い run なら録音）が直された・消えた: store が書かずに failed（internal）にした
       logFailure("internal");
       return { status: "failed", errorCode: "internal" };
     }

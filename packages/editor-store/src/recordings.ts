@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { isPageId } from "./store.ts";
 import type { OwnerId, PageLang, Queryable } from "./types.ts";
+import { createTranscriptTab, ensureRecordingFolder } from "./transcripts.ts";
 
 /**
  * 録音ページの文字起こし（#36 段 1）。録音ページ（kind = 'rec'）に page_recordings の 1 行（migrations/0007_page_recordings.sql）。
@@ -355,14 +356,16 @@ export async function rollback(client: Pick<PoolClient, "query">): Promise<void>
 }
 
 /**
- * 録音ページを作る: pages（kind = 'rec'・本文は空）と page_recordings を 1 つのトランザクションで入れる
- * （途中で失敗したらどちらも残らない）。形が規則に合わなければ InvalidRecordingError（何も書かない）。
+ * 録音ページを作る（VTT の取り込み）: 入れ物と録音のタブ（kind = 'rec'・本文は空）・page_recordings（段落は持たない）を入れ、
+ * 題名のフォルダに包んで（#309 の wrapInFolder と同じ）、「文字起こし」ページのタブ（#310。札は「取り込んだ字幕」）に段落と話者名を入れる。
+ * 1 つのトランザクション（途中で失敗したらどれも残らない）。形が規則に合わなければ InvalidRecordingError（何も書かない）。
+ * `transcript` はその文字起こしのタブ（画面はこれを開く）。
  */
 export async function createRecordingPage(
   pool: Connectable,
   owner: OwnerId,
   input: CreateRecordingInput,
-): Promise<{ page: RecordingPage; recording: Recording }> {
+): Promise<{ page: RecordingPage; recording: Recording; transcript: string }> {
   assertOwner(owner);
   const data = { segments: input.segments, speakerNames: input.speakerNames ?? {} };
   assertData(data);
@@ -393,11 +396,20 @@ export async function createRecordingPage(
         input.durationSec ?? null,
         input.sourceName ?? null,
         input.sourceSha256 ?? null,
-        JSON.stringify(clean.segments),
-        JSON.stringify(clean.speakerNames),
+        "[]",
+        "{}",
       ]);
       const recording = recordingResult.rows[0];
       if (!recording) throw new Error("editor-store: insert returned no recording");
+      // 段落は「文字起こし」ページのタブへ（#310）。録音は題名のフォルダに包む（1 フォルダ 1 手順。文字起こしのタブはフォルダの中にある）
+      const home = await ensureRecordingFolder(client, owner, page.id);
+      if (!home) throw new Error("editor-store: recording page vanished before wrapping");
+      const engine = input.engine ?? "import";
+      const { tab } = await createTranscriptTab(client, owner, home, { engine, language: input.lang, durationSec: input.durationSec ?? null });
+      await client.query(
+        "UPDATE page_transcripts SET segments = $3::jsonb, speaker_names = $4::jsonb WHERE owner = $1 AND page_id = $2",
+        [owner, tab, JSON.stringify(clean.segments), JSON.stringify(clean.speakerNames)],
+      );
       await client.query("COMMIT");
       return {
         page: {
@@ -410,6 +422,7 @@ export async function createRecordingPage(
           updatedAt: page.updated_at.toISOString(),
         },
         recording: toRecording(recording),
+        transcript: tab,
       };
     } catch (error) {
       await rollback(client);

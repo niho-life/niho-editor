@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, type CSSProperties, type DragEvent } from "react";
-import { RecordingConflictError, VTT_FILE_MAX_BYTES, appendVtt, recordingErrorMessage, type RecordingSnapshot } from "@/lib/recording-client";
+import { VTT_FILE_MAX_BYTES, recordingErrorMessage } from "@/lib/recording-client";
 
 const ROW_STYLE: CSSProperties = { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 12 };
 
@@ -16,24 +16,28 @@ function isVtt(file: File): boolean {
 }
 
 /**
- * 1 つの録音ページに、あとの音声の文字起こし（.vtt）を足す（#36 段 3b-3「複数音声」）。
+ * 1 つの文字起こし（#310 では文字起こしのタブ）に、あとの音声の文字起こし（.vtt）を足す（#36 段 3b-3「複数音声」）。
  * - 時刻は server が前の音声の長さだけずらして 1 本につなぐ（src/recording/append-transcript.ts）。
  * - 何件でも選べる（複数回の録音・複数のファイル）。選んだ順に 1 件ずつ送り、途中で失敗したらそこで止めて、何件足せたかを出す
  *   （足せた分はサーバーに残る）。
- * - 書き込みは録音ページの保存の列（enqueue）に並べ、`baseRevision` は送る直前の revision を使う。
- * - **音声そのもの**を足すのは、録音ごとに複数の音声を持てるようにする段（PR 本文の相談）のあと。ここは .vtt だけ。
+ * - 書き込みは本文の保存の列（enqueue）に並べ、`baseRevision` は送る直前の revision を使う。足す関数（`append`）と、
+ *   競合（409）から最新を取り出す関数（`conflictOf`）は呼ぶ側が渡す（録音の正本と文字起こしのタブで API が違う）。
  */
-export function RecordingAppend({
-  pageId,
+export function RecordingAppend<S>({
   revision,
+  append,
+  conflictOf,
   onSnapshot,
   enqueue,
   disabled,
 }: {
-  pageId: string;
   /** 送る直前の revision（別の書き込みのあとでも最新を使う）。読めなければ null。 */
   revision: () => number | null;
-  onSnapshot: (snapshot: RecordingSnapshot) => void;
+  /** .vtt を足す（lib/transcript-client.ts の appendTranscriptVtt など）。 */
+  append: (baseRevision: number, input: { name: string; vtt: string }) => Promise<S>;
+  /** 競合の失敗から最新の本文を取り出す（競合でなければ null）。 */
+  conflictOf: (error: unknown) => S | null;
+  onSnapshot: (snapshot: S) => void;
   enqueue: <T>(job: () => Promise<T>) => Promise<T>;
   disabled?: boolean;
 }) {
@@ -42,7 +46,7 @@ export function RecordingAppend({
   const input = useRef<HTMLInputElement>(null);
   const running = useRef(false);
 
-  const append = async (files: readonly File[]) => {
+  const appendFiles = async (files: readonly File[]) => {
     if (running.current || files.length === 0) return;
     const chosen = files.filter(isVtt);
     if (chosen.length === 0) {
@@ -67,12 +71,13 @@ export function RecordingAppend({
         const next = await enqueue(async () => {
           const base = revision();
           if (base === null) throw new Error("no revision");
-          return appendVtt(pageId, base, { name: file.name, vtt });
+          return append(base, { name: file.name, vtt });
         });
         onSnapshot(next);
         added += 1;
       } catch (error) {
-        if (error instanceof RecordingConflictError) onSnapshot(error.snapshot);
+        const latest = conflictOf(error);
+        if (latest !== null) onSnapshot(latest);
         const reason = recordingErrorMessage(error, "append");
         setMessage({ kind: "error", text: added > 0 ? `${added} 件足しました。${file.name}は足せませんでした。${reason}` : reason });
         break;
@@ -85,7 +90,7 @@ export function RecordingAppend({
 
   const choose = (files: FileList | null) => {
     if (busy || disabled) return;
-    void append([...(files ?? [])]);
+    void appendFiles([...(files ?? [])]);
   };
 
   return (

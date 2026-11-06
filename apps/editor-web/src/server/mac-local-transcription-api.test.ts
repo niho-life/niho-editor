@@ -6,7 +6,7 @@ const ORIGIN = "http://editor.test";
 const PAGE = "00000000-0000-4000-8000-000000000001";
 const RUN = "00000000-0000-4000-8000-000000000002";
 const OPERATION = "00000000-0000-4000-8000-000000000003";
-const CANDIDATE = "00000000-0000-4000-8000-000000000004";
+const TAB = "00000000-0000-4000-8000-000000000004";
 const notUsed = async (): Promise<Response> => { throw new Error("not used"); };
 
 function auth(userId: string | null): AuthProvider {
@@ -16,12 +16,12 @@ function auth(userId: string | null): AuthProvider {
 function localRun(status: "created" | "existing" = "created") {
   return {
     status,
-    run: { id: RUN, status: "running" as const, engine: "apple-local" as const, executor: "mac-local" as const, language: "ja" as const, errorCode: null, createdAt: new Date(0).toISOString(), startedAt: new Date(0).toISOString(), finishedAt: null },
+    run: { id: RUN, status: "running" as const, engine: "apple-local" as const, executor: "mac-local" as const, language: "ja" as const, errorCode: null, createdAt: new Date(0).toISOString(), startedAt: new Date(0).toISOString(), finishedAt: null, tab: TAB },
     generation: 1,
     operationId: OPERATION,
     settings: { engine: "apple-speech" as const, speakerMode: "auto" as const },
     audioManifest: [{ partIndex: 0, bytes: 64, contentType: "audio/mp4", sha256: "a".repeat(64), durationSec: 60, offsetSec: 0 }],
-    candidateId: null,
+    tab: TAB,
   };
 }
 
@@ -51,7 +51,7 @@ describe("Apple on-device transcription API", () => {
     const { deps, calls } = setup();
     const response = await mutateMacLocalTranscriptionRoute(request("POST", { action: "start", operationId: OPERATION }), PAGE, deps);
     expect(response.status).toBe(202);
-    expect(await response.json()).toMatchObject({ run: { engine: "apple-local", executor: "mac-local" }, settings: { engine: "apple-speech", speakerMode: "auto" } });
+    expect(await response.json()).toMatchObject({ run: { engine: "apple-local", executor: "mac-local", tab: TAB }, settings: { engine: "apple-speech", speakerMode: "auto" }, tab: TAB });
     expect(calls[0]).toEqual(["start", "owner-a", PAGE, { operationId: OPERATION }]);
   });
 
@@ -63,9 +63,9 @@ describe("Apple on-device transcription API", () => {
     expect(cross.calls).toEqual([]);
   });
 
-  it("delegates candidate and run creation to one atomic store start", async () => {
+  it("delegates the tab and the run to one atomic store start (#310)", async () => {
     const { deps, store } = setup();
-    store.start = vi.fn().mockResolvedValueOnce({ ...localRun(), candidateId: CANDIDATE });
+    store.start = vi.fn().mockResolvedValueOnce({ ...localRun(), tab: TAB });
     const response = await mutateMacLocalTranscriptionRoute(request("POST", { action: "start", operationId: OPERATION }), PAGE, deps);
     expect(response.status).toBe(202);
     expect(store.start).toHaveBeenCalledOnce();

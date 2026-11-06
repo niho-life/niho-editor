@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 import { audioInfo, listAudioParts, type AudioInfo, type AudioPart } from "./recording-audio.ts";
-import { addRecordingCandidateLocked, listRecordingCandidates, writeCandidateSegments } from "./recording-candidates.ts";
+import { createTranscriptTab, ensureRecordingFolder, writeTranscriptSegments } from "./transcripts.ts";
 import {
   CONTROL_CHARACTERS,
   InvalidRecordingError,
@@ -29,9 +29,11 @@ import type { OwnerId, PageLang, Queryable } from "./types.ts";
  * 掃除が積み直すときも世代を進める（requeueRun）。実行の口（Cloud Tasks）の task の名前に世代が入るので、消えた task の名前
  * （Cloud Tasks は最大 24 時間は同じ名前を作らせない）とぶつからず、取りこぼした run をすぐ積み直せる。
  * 1 つのページで有効な run（queued・running）は 1 つだけ（部分 unique index と、録音の行の FOR UPDATE）。
- * 段落を書くのは開始時revisionが変わっていないrunだけ。replaceで段落があっても、開始後の編集があれば結果を捨てる。
  * 音声が複数ある録音（#36 段 3b-4）は、**すべての音声**を順に文字起こしして 1 本につなぐ（claim が音声の列を渡し、実行する側が
- * 前の音声の長さだけ時刻をずらす）。run の `candidate` が入っていれば、結果は正本ではなくその案に書く（見比べる別案）。
+ * 前の音声の長さだけ時刻をずらす）。
+ * #310: 結果の書き先は run の `target_tab`（開始のときに作る「文字起こし」ページの新しいタブ。transcripts.ts）。録音の正本
+ * （page_recordings.segments）には書かない。開始後にタブが直されていれば（revision が進んでいれば）結果を捨てる。
+ * `target_tab` の無い古い run（migration より前）だけは、今までどおり正本に書く。
  * 読み書きは全て本人の・ゴミ箱でないページだけ（claimRun・finishRun・failRun は実行する側が run の id で呼ぶ）。
  * 本文・音声・エンジンの応答・鍵はこの表に持たない。
  */
@@ -74,6 +76,8 @@ export type TranscriptionRunView = {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  /** 結果を書く文字起こしのタブ（#310。migration より前の run は null＝正本に書いた）。 */
+  tab: string | null;
 };
 
 export type EnqueueTranscriptionInput = {
@@ -83,33 +87,26 @@ export type EnqueueTranscriptionInput = {
   language?: PageLang;
   /** 話者を分けるか。 */
   diarize: boolean;
-  /** 既にある段落を置き換えてよいか（false なら、段落が空の録音だけ）。 */
-  replace: boolean;
   /** 固有名詞の表記（100 個まで・1 つ 64 文字まで・制御文字なし）。 */
   terms: readonly string[];
   /**
-   * 結果を書く案の id（#36 段 3b-4）。入れると正本（page_recordings）には書かず、その案に書く（`replace`・段落の有無は見ない）。
-   * 無ければ今までどおり正本に書く。
+   * 書き先にする既存の文字起こしのタブ（「もう一度」。失敗した・空のタブに同じ録音で書き直す。#310）。
+   * 省けば新しいタブを作る。この録音のタブでなければ tab_missing。
    */
-  candidate?: string | null;
+  tab?: string;
 };
 
 export type EnqueueTranscriptionResult =
-  | { status: "created"; run: TranscriptionRunView }
-  /**
-   * 有効な run（queued・running）が既にある（新しく作らない）。`candidate` はその run の書き先（null は正本）。
-   * 同じページの有効な run は 1 つだけなので、別の案・正本に書く run が走っていることもある。呼び出し側は、書き先が
-   * 求めたものと同じか確かめてから「始まった」と言う。
-   */
-  | { status: "existing"; run: TranscriptionRunView; candidate: string | null }
+  /** run を作り、結果を書くタブ（`tab`。省略時は「文字起こし」ページに足した新しいタブ）を決めた。 */
+  | { status: "created"; run: TranscriptionRunView; tab: string }
+  /** 有効な run（queued・running）が既にある（新しく作らない）。`tab` はその run の書き先。 */
+  | { status: "existing"; run: TranscriptionRunView; tab: string | null }
   /** 音声のアップロードが済んでいない（uploading）か、音声の無い録音。 */
   | { status: "audio_not_ready" }
   /** 音声の保持の期限を過ぎた（保存先から消えている見込み）。 */
   | { status: "audio_expired" }
-  /** 段落が既にあり、replace が false（直した文章を失わせない）。 */
-  | { status: "has_transcript" }
-  /** 指定した案がこのページに無い（#36 段 3b-4）。 */
-  | { status: "candidate_missing" };
+  /** `tab` がこの録音の文字起こしのタブでない（別の録音・消えた・別の人）。 */
+  | { status: "tab_missing" };
 
 /** Mac の Antigravity CLI 実行で固定する設定。画面や native から任意のモデル・分割秒を渡さない。 */
 export const MAC_CLI_TRANSCRIPTION_SETTINGS = Object.freeze({ model: "gemini-3.8-flash", effort: "low", targetSec: 600 } as const);
@@ -129,13 +126,11 @@ export type MacTranscriptionStartInput = {
   operationId: string;
   language?: PageLang;
   terms: readonly string[];
-  candidate?: string | null;
 };
 
 export type MacLocalTranscriptionStartInput = {
   operationId: string;
   language?: PageLang;
-  candidate?: string | null;
 };
 
 export type MacTranscriptionRun = {
@@ -144,12 +139,13 @@ export type MacTranscriptionRun = {
   operationId: string;
   settings: typeof MAC_CLI_TRANSCRIPTION_SETTINGS;
   audioManifest: MacAudioManifestPart[];
-  candidateId: string | null;
+  /** 結果を書く文字起こしのタブ（#310）。 */
+  tab: string | null;
 };
 
 export type StartMacTranscriptionResult =
   | ({ status: "created" | "existing" } & MacTranscriptionRun)
-  | { status: "audio_not_ready" | "audio_expired" | "has_transcript" | "candidate_missing" | "other_run_active" | "operation_conflict" };
+  | { status: "audio_not_ready" | "audio_expired" | "other_run_active" | "operation_conflict" };
 
 export type MacLocalTranscriptionRun = {
   run: TranscriptionRunView;
@@ -157,12 +153,13 @@ export type MacLocalTranscriptionRun = {
   operationId: string;
   settings: typeof MAC_LOCAL_TRANSCRIPTION_SETTINGS;
   audioManifest: MacAudioManifestPart[];
-  candidateId: string | null;
+  /** 結果を書く文字起こしのタブ（#310）。 */
+  tab: string | null;
 };
 
 export type StartMacLocalTranscriptionResult =
   | ({ status: "created" | "existing" } & MacLocalTranscriptionRun)
-  | { status: "audio_not_ready" | "audio_expired" | "candidate_missing" | "too_many_candidates" | "other_run_active" | "operation_conflict" };
+  | { status: "audio_not_ready" | "audio_expired" | "other_run_active" | "operation_conflict" };
 
 /** 実行する側が claim した run。audio は本人の・ゴミ箱でないページの音声（無ければ null）。 */
 export type ClaimedTranscription = {
@@ -174,8 +171,8 @@ export type ClaimedTranscription = {
     diarize: boolean;
     replace: boolean;
     terms: string[];
-    /** 結果を書く案（無ければ正本）。 */
-    candidateId: string | null;
+    /** 結果を書く文字起こしのタブ（#310。古い run は null＝正本）。 */
+    tab: string | null;
   };
   /** この実行の世代。finishRun・failRun に渡す。 */
   generation: number;
@@ -189,15 +186,14 @@ export type ClaimedTranscription = {
 export type TranscriptionOutput = { segments: readonly RecordingSegment[]; durationSec: number | null };
 
 /**
- * succeeded: 段落を書いて run を確定した / superseded: 開始後に録音が変わった、replaceでないrunに段落が入った、または案が消えた（書かずに失敗）/
+ * succeeded: 段落を書いて run を確定した / superseded: 開始後にタブ（古い run なら録音）が直された・消えた（書かずに失敗）/
  * stale: 世代が古い・running でない（掃除・別の実行のあと）。何も書いていない。
  */
 export type FinishTranscriptionResult = "succeeded" | "superseded" | "stale";
 
 type RunRow = {
-  /** 書き先の案（null は正本）。 */
-  candidate: string | null;
-  candidate_revision: number | null;
+  /** 書き先のタブ（#310。古い run は null＝正本）。 */
+  target_tab: string | null;
   id: string;
   status: TranscriptionRunStatus;
   engine: TranscriptionLedgerEngineName;
@@ -209,7 +205,7 @@ type RunRow = {
   finished_at: Date | null;
 };
 
-const RUN_COLUMNS = "t.id, t.status, t.engine, t.executor, t.language, t.error_code, t.created_at, t.started_at, t.finished_at, t.candidate, t.candidate_revision";
+const RUN_COLUMNS = "t.id, t.status, t.engine, t.executor, t.language, t.error_code, t.created_at, t.started_at, t.finished_at, t.target_tab";
 
 function toView(row: RunRow): TranscriptionRunView {
   return {
@@ -222,6 +218,7 @@ function toView(row: RunRow): TranscriptionRunView {
     createdAt: row.created_at.toISOString(),
     startedAt: row.started_at ? row.started_at.toISOString() : null,
     finishedAt: row.finished_at ? row.finished_at.toISOString() : null,
+    tab: row.target_tab,
   };
 }
 
@@ -244,13 +241,11 @@ export function isTranscriptionTerm(value: unknown): value is string {
 function assertEnqueueInput(input: EnqueueTranscriptionInput): void {
   if (!(TRANSCRIPTION_ENGINES as readonly string[]).includes(input.engine)) throw new TypeError("editor-store: unknown transcription engine");
   if (input.language !== undefined && input.language !== "ja" && input.language !== "en") throw new TypeError("editor-store: language must be ja or en");
-  if (typeof input.diarize !== "boolean" || typeof input.replace !== "boolean") throw new TypeError("editor-store: diarize and replace must be booleans");
+  if (typeof input.diarize !== "boolean") throw new TypeError("editor-store: diarize must be a boolean");
   if (!Array.isArray(input.terms) || input.terms.length > TRANSCRIPTION_TERMS_MAX || !input.terms.every(isTranscriptionTerm)) {
     throw new TypeError("editor-store: terms are not valid");
   }
-  if (input.candidate !== undefined && input.candidate !== null && !isPageId(input.candidate)) {
-    throw new TypeError("editor-store: candidate must be a UUID");
-  }
+  if (input.tab !== undefined && !isPageId(input.tab)) throw new TypeError("editor-store: tab must be a UUID");
 }
 
 function audioManifest(parts: readonly AudioPart[]): MacAudioManifestPart[] {
@@ -340,17 +335,26 @@ SELECT ${RUN_COLUMNS}
   FROM transcription_runs AS t
  WHERE t.owner = $1 AND t.page_id = $2 AND t.status IN ('queued', 'running')`;
 
-// $1 owner / $2 page id / $3 engine / $4 language / $5 diarize / $6 replace / $7 terms / $8 candidate / $9 base revision / $10 candidate revision
+// $1 owner / $2 page id / $3 engine / $4 language / $5 diarize / $6 terms / $7 base revision（書き先のタブの revision）/ $8 target tab
 const INSERT_RUN_SQL = `
-INSERT INTO transcription_runs AS t (owner, page_id, engine, status, language, diarize, replace, terms, candidate, base_revision, candidate_revision)
-VALUES ($1, $2, $3, 'queued', $4, $5, $6, $7::jsonb, $8::uuid, $9, $10)
+INSERT INTO transcription_runs AS t (owner, page_id, engine, status, language, diarize, replace, terms, base_revision, target_tab)
+VALUES ($1, $2, $3, 'queued', $4, $5, false, $6::jsonb, $7, $8::uuid)
 RETURNING ${RUN_COLUMNS}`;
 
-// $1 owner / $2 page id / $3 candidate id。案がこのページのものか（案に書く run だけ）。
-const CANDIDATE_EXISTS_SQL = `
-SELECT c.revision
-  FROM page_recording_candidates AS c
- WHERE c.owner = $1 AND c.page_id = $2 AND c.id = $3`;
+// $1 owner / $2 tab id。書き先のタブ（本人の・ゴミ箱でない）の今の revision。
+const TAB_REVISION_SQL = `
+SELECT t.revision
+  FROM page_transcripts AS t
+  JOIN pages AS p ON p.owner = t.owner AND p.id = t.page_id
+ WHERE t.owner = $1 AND t.page_id = $2 AND p.deleted_at IS NULL`;
+
+// $1 owner / $2 recording id / $3 tab id。この録音の文字起こしのタブ（本人の・ゴミ箱でない）を押さえ、今の revision を読む。
+const OWN_TAB_REVISION_SQL = `
+SELECT t.revision
+  FROM page_transcripts AS t
+  JOIN pages AS p ON p.owner = t.owner AND p.id = t.page_id
+ WHERE t.owner = $1 AND t.recording_page_id = $2 AND t.page_id = $3 AND p.deleted_at IS NULL
+   FOR UPDATE OF t`;
 
 const ACTIVE_INDEX = "transcription_runs_active_idx";
 
@@ -360,19 +364,19 @@ function isActiveRunConflict(error: unknown): boolean {
   return code === "23505" && constraint === ACTIVE_INDEX;
 }
 
-async function activeRun(db: Pick<PoolClient, "query">, owner: OwnerId, pageId: string): Promise<{ run: TranscriptionRunView; candidate: string | null } | null> {
+async function activeRun(db: Pick<PoolClient, "query">, owner: OwnerId, pageId: string): Promise<{ run: TranscriptionRunView; tab: string | null } | null> {
   const row = (await db.query<RunRow>(ACTIVE_RUN_SQL, [owner, pageId])).rows[0];
-  return row ? { run: toView(row), candidate: row.candidate } : null;
+  return row ? { run: toView(row), tab: row.target_tab } : null;
 }
 
 /**
  * 文字起こしを始める（run を queued で作る）。録音の行を FOR UPDATE で押さえてから前提を順に見る:
  * - 本人の・ゴミ箱でないページの録音が無い（別の人・存在しない・不正な id・削除済み・録音の無いページ）: null
  * - 音声（複数あればそのどれか）のアップロードが済んでいない・音声が無い: audio_not_ready / 期限を過ぎた: audio_expired
- * - 案を指定したが、その案がこのページに無い: candidate_missing
  * - 有効な run（queued・running）がある: それを返す（existing。何も書かない）
- * - 段落があり replace が false: has_transcript（案に書く run では見ない。何も書かない）
- * - それ以外: run を作る（created）
+ * - `tab` を指定した（「もう一度」）のに、この録音の文字起こしのタブでない: tab_missing
+ * - それ以外: 録音がフォルダの外ならフォルダに包み、「文字起こし」ページに新しいタブ（本文なし・札はエンジンの名前）を足し
+ *   （`tab` を指定していればそのタブ）、そのタブを書き先にして run を作る（created。#310）
  * 同じページの開始が並んでも、作られる run は 1 つだけ（行の lock と部分 unique index。unique で止まった側は既存を返す）。
  */
 export async function enqueueTranscription(
@@ -403,48 +407,53 @@ export async function enqueueTranscription(
         await rollback(client);
         return { status: "audio_expired" };
       }
-      const candidate = input.candidate ?? null;
-      let candidateRevision: number | null = null;
-      if (candidate !== null) {
-        const found = (await client.query<{ revision: number }>(CANDIDATE_EXISTS_SQL, [owner, pageId, candidate])).rows[0];
-        if (!found) {
-          await rollback(client);
-          return { status: "candidate_missing" };
-        }
-        candidateRevision = found.revision;
-      }
       const existing = await activeRun(client, owner, pageId);
       if (existing) {
         await rollback(client);
-        return { status: "existing", run: existing.run, candidate: existing.candidate };
+        return { status: "existing", run: existing.run, tab: existing.tab };
       }
-      // 案に書く run は、正本の段落には触らないので段落の有無を見ない
-      if (candidate === null && recording.has_segments && !input.replace) {
-        await rollback(client);
-        return { status: "has_transcript" };
+      const language = input.language ?? recording.language;
+      let tab: string;
+      let baseRevision: number;
+      if (input.tab !== undefined) {
+        // 「もう一度」: この録音の既存のタブに書き直す（開始後に直されたら finishRun が superseded にする）
+        const own = (await client.query<{ revision: number }>(OWN_TAB_REVISION_SQL, [owner, pageId, input.tab])).rows[0];
+        if (!own) {
+          await rollback(client);
+          return { status: "tab_missing" };
+        }
+        tab = input.tab;
+        baseRevision = own.revision;
+      } else {
+        // 書き先: 「文字起こし」ページの新しいタブ（録音がフォルダの外なら、まずフォルダに包む。#310）
+        const home = await ensureRecordingFolder(client, owner, pageId);
+        if (!home) {
+          await rollback(client);
+          return null;
+        }
+        tab = (await createTranscriptTab(client, owner, home, { engine: input.engine, language, durationSec: recording.duration_sec })).tab;
+        baseRevision = 1;
       }
       const inserted = await client.query<RunRow>(INSERT_RUN_SQL, [
         owner,
         pageId,
         input.engine,
-        input.language ?? recording.language,
+        language,
         input.diarize,
-        input.replace,
         JSON.stringify([...input.terms]),
-        candidate,
-        recording.base_revision,
-        candidateRevision,
+        baseRevision,
+        tab,
       ]);
       const row = inserted.rows[0];
       if (!row) throw new Error("editor-store: insert returned no transcription run");
       await client.query("COMMIT");
-      return { status: "created", run: toView(row) };
+      return { status: "created", run: toView(row), tab };
     } catch (error) {
       await rollback(client);
       // 録音の行の lock を通らずに同じページの run が入った（並んだ開始）: 先に入った方を返す
       if (isActiveRunConflict(error)) {
         const existing = await activeRun(client, owner, pageId);
-        if (existing) return { status: "existing", run: existing.run, candidate: existing.candidate };
+        if (existing) return { status: "existing", run: existing.run, tab: existing.tab };
       }
       if (isInvalidTextRepresentation(error)) return null;
       throw error;
@@ -466,12 +475,13 @@ type MacRunRow = RunRow & {
 
 const MAC_RUN_COLUMNS = `${RUN_COLUMNS}, t.base_revision, t.generation, t.operation_id, t.settings, t.audio_manifest, t.page_id, t.owner`;
 const FIND_MAC_OPERATION_SQL = `SELECT ${MAC_RUN_COLUMNS} FROM transcription_runs AS t WHERE t.owner = $1 AND t.operation_id = $2 AND t.executor IN ('mac-cli', 'mac-local')`;
+// $1 owner / $2 page id / $3 language / $4 terms / $5 target tab / $6 base revision（タブの revision）/ $7 operation / $8 settings / $9 manifest
 const INSERT_MAC_RUN_SQL = `
 INSERT INTO transcription_runs AS t
-  (owner, page_id, engine, executor, status, language, diarize, replace, terms, candidate, base_revision,
-   candidate_revision, generation, operation_id, settings, audio_manifest, started_at)
-VALUES ($1, $2, 'gemini-cli', 'mac-cli', 'running', $3, true, false, $4::jsonb, $5::uuid, $6, $7,
-        1, $8::uuid, $9::jsonb, $10::jsonb, clock_timestamp())
+  (owner, page_id, engine, executor, status, language, diarize, replace, terms, target_tab, base_revision,
+   generation, operation_id, settings, audio_manifest, started_at)
+VALUES ($1, $2, 'gemini-cli', 'mac-cli', 'running', $3, true, false, $4::jsonb, $5::uuid, $6,
+        1, $7::uuid, $8::jsonb, $9::jsonb, clock_timestamp())
 RETURNING ${MAC_RUN_COLUMNS}`;
 
 function macRun(row: MacRunRow): MacTranscriptionRun {
@@ -481,16 +491,16 @@ function macRun(row: MacRunRow): MacTranscriptionRun {
     operationId: row.operation_id,
     settings: MAC_CLI_TRANSCRIPTION_SETTINGS,
     audioManifest: row.audio_manifest as MacAudioManifestPart[],
-    candidateId: row.candidate,
+    tab: row.target_tab,
   };
 }
 
 const INSERT_MAC_LOCAL_RUN_SQL = `
 INSERT INTO transcription_runs AS t
-  (owner, page_id, engine, executor, status, language, diarize, replace, terms, candidate, base_revision,
-   candidate_revision, generation, operation_id, settings, audio_manifest, started_at)
-VALUES ($1, $2, 'apple-local', 'mac-local', 'running', $3, true, false, $4::jsonb, $5::uuid, $6, $7,
-        1, $8::uuid, $9::jsonb, $10::jsonb, clock_timestamp())
+  (owner, page_id, engine, executor, status, language, diarize, replace, terms, target_tab, base_revision,
+   generation, operation_id, settings, audio_manifest, started_at)
+VALUES ($1, $2, 'apple-local', 'mac-local', 'running', $3, true, false, $4::jsonb, $5::uuid, $6,
+        1, $7::uuid, $8::jsonb, $9::jsonb, clock_timestamp())
 RETURNING ${MAC_RUN_COLUMNS}`;
 
 function macLocalRun(row: MacRunRow): MacLocalTranscriptionRun {
@@ -500,31 +510,8 @@ function macLocalRun(row: MacRunRow): MacLocalTranscriptionRun {
     operationId: row.operation_id,
     settings: MAC_LOCAL_TRANSCRIPTION_SETTINGS,
     audioManifest: row.audio_manifest as MacAudioManifestPart[],
-    candidateId: row.candidate,
+    tab: row.target_tab,
   };
-}
-
-const MAC_LOCAL_CANDIDATE_NAME = "Apple（このMac内）";
-const PRIMARY_CANDIDATE_NAMES: Readonly<Record<string, string>> = {
-  deepgram: "Deepgram",
-  fake: "開発の偽物",
-  "vtt-import": "取り込んだ字幕",
-  gemini: "Gemini",
-  "gemini-cli": "Gemini（このMacのCLI）",
-  "apple-local": MAC_LOCAL_CANDIDATE_NAME,
-};
-
-function availableMacLocalCandidateName(existing: readonly string[]): string {
-  const names = new Set(existing);
-  if (!names.has(MAC_LOCAL_CANDIDATE_NAME)) return MAC_LOCAL_CANDIDATE_NAME;
-  for (let suffix = 2; ; suffix += 1) {
-    const name = `${MAC_LOCAL_CANDIDATE_NAME} ${suffix}`;
-    if (!names.has(name)) return name;
-  }
-}
-
-function primaryCandidateName(engine: string | null): string {
-  return engine === null ? "はじめの案" : PRIMARY_CANDIDATE_NAMES[engine] ?? engine;
 }
 
 /**
@@ -544,8 +531,6 @@ export async function startMacTranscription(
   if (!Array.isArray(input.terms) || input.terms.length > TRANSCRIPTION_TERMS_MAX || !input.terms.every(isTranscriptionTerm)) {
     throw new TypeError("editor-store: terms are not valid");
   }
-  const candidate = input.candidate ?? null;
-  if (candidate !== null && !isPageId(candidate)) throw new TypeError("editor-store: candidate must be a UUID");
 
   const client = await pool.connect();
   try {
@@ -579,20 +564,9 @@ export async function startMacTranscription(
         await rollback(client);
         return { status: "audio_expired" };
       }
-      const candidateRevision = candidate === null
-        ? null
-        : (await client.query<{ revision: number }>(CANDIDATE_EXISTS_SQL, [owner, pageId, candidate])).rows[0]?.revision ?? null;
-      if (candidate !== null && candidateRevision === null) {
-        await rollback(client);
-        return { status: "candidate_missing" };
-      }
       if (await activeRun(client, owner, pageId)) {
         await rollback(client);
         return { status: "other_run_active" };
-      }
-      if (candidate === null && recording.has_segments) {
-        await rollback(client);
-        return { status: "has_transcript" };
       }
       const parts = await listAudioParts(client, owner, pageId);
       if (parts.length === 0 || parts.some((part) => part.status !== "uploaded")) {
@@ -600,14 +574,21 @@ export async function startMacTranscription(
         return { status: "audio_not_ready" };
       }
       const manifest = audioManifest(parts);
+      // 書き先: 「文字起こし」ページの新しいタブ（#310）
+      const home = await ensureRecordingFolder(client, owner, pageId);
+      if (!home) {
+        await rollback(client);
+        return null;
+      }
+      const language = input.language ?? recording.language;
+      const { tab } = await createTranscriptTab(client, owner, home, { engine: "gemini-cli", language, durationSec: recording.duration_sec });
       const inserted = await client.query<MacRunRow>(INSERT_MAC_RUN_SQL, [
         owner,
         pageId,
-        input.language ?? recording.language,
+        language,
         JSON.stringify([...input.terms]),
-        candidate,
-        recording.base_revision,
-        candidateRevision,
+        tab,
+        1,
         input.operationId,
         JSON.stringify(MAC_CLI_TRANSCRIPTION_SETTINGS),
         JSON.stringify(manifest),
@@ -643,8 +624,6 @@ export async function startMacLocalTranscription(
   if (!isPageId(pageId)) return null;
   if (!isPageId(input.operationId)) throw new TypeError("editor-store: operation id must be a UUID");
   if (input.language !== undefined && input.language !== "ja" && input.language !== "en") throw new TypeError("editor-store: language must be ja or en");
-  const candidate = input.candidate ?? null;
-  if (candidate !== null && !isPageId(candidate)) throw new TypeError("editor-store: candidate must be a UUID");
 
   const client = await pool.connect();
   try {
@@ -678,38 +657,21 @@ export async function startMacLocalTranscription(
         await rollback(client);
         return { status: "audio_not_ready" };
       }
-      let targetCandidate = candidate;
-      let candidateRevision = candidate === null
-        ? null
-        : (await client.query<{ revision: number }>(CANDIDATE_EXISTS_SQL, [owner, pageId, candidate])).rows[0]?.revision ?? null;
-      if (candidate !== null && candidateRevision === null) {
+      // 書き先: 「文字起こし」ページの新しいタブ（#310）
+      const home = await ensureRecordingFolder(client, owner, pageId);
+      if (!home) {
         await rollback(client);
-        return { status: "candidate_missing" };
+        return null;
       }
-      if (targetCandidate === null && recording.has_segments) {
-        const existing = await listRecordingCandidates(client, owner, pageId);
-        const added = await addRecordingCandidateLocked(client, owner, pageId, recording, {
-          name: availableMacLocalCandidateName(existing.map((item) => item.name)),
-          primaryName: primaryCandidateName(recording.engine),
-          engine: "apple-local",
-          language: input.language ?? recording.language,
-        });
-        if (added.status === "too_many") {
-          await rollback(client);
-          return { status: "too_many_candidates" };
-        }
-        targetCandidate = added.candidateId;
-        candidateRevision = (await client.query<{ revision: number }>(CANDIDATE_EXISTS_SQL, [owner, pageId, targetCandidate])).rows[0]?.revision ?? null;
-        if (candidateRevision === null) throw new Error("editor-store: inserted candidate disappeared");
-      }
+      const language = input.language ?? recording.language;
+      const { tab } = await createTranscriptTab(client, owner, home, { engine: "apple-local", language, durationSec: recording.duration_sec });
       const inserted = await client.query<MacRunRow>(INSERT_MAC_LOCAL_RUN_SQL, [
         owner,
         pageId,
-        input.language ?? recording.language,
+        language,
         JSON.stringify([]),
-        targetCandidate,
-        recording.base_revision,
-        candidateRevision,
+        tab,
+        1,
         input.operationId,
         JSON.stringify(MAC_LOCAL_TRANSCRIPTION_SETTINGS),
         JSON.stringify(audioManifest(parts)),
@@ -730,6 +692,19 @@ export async function startMacLocalTranscription(
   } finally {
     client.release();
   }
+}
+
+/**
+ * 再開できるか: 書き先のタブ（#310）が生きていて、開始のときから直されていない（revision が同じ）。
+ * 書き先の無い古い run は、録音の正本が開始のときから変わっていないこと。
+ */
+async function targetUnchanged(client: Pick<PoolClient, "query">, owner: OwnerId, row: MacRunRow): Promise<boolean> {
+  if (row.target_tab !== null) {
+    const current = (await client.query<{ revision: number }>(TAB_REVISION_SQL, [owner, row.target_tab])).rows[0];
+    return current !== undefined && current.revision === row.base_revision;
+  }
+  const recording = (await client.query<LockRow>(LOCK_RECORDING_SQL, [owner, row.page_id])).rows[0];
+  return recording !== undefined && recording.base_revision === row.base_revision;
 }
 
 const RESUME_MAC_SQL = `
@@ -773,16 +748,9 @@ export async function resumeMacTranscription(
         await rollback(client);
         return null;
       }
-      if (row.candidate === null && recording.base_revision !== row.base_revision) {
+      if (!(await targetUnchanged(client, owner, row))) {
         await rollback(client);
         return null;
-      }
-      if (row.candidate !== null) {
-        const current = (await client.query<{ revision: number }>(CANDIDATE_EXISTS_SQL, [owner, pageId, row.candidate])).rows[0];
-        if (!current || current.revision !== row.candidate_revision) {
-          await rollback(client);
-          return null;
-        }
       }
       if (!sameManifest(row.audio_manifest, audioManifest(await listAudioParts(client, owner, pageId)))) {
         await rollback(client);
@@ -849,16 +817,9 @@ export async function resumeMacLocalTranscription(
         await rollback(client);
         return null;
       }
-      if (row.candidate === null && recording.base_revision !== row.base_revision) {
+      if (!(await targetUnchanged(client, owner, row))) {
         await rollback(client);
         return null;
-      }
-      if (row.candidate !== null) {
-        const current = (await client.query<{ revision: number }>(CANDIDATE_EXISTS_SQL, [owner, pageId, row.candidate])).rows[0];
-        if (!current || current.revision !== row.candidate_revision) {
-          await rollback(client);
-          return null;
-        }
       }
       if (!sameManifest(row.audio_manifest, audioManifest(await listAudioParts(client, owner, pageId))) || await activeRun(client, owner, pageId)) {
         await rollback(client);
@@ -880,7 +841,7 @@ export async function resumeMacLocalTranscription(
   }
 }
 
-type ClaimRow = RunRow & { owner: string; page_id: string; diarize: boolean; replace: boolean; terms: unknown; generation: number; candidate: string | null };
+type ClaimRow = RunRow & { owner: string; page_id: string; diarize: boolean; replace: boolean; terms: unknown; generation: number };
 
 // queued の run だけを running にして世代を 1 つ進める（同時に何本来ても 1 本だけが通る）。$1 run id。
 const CLAIM_SQL = `
@@ -889,7 +850,7 @@ UPDATE transcription_runs AS t
        generation = t.generation + 1,
        started_at = GREATEST(clock_timestamp(), t.created_at)
  WHERE t.id = $1 AND t.status = 'queued' AND t.executor = 'server'
-RETURNING ${RUN_COLUMNS}, t.owner, t.page_id, t.diarize, t.replace, t.terms, t.generation, t.candidate`;
+RETURNING ${RUN_COLUMNS}, t.owner, t.page_id, t.diarize, t.replace, t.terms, t.generation`;
 
 /**
  * queued の run を実行中にする（世代を 1 つ進め、開始の時刻を入れる）。他が claim 済み・終わっている・無い・不正な id は null。
@@ -914,7 +875,7 @@ export async function claimRun(db: Queryable, runId: string): Promise<ClaimedTra
     throw error;
   }
   return {
-    run: { ...toView(row), engine: row.engine as TranscriptionEngineName, executor: "server", owner: row.owner, pageId: row.page_id, diarize: row.diarize, replace: row.replace, terms, candidateId: row.candidate },
+    run: { ...toView(row), engine: row.engine as TranscriptionEngineName, executor: "server", owner: row.owner, pageId: row.page_id, diarize: row.diarize, replace: row.replace, terms, tab: row.target_tab },
     generation: row.generation,
     audio,
     parts,
@@ -929,14 +890,14 @@ type FinishLockRow = {
   generation: number;
   replace: boolean;
   engine: TranscriptionLedgerEngineName;
-  candidate: string | null;
-  candidate_revision: number | null;
+  /** 書き先のタブ（#310。古い run は null＝正本）。 */
+  target_tab: string | null;
   executor: "server" | "mac-cli" | "mac-local";
   operation_id: string | null;
   audio_manifest: unknown;
 };
 
-const LOCK_RUN_SQL = "SELECT owner, page_id, status, generation, replace, engine, candidate, candidate_revision, base_revision, executor, operation_id, audio_manifest FROM transcription_runs WHERE id = $1 FOR UPDATE";
+const LOCK_RUN_SQL = "SELECT owner, page_id, status, generation, replace, engine, target_tab, base_revision, executor, operation_id, audio_manifest FROM transcription_runs WHERE id = $1 FOR UPDATE";
 
 // 録音の行を押さえる（run → 録音 の順に lock を取る。開始は録音の行だけを押さえて run の行を lock しないので、順が逆転しない）
 const LOCK_SEGMENTS_SQL = `
@@ -1005,10 +966,10 @@ function cleanOutput(output: TranscriptionOutput): { segments: RecordingSegment[
 
 /**
  * 実行の結果を確定する。1 つの transaction で、run の行を FOR UPDATE で押さえ、世代が一致して running のときだけ:
- * - 案に書く run（candidate つき）: その案に段落・長さ・エンジンを書いて succeeded（正本は触らないので、開いている画面の
- *   revision は変わらない）。案が消えていたら書かずに failed（superseded）
- * - 正本へ書くrunで開始時revisionと現在revisionが違う: replace指定でも書かずに run を failed（internal）にする（superseded）
- * - それ以外: page_recordings の段落・話者名（空）・エンジン・長さを書いて revision を 1 進め、ページの更新時刻も進め、run を succeeded にする
+ * - 書き先のタブがある run（#310）: そのタブ（page_transcripts）に段落・長さ・エンジンを書いて succeeded。タブが消えた・開始後に
+ *   直されていた（revision が進んだ）なら書かずに failed（superseded）
+ * - 古い run（書き先なし）で開始時revisionと現在revisionが違う: replace指定でも書かずに run を failed（internal）にする（superseded）
+ * - それ以外の古い run: page_recordings の段落・話者名（空）・エンジン・長さを書いて revision を 1 進め、ページの更新時刻も進め、run を succeeded にする
  * 世代が違う・running でない・不正な id は何もしない（stale）。結果の形が規則に合わなければ InvalidRecordingError（何も書かない）。
  */
 type MacFinishGuard = { owner: OwnerId; pageId: string; operationId: string; executor: "mac-cli" | "mac-local" };
@@ -1073,17 +1034,11 @@ async function finishRunChecked(
         await client.query("COMMIT");
         return "superseded";
       }
-      if (run.candidate !== null) {
-        if (mac && (await client.query(CANDIDATE_EXISTS_SQL, [run.owner, run.page_id, run.candidate])).rowCount !== 1) {
-          await client.query(FAIL_MAC_INTERNAL_SQL, [runId, generation, "internal", mac.executor]);
-          await client.query("COMMIT");
-          return "superseded";
-        }
-        // 案に書く run: 正本（page_recordings）には触らない（採用のときに写す）
-        if (run.candidate_revision === null) throw new Error("editor-store: candidate run has no candidate revision");
-        const written = await writeCandidateSegments(client, run.candidate, run.candidate_revision, { segments: clean.segments, durationSec: clean.durationSec, engine: run.engine });
+      if (run.target_tab !== null) {
+        // 書き先のタブ（#310）に書く。正本（page_recordings）には触らない
+        const written = await writeTranscriptSegments(client, run.owner, run.target_tab, run.base_revision, { segments: clean.segments, durationSec: clean.durationSec, engine: run.engine });
         if (written !== "written") {
-          // 案が消えた、または開始後に手編集された: 遅着結果を書かずに失敗にする
+          // タブが消えた、または開始後に直された: 遅れて届いた結果を書かずに失敗にする
           await client.query(mac ? FAIL_MAC_INTERNAL_SQL : FAIL_SERVER_SQL, mac ? [runId, generation, "internal", mac.executor] : [runId, generation, "internal"]);
           await client.query("COMMIT");
           return "superseded";
@@ -1218,6 +1173,23 @@ SELECT ${RUN_COLUMNS}
      LIMIT 1
   ) AS t ON true
  WHERE r.owner = $1 AND r.page_id = $2 AND p.deleted_at IS NULL`;
+
+// 本人の・ゴミ箱でないタブに書く最新の run（server・Mac とも）。$1 owner / $2 tab id。
+const TAB_RUN_SQL = `
+SELECT ${RUN_COLUMNS}
+  FROM transcription_runs AS t
+  JOIN pages AS p ON p.owner = t.owner AND p.id = t.target_tab
+ WHERE t.owner = $1 AND t.target_tab = $2 AND p.deleted_at IS NULL
+ ORDER BY t.created_at DESC, t.id DESC
+ LIMIT 1`;
+
+/** 文字起こしのタブ（#310）に書く最新の run（server・Mac とも）。無ければ null（run の無いタブ・別の人・消えたタブ）。 */
+export async function tabRun(db: Queryable, owner: OwnerId, tabId: string): Promise<TranscriptionRunView | null> {
+  assertOwner(owner);
+  if (typeof tabId !== "string" || !isPageId(tabId)) return null;
+  const row = (await db.query<RunRow>(TAB_RUN_SQL, [owner, tabId])).rows[0];
+  return row ? toView(row) : null;
+}
 
 /**
  * 本人の・ゴミ箱でないページの録音の、文字起こしの状態（`{ run }`。run が無ければ run: null）。

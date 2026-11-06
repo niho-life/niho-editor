@@ -18,7 +18,7 @@ function claimOf(
     diarize?: boolean;
     /** 音声の列（#36 段 3b-4）。渡さなければ part 0 の 1 件（audio と同じもの）。 */
     parts?: ClaimedTranscription["parts"];
-    candidateId?: string | null;
+    tab?: string | null;
   } = {},
 ): ClaimedTranscription {
   const audio =
@@ -49,7 +49,7 @@ function claimOf(
       diarize: extra.diarize ?? true,
       replace: false,
       terms: ["合成語"],
-      candidateId: extra.candidateId ?? null,
+      tab: extra.tab ?? null,
     },
     generation: 1,
     audio,

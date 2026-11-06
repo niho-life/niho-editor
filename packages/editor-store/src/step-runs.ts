@@ -808,19 +808,25 @@ export type StepInput = StepMaterials & { previousBlocks: Block[] | null };
  * ページの本文を資料として読む SQL（`x` は pages の行）。録音のタブで文字起こし（`page_recordings.segments`）があれば、
  * 段落ごとに「[分:秒] 話者: 文」の段落にする（#309。#310 までは録音のタブ＝文字起こし）。それ以外は `blocks` のまま。
  */
+const SEGMENT_PARAGRAPHS_SQL = (source: string) => `
+  (SELECT jsonb_agg(jsonb_build_object('type', 'paragraph', 'content', jsonb_build_array(jsonb_build_object('type', 'text', 'text',
+            CASE WHEN jsonb_typeof(s.seg->'start') = 'number'
+                 THEN '[' || floor((s.seg->>'start')::numeric / 60)::int::text || ':' || lpad(floor(mod((s.seg->>'start')::numeric, 60))::int::text, 2, '0') || '] '
+                 ELSE '' END
+            || CASE WHEN jsonb_typeof(s.seg->'speaker') = 'number'
+                    THEN COALESCE(pr.speaker_names->>(s.seg->>'speaker'), '話者' || (s.seg->>'speaker')) || ': '
+                    ELSE '' END
+            || COALESCE(s.seg->>'text', '')))) ORDER BY s.ord)
+     FROM ${source} pr, jsonb_array_elements(pr.segments) WITH ORDINALITY s(seg, ord)
+    WHERE pr.owner = x.owner AND pr.page_id = x.id)`;
+
+// 文字起こしのタブ（#310。page_transcripts）と、古い録音のタブ（page_recordings に段落）は「[分:秒] 話者: 文」の段落に。それ以外は blocks
 const PAGE_TEXT_SQL = `
-  CASE WHEN x.kind = 'rec'
+  CASE WHEN EXISTS (SELECT 1 FROM page_transcripts pt WHERE pt.owner = x.owner AND pt.page_id = x.id AND jsonb_array_length(pt.segments) > 0)
+       THEN ${SEGMENT_PARAGRAPHS_SQL("page_transcripts")}
+       WHEN x.kind = 'rec'
         AND EXISTS (SELECT 1 FROM page_recordings pr WHERE pr.owner = x.owner AND pr.page_id = x.id AND jsonb_array_length(pr.segments) > 0)
-       THEN (SELECT jsonb_agg(jsonb_build_object('type', 'paragraph', 'content', jsonb_build_array(jsonb_build_object('type', 'text', 'text',
-                      CASE WHEN jsonb_typeof(s.seg->'start') = 'number'
-                           THEN '[' || floor((s.seg->>'start')::numeric / 60)::int::text || ':' || lpad(floor(mod((s.seg->>'start')::numeric, 60))::int::text, 2, '0') || '] '
-                           ELSE '' END
-                      || CASE WHEN jsonb_typeof(s.seg->'speaker') = 'number'
-                              THEN COALESCE(pr.speaker_names->>(s.seg->>'speaker'), '話者' || (s.seg->>'speaker')) || ': '
-                              ELSE '' END
-                      || COALESCE(s.seg->>'text', '')))) ORDER BY s.ord)
-               FROM page_recordings pr, jsonb_array_elements(pr.segments) WITH ORDINALITY s(seg, ord)
-              WHERE pr.owner = x.owner AND pr.page_id = x.id)
+       THEN ${SEGMENT_PARAGRAPHS_SQL("page_recordings")}
        ELSE x.blocks END`;
 
 /**
@@ -1502,7 +1508,7 @@ export type FlowView = {
   folder: { id: string; title: string; recipe: string | null };
   /** フォルダ直下の入れ物（役割の有無を問わず。タブは入れ物の中の並び）。 */
   holders: FlowHolder[];
-  /** フォルダの録音のタブで済んだ文字起こしのエンジン（#309。#310 までは録音のタブ＝文字起こし）。 */
+  /** フォルダの録音ごとに、文字起こしのタブがあるエンジン（#310。流れの「文字起こし 作成 ▾」で済みにする）。 */
   usedEngines: { recording: string; engine: string }[];
 };
 
@@ -1534,13 +1540,18 @@ export async function readFlow(db: Queryable, owner: OwnerId, folderId: string):
     holder.tabs.push({ id: row.id, kind: row.kind, title: row.title, tabName: row.tab_name, tabPos: Number(row.tab_pos), revision: row.revision, stepStatus: row.step_status, madeFrom: row.made_from });
     holders.set(row.holder, holder);
   }
-  const recordings = rows.rows.filter((row) => row.kind === "rec").map((row) => row.id);
-  const engines = recordings.length === 0
-    ? []
-    : (await db.query<{ page_id: string; engine: string }>(
-        "SELECT DISTINCT page_id, engine FROM transcription_runs WHERE owner = $1 AND status = 'succeeded' AND page_id = ANY($2::uuid[])",
-        [owner, recordings],
-      )).rows.map((row) => ({ recording: row.page_id, engine: row.engine }));
+  // 済んだ（使った）エンジン: 文字起こしのタブ（#310。役割 transcript の入れ物のタブの made_from）
+  const seen = new Set<string>();
+  const engines: { recording: string; engine: string }[] = [];
+  for (const holder of holders.values()) {
+    if (holder.role?.kind !== "transcript") continue;
+    for (const tab of holder.tabs) {
+      const made = tab.madeFrom;
+      if (!made || made.kind !== "transcript" || seen.has(`${made.recording}\n${made.engine}`)) continue;
+      seen.add(`${made.recording}\n${made.engine}`);
+      engines.push({ recording: made.recording, engine: made.engine });
+    }
+  }
   return { folder: { id: folderRow.id, title: folderRow.title, recipe: folderRow.recipe }, holders: [...holders.values()], usedEngines: engines };
 }
 

@@ -1,10 +1,7 @@
 import "server-only";
 import { connectionSource } from "@niho/editor-publish";
 import {
-  addRecordingCandidate,
-  adoptRecordingCandidate,
   audioInfo,
-  deleteRecordingCandidate,
   completeAudioPart,
   discardAudioPart,
   completeAudioUpload,
@@ -23,8 +20,8 @@ import {
   failMacLocalTranscription,
   findImageUploadByKey,
   getRecording,
-  getRecordingCandidate,
-  getRecordingCandidateVersion,
+  getTranscript,
+  getTranscriptVersion,
   getOrCreateNativeAudioCacheNamespace,
   getShare,
   imageAsset,
@@ -35,9 +32,10 @@ import {
   resumeMacTranscription,
   resumeMacLocalTranscription,
   listAudioParts,
-  listRecordingCandidates,
-  listRecordingCandidateVersions,
-  restoreRecordingCandidateVersion,
+  listTranscriptTabs,
+  listTranscriptVersions,
+  restoreTranscriptVersion,
+  transcriptRecordingOf,
   rotateShare,
   searchPages,
   sharedImageAsset,
@@ -45,6 +43,7 @@ import {
   startAudioRecording,
   startImageUpload,
   stopShare,
+  tabRun,
   transcriptionStatus,
   startMacTranscription,
   startMacLocalTranscription,
@@ -52,7 +51,7 @@ import {
   finishMacLocalTranscription,
   updateImageMeta,
   updateRecording,
-  updateRecordingCandidate,
+  updateTranscript,
 } from "@niho/editor-store";
 import { getAuthProvider, getPhotoAuthProvider } from "../auth";
 import { NihoExperienceApiClient } from "../auth/niho-experience-api";
@@ -77,8 +76,8 @@ import { createFixedWindowLimiter, rateLimitFromEnv, type RateLimiter } from "..
 import type { PagesApiDeps } from "./pages-api";
 import type { PreviewTokenApiDeps } from "./preview-token-api";
 import type { PublishApiDeps } from "./publish-api";
-import type { CandidatesApiDeps } from "./recording-candidates-api";
 import type { RecordingsApiDeps } from "./recordings-api";
+import type { TranscriptApiDeps } from "./transcript-api";
 import type { SearchApiDeps } from "./search-api";
 import type { ShareApiDeps } from "./share-api";
 import type { TranscriptionApiDeps } from "./transcription-api";
@@ -131,9 +130,9 @@ export const recordingDeps: RecordingsApiDeps = {
       getRecording: (owner, pageId) => getRecording(pool, owner, pageId),
       updateRecording: (owner, pageId, baseRevision, mutate) => updateRecording(pool, owner, pageId, baseRevision, mutate),
       latestTranscription: (owner, pageId) => latestRun(pool, owner, pageId),
-      // 音声の列と文字起こしの案（#36 段 3b-4）
+      // 音声の列（#36 段 3b-4）と、この録音から作った文字起こしのタブ（#310）
       listAudioParts: (owner, pageId) => listAudioParts(pool, owner, pageId),
-      listCandidates: (owner, pageId) => listRecordingCandidates(pool, owner, pageId),
+      listTranscripts: (owner, pageId) => listTranscriptTabs(pool, owner, pageId),
     };
   },
   // いま使えるエンジン（鍵が入っているもの）。画面は 2 つ以上あるときだけ案のエンジンを選べる
@@ -142,31 +141,21 @@ export const recordingDeps: RecordingsApiDeps = {
   defaultEngine: () => resolveTranscriptionEngines(process.env)?.default ?? null,
 };
 
-/** 文字起こしの案（#36 段 3b-4）の実行時の依存（DB・実行の呼び出し口は要求のたびに遅延して決める）。 */
-export const candidatesDeps: CandidatesApiDeps = {
+/** 文字起こしのタブ（#310）の実行時の依存（DB の接続は要求のたびに遅延して決める。Pool は getStore と共有）。 */
+export const transcriptDeps: TranscriptApiDeps = {
   auth: () => getAuthProvider(),
   store: () => {
     const pool = getPool();
     if (!pool) return null;
     return {
-      getRecording: (owner, pageId) => getRecording(pool, owner, pageId),
-      listCandidates: (owner, pageId) => listRecordingCandidates(pool, owner, pageId),
-      getCandidate: (owner, pageId, candidateId) => getRecordingCandidate(pool, owner, pageId, candidateId),
-      addCandidate: (owner, pageId, input) => addRecordingCandidate(pool, owner, pageId, input),
-      updateCandidate: (owner, pageId, candidateId, input) => updateRecordingCandidate(pool, owner, pageId, candidateId, input),
-      listVersions: (owner, pageId, candidateId) => listRecordingCandidateVersions(pool, owner, pageId, candidateId),
-      getVersion: (owner, pageId, candidateId, version) => getRecordingCandidateVersion(pool, owner, pageId, candidateId, version),
-      restoreVersion: (owner, pageId, candidateId, version, input) => restoreRecordingCandidateVersion(pool, owner, pageId, candidateId, version, input),
-      adoptCandidate: (owner, pageId, candidateId, input) => adoptRecordingCandidate(pool, owner, pageId, candidateId, input),
-      deleteCandidate: (owner, pageId, candidateId) => deleteRecordingCandidate(pool, owner, pageId, candidateId),
-      enqueue: (owner, pageId, input) => enqueueTranscription(pool, owner, pageId, input),
-      failRun: (runId, generation, errorCode) => failRun(pool, runId, generation, errorCode),
-      hints: (owner, pageId) => readTranscriptionHints(pool, owner, pageId),
+      get: (owner, tabId) => getTranscript(pool, owner, tabId),
+      update: (owner, tabId, baseRevision, mutate) => updateTranscript(pool, owner, tabId, baseRevision, mutate),
+      listVersions: (owner, tabId) => listTranscriptVersions(pool, owner, tabId),
+      getVersion: (owner, tabId, version) => getTranscriptVersion(pool, owner, tabId, version),
+      restoreVersion: (owner, tabId, version, baseRevision) => restoreTranscriptVersion(pool, owner, tabId, version, baseRevision),
+      run: (owner, tabId) => tabRun(pool, owner, tabId),
+      recordingOf: (owner, tabId) => transcriptRecordingOf(pool, owner, tabId),
     };
-  },
-  runner: () => {
-    const pool = getPool();
-    return pool ? getTranscriptionRunner(pool, process.env) : null;
   },
 };
 
@@ -300,8 +289,6 @@ export const macTranscriptionDeps: MacTranscriptionApiDeps = {
     if (!pool) return null;
     return {
       getRecording: (owner, pageId) => getRecording(pool, owner, pageId),
-      listCandidates: (owner, pageId) => listRecordingCandidates(pool, owner, pageId),
-      addCandidate: (owner, pageId, input) => addRecordingCandidate(pool, owner, pageId, input),
       start: (owner, pageId, input) => startMacTranscription(pool, owner, pageId, input),
       status: (owner, pageId) => macTranscriptionStatus(pool, owner, pageId),
       finish: (owner, pageId, runId, operationId, generation, output) => finishMacTranscription(pool, owner, pageId, runId, operationId, generation, output),

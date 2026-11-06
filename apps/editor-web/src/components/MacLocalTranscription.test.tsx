@@ -49,13 +49,13 @@ afterEach(async () => {
 
 describe("Apple on-device transcription control", () => {
   it("is absent in Web and gives an update notice only to an older Mac shell", async () => {
-    await act(async () => root.render(<MacLocalTranscription pageId="p1" hasTranscript={false} onSucceeded={() => undefined} />));
+    await act(async () => root.render(<MacLocalTranscription pageId="p1" onSucceeded={() => undefined} />));
     await flush();
     expect(host.textContent).toBe("");
 
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     native.shell = shell(false);
-    await act(async () => root.render(<MacLocalTranscription pageId="p2" hasTranscript={false} onSucceeded={() => undefined} />));
+    await act(async () => root.render(<MacLocalTranscription pageId="p2" onSucceeded={() => undefined} />));
     await flush();
     expect(host.textContent).toContain("Macアプリを更新");
   });
@@ -65,10 +65,10 @@ describe("Apple on-device transcription control", () => {
     native.shell = shell(true);
     const succeeded = vi.fn();
     runMock.mockResolvedValue(undefined);
-    await act(async () => root.render(<MacLocalTranscription pageId="p3" hasTranscript onSucceeded={succeeded} />));
+    await act(async () => root.render(<MacLocalTranscription pageId="p3" onSucceeded={succeeded} />));
     await flush();
     expect(runMock).not.toHaveBeenCalled();
-    expect(host.textContent).toContain("Apple端末内で別案を作る");
+    expect(host.textContent).toContain("Apple端末内で文字起こし");
     expect(host.textContent).toContain("他のproviderへ自動送信しません");
     await act(async () => host.querySelector("button")!.click());
     expect(runMock).toHaveBeenCalledOnce();
@@ -81,7 +81,7 @@ describe("Apple on-device transcription control", () => {
     const operationId = "00000000-0000-4000-8000-000000000003";
     statusMock.mockResolvedValue({ run: { status: "running" }, operationId });
     runMock.mockRejectedValue(new MacLocalTranscriptionError("saving"));
-    await act(async () => root.render(<MacLocalTranscription pageId="p4" hasTranscript={false} onSucceeded={() => undefined} />));
+    await act(async () => root.render(<MacLocalTranscription pageId="p4" onSucceeded={() => undefined} />));
     await flush();
     expect(host.textContent).toContain("再開");
     await act(async () => host.querySelector("button")!.click());

@@ -64,7 +64,7 @@ function stableFingerprint(pageId: string, run: MacTranscriptionRun): string {
     runId: run.run.id,
     operationId: run.operationId,
     language: run.run.language,
-    candidateId: run.candidateId,
+    tab: run.tab,
     settings: run.settings,
     audioManifest: run.audioManifest,
   });

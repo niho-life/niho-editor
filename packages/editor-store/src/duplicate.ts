@@ -7,6 +7,7 @@ import type { Block, OwnerId, Page, PageKind, PageLang, Queryable, StepStatus } 
  * タブ（#307。`page` が入れ物を指す行）の複製は**同じ入れ物の新しいタブ**（同じフォルダに並び、並びは末尾、`made_from` は `{kind:'dup', from}`）。
  * 入れ物の無い行（手順のサブページ・移行前の行）の複製は、今までどおり上の段の 1 枚（parent は付けない）。
  * 録音ページ（#36。page_recordings の行がある）は、文字起こし（段落・話者名・原本の名前と SHA-256）も同じ文の中で写す。
+ * 文字起こしのタブ（#310。page_transcripts の行がある）も、本文（段落・話者名・長さ）を同じ文の中で写す（版は写さない。revision は 1 から）。
  * 録音の revision は 1 から数え直す（別の録音になるので、元の録音の編集とは競合しない）。
  * 音声（#36 段 2a。資産は 1 つのページに属する）は写さない: コピーは文字起こしだけで、audio_* は既定の none。
  * 2 本目以降の音声（新しい migration の page_recording_audios）と文字起こしの案（page_recording_candidates）も、同じ理由で写さない。
@@ -94,6 +95,14 @@ recording AS (
          r.segments, r.speaker_names, c.created_at, c.created_at
     FROM copied AS c
     JOIN page_recordings AS r ON r.owner = $1 AND r.page_id = $2
+  RETURNING page_id
+),
+transcript AS (
+  INSERT INTO page_transcripts
+         (page_id, owner, recording_page_id, engine, language, segments, speaker_names, duration_sec, created_at, updated_at)
+  SELECT c.id, t.owner, t.recording_page_id, t.engine, t.language, t.segments, t.speaker_names, t.duration_sec, c.created_at, c.created_at
+    FROM copied AS c
+    JOIN page_transcripts AS t ON t.owner = $1 AND t.page_id = $2
   RETURNING page_id
 )
 SELECT ${DUPLICATE_COLUMNS} FROM copied`;

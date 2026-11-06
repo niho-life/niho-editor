@@ -149,7 +149,7 @@ export class MemoryStepRunStore implements StepRunStore {
    * 本文のページ（既定は note）。入れ物を一緒に作り、タブの id を返す（editor-store の createPage と同じ）。
    * `parent` はフォルダ。`role` は入れ物の役割。
    */
-  addPage(owner: string, page: { kind?: PageKind; blocks?: Block[]; title?: string; parent?: string | null; role?: PageRole | null } = {}): string {
+  addPage(owner: string, page: { kind?: PageKind; blocks?: Block[]; title?: string; parent?: string | null; role?: PageRole | null; madeFrom?: MadeFrom | null } = {}): string {
     const kind = page.kind ?? "note";
     const title = page.title ?? "";
     const parent = page.parent ?? null;
@@ -157,7 +157,7 @@ export class MemoryStepRunStore implements StepRunStore {
       return this.#insert({ owner, kind, title, blocks: page.blocks ?? [], parent, page: null, role: null, recipe: null, stepStatus: null, madeFrom: null }).id;
     }
     const holder = this.#insert({ owner, kind: "page", title, blocks: [], parent, page: null, role: page.role ?? null, recipe: null, stepStatus: null, madeFrom: null });
-    return this.#insert({ owner, kind, title, blocks: page.blocks ?? [], parent, page: holder.id, role: null, recipe: null, stepStatus: null, madeFrom: null, sortOrder: 1 }).id;
+    return this.#insert({ owner, kind, title, blocks: page.blocks ?? [], parent, page: holder.id, role: null, recipe: null, stepStatus: null, madeFrom: page.madeFrom ?? null, sortOrder: 1 }).id;
   }
 
   /** test 用: タブの入れ物。 */

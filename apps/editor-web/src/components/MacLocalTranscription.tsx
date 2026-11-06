@@ -8,7 +8,7 @@ import { MacLocalTranscriptionError, runMacLocalTranscription, type MacLocalProg
 const ROW: CSSProperties = { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 8 };
 const ERRORS: Record<MacLocalTranscriptionError["code"], string> = {
   unsupported: "この版のMacアプリはApple端末内文字起こしの現行方式に対応していません。アプリを更新してください。",
-  changed: "ページ、音声、設定、または候補が変わったため、古い結果は保存しませんでした。",
+  changed: "ページ、音声、設定、または書き先のタブが変わったため、古い結果は保存しませんでした。",
   failed: "このMacで文字起こしを終えられませんでした。音声はサーバーとこのMacに残っています。",
   saving: "認識結果はこのMacに保存待ちで残っています。再試行しても認識はやり直しません。",
   stopped: "止めました。成功としては保存していません。",
@@ -22,13 +22,13 @@ function progressText(value: MacLocalProgress | null): string | null {
   return "文字起こしを保存しました";
 }
 
-type Props = { pageId: string; hasTranscript: boolean; disabled?: boolean; onSucceeded: () => void };
+type Props = { pageId: string; disabled?: boolean; /** 保存した（結果は「文字起こし」ページの新しいタブ）。 */ onSucceeded: () => void };
 
 export function MacLocalTranscription(props: Props) {
   return <MacLocalTranscriptionPage key={props.pageId} {...props} />;
 }
 
-function MacLocalTranscriptionPage({ pageId, hasTranscript, disabled, onSucceeded }: Props) {
+function MacLocalTranscriptionPage({ pageId, disabled, onSucceeded }: Props) {
   const [shell, setShell] = useState<ShellBridge | null>(null);
   const [oldShell, setOldShell] = useState(false);
   const [operationId, setOperationId] = useState<string | null>(null);
@@ -89,7 +89,7 @@ function MacLocalTranscriptionPage({ pageId, hasTranscript, disabled, onSucceede
     <div style={ROW}>
       {running
         ? <button type="button" className="es-btn es-btn--quiet es-btn--sm" onClick={() => controller.current?.abort()}>止める</button>
-        : <button type="button" className="es-btn es-btn--outline es-btn--sm" disabled={disabled} onClick={() => void start()}>{operationId ? "Apple端末内文字起こしを再開" : hasTranscript ? "Apple端末内で別案を作る" : "Apple端末内で文字起こし"}</button>}
+        : <button type="button" className="es-btn es-btn--outline es-btn--sm" disabled={disabled} onClick={() => void start()}>{operationId ? "Apple端末内文字起こしを再開" : "Apple端末内で文字起こし"}</button>}
       <span className="es-note">音声認識はこのMac内で行い、他のproviderへ自動送信しません</span>
     </div>
     {progressText(progress) && <p role="status" aria-live="polite" className="es-note">{progressText(progress)}</p>}

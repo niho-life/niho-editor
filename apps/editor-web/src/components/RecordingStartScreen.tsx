@@ -12,7 +12,7 @@ import { recordingKeep, type KeptTake, type RecordingKeep } from "@/lib/recordin
 import { formatClock } from "@/lib/recording-view";
 import { AUDIO_STAGE_LABELS, useAudioImport } from "@/lib/use-audio-import";
 import { micErrorMessage, useMicCapture } from "@/lib/use-mic-capture";
-import { transcriptionServiceNote } from "@/recording/candidate-names";
+import { transcriptionServiceNote } from "@/recording/engine-names";
 import { savePageFieldsRequest } from "@/lib/folder-client";
 import { RECORDING_FIELD_LIMITS } from "@/lib/page-limits";
 import { movePageRequest } from "@/lib/pages-client";
@@ -277,7 +277,8 @@ export function RecordingStartScreen({
       if (vtt === null) throw new Error("unreadable");
       const imported = await importVtt({ name: vttFile.name, vtt });
       await settleCreated(imported.page);
-      router.push(`/p/${imported.page.id}`);
+      // 段落は文字起こしのタブ（#310）。そこを開く
+      router.push(`/p/${imported.transcript}`);
       // 移るまで、もう一度取り込ませない（この画面は移ると外れる）
     } catch (error) {
       // 選んだファイルは残す。もう一度押せる

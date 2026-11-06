@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import type { RecordingAudio } from "@niho/editor-store";
 import {
   audioExpiryLabel,
@@ -9,7 +9,7 @@ import {
   isAudioExpired,
   runStatusLabel,
 } from "@/lib/transcription-view";
-import { canDiscloseTranscriptionEngine, transcriptionServiceNote } from "@/recording/candidate-names";
+import { canDiscloseTranscriptionEngine, transcriptionEngineLabel, transcriptionServiceNote } from "@/recording/engine-names";
 import { useTranscription } from "@/lib/use-transcription";
 import { MacGeminiTranscription } from "./MacGeminiTranscription";
 import { MacLocalTranscription } from "./MacLocalTranscription";
@@ -17,31 +17,28 @@ import { MacLocalTranscription } from "./MacLocalTranscription";
 const ROW_STYLE: CSSProperties = { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 8 };
 
 /**
- * 録音ページの文字起こしの開始と状態（#36 段 3b-1。音声のある録音だけ）。
- * - 音声がアップロード済みで段落が空なら「文字起こしをはじめる」。状態（待機中・文字起こし中）は読み上げ、失敗は理由と「もう一度」。
- * - 段落があるときに始める（「もう一度文字起こしする」・失敗の「もう一度」）は、置き換えることを 1 回確かめてから `replace: true`。
- *   文字起こしするのはこのページの音声だけなので、あとから足した分（RecordingAppend）も置き換えで消える。確かめる欄でそう言う。
- * - 音声の期限（30 日で削除）を小さく出し、過ぎていたら「音声は削除されました」（段落は残る）。
- * - 音声を送る先は、始める・置き換える前にサービス名まで表示する。送信先が分からない場合は開始させない。
+ * 録音のタブの文字起こしの開始と状態（#36 段 3b-1 → #310。音声のある録音だけ）。
+ * - 音声がアップロード済みなら「文字起こしをはじめる」（設定の既定のエンジン。別のエンジンは「ページ」パネルの流れの ▾ から）。
+ *   結果は「文字起こし」ページの新しいタブに入るので、置き換えの確認は要らない。始めたらそのタブを開く（`onStarted`）。
+ * - 状態（待機中・文字起こし中）は読み上げ、失敗は理由と「もう一度」（同じタブに書き直す）。
+ * - 音声の期限（30 日で削除）を小さく出し、過ぎていたら「音声は削除されました」（文字起こしのタブは残る）。
+ * - 音声を送る先は、始める前にサービス名まで表示する。送信先が分からない場合は開始させない。
  */
 export function RecordingTranscription({
   pageId,
   audio,
   engine,
-  hasTranscript,
+  onStarted,
   onSucceeded,
-  onHasTranscript,
-  showMacCli = true,
 }: {
   pageId: string;
   audio: RecordingAudio;
+  /** 設定の既定のエンジン（送信先の表示に使う）。 */
   engine: string | null;
-  hasTranscript: boolean;
-  /** 実行が済んだ（録音を読み直す）。 */
+  /** 始めた（結果を書く文字起こしのタブ。画面はそれを開く）。 */
+  onStarted: (tab: string | null) => void;
+  /** 実行が済んだ（文字起こしのタブの一覧を読み直す）。 */
   onSucceeded: () => void;
-  /** 段落がすでにあると断られた（録音を読み直す）。 */
-  onHasTranscript: () => void;
-  showMacCli?: boolean;
 }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -50,38 +47,20 @@ export function RecordingTranscription({
   }, []);
   const uploaded = audio.status === "uploaded";
   const expired = isAudioExpired(audio, now);
-  const { state, start, resume } = useTranscription(pageId, { enabled: uploaded, hasTranscript, onSucceeded, onHasTranscript });
-  const [confirming, setConfirming] = useState(false);
-  const cancelRef = useRef<HTMLButtonElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  // やめたあと、押したボタンへフォーカスを戻す（ボタンは確かめる欄を閉じてから描かれる）
-  const refocus = useRef(false);
-
-  // 確かめる欄を開いたら「やめる」へ（置き換えない側）。閉じたら押したボタンへ戻す
-  useEffect(() => {
-    if (confirming) {
-      cancelRef.current?.focus();
-    } else if (refocus.current) {
-      refocus.current = false;
-      triggerRef.current?.focus();
-    }
-  }, [confirming]);
+  const { state, start, resume } = useTranscription(pageId, { enabled: uploaded, hasTranscript: true, onSucceeded });
 
   const { phase, run } = state;
   const starting = phase === "starting";
-  const canStart = canDiscloseTranscriptionEngine(engine) && uploaded && !expired && (phase === "idle" || phase === "starting" || (phase === "failed" && canRetry(run)));
-  const label = phase === "failed" ? "もう一度" : hasTranscript ? "もう一度文字起こしする" : "文字起こしをはじめる";
-  const statusText = starting ? "始めています" : phase === "active" ? runStatusLabel(run) : null;
+  const retry = phase === "failed" && canRetry(run);
+  const canStart = canDiscloseTranscriptionEngine(engine) && uploaded && !expired && (phase === "idle" || phase === "starting" || retry);
+  const statusText = starting ? "始めています" : phase === "active" ? `${runStatusLabel(run)}（${transcriptionEngineLabel(run?.engine ?? engine)}）` : null;
   const expiry = audioExpiryLabel(audio, now);
 
-  const begin = () => {
+  const begin = async () => {
     if (starting) return;
-    if (hasTranscript) setConfirming(true);
-    else void start(false);
-  };
-  const closeConfirm = () => {
-    refocus.current = true;
-    setConfirming(false);
+    // 失敗した run の「もう一度」は、同じタブに書き直す（失敗したタブを増やさない）
+    const started = await start(retry && run?.tab ? { tab: run.tab, engine: run.engine } : {});
+    if (started) onStarted(started.tab);
   };
 
   return (
@@ -105,53 +84,17 @@ export function RecordingTranscription({
       {state.startError && <p role="alert">{state.startError}</p>}
       {!uploaded && <p className="es-note">音声の取り込みが終わっていません</p>}
       {uploaded && !canDiscloseTranscriptionEngine(engine) && <p className="es-note">{transcriptionServiceNote(engine)}</p>}
-      {canStart && !confirming && (
+      {canStart && (
         <div style={ROW_STYLE}>
-          <button
-            ref={triggerRef}
-            type="button"
-            className={`es-btn es-btn--sm ${hasTranscript && phase !== "failed" ? "es-btn--outline" : "es-btn--primary"}`}
-            aria-disabled={starting || undefined}
-            onClick={begin}
-          >
-            {label}
+          <button type="button" className={`es-btn es-btn--sm ${retry ? "es-btn--outline" : "es-btn--primary"}`} aria-disabled={starting || undefined} onClick={() => void begin()}>
+            {retry ? "もう一度" : "文字起こしをはじめる"}
           </button>
-          {/* 段落があるときは、送る前の確かめる欄に出す */}
-          {!hasTranscript && <span className="es-note">{transcriptionServiceNote(engine)}</span>}
-        </div>
-      )}
-      {canStart && confirming && (
-        <div
-          role="group"
-          aria-label="文字起こしの置き換え"
-          style={ROW_STYLE}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              closeConfirm();
-            }
-          }}
-        >
-          <span>いまの文字起こしは、足した分も含めて置き換えられます</span>
-          <button
-            type="button"
-            className="es-btn es-btn--primary es-btn--sm"
-            onClick={() => {
-              setConfirming(false);
-              void start(true);
-            }}
-          >
-            置き換える
-          </button>
-          <button ref={cancelRef} type="button" className="es-btn es-btn--quiet es-btn--sm" onClick={closeConfirm}>
-            やめる
-          </button>
-          <span className="es-note">{transcriptionServiceNote(engine)}</span>
+          <span className="es-note">{transcriptionServiceNote(retry && run ? run.engine : engine)}</span>
         </div>
       )}
       {expiry && <p className="es-note">{expiry}</p>}
-      {showMacCli && uploaded && !expired && <MacGeminiTranscription pageId={pageId} hasTranscript={hasTranscript} onSucceeded={onSucceeded} />}
-      {uploaded && !expired && <MacLocalTranscription pageId={pageId} hasTranscript={hasTranscript} onSucceeded={onSucceeded} />}
+      {uploaded && !expired && <MacGeminiTranscription pageId={pageId} onSucceeded={onSucceeded} />}
+      {uploaded && !expired && <MacLocalTranscription pageId={pageId} onSucceeded={onSucceeded} />}
     </div>
   );
 }

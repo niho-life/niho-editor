@@ -1,4 +1,6 @@
-# 録音の文字起こし候補
+# 録音の文字起こし候補（退役。#310）
+
+> **2026-11-07（#310）で候補と「採用」は廃止。** 文字起こしはエンジンごとに「文字起こし」ページのタブになり（[editor-recipes-and-folders.md](editor-recipes-and-folders.md) §3.6）、案の API（`…/recording/candidates/*`）と画面は無い。表 `page_recording_candidates`・`page_recording_candidate_versions`・`page_recording_candidate_operations` は migration `20261107042444_page_transcripts` がタブへ写したあと、contract の migration まで残っている。以下は履歴。
 
 Issue #236 で確定した、同じ録音に対する独立した文字起こし案の契約。録音・ページの正本は既存の NIHO クラウドであり、`vault`、`candidateSets`、端末内の正本は作らない。
 

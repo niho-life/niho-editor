@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONFLICT_MESSAGE,
-  RecordingCandidateConflictError,
   RecordingConflictError,
   RecordingRequestError,
   editSegments,
@@ -10,7 +9,6 @@ import {
   mergeSpeakers,
   recordingErrorMessage,
   renameSpeaker,
-  updateCandidate,
 } from "./recording-client";
 
 const ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
@@ -40,12 +38,12 @@ const SPEAKERS = [
   { speaker: 2, name: null, count: 1 },
 ];
 const snapshot = (revision: number) => ({ recording: recording(revision), speakers: SPEAKERS });
-const candidate = (revision = 3) => ({
-  id: "11111111-1111-4111-8111-111111111111", revision, name: "比較案", engine: "fake", engineLabel: "開発の偽物",
-  language: "ja", durationSec: 9, adopted: false, state: "ready", busy: false, segmentCount: 1, preview: ["本文"],
-  createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z",
-  segments: [{ start: 0, end: 9, text: "本文", speaker: 1 }], speakerNames: { "1": "話し手" },
-} as const);
+const TAB = "11111111-1111-4111-8111-111111111111";
+/** 文字起こしのタブの 1 行（#310。GET の `transcripts`）。 */
+const transcriptTab = (overrides: Record<string, unknown> = {}) => ({
+  id: TAB, label: "Deepgram", engine: "deepgram", engineLabel: "Deepgram", language: "ja", durationSec: 9, segmentCount: 12, revision: 2,
+  updatedAt: "2026-10-30T00:00:00.000Z", ...overrides,
+});
 
 function mockFetch(status: number, body: unknown) {
   const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
@@ -59,10 +57,11 @@ afterEach(() => {
 });
 
 describe("recording client: requests", () => {
-  it("importVtt posts name and vtt (and lang when given) and returns the page with the recording", async () => {
-    const fetchMock = mockFetch(201, { page: { id: ID, kind: "rec", title: "dinner", lang: "ja", createdAt: "x", updatedAt: "x" }, ...snapshot(1) });
+  it("importVtt posts name and vtt (and lang when given) and returns the page, the transcript tab and the recording", async () => {
+    const fetchMock = mockFetch(201, { page: { id: ID, kind: "rec", title: "dinner", lang: "ja", createdAt: "x", updatedAt: "x" }, transcript: TAB, ...snapshot(1) });
     const imported = await importVtt({ name: "dinner.vtt", vtt: "WEBVTT\n" });
     expect(imported.page).toEqual({ id: ID, title: "dinner", lang: "ja" });
+    expect(imported.transcript).toBe(TAB);
     expect(imported.recording.revision).toBe(1);
     expect(imported.speakers).toEqual(SPEAKERS);
     expect(fetchMock.mock.calls[0]![0]).toBe("/api/recordings/import-vtt");
@@ -84,16 +83,17 @@ describe("recording client: requests", () => {
     expect(fetchMock.mock.calls.at(-1)![0]).toBe("/api/pages/..%2Fx%3Fy/recording");
   });
 
-  it("keeps one latest candidate summary per id when a recording read repeats an id", async () => {
-    const first = { ...candidate(4), name: "最新の案" };
-    const repeated = { ...candidate(3), name: "古い案" };
-    const second = { ...candidate(), id: "22222222-2222-4222-8222-222222222222", name: "別の案" };
-    mockFetch(200, { ...snapshot(3), candidates: [first, repeated, second] });
+  it("reads the transcript tabs of the recording (#310) and drops rows in the wrong shape", async () => {
+    const second = transcriptTab({ id: "22222222-2222-4222-8222-222222222222", label: "Gemini", engine: "gemini", engineLabel: "Gemini", segmentCount: 0, durationSec: null });
+    mockFetch(200, { ...snapshot(3), transcripts: [transcriptTab(), { id: "not-a-uuid", label: "x" }, second], engines: ["deepgram", "gemini"], defaultEngine: "deepgram" });
 
     const loaded = await getRecording(ID);
 
-    expect(loaded.candidates?.map((item) => item.id)).toEqual([first.id, second.id]);
-    expect(loaded.candidates?.[0]?.name).toBe(first.name);
+    expect(loaded.transcripts?.map((item) => [item.id, item.label, item.segmentCount])).toEqual([[TAB, "Deepgram", 12], [second.id, "Gemini", 0]]);
+    expect(loaded.engines).toEqual(["deepgram", "gemini"]);
+    expect(loaded.defaultEngine).toBe("deepgram");
+    mockFetch(200, snapshot(3));
+    expect((await getRecording(ID)).transcripts).toBeUndefined();
   });
 
   it("editSegments / renameSpeaker / mergeSpeakers patch with baseRevision and exactly one operation", async () => {
@@ -110,19 +110,6 @@ describe("recording client: requests", () => {
     expect(fetchMock.mock.calls.at(-1)![0]).toBe(`/api/pages/${ID}/recording`);
   });
 
-  it("candidate mutation retries a lost response once with the same operation ID", async () => {
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockRejectedValueOnce(new TypeError("response lost"))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ candidate: candidate(4), replayed: true }), { status: 200, headers: { "content-type": "application/json" } }));
-    vi.stubGlobal("fetch", fetchMock);
-    const saved = await updateCandidate(ID, candidate().id, { expectedRevision: 3, name: "比較案" });
-    expect(saved.revision).toBe(4);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const first = JSON.parse(String(fetchMock.mock.calls[0]![1]?.body));
-    const second = JSON.parse(String(fetchMock.mock.calls[1]![1]?.body));
-    expect(first.operationId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(second).toEqual(first);
-  });
 });
 
 describe("recording client: failures", () => {
@@ -134,14 +121,6 @@ describe("recording client: failures", () => {
     expect((error as RecordingConflictError).status).toBe(409);
     expect((error as RecordingConflictError).snapshot.recording.revision).toBe(7);
     expect((error as RecordingConflictError).snapshot.speakers).toEqual(SPEAKERS);
-  });
-
-  it("candidate 409 carries the latest candidate without treating it as a recording conflict", async () => {
-    mockFetch(409, { error: "conflict", candidate: candidate(5) });
-    const error = await updateCandidate(ID, candidate().id, { expectedRevision: 3, name: "私の案" }).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(RecordingCandidateConflictError);
-    expect(error).not.toBeInstanceOf(RecordingConflictError);
-    expect((error as RecordingCandidateConflictError).candidate.revision).toBe(5);
   });
 
   it("a 409 that is not in the conflict shape is a plain failure", async () => {
@@ -169,7 +148,9 @@ describe("recording client: failures", () => {
   it("a response in the wrong shape is a server failure, not data", async () => {
     mockFetch(200, { recording: { revision: 0, segments: [] }, speakers: [] });
     expect(await getRecording(ID).catch((caught: unknown) => caught)).toMatchObject({ status: 500 });
-    mockFetch(200, { page: { id: "not-a-uuid", title: "x", lang: "ja" }, ...snapshot(1) });
+    mockFetch(200, { page: { id: "not-a-uuid", title: "x", lang: "ja" }, transcript: TAB, ...snapshot(1) });
+    expect(await importVtt({ name: "a.vtt", vtt: "x" }).catch((caught: unknown) => caught)).toMatchObject({ status: 500 });
+    mockFetch(200, { page: { id: ID, title: "x", lang: "ja" }, ...snapshot(1) });
     expect(await importVtt({ name: "a.vtt", vtt: "x" }).catch((caught: unknown) => caught)).toMatchObject({ status: 500 });
     mockFetch(200, { recording: recording(1, { segments: [{ start: 0, end: 1, text: 3, speaker: 1 }] }), speakers: SPEAKERS });
     expect(await getRecording(ID).catch((caught: unknown) => caught)).toMatchObject({ status: 500 });

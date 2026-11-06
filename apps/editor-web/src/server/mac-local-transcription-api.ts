@@ -22,7 +22,8 @@ const FAILURE_CODES = new Set<TranscriptionErrorCode>([
 
 export type MacLocalTranscriptionStore = {
   getRecording: (owner: OwnerId, pageId: string) => Promise<Recording | null>;
-  start: (owner: OwnerId, pageId: string, input: { operationId: string; candidate?: string | null }) => Promise<StartMacLocalTranscriptionResult | null>;
+  /** 開始は「文字起こし」ページに新しいタブ（札「Apple（このMac内）」）を作り、そのタブを書き先にする（#310）。 */
+  start: (owner: OwnerId, pageId: string, input: { operationId: string }) => Promise<StartMacLocalTranscriptionResult | null>;
   status: (owner: OwnerId, pageId: string) => Promise<MacLocalTranscriptionRun | null>;
   finish: (owner: OwnerId, pageId: string, runId: string, operationId: string, generation: number, output: TranscriptionOutput) => Promise<FinishTranscriptionResult>;
   resume: (owner: OwnerId, pageId: string, runId: string, operationId: string, generation: number) => Promise<MacLocalTranscriptionRun | null>;
@@ -46,7 +47,8 @@ function body(run: MacLocalTranscriptionRun) {
     operationId: run.operationId,
     settings: run.settings,
     audioManifest: run.audioManifest.map((part) => ({ ...part })),
-    candidateId: run.candidateId,
+    /** 結果を書く文字起こしのタブ（#310）。 */
+    tab: run.tab,
   };
 }
 
@@ -61,7 +63,7 @@ function startResponse(result: StartMacLocalTranscriptionResult): Response {
 }
 
 async function startFor(store: MacLocalTranscriptionStore, owner: OwnerId, pageId: string, operationId: string): Promise<Response> {
-  // 候補の要否判断・作成・run作成は store の同じ transaction。route は候補を先に永続化しない。
+  // タブの作成と run の作成は store の同じ transaction。route はタブを先に永続化しない。
   const started = await store.start(owner, pageId, { operationId });
   return started ? startResponse(started) : notFoundResponse();
 }

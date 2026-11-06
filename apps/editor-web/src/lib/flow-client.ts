@@ -21,6 +21,8 @@ export type FlowRow = {
   from: string | null;
   action: "go" | "done" | null;
   engines?: { id: string; used: boolean }[];
+  /** 文字起こしの行で engines があるとき: エンジンのメニューが文字起こしする録音のタブ（#310）。 */
+  recording?: string;
 };
 
 export type FlowState = {
@@ -66,7 +68,7 @@ function toTab(value: unknown): FlowTabView | null {
 
 function toRow(value: unknown): FlowRow | null {
   if (!isPlainObject(value)) return null;
-  const { kind, stepId, stepIndex, name, holder, tabs, current, from, action, engines } = value;
+  const { kind, stepId, stepIndex, name, holder, tabs, current, from, action, engines, recording } = value;
   if (kind !== "rec" && kind !== "transcript" && kind !== "step") return null;
   if (typeof name !== "string" || typeof current !== "boolean") return null;
   if (from !== null && typeof from !== "string") return null;
@@ -77,6 +79,7 @@ function toRow(value: unknown): FlowRow | null {
   if (parsedTabs.some((tab) => tab === null)) return null;
   if (stepId !== undefined && (typeof stepId !== "string" || typeof stepIndex !== "number" || !Number.isInteger(stepIndex) || stepIndex < 0)) return null;
   if (engines !== undefined && (!Array.isArray(engines) || !engines.every((engine) => isPlainObject(engine) && typeof engine.id === "string" && typeof engine.used === "boolean"))) return null;
+  if (recording !== undefined && typeof recording !== "string") return null;
   return {
     kind,
     ...(stepId === undefined ? {} : { stepId: stepId as string, stepIndex: stepIndex as number }),
@@ -87,6 +90,7 @@ function toRow(value: unknown): FlowRow | null {
     from: from as string | null,
     action: action as FlowRow["action"],
     ...(engines === undefined ? {} : { engines: engines as FlowRow["engines"] }),
+    ...(recording === undefined ? {} : { recording }),
   };
 }
 

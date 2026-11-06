@@ -7,10 +7,10 @@ import {
   getConversation,
   getEditorSettings,
   getPageFields,
-  getRecording,
   getRunGuide,
   listChatWorkspace,
   markChangesUndone,
+  readTranscriptText,
   recordAiUsage,
 } from "@niho/editor-store";
 import { monthlyLimitUsd, resolveAiCompose } from "../ai/config";
@@ -42,7 +42,8 @@ export const chatDeps: ChatApiDeps = {
     return {
       workspace: (owner, pageId) => listChatWorkspace(pool, owner, pageId),
       context: (owner, pageId) => chatContextOf(pool, owner, pageId),
-      recording: (owner, pageId) => getRecording(pool, owner, pageId),
+      // 文字起こしのタブならその本文、録音のタブならその録音の最新の文字起こしのタブ（#310）
+      recording: (owner, pageId) => readTranscriptText(pool, owner, pageId),
       fields: (owner, pageId) => getPageFields(pool, owner, pageId),
       guide: (owner, pageId) => getRunGuide(pool, owner, pageId),
       history: (owner, pageId, conversationId) => getConversation(pool, owner, pageId, conversationId),
