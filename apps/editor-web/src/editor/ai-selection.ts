@@ -81,11 +81,18 @@ export const AiSelection = Extension.create({
   },
 });
 
-/** 範囲の端（`to` は含まない位置）が最上位のどのブロックか（0 始まり）。ブロックの間の位置は、前のブロックの終わりと数える。 */
+/**
+ * 範囲の端（`to` は含まない位置）が最上位のどのブロックか（0 始まり）。終わりの端は、ブロックの間・ブロックのちょうど先頭
+ * （次のブロックの 0 字目まで引っ張って選んだとき）なら、前のブロックの終わりと数える（次のブロックの字は 1 字も含まない）。
+ */
 function topLevelIndex(doc: PmNode, pos: number, end: boolean): number {
   const resolved = doc.resolve(Math.max(0, Math.min(pos, doc.content.size)));
   if (resolved.depth === 0) return Math.max(0, end ? resolved.index(0) - 1 : resolved.index(0));
-  return resolved.index(0);
+  const index = resolved.index(0);
+  if (!end || index === 0 || resolved.parentOffset !== 0) return index;
+  // 入れ子（箇条書きの中など）でも、最上位のブロックの先頭まで一番手前の子を辿ってきた位置だけを「先頭」とする
+  for (let depth = 1; depth < resolved.depth; depth++) if (resolved.index(depth) !== 0) return index;
+  return index - 1;
 }
 
 /**

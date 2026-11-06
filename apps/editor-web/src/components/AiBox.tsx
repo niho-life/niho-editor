@@ -10,7 +10,7 @@ import { validateBlocks } from "niho-docs-ui/page/blocks";
 import { blocksToMarkdown } from "niho-docs-ui/page/markdown";
 import { Icon, SHELL_DND, type ShellAiPlace } from "niho-docs-ui/shell";
 import type { Node as PmNode } from "@tiptap/pm/model";
-import { TextSelection } from "@tiptap/pm/state";
+import { AllSelection, TextSelection } from "@tiptap/pm/state";
 import { MAX_CHAT_INPUT_CHARS } from "@/ai/chat-limits";
 import { selectionParagraphLabel, type ChatSelection } from "@/ai/chat-selection";
 import { aiSelectionOf, describeAiSelection } from "@/editor/ai-selection";
@@ -596,6 +596,11 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
   // 本文で選んだ範囲（#280）。エディタの選択が入力欄へ移って外れても、チップを外す・送るまで残す（下地は plugin が描く）。
   // 作業中と、送信待ちがあるあいだは新しく選ばない（待ちの指示は本文の番号が前の依頼で変わりうるので、範囲を持たない）
   const editor = context?.editor ?? null;
+  /** 入力欄が画面に見えているか（レールを畳んだ・狭い画面で閉じているときは false。測れない環境では true）。 */
+  const inputShown = () => {
+    const field = textareaRef.current;
+    return field !== null && (typeof field.checkVisibility !== "function" || field.checkVisibility());
+  };
   const [, repick] = useReducer((count: number) => count + 1, 0);
   const pickAllowedRef = useRef(true);
   const lastPickKeyRef = useRef("");
@@ -607,8 +612,11 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     const onSelect = () => {
       // 変換中（IME）に下地を描き足すと、変換が切れることがあるので、確定してからにする
       if (!pickAllowedRef.current || editor.isDestroyed || editor.view.composing) return;
+      // 入力欄が見えていないとき（右のレールを畳んだ・狭い画面）は、チップも外す手段も見えないので選ばない
+      if (!inputShown()) return;
       const { selection } = editor.state;
-      if (!(selection instanceof TextSelection) || selection.empty) return;
+      // 全選択（⌘A）も範囲として渡す。画像などのブロックを選んだ（NodeSelection）ときは渡さない
+      if (!(selection instanceof TextSelection || selection instanceof AllSelection) || selection.empty) return;
       editor.commands.setAiSelection({ from: selection.from, to: selection.to });
     };
     // 本文を打つたびに欄を描き直さない。残している範囲が変わったときだけ描き直す
@@ -645,7 +653,8 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, rea
     const onKey = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey || event.isComposing || event.key.toLowerCase() !== "l") return;
       const field = textareaRef.current;
-      if (!field) return;
+      // 入力欄が見えていないときは、ブラウザの ⌘L（アドレスバー）をそのまま使わせる
+      if (!field || !inputShown()) return;
       event.preventDefault();
       field.focus();
     };

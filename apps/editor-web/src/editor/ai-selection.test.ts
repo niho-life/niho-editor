@@ -110,6 +110,29 @@ describe("describeAiSelection", () => {
     expect(wide.selection).toMatchObject({ startParagraph: 1, endParagraph: 5 });
   });
 
+  it("範囲の終わりが次のブロックの 0 字目（先頭）でも、次のブロックは含めない。入れ子の先頭も同じ", () => {
+    const target = open(BLOCKS);
+    const second = find(target, "二つ目の段落です。");
+    const next = find(target, "箇条書きの 1");
+    // 「二つ目」の途中から、次の箇条書きの先頭（1 字目の手前）まで
+    const toListStart = describeAiSelection(target.state.doc, { from: second.from + 2, to: next.from }, 1)!;
+    expect(toListStart.selection).toMatchObject({ startParagraph: 3, endParagraph: 3 });
+    // 箇条書きの 2 つ目の項目の先頭まで → 箇条書き（4）の中なので 4 のまま
+    const toSecondItem = describeAiSelection(target.state.doc, { from: second.from + 2, to: find(target, "箇条書きの 2").from }, 1)!;
+    expect(toSecondItem.selection).toMatchObject({ startParagraph: 3, endParagraph: 4 });
+    // 段落の先頭から次の段落の先頭まで
+    const lastPara = find(target, "最後の段落です。");
+    const toLast = describeAiSelection(target.state.doc, { from: find(target, "箇条書きの 2").from, to: lastPara.from }, 1)!;
+    expect(toLast.selection).toMatchObject({ startParagraph: 4, endParagraph: 4 });
+  });
+
+  it("全選択（⌘A）は、全部の段落の範囲になる", () => {
+    const target = open(BLOCKS);
+    target.commands.selectAll();
+    const all = describeAiSelection(target.state.doc, { from: target.state.selection.from, to: target.state.selection.to }, 1)!;
+    expect(all.selection).toMatchObject({ startParagraph: 1, endParagraph: 5 });
+  });
+
   it("ブロックの境目で終わる範囲は、次のブロックに入れない。文字の無い範囲は null。長い選択は先頭だけ text に入れる", () => {
     const target = open([p("あ".repeat(3000)), p("次の段落")]);
     const first = find(target, "あ");

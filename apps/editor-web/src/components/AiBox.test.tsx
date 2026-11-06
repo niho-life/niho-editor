@@ -1378,6 +1378,30 @@ describe("AiPanel: 本文の選択範囲を渡す（#280）", () => {
     expect(document.activeElement).toBe(field());
   });
 
+  it("全選択（⌘A）でもチップが付く", async () => {
+    defaultServer();
+    const target = openEditor();
+    await renderWith(target);
+    await act(async () => { target.commands.selectAll(); });
+    expect(chipText()).toContain("選択範囲");
+    expect(aiSelectionOf(target.state)).not.toBeNull();
+  });
+
+  it("入力欄が見えていないとき（レールを畳んだ・狭い画面）は、範囲を選ばず、⌘L も奪わない", async () => {
+    defaultServer();
+    const target = openEditor();
+    await renderWith(target);
+    // 畳んだパネルの入力欄は見えない（jsdom は測れないので、見えない状態を作る）
+    Object.defineProperty(field(), "checkVisibility", { value: () => false, configurable: true });
+    await select(target, "二つ目の段落");
+    expect(chipText()).toBe("");
+    expect(aiSelectionOf(target.state)).toBeNull();
+    const event = new KeyboardEvent("keydown", { key: "l", metaKey: true, bubbles: true, cancelable: true });
+    await act(async () => { window.dispatchEvent(event); });
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.activeElement).not.toBe(field());
+  });
+
   it("工程を付けているあいだは、選択範囲のチップを出さない", async () => {
     defaultServer();
     const target = openEditor();
