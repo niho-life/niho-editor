@@ -140,7 +140,7 @@ recipes (owner, id)   -- 主キー。人ごとに 1 行ずつ
 - **1 フォルダに 1 つの手順**（`pages.recipe`。フォルダだけ。無ければ既定の `tpl-1`。`PATCH /api/pages/{id}/flow { recipe }` で替える）。
 - **run の親はフォルダ**（`step_runs.parent`。1 フォルダに進行中の run は 1 つ）。入力は `step_runs.input_tab`（タブ）と `input_revision`。始めの段階は入力のタブの役割で決まる（録音・役割なし → 0、段階 k の入れ物のタブ → k+1）。`createRun(owner, folder, { recipe, inputTab, toStep })`。
 - **出力は新しいタブ**: 段階ごとに、フォルダ直下の役割ページ（`role = { kind: 'step', recipe, stepId }` の入れ物。無ければ段階の名前で作る）へタブを 1 つ足す（`kind = 'note'`・題名は入れ物の題名・`step_status`・`made_from = { kind: 'step', run, input, inputRevision }`）。録音の下には何も増えない。決定的な id の `step` サブページ（`stepPageId`）は廃止。migration は、フォルダの中の録音の下にあった `step` サブページを役割ページのタブに動かし、run をフォルダに結ぶ（フォルダの外の録音の run はそのまま）。
-- **作り直す**（タブの ▾・失敗の「作り直す」）＝ `{ regenerate: tabId }`: 同じ入力（`made_from.input`）で同じタブへ書く（直前の本文は版 `ai` に残る）。**同じ入力でもう 1 つ** ＝ `{ sibling: tabId }`: 同じ入れ物に新しいタブ。
+- **作り直す（AI）**（段階の出力のタブの ▾・流れの失敗の「作り直す」）＝ `{ regenerate: tabId }`: 同じ入力（`made_from.input`）で同じタブへ書く（直前の本文は版 `ai` に残る）。**同じ入力でもう 1 つ（AI）** ＝ `{ sibling: tabId }`: 同じ入れ物に新しいタブ。▾ はタブが 2 つ以上のときだけ出る（#308）ので、1 つだけのタブは ＋ で足してから。
 - 入力の読み方（`readStepInput`）: 入力のタブの系譜（`made_from.input` を最大 8 段）の根が資料（録音なら `page_recordings.segments` を「[分:秒] 話者: 文」の段落に。#310 までは録音のタブ＝文字起こし）、「この録音について」はその根の欄、参考は同じフォルダの役割の無い入れ物のタブ。前提変更（`refreshStale`）はフォルダの最新 run の出力のタブについて測る。
 - **フォルダの外のタブ**で「作成」を押すと、その入れ物の題名でフォルダを作って入れ物ごと入れてから始める（`wrapInFolder`）。
 - API（`apps/editor-web/src/server/flow-api.ts`）: `GET /api/pages/{タブ}/flow`（フォルダの id に `?tab=` でも）→ 行・フォルダの手順・候補・最新の run。`POST /api/pages/{タブ}/flow/runs { inputTab, toStep } | { regenerate } | { sibling }`（202。`opened` は開くタブ）。取消・やり直し・途中出力・設計の更新は `…/{フォルダ}/steps/runs/{run}/…` のまま。文字起こしの「作成 ▾」は `POST …/recording/transcribe { engine, replace: true }`。
