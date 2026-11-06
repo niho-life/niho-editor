@@ -218,8 +218,9 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
         console.error("editor-web: step output rejected", { reason: blocks.reason });
         throw new StepError("invalid_output", false);
       }
-      // 区切ったときは、区切った対象（全文を使う）を除いたほかの資料が上限で切られたときだけ知らせる
-      const inputUsedChars = composeSourceUsedChars(input.chunk ? composeInput.sources.filter((source) => source.keepWhole !== true) : composeInput.sources);
+      // 区切った対象（keepWhole）は予算を先に全文分取るので切られない。切られるのはほかの資料だけで、その予算は
+      // 上限から区切りの分を引いた残り。実際の配分（sourceBudgets）と同じ資料の並びで数える（区切りを外すと、残りを多く見積もる）
+      const inputUsedChars = composeSourceUsedChars(composeInput.sources);
       return { blocks: blocks.blocks, usage: { inputTokens, outputTokens, model: report.model }, ...(inputUsedChars === null ? {} : { inputUsedChars }) };
     },
   };

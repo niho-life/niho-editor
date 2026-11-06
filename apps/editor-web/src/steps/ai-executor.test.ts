@@ -514,6 +514,18 @@ describe("the real step executor with chunks (#277)", () => {
     expect(output.inputUsedChars).toBeUndefined();
   });
 
+  it("reports a cut when the other sources only exceed the budget left after the chunk (84,000 chars, not 100,000)", async () => {
+    const client = okClient();
+    const long = (text: string): Block[] => [{ type: "paragraph", content: [{ type: "text", text }] }];
+    // 原文は 90,000 字。区切り（16,000 字）を引いた残り 84,000 字には収まらず切られるが、10 万字の上限だけで見ると収まって見える
+    const longInput = { ...input, stepIndex: 5, recipe: { ...input.recipe, steps: Array.from({ length: 6 }, (_, index) => ({ ...input.recipe.steps[0]!, id: `step${index}0001`, name: `段階 ${index + 1}` })) }, parentBlocks: long("Ψ".repeat(90_000)), materials: undefined };
+    const output = await setup({ client: client.client }).run({ ...longInput, chunk: { index: 0, count: 3, text: "Ω".repeat(16_000), previousTail: "" } });
+    const user = client.calls[0]!.user;
+    expect(Array.from(user).filter((ch) => ch === "Ω")).toHaveLength(16_000);
+    expect(Array.from(user).filter((ch) => ch === "Ψ")).toHaveLength(84_000);
+    expect(output.inputUsedChars).toBe(100_000);
+  });
+
   it("checks this month's limit before each chunk and records the usage of each chunk", async () => {
     const usage = memoryUsage();
     const client = okClient();
