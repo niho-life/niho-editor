@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { AiMessage, AiMessageChange, Block, ChatTurnInput, ChatWorkspacePage, CreatePageInput, Page } from "@niho/editor-store";
-import type { Turn } from "../ai/anthropic";
+import type { ConverseInput, Turn } from "../ai/anthropic";
+import { createFakeClient } from "../ai/fake-client";
+import { DEFAULT_EDITOR_SETTINGS } from "@niho/editor-store";
 import { diffBlocks } from "../ai/block-diff";
 import type { AiComposeBackend } from "../ai/config";
 import type { AuthProvider } from "../auth/types";
@@ -1291,5 +1293,101 @@ describe("Mac CLI の書き戻しは base_revision が無くても今までど�
     // 書き戻しで受けるページの数は前と同じ 12 まで
     const many = Array.from({ length: 13 }, () => ({ pageId: randomUUID(), markdown: "x", baseRevision: 1 }));
     expect((await deviceTurn(page.id, { input: "直して", reply: "", engine: "cli:claude-code", writes: many }, deps("user-a", store))).status).toBe(400);
+  });
+});
+
+describe("POST /api/pages/{id}/ai/chat の Web 検索（#283）", () => {
+  /** 偽物のモデル（EDITOR_AI_MODE=fake と同じ）。渡された道具を残す。 */
+  function fakeBackend(route: "server" | "device" = "server") {
+    const fake = createFakeClient();
+    const tools: unknown[][] = [];
+    const backend: AiComposeBackend = {
+      model: "fake",
+      provider: null,
+      route,
+      engine: "fake:fake",
+      client: {
+        ...fake,
+        converse: async (input: ConverseInput) => {
+          tools.push(input.tools ?? []);
+          return fake.converse(input);
+        },
+      },
+    };
+    return { backend, tools, offered: () => tools.map((list) => list.some((tool) => (tool as { name?: string }).name === "web_search")) };
+  }
+  const withSettings = (d: ChatApiDeps, webSearch: boolean): ChatApiDeps => ({ ...d, settings: () => async () => ({ ...DEFAULT_EDITOR_SETTINGS, webSearch }) });
+
+  it("「営業時間を調べて」: 検索の往復が通り、作業の行に検索語と読んだサイト、返答の末尾に出典。本文は変えず、検索の費用を数える", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成の店の記事", blocks: [p("合成の本文")] });
+    const chats = memoryConversations(store);
+    const usage = memoryUsage();
+    const { backend, offered } = fakeBackend();
+    const response = await runAiChat(
+      streamRequest(`/api/pages/${page.id}/ai/chat`, { text: "合成の店の営業時間を調べて" }),
+      page.id,
+      deps("user-a", store, { ai: backend, conversations: chats, usage, limitUsd: 10 }),
+    );
+    const events = parseSse(await response.text());
+    const tools = events.filter((event) => event.event === "tool").map((event) => event.data);
+    expect(tools).toEqual([
+      { tool: "web_search", page: null, ok: null, phase: "start", detail: "Web を検索: [fake] 営業時間" },
+      { tool: "web_search", page: null, ok: true, phase: "end", detail: "example.comを読んでいます" },
+    ]);
+    // pause_turn のあと、返されたブロックで続きを書いた（崩れていれば偽物は 400 で断る）
+    expect(offered()).toEqual([true, true]);
+    const done = events.at(-1)!.data as { message: { text: string; result: string; items: unknown[] } };
+    expect(done.message.result).toBe("done");
+    expect(done.message.text).toBe("[fake] Web で調べます。[fake] 営業時間は 10 時から 18 時です。\n\n出典:\n- [fake] 営業時間のページ https://example.com/fake-hours");
+    // 会話に残すのは成否と件数だけ（検索語・題名・本文は残さない）
+    expect(chats.turns[0]!.items).toEqual([{ kind: "tool", tool: "web_search", page: null, ok: true, results: 1 }]);
+    expect(JSON.stringify(chats.turns[0]!.items)).not.toContain("営業時間");
+    // ページは書いていない（URL も印も入らない）
+    expect(plain(store.rows.get(page.id)!.blocks)).toEqual([p("合成の本文")]);
+    expect(store.versions).toEqual([]);
+    // 検索 1 回 = 10,000 マイクロ USD（偽物はトークンの金額 0）
+    expect(usage.records).toEqual([10_000, 0]);
+  });
+
+  it("設定で切っていれば道具を出さず「検索は切っています」と知らせる", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成", blocks: [p("合成の本文")] });
+    const { backend, offered } = fakeBackend();
+    const response = await runAiChat(streamRequest(`/api/pages/${page.id}/ai/chat`, { text: "営業時間を調べて" }), page.id, withSettings(deps("user-a", store, { ai: backend }), false));
+    const events = parseSse(await response.text());
+    expect(events[0]).toEqual({ event: "tool", data: { tool: "web_search", page: null, ok: null, phase: "end", detail: "検索は切っています" } });
+    expect(offered().every((value) => !value)).toBe(true);
+  });
+
+  it("月の上限の残りが検索 1 回分に満たなければ道具を出さない", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成", blocks: [p("合成の本文")] });
+    const { backend, offered } = fakeBackend();
+    // 上限 1 USD のうち 0.995 USD を使っている（残り 0.005 USD < 0.01 USD）
+    const response = await runAiChat(
+      streamRequest(`/api/pages/${page.id}/ai/chat`, { text: "営業時間を調べて" }),
+      page.id,
+      deps("user-a", store, { ai: backend, usage: memoryUsage(995_000), limitUsd: 1 }),
+    );
+    const events = parseSse(await response.text());
+    expect(events.some((event) => event.event === "tool" && (event.data as { detail?: string }).detail === "月の上限に近いので検索は使いません")).toBe(true);
+    expect(offered().every((value) => !value)).toBe(true);
+  });
+
+  it("CLI の経路（route が server でない）は道具を出さず、検索の費用も数えない", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成", blocks: [p("合成の本文")] });
+    const { backend, offered } = fakeBackend("device");
+    await chat(page.id, { text: "営業時間を調べて" }, deps("user-a", store, { ai: backend }));
+    expect(offered().every((value) => !value)).toBe(true);
+
+    const usage = memoryUsage();
+    const searched = stubBackend([turn({ text: "はい。", usage: { model: "claude-sonnet-5-5", inputTokens: 0, outputTokens: 0, webSearchRequests: 2 } })]);
+    await chat(page.id, { text: "はい" }, deps("user-a", store, { ai: { ...searched, route: "device" }, usage }));
+    expect(usage.records).toEqual([0]);
+    const server = memoryUsage();
+    await chat(page.id, { text: "はい" }, deps("user-a", store, { ai: stubBackend([turn({ text: "はい。", usage: { model: "claude-sonnet-5-5", inputTokens: 0, outputTokens: 0, webSearchRequests: 2 } })]), usage: server }));
+    expect(server.records).toEqual([20_000]);
   });
 });

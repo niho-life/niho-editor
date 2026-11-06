@@ -382,6 +382,10 @@ describe("createAnthropicClient.converse (streaming)", () => {
       toolCalls: [{ id: "toolu_1", name: "read_page", input: { page_id: "p1" } }],
       stopReason: "tool_use",
       usage: { model: "claude-sonnet-5-5", inputTokens: 120, outputTokens: 42 },
+      content: [
+        { type: "text", text: "本文を読んで、見出しを足します。" },
+        { type: "tool_use", id: "toolu_1", name: "read_page", input: { page_id: "p1" } },
+      ],
     });
   });
 
@@ -447,5 +451,74 @@ describe("createAnthropicClient.converse (streaming)", () => {
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(500);
     expect((await pending).kind).toBe("timeout");
+  });
+});
+
+describe("createAnthropicClient.converse with server-side Web search (#283)", () => {
+  // Anthropic の web search のドキュメントの応答の形（合成の値）
+  const SEARCH_CONTENT = [
+    { type: "text", text: "調べます。" },
+    { type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: { query: "合成の店 営業時間" } },
+    {
+      type: "web_search_tool_result",
+      tool_use_id: "srvtoolu_1",
+      content: [{ type: "web_search_result", url: "https://example.com/a", title: "合成の店", encrypted_content: "enc-1", page_age: null }],
+    },
+    { type: "text", text: "調べた結果、" },
+    {
+      type: "text",
+      text: "10 時から 18 時です。",
+      citations: [{ type: "web_search_result_location", url: "https://example.com/a", title: "合成の店", encrypted_index: "idx-1", cited_text: "10:00-18:00" }],
+    },
+  ];
+
+  it("keeps every block as it came (to send back next time), joins cited text without a break and reads the search count", async () => {
+    const { fetch } = fakeFetch(() => message(null, { content: SEARCH_CONTENT, usage: { input_tokens: 600, output_tokens: 90, server_tool_use: { web_search_requests: 1 } } }));
+    const client = createAnthropicClient({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: KEY }, fetch });
+    const turn = await client.converse({ system: "s", messages: [], tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }] });
+    expect(turn.content).toEqual(SEARCH_CONTENT);
+    expect(turn.text).toBe("調べます。\n調べた結果、10 時から 18 時です。");
+    expect(turn.toolCalls).toEqual([]);
+    expect(turn.usage).toEqual({ model: "claude-sonnet-5-5", inputTokens: 600, outputTokens: 90, webSearchRequests: 1 });
+  });
+
+  it("builds the same blocks from the stream (query deltas, the result in one start event, citation deltas) and reports them as they complete", async () => {
+    const chunks = [
+      sse({ type: "message_start", message: { model: "claude-sonnet-5-5", usage: { input_tokens: 600, output_tokens: 1 } } }),
+      sse({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
+      sse({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "調べます。" } }),
+      sse({ type: "content_block_stop", index: 0 }),
+      sse({ type: "content_block_start", index: 1, content_block: { type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: {} } }),
+      sse({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"query":"合成の店' } }),
+      sse({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: ' 営業時間"}' } }),
+      sse({ type: "content_block_stop", index: 1 }),
+      sse({ type: "content_block_start", index: 2, content_block: SEARCH_CONTENT[2]! }),
+      sse({ type: "content_block_stop", index: 2 }),
+      sse({ type: "content_block_start", index: 3, content_block: { type: "text", text: "" } }),
+      sse({ type: "content_block_delta", index: 3, delta: { type: "text_delta", text: "調べた結果、" } }),
+      sse({ type: "content_block_stop", index: 3 }),
+      sse({ type: "content_block_start", index: 4, content_block: { type: "text", text: "", citations: [] } }),
+      sse({ type: "content_block_delta", index: 4, delta: { type: "citations_delta", citation: (SEARCH_CONTENT[4] as { citations: unknown[] }).citations[0] } }),
+      sse({ type: "content_block_delta", index: 4, delta: { type: "text_delta", text: "10 時から 18 時です。" } }),
+      sse({ type: "content_block_stop", index: 4 }),
+      sse({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 90, server_tool_use: { web_search_requests: 1 } } }),
+      sse({ type: "message_stop" }),
+    ];
+    const { fetch } = fakeFetch(() => streamResponse(chunks));
+    const client = createAnthropicClient({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: KEY }, fetch });
+    const blocks: Record<string, unknown>[] = [];
+    const turn = await client.converse({ system: "s", messages: [], onText: () => undefined, onServerBlock: (block) => blocks.push(block) });
+    expect(turn.content).toEqual(SEARCH_CONTENT);
+    expect(blocks).toEqual([SEARCH_CONTENT[1], SEARCH_CONTENT[2]]);
+    expect(turn.usage).toEqual({ model: "claude-sonnet-5-5", inputTokens: 600, outputTokens: 90, webSearchRequests: 1 });
+    expect(turn.stopReason).toBe("end_turn");
+  });
+
+  it("returns pause_turn as a stop reason (the conversation sends the content back to continue)", async () => {
+    const { fetch } = fakeFetch(() => message(null, { content: SEARCH_CONTENT.slice(0, 3), stop_reason: "pause_turn" }));
+    const client = createAnthropicClient({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: KEY }, fetch });
+    const turn = await client.converse({ system: "s", messages: [] });
+    expect(turn.stopReason).toBe("pause_turn");
+    expect(turn.content).toEqual(SEARCH_CONTENT.slice(0, 3));
   });
 });

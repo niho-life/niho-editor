@@ -83,7 +83,7 @@ export type AiChatResult = {
 export type DeviceChatWrite = { pageId: string; markdown: string; baseRevision: number };
 
 /** 作業の 1 行（道具の名前とページの名前。edit_page は直した段落の番号も）。 */
-export type AiChatItem = { kind: "narration"; text: string } | { kind: "tool"; tool: string; page: string | null; ok: boolean; paragraphs?: number[] };
+export type AiChatItem = { kind: "narration"; text: string } | { kind: "tool"; tool: string; page: string | null; ok: boolean; paragraphs?: number[]; results?: number };
 
 /** 「元に戻す」の結果。`kept` は戻さなかったページとその理由。 */
 export type AiUndoResult = { undone: string[]; kept: { pageId: string; reason: string }[]; page: AiPage | null };
@@ -156,7 +156,9 @@ function chatItemOf(value: unknown): AiChatItem | null {
   if (value.kind === "narration" && typeof value.text === "string") return { kind: "narration", text: value.text };
   if (value.kind !== "tool" || typeof value.tool !== "string") return null;
   const paragraphs = Array.isArray(value.paragraphs) ? value.paragraphs.filter((n): n is number => isIndex(n, 1)).slice(0, 200) : [];
-  return { kind: "tool", tool: value.tool, page: typeof value.page === "string" ? value.page : null, ok: value.ok === true, ...(paragraphs.length > 0 ? { paragraphs } : {}) };
+  // Web 検索（#283）は件数だけを持つ
+  const results = isIndex(value.results, 0) ? value.results : null;
+  return { kind: "tool", tool: value.tool, page: typeof value.page === "string" ? value.page : null, ok: value.ok === true, ...(paragraphs.length > 0 ? { paragraphs } : {}), ...(results === null ? {} : { results }) };
 }
 
 function chatItemsOf(value: unknown): AiChatItem[] {
