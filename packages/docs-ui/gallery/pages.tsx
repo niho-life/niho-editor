@@ -78,13 +78,14 @@ export function PreviewDemo({ id }: { id: string }) {
 
 /** 設定系ページの枠（左の一覧＋ヘッダー＋ページ）。ページは選ばれていない。 */
 function SettingsFrame({ title, sidebar: forcedSidebar, pendingInvites = 0, overlay, children }: { title: string; sidebar?: boolean; pendingInvites?: number; overlay?: ReactNode; children: ReactNode }) {
-  const { sidebar, sidebarOpen, setSidebarOpen } = useSettingsSidebar(forcedSidebar, pendingInvites);
+  const { sidebar, sidebarOpen, setSidebarOpen, settings } = useSettingsSidebar(forcedSidebar, pendingInvites);
   return (
     <EditorShell
       sidebar={sidebar}
       header={<ShellHeader plain title={title} showListButton={!sidebarOpen} onToggleList={() => setSidebarOpen(true)} />}
       sidebarOpen={sidebarOpen}
       railOpen={false}
+      settings={settings}
       overlay={overlay}
     >
       {children}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { ShellPanelHead } from "../shell/dock";
 import { Icon } from "../shell/icons";
 import { ShellSheet } from "../shell/sheet";
 import { IMAGE_ACCEPT, IMAGE_ALT_MAX_CHARS, IMAGE_CREDIT_MAX_CHARS, IMAGE_MAX_BYTES, IMAGE_PAGE_MAX_COUNT, isAllowedImageSize, isAllowedImageType } from "./image-limits";
@@ -9,7 +10,9 @@ import type { ImageMeta, ImageProblem, ImageSrcOf, PageImageEntry, PageImages } 
 import { PAGE_IMAGE_DRAG_TYPE, encodePagePhotoDrag, type PagePhotosBody } from "./page-photos";
 
 /**
- * 「このページの写真」（左のサイドバーの下。モック docs/mockups/editor-photo-library-v1.html。オーナー決定 2026-11-05）。
+ * 「このページの写真」（モック docs/mockups/editor-photo-library-v1.html。オーナー決定 2026-11-05）。
+ * `panel` を渡すと「写真」のパネルの中身（#311。見出しは ShellPanelHead で、折りたたみと高さの境目は無く、パネルいっぱいに広がる）。
+ * 渡さなければ左のサイドバーの下の折りたたみ（旧）。
  * 写真の原本はここ（そのページの画像の資産）にあり、本文の画像はそれを指す。
  *
  * - 既定で閉じる（写真アイコンの 1 行だけ）。アイコンを押すと開き、もう一度押すと閉じる。開閉と高さは呼ぶ側がメモリに持つ（保存しない）。
@@ -46,11 +49,17 @@ export type PagePhotosProps = {
   srcOf: ImageSrcOf;
   /** 本文との橋渡し（page-photos.ts の pagePhotosBody）。 */
   body: PagePhotosBody;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  /** 開いているときの高さ（px）。 */
-  height: number;
-  onHeightChange: (height: number) => void;
+  /** 開いているか（省くと開いている）。panel のときは、パネルを出しているか（閉じている間は読まず、上げている途中の写真だけ保つ）。 */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** 開いているときの高さ（px。panel のときは使わない）。 */
+  height?: number;
+  onHeightChange?: (height: number) => void;
+  /**
+   * 「写真」のパネルとして描く（#311）。onClose は見出しの ×、drag は見出しを掴んでドックへ移せるか（デスクトップだけ）。
+   * 折りたたみと高さの境目は無い（open はパネルを出しているか）。
+   */
+  panel?: { onClose?: () => void; drag?: boolean };
   /** 狭い画面（タイルをドラッグできないので、押して「本文に入れる」）。 */
   narrow?: boolean;
   /** 「本文に入れる」で入れたあと（狭い画面ではページへ戻る）。 */
@@ -119,7 +128,7 @@ const NO_ENTRIES: PageImageEntry[] = [];
 
 let pendingSeq = 0;
 
-export function PagePhotos({ pageId, images, srcOf, body, open, onOpenChange, height, onHeightChange, narrow = false, onInserted, onUploadingChange }: PagePhotosProps) {
+export function PagePhotos({ pageId, images, srcOf, body, open = true, onOpenChange, height = PAGE_PHOTOS_MIN_HEIGHT, onHeightChange, panel, narrow = false, onInserted, onUploadingChange }: PagePhotosProps) {
   const bodyId = useId();
   const section = useRef<HTMLElement | null>(null);
   const picker = useRef<HTMLInputElement | null>(null);
@@ -305,7 +314,7 @@ export function PagePhotos({ pageId, images, srcOf, body, open, onOpenChange, he
     handle.setPointerCapture?.(event.pointerId);
     const from = event.clientY;
     const start = height;
-    const move = (next: PointerEvent) => onHeightChange(clamp(start - (next.clientY - from)));
+    const move = (next: PointerEvent) => onHeightChange?.(clamp(start - (next.clientY - from)));
     const end = () => {
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", end);
@@ -318,7 +327,7 @@ export function PagePhotos({ pageId, images, srcOf, body, open, onOpenChange, he
   const resizeByKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
     event.preventDefault();
-    onHeightChange(clamp(height + (event.key === "ArrowUp" ? KEY_STEP : -KEY_STEP)));
+    onHeightChange?.(clamp(height + (event.key === "ArrowUp" ? KEY_STEP : -KEY_STEP)));
   };
 
   // パネルへのファイルのドロップ（パネルにだけ足す）。タイル自身のドラッグは受けない
@@ -341,7 +350,7 @@ export function PagePhotos({ pageId, images, srcOf, body, open, onOpenChange, he
     if (!hasFiles(event.dataTransfer) || isTile(event.dataTransfer)) return;
     event.preventDefault();
     // 閉じた行に落としたときは、開いて上げている様子を見せる
-    if (!open) onOpenChange(true);
+    if (!open) onOpenChange?.(true);
     addFiles(Array.from(event.dataTransfer.files ?? []));
   };
 
@@ -350,9 +359,38 @@ export function PagePhotos({ pageId, images, srcOf, body, open, onOpenChange, he
   const viewed = viewing && entries ? entries.find((entry) => entry.assetId === viewing) ?? null : null;
   const anyUsed = entries?.some((entry) => uses.has(entry.assetId.toLowerCase())) ?? false;
 
+  const addButton = open && (
+    <button
+      type="button"
+      className="es-ib es-ib--sm"
+      aria-label={full ? PAGE_PHOTOS_FULL_TEXT : PAGE_PHOTOS_ADD_TEXT}
+      title={full ? PAGE_PHOTOS_FULL_TEXT : PAGE_PHOTOS_ADD_TEXT}
+      aria-disabled={full || undefined}
+      data-page-photos-add=""
+      onClick={choose}
+    >
+      <Icon name="plus" />
+    </button>
+  );
+  const pickerInput = (
+    <input
+      ref={picker}
+      type="file"
+      accept={IMAGE_ACCEPT}
+      multiple
+      hidden
+      tabIndex={-1}
+      aria-hidden="true"
+      onChange={(event) => {
+        const files = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
+        if (files.length > 0) addFiles(files);
+      }}
+    />
+  );
+
   return (
     <>
-      {open && (
+      {open && !panel && (
         <div
           className="es-ph-split"
           role="separator"
@@ -368,58 +406,41 @@ export function PagePhotos({ pageId, images, srcOf, body, open, onOpenChange, he
       )}
       <section
         ref={section}
-        className={`es-ph${open ? "" : " es-ph--folded"}${over ? " es-ph--over" : ""}`}
+        className={`es-ph${panel ? " es-ph--panel" : ""}${open || panel ? "" : " es-ph--folded"}${over ? " es-ph--over" : ""}`}
         aria-label={PAGE_PHOTOS_LABEL}
-        style={open ? { height } : undefined}
+        style={open && !panel ? { height } : undefined}
         onDragEnter={dragEnter}
         onDragLeave={dragLeave}
         onDragOver={dragOver}
         onDrop={drop}
       >
-        <div className="es-ph-hd">
-          <button
-            type="button"
-            className="es-ph-fold"
-            aria-expanded={open}
-            // 閉じている間は中身が無いので、指す先も持たない（無い id を指さない）
-            aria-controls={open ? bodyId : undefined}
-            aria-label={PAGE_PHOTOS_LABEL}
-            title={PAGE_PHOTOS_LABEL}
-            onClick={() => onOpenChange(!open)}
-          >
-            <span className="es-ph-caret" aria-hidden="true">
-              {open ? "▾" : "▸"}
-            </span>
-            <Icon name="img" />
-          </button>
-          <span className="es-sp" />
-          {open && (
+        {panel ? (
+          <ShellPanelHead panel="photos" onClose={panel.onClose} drag={panel.drag}>
+            {addButton}
+            {pickerInput}
+          </ShellPanelHead>
+        ) : (
+          <div className="es-ph-hd">
             <button
               type="button"
-              className="es-ib es-ib--sm"
-              aria-label={full ? PAGE_PHOTOS_FULL_TEXT : PAGE_PHOTOS_ADD_TEXT}
-              title={full ? PAGE_PHOTOS_FULL_TEXT : PAGE_PHOTOS_ADD_TEXT}
-              aria-disabled={full || undefined}
-              data-page-photos-add=""
-              onClick={choose}
+              className="es-ph-fold"
+              aria-expanded={open}
+              // 閉じている間は中身が無いので、指す先も持たない（無い id を指さない）
+              aria-controls={open ? bodyId : undefined}
+              aria-label={PAGE_PHOTOS_LABEL}
+              title={PAGE_PHOTOS_LABEL}
+              onClick={() => onOpenChange?.(!open)}
             >
-              <Icon name="plus" />
+              <span className="es-ph-caret" aria-hidden="true">
+                {open ? "▾" : "▸"}
+              </span>
+              <Icon name="img" />
             </button>
-          )}
-          <input
-            ref={picker}
-            type="file"
-            accept={IMAGE_ACCEPT}
-            multiple
-            hidden
-            tabIndex={-1}
-            aria-hidden="true"
-            onChange={(event) => {
-              const files = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
-              if (files.length > 0) addFiles(files);
-            }}
-          />
-        </div>
+            <span className="es-sp" />
+            {addButton}
+            {pickerInput}
+          </div>
+        )}
         {open && (
           <div className="es-ph-body" id={bodyId}>
             {entries === null && !loadError && (

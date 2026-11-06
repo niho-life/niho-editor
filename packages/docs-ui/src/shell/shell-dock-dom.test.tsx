@@ -8,14 +8,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EditorShell,
   SHELL_DND,
+  SHELL_DOCKS_DEFAULT,
   SHELL_DOCK_DEFAULT,
+  ShellPanelHead,
   ShellRail,
   ShellSidePane,
   ShellSidebar,
   computeShellDock,
   dockPanels,
   type EditorShellDock,
-  type ShellDockPlace,
+  type ShellDocks,
+  type ShellPanelId,
 } from "./index";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -25,6 +28,7 @@ afterEach(() => {
   act(() => roots.forEach((root) => root.unmount()));
   roots.length = 0;
   document.body.innerHTML = "";
+  vi.restoreAllMocks();
 });
 
 function mount(node: ReactNode): { host: HTMLElement; render: (next: ReactNode) => void } {
@@ -74,6 +78,15 @@ function drag(target: Element, type: string, dataTransfer: ReturnType<typeof tra
   return event;
 }
 
+const rectOf = (width: number, height: number) => ({ x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height, toJSON: () => ({}) }) as DOMRect;
+
+/** 枠（.es-ws）と .es-root の大きさを jsdom で測れるようにする（ほかの要素は 0）。 */
+function sizeBox(width = 1680, height = 900) {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("es-ws") || this.classList.contains("es-root") ? rectOf(width, height) : rectOf(0, 0);
+  });
+}
+
 /** 書きかけを持つ部品（作り直されると消える）。 */
 function Draft() {
   const [count, setCount] = useState(0);
@@ -91,16 +104,23 @@ function Draft() {
 const sidebar = <aside className="es-sb" aria-label="ページ"><input aria-label="一覧の中の入力" defaultValue="" /></aside>;
 
 type Over = Partial<EditorShellDock> & { width?: number };
+type Shown = Record<ShellPanelId, boolean>;
+const ALL: Shown = { list: true, ai: true, page: true, photos: true };
 
-function dockOf(over: Over = {}, shown = { list: true, ai: true }): EditorShellDock {
-  const place: ShellDockPlace = over.place ?? { list: "left", ai: "right" };
+function dockOf(over: Over = {}, shown: Shown = ALL): EditorShellDock {
+  const docks: ShellDocks = over.docks ?? SHELL_DOCKS_DEFAULT;
   const widths = over.widths ?? { ...SHELL_DOCK_DEFAULT };
-  const fit = over.fit ?? computeShellDock({ width: over.width ?? 1680, widths, docks: dockPanels(place, shown), side: Boolean(over.side) });
+  const panels = dockPanels(docks, shown);
+  const fit =
+    over.fit ??
+    computeShellDock({ width: over.width ?? 1680, widths, docks: { left: panels.left.map((item) => item.id), right: panels.right.map((item) => item.id) }, side: Boolean(over.side) });
   const { width: _width, ...rest } = over;
-  return { wide: true, onWidth: vi.fn(), onMove: vi.fn(), onPeek: vi.fn(), onDropPage: vi.fn(), onDropSide: vi.fn(), ...rest, place, widths, fit };
+  return { wide: true, onWidth: vi.fn(), onMove: vi.fn(), onResize: vi.fn(), onPeek: vi.fn(), onDropPage: vi.fn(), onDropSide: vi.fn(), ...rest, docks, widths, fit };
 }
 
-function Shell({ dock, sidebarOpen = true, railOpen = true }: { dock?: EditorShellDock; sidebarOpen?: boolean; railOpen?: boolean }) {
+type ShellProps = { dock?: EditorShellDock; sidebarOpen?: boolean; railOpen?: boolean; pageOpen?: boolean; photosOpen?: boolean; onClosePage?: () => void; settings?: boolean };
+
+function Shell({ dock, sidebarOpen = true, railOpen = true, pageOpen = true, photosOpen = true, onClosePage, settings }: ShellProps) {
   return (
     <EditorShell
       sidebar={sidebar}
@@ -110,9 +130,19 @@ function Shell({ dock, sidebarOpen = true, railOpen = true }: { dock?: EditorShe
           <Draft />
         </ShellRail>
       }
+      page={
+        <>
+          <ShellPanelHead panel="page" drag onClose={onClosePage ?? (() => undefined)} />
+          <div className="es-pn-body">ページのパネル</div>
+        </>
+      }
+      photos={<div className="es-pn-body">写真のパネル</div>}
       corner={<span>文字数</span>}
       sidebarOpen={sidebarOpen}
       railOpen={railOpen}
+      pageOpen={pageOpen}
+      photosOpen={photosOpen}
+      settings={settings ? { onOpen: () => undefined } : undefined}
       dock={dock}
     >
       <p>本文</p>
@@ -120,44 +150,69 @@ function Shell({ dock, sidebarOpen = true, railOpen = true }: { dock?: EditorShe
   );
 }
 
-describe("EditorShell の分割ビュー（dock）", () => {
-  it("dock を渡さなければ従来の DOM のまま（一覧｜ヘッダー＋ページ＋レール。新しい要素・属性・style は無い）", () => {
+const pane = (host: HTMLElement, id: ShellPanelId) => host.querySelector<HTMLElement>(`.es-pn[data-panel="${id}"]`)!;
+
+describe("EditorShell のパネルの配置（dock）", () => {
+  it("dock を渡さなければ従来の DOM のまま（アプリ名の帯｜一覧｜ヘッダー＋ページ＋レール。パネルの要素・style は無い）", () => {
     const { host } = mount(<Shell />);
     const root = host.querySelector<HTMLElement>(".es-root")!;
-    expect([...root.attributes].map((attr) => attr.name).sort()).toEqual(["class", "data-editor-shell", "data-rail", "data-sidebar", "data-view"]);
+    expect([...root.attributes].map((attr) => attr.name).sort()).toEqual(["class", "data-editor-shell", "data-left", "data-rail", "data-sidebar", "data-view"]);
+    expect([...root.children].map((node) => node.className)).toEqual(["es-skip", "es-brandbar", "es-ws"]);
     const ws = root.querySelector<HTMLElement>(".es-ws")!;
     expect(ws.getAttribute("style")).toBeNull();
     expect([...ws.children].map((node) => node.className)).toEqual(["es-sb", "es-doc"]);
     expect([...root.querySelector(".es-dbody")!.children].map((node) => node.className)).toEqual(["es-canvas", "es-rail-presence", "es-corner"]);
     const presence = root.querySelector<HTMLElement>(".es-rail-presence")!;
     expect([...presence.attributes].map((attr) => attr.name).sort()).toEqual(["class"]);
-    expect(root.querySelector(".es-pane, .es-sash, .es-strip, .es-sidecol, .es-dzs, .es-ghost")).toBeNull();
+    expect(root.querySelector(".es-pn, .es-sash, .es-strip, .es-sidecol, .es-dzs, .es-ghost")).toBeNull();
+    // 「ページ」「写真」のパネルは dock のときだけ
+    expect(root.textContent).not.toContain("ページのパネル");
   });
 
-  it("デスクトップでは grid の列で置く（一覧は左の列、AI は右の列）", () => {
+  it("既定の配置: 左＝一覧、右＝ページ（上）＋AI（下）。パネルは絶対配置で、位置は割合", () => {
     const { host } = mount(<Shell dock={dockOf()} />);
     const root = host.querySelector<HTMLElement>(".es-root")!;
-    expect(root.dataset).toMatchObject({ layout: "dock", wide: "true", ai: "right" });
+    expect(root.dataset).toMatchObject({ layout: "dock", wide: "true", left: "dock" });
+    expect(root.style.getPropertyValue("--es-left-w")).toBe("272px");
     expect(root.querySelector<HTMLElement>(".es-ws")!.style.gridTemplateColumns).toBe("272px 0px minmax(0,1fr) 0px 0px 0px 340px");
-    const pane = root.querySelector<HTMLElement>(".es-pane")!;
-    expect(pane.dataset).toMatchObject({ dock: "left", state: "open" });
-    expect(pane.style.gridColumn).toBe("1");
-    const presence = root.querySelector<HTMLElement>(".es-rail-presence")!;
-    expect(presence.dataset).toMatchObject({ dock: "right", state: "open" });
-    expect(presence.style.gridColumn).toBe("7");
+    // 木の順はいつも 一覧・AI・ページ・写真（置き場所に関係なく）
+    expect([...root.querySelectorAll<HTMLElement>(".es-pn")].map((node) => node.dataset.panel)).toEqual(["list", "ai", "page", "photos"]);
+    const list = pane(host, "list");
+    expect(list.dataset).toMatchObject({ dock: "left", state: "open", index: "0" });
+    expect(list.style.width).toBe("272px");
+    expect(list.style.top).toBe("calc(var(--es-header) + (100% - 2 * var(--es-header)) * 0)");
+    expect(list.style.height).toBe("calc((100% - 2 * var(--es-header)) * 1)");
+    const page = pane(host, "page");
+    expect(page.dataset).toMatchObject({ dock: "right", index: "0" });
+    expect(page.style.top).toBe("0%");
+    expect(page.style.height).toBe("50%");
+    const ai = pane(host, "ai");
+    expect(ai.dataset).toMatchObject({ dock: "right", index: "1" });
+    expect(ai.style.top).toBe("50%");
+    expect(ai.style.height).toBe("50%");
+    expect(ai.style.width).toBe("340px");
+    // 写真は閉じている（どちらのドックにも無い）
+    const photos = pane(host, "photos");
+    expect(photos.hidden).toBe(true);
+    expect(photos.hasAttribute("data-dock")).toBe(false);
+    expect(photos.hasAttribute("inert")).toBe(true);
   });
 
-  it("同じドックに 2 つなら一覧が上の段・AI が下の段", () => {
-    const { host } = mount(<Shell dock={dockOf({ place: { list: "left", ai: "left" } })} />);
-    const ws = host.querySelector<HTMLElement>(".es-ws")!;
-    expect(ws.style.gridTemplateRows).toContain("fit-content(");
-    expect(host.querySelector<HTMLElement>(".es-pane")!.style.gridRow).toBe("1 / 3");
-    const presence = host.querySelector<HTMLElement>(".es-rail-presence")!;
-    expect(presence.style.gridRow).toBe("3 / 4");
-    expect(presence.dataset.stack).toBe("below");
+  it("高さの割合は docks の size から（3 つなら 3 段）。隠したパネルは数えない", () => {
+    const docks: ShellDocks = { left: [], right: [{ id: "list", size: 1 }, { id: "page", size: 2 }, { id: "ai", size: 1 }] };
+    const { host, render } = mount(<Shell dock={dockOf({ docks })} />);
+    expect(host.querySelector<HTMLElement>(".es-root")!.dataset.left).toBe("none");
+    expect(pane(host, "list").style.top).toBe("0%");
+    expect(pane(host, "page").style.top).toBe("25%");
+    expect(pane(host, "page").style.height).toBe("50%");
+    expect(pane(host, "ai").style.top).toBe("75%");
+    render(<Shell dock={dockOf({ docks }, { ...ALL, page: false })} pageOpen={false} />);
+    expect(pane(host, "page").hidden).toBe(true);
+    expect(pane(host, "ai").style.top).toBe("50%");
+    expect(pane(host, "ai").dataset.index).toBe("1");
   });
 
-  it("AI を左・浮かせる・狭い画面へ動かしても、同じ要素のまま（書きかけと中の状態が残る）", () => {
+  it("AI を左へ・一覧を右へ・狭い画面へ動かしても、同じ要素のまま（書きかけと中の状態が残る）", () => {
     const { host, render } = mount(<Shell dock={dockOf()} />);
     const field = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')!;
     const list = host.querySelector<HTMLInputElement>('input[aria-label="一覧の中の入力"]')!;
@@ -165,11 +220,10 @@ describe("EditorShell の分割ビュー（dock）", () => {
     list.value = "探している語";
     act(() => host.querySelector<HTMLButtonElement>("section button")!.click());
 
-    render(<Shell dock={dockOf({ place: { list: "right", ai: "left" } })} />);
-    expect(host.querySelector(".es-rail-presence")!.getAttribute("data-dock")).toBe("left");
-    expect(host.querySelector(".es-pane")!.getAttribute("data-dock")).toBe("right");
-    render(<Shell dock={dockOf({ place: { list: "right", ai: "float" }, float: { open: false, height: 360, max: 700, onHeight: vi.fn() } })} />);
-    expect(host.querySelector<HTMLElement>(".es-rail-presence")!.dataset).toMatchObject({ dock: "float", float: "bar" });
+    const swapped: ShellDocks = { left: [{ id: "ai", size: 1 }], right: [{ id: "page", size: 1 }, { id: "list", size: 1 }] };
+    render(<Shell dock={dockOf({ docks: swapped })} />);
+    expect(pane(host, "ai").dataset.dock).toBe("left");
+    expect(pane(host, "list").dataset).toMatchObject({ dock: "right", index: "1" });
     render(<Shell dock={{ ...dockOf(), wide: false }} />);
     render(<Shell dock={dockOf()} />);
 
@@ -181,33 +235,57 @@ describe("EditorShell の分割ビュー（dock）", () => {
     expect(host.querySelector("section button")!.textContent).toBe("数える 1");
   });
 
-  it("900px 未満（wide=false）は従来の 1 枚表示: grid の style・境目・右のページ・細い列を出さない", () => {
+  it("900px 未満（wide=false）は 1 枚表示: grid の style・位置・境目・右のページ・細い列を出さない。一覧 > ほかのパネル > ページ", () => {
     const side = <ShellSidePane pageId="b" title="右" onSwap={vi.fn()} onClose={vi.fn()}>本文</ShellSidePane>;
-    const { host } = mount(<Shell dock={{ ...dockOf({ side, width: 1100 }), wide: false }} />);
+    const { host, render } = mount(<Shell dock={{ ...dockOf({ side, width: 1100 }), wide: false }} />);
     const root = host.querySelector<HTMLElement>(".es-root")!;
     expect(root.dataset.wide).toBe("false");
-    expect(root.dataset.ai).toBeUndefined();
+    expect(root.dataset.view).toBe("list");
     expect(root.querySelector<HTMLElement>(".es-ws")!.getAttribute("style")).toBeNull();
-    expect(root.querySelector(".es-pane")!.getAttribute("style")).toBeNull();
-    expect(root.querySelector(".es-pane")!.hasAttribute("data-dock")).toBe(false);
-    expect(root.querySelector(".es-rail-presence")!.hasAttribute("data-dock")).toBe(false);
+    expect(root.getAttribute("style")).toBeNull();
+    for (const id of ["list", "ai", "page", "photos"] as const) {
+      expect(pane(host, id).getAttribute("style")).toBeNull();
+      expect(pane(host, id).hasAttribute("data-dock")).toBe(false);
+    }
     expect(root.querySelector(".es-sash, .es-strip, .es-sidecol, .es-side")).toBeNull();
+    render(<Shell dock={{ ...dockOf(), wide: false }} sidebarOpen={false} railOpen={false} pageOpen photosOpen={false} />);
+    expect(root.dataset.view).toBe("rail");
+    expect(pane(host, "page").hidden).toBe(false);
+    expect(pane(host, "ai").hidden).toBe(true);
+    render(<Shell dock={{ ...dockOf(), wide: false }} sidebarOpen={false} railOpen={false} pageOpen={false} photosOpen={false} />);
+    expect(root.dataset.view).toBe("page");
   });
 
-  it("一覧・AI を隠すと、どのドックにいても隠れる（hidden）", () => {
-    const { host } = mount(<Shell dock={dockOf({ place: { list: "right", ai: "left" } }, { list: false, ai: false })} sidebarOpen={false} railOpen={false} />);
-    expect(host.querySelector<HTMLElement>(".es-pane")!.hidden).toBe(true);
-    expect(host.querySelector<HTMLElement>(".es-rail-presence")!.hidden).toBe(true);
-    expect(host.querySelector<HTMLElement>(".es-rail-presence")!.hasAttribute("inert")).toBe(true);
+  it("閉じたパネルは、どのドックにいても hidden と inert（中の状態は残す）", () => {
+    const docks: ShellDocks = { left: [{ id: "ai", size: 1 }, { id: "photos", size: 1 }], right: [{ id: "list", size: 1 }, { id: "page", size: 1 }] };
+    const { host } = mount(<Shell dock={dockOf({ docks }, { list: false, ai: false, page: false, photos: false })} sidebarOpen={false} railOpen={false} pageOpen={false} photosOpen={false} />);
+    for (const id of ["list", "ai", "page", "photos"] as const) {
+      expect(pane(host, id).hidden).toBe(true);
+      expect(pane(host, id).hasAttribute("inert")).toBe(true);
+      expect(pane(host, id).getAttribute("aria-hidden")).toBe("true");
+    }
+    expect(host.querySelector<HTMLElement>(".es-root")!.dataset).toMatchObject({ sidebar: "closed", rail: "closed", left: "none" });
+    expect(host.querySelector<HTMLElement>(".es-ws")!.style.gridTemplateColumns).toBe("0px 0px minmax(0,1fr) 0px 0px 0px 0px");
+  });
+
+  it("アプリ名は左上端（skip link の次）、設定は左下（settings を渡したとき）。左のドックが細い列なら中央のヘッダーの左を空ける（data-left=none）", () => {
+    const { host, render } = mount(<Shell dock={dockOf()} settings />);
+    const root = host.querySelector<HTMLElement>(".es-root")!;
+    expect([...root.children].map((node) => node.className)).toEqual(["es-skip", "es-brandbar", "es-ws", "es-setbar"]);
+    expect(root.querySelector(".es-brandbar .es-brand")).not.toBeNull();
+    expect(root.querySelector(".es-setbar .es-sb-me")?.textContent).toBe("設定");
+    expect(root.dataset.left).toBe("dock");
+    render(<Shell dock={dockOf({ width: 1024 })} settings />);
+    expect(pane(host, "list").dataset.state).toBe("strip");
+    expect(root.dataset.left).toBe("none");
   });
 
   it("境目: separator（縦）で aria の値を持ち、← →（Shift で大きく）・Home / End・Enter・ダブルクリックで幅を変える", () => {
     const dock = dockOf({ side: <span>右</span> });
     const { host } = mount(<Shell dock={dock} />);
-    const sashes = [...host.querySelectorAll<HTMLElement>('[role="separator"]')];
+    const sashes = [...host.querySelectorAll<HTMLElement>('[role="separator"][aria-orientation="vertical"]')];
     expect(sashes.map((sash) => sash.getAttribute("aria-label"))).toEqual(["左のドックの幅", "右に並べたページの幅", "右のドックの幅"]);
     const [left, side] = sashes as [HTMLElement, HTMLElement];
-    expect(left.getAttribute("aria-orientation")).toBe("vertical");
     expect(left.tabIndex).toBe(0);
     expect(left.getAttribute("aria-valuenow")).toBe("272");
     expect(left.getAttribute("aria-valuemin")).toBe("240");
@@ -241,7 +319,7 @@ describe("EditorShell の分割ビュー（dock）", () => {
   it("境目はドラッグ（pointer）でも動かせる。右のページ・右のドックは左へ動かすと広がる", () => {
     const dock = dockOf({ side: <span>右</span> });
     const { host } = mount(<Shell dock={dock} />);
-    const [left, side] = [...host.querySelectorAll<HTMLElement>('[role="separator"]')] as [HTMLElement, HTMLElement];
+    const [left, side] = [...host.querySelectorAll<HTMLElement>('[role="separator"][aria-orientation="vertical"]')] as [HTMLElement, HTMLElement];
     const pointer = (target: Element, type: string, clientX: number) => {
       const event = new Event(type, { bubbles: true, cancelable: true });
       Object.defineProperties(event, { button: { value: 0 }, pointerId: { value: 1 }, clientX: { value: clientX }, clientY: { value: 0 } });
@@ -260,30 +338,76 @@ describe("EditorShell の分割ビュー（dock）", () => {
     expect(dock.onWidth).toHaveBeenLastCalledWith("side", 460);
   });
 
-  it("分割ビューの枠に axe の serious 以上の違反が無い（境目・細い列・右のページ）", async () => {
+  it("同じドックの上下の境目: 横の separator。値は上のパネルの高さ（px。最小 90）、↑↓・Enter（半々）・ドラッグで割合（fraction）を知らせる", () => {
+    sizeBox(1680, 900);
+    const dock = dockOf();
+    const { host } = mount(<Shell dock={dock} />);
+    const splits = [...host.querySelectorAll<HTMLElement>('[role="separator"][aria-orientation="horizontal"]')];
+    expect(splits.map((split) => split.getAttribute("aria-label"))).toEqual(["「ページ」と「AIと作る」の境目"]);
+    const split = splits[0]!;
+    expect(split.className).toBe("es-sash es-sash--split");
+    expect(split.style.top).toBe("50%");
+    expect(split.style.width).toBe("340px");
+    expect(split.getAttribute("aria-valuenow")).toBe("450");
+    expect(split.getAttribute("aria-valuemin")).toBe("90");
+    expect(split.getAttribute("aria-valuemax")).toBe("810");
+    // ↓ で境目が下がり、上のパネルが広がる（24px。Shift で 96px）
+    key(split, "ArrowDown");
+    expect(dock.onResize).toHaveBeenLastCalledWith("right", 1, 474 / 900);
+    key(split, "ArrowUp", { shiftKey: true });
+    expect(dock.onResize).toHaveBeenLastCalledWith("right", 1, 354 / 900);
+    key(split, "Home");
+    expect(dock.onResize).toHaveBeenLastCalledWith("right", 1, 90 / 900);
+    key(split, "Enter");
+    expect(dock.onResize).toHaveBeenLastCalledWith("right", 1, 0.5);
+    const pointer = (type: string, clientY: number) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperties(event, { button: { value: 0 }, pointerId: { value: 1 }, clientX: { value: 0 }, clientY: { value: clientY } });
+      act(() => {
+        split.dispatchEvent(event);
+      });
+    };
+    // 下へ 40px 動かすと上のパネルが 40px 広がる
+    pointer("pointerdown", 500);
+    pointer("pointermove", 540);
+    expect(dock.onResize).toHaveBeenLastCalledWith("right", 1, 490 / 900);
+    pointer("pointerup", 540);
+    // 左のドック（アプリ名と設定の段を除いた高さ 804）に 2 つなら、そこにも
+    const docks: ShellDocks = { left: [{ id: "list", size: 3 }, { id: "photos", size: 1 }], right: [{ id: "page", size: 1 }, { id: "ai", size: 1 }] };
+    const { host: more } = mount(<Shell dock={dockOf({ docks })} />);
+    const leftSplit = more.querySelector<HTMLElement>('[role="separator"][aria-label="「一覧」と「写真」の境目"]')!;
+    expect(leftSplit.style.top).toBe("calc(var(--es-header) + (100% - 2 * var(--es-header)) * 0.75)");
+    expect(leftSplit.style.width).toBe("272px");
+    expect(leftSplit.getAttribute("aria-valuenow")).toBe("603");
+  });
+
+  it("パネルの配置の枠に axe の serious 以上の違反が無い（境目・細い列・右のページ・パネルの見出し）", async () => {
     const side = <ShellSidePane pageId="b" title="右" onSwap={vi.fn()} onClose={vi.fn()}><p>本文</p></ShellSidePane>;
-    mount(<Shell dock={dockOf({ width: 1100, side })} />);
+    mount(<Shell dock={dockOf({ width: 1100, side })} settings />);
     const result = await axe.run(document.body, { rules: { "color-contrast": { enabled: false } } });
     expect(result.violations.filter((entry) => entry.impact === "serious" || entry.impact === "critical")).toEqual([]);
   });
 
-  it("入りきらないときは細い列。アイコンで上に重ねて開き、Esc・外側の押下で閉じる", () => {
+  it("入りきらないときは細い列（パネルごとのアイコン）。アイコンで上に重ねて開き、Esc・外側の押下で閉じる", () => {
     const onPeek = vi.fn();
-    const { host, render } = mount(<Shell dock={dockOf({ width: 1024, onPeek })} />);
-    const pane = host.querySelector<HTMLElement>(".es-pane")!;
-    expect(pane.dataset.state).toBe("strip");
+    const docks: ShellDocks = { left: [{ id: "list", size: 1 }, { id: "photos", size: 1 }], right: [{ id: "page", size: 1 }, { id: "ai", size: 1 }] };
+    const { host, render } = mount(<Shell dock={dockOf({ docks, width: 1024, onPeek })} />);
+    const list = pane(host, "list");
+    expect(list.dataset.state).toBe("strip");
     const strip = host.querySelector<HTMLElement>('.es-strip[data-dock="left"]')!;
+    expect([...strip.querySelectorAll("button")].map((button) => button.getAttribute("aria-label"))).toEqual(["一覧を開く", "写真を開く"]);
     const open = strip.querySelector<HTMLButtonElement>('button[aria-label="一覧を開く"]')!;
     expect(open.getAttribute("aria-expanded")).toBe("false");
     act(() => open.click());
     expect(onPeek).toHaveBeenLastCalledWith("left");
 
-    render(<Shell dock={dockOf({ width: 1024, onPeek, peek: "left" })} />);
-    expect(pane.dataset.state).toBe("peek");
-    expect(pane.style.getPropertyValue("--es-peek-w")).toBe("272px");
+    render(<Shell dock={dockOf({ docks, width: 1024, onPeek, peek: "left" })} />);
+    expect(list.dataset.state).toBe("peek");
+    expect(list.style.width).toBe("272px");
+    expect(list.style.getPropertyValue("--es-peek-w")).toBe("272px");
     // 中を押しても閉じない
     act(() => {
-      pane.querySelector("input")!.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      list.querySelector("input")!.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     });
     expect(onPeek).toHaveBeenCalledTimes(1);
     key(document.body, "Escape");
@@ -293,25 +417,6 @@ describe("EditorShell の分割ビュー（dock）", () => {
       host.querySelector("main")!.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     });
     expect(onPeek).toHaveBeenCalledTimes(3);
-  });
-
-  it("浮かせた AI を開いているときは、上端に高さの取っ手（横の separator、↑↓）", () => {
-    const onHeight = vi.fn();
-    const { host } = mount(<Shell dock={dockOf({ place: { list: "left", ai: "float" }, float: { open: true, height: 360, max: 700, onHeight } })} />);
-    const presence = host.querySelector<HTMLElement>(".es-rail-presence")!;
-    expect(presence.dataset).toMatchObject({ dock: "float", float: "open" });
-    expect(presence.style.getPropertyValue("--es-float-open")).toBe("360px");
-    const handle = presence.querySelector<HTMLElement>('[role="separator"]')!;
-    expect(handle.getAttribute("aria-label")).toBe("AIの高さ");
-    expect(handle.getAttribute("aria-orientation")).toBe("horizontal");
-    expect(handle.getAttribute("aria-valuemax")).toBe("700");
-    key(handle, "ArrowUp");
-    expect(onHeight).toHaveBeenLastCalledWith(384);
-    key(handle, "ArrowDown", { shiftKey: true });
-    expect(onHeight).toHaveBeenLastCalledWith(360 - 96);
-    // 浮かせているあいだ AI は右のドックにいないので、右の境目は出さない
-    expect(host.querySelector('[aria-label="右のドックの幅"]')).toBeNull();
-    expect(host.querySelector<HTMLElement>(".es-root")!.dataset.ai).toBe("float");
   });
 
   it("本文への落とし先は、ページ用の型のときだけ出す（写真・文字のドラッグでは出さない）", () => {
@@ -350,36 +455,91 @@ describe("EditorShell の分割ビュー（dock）", () => {
     expect(dock.onDropSide).toHaveBeenCalledTimes(1);
   });
 
-  it("パネルを掴むと、近づけた場所に「落とすと入る形」を出し、そこへ落とすと移す（真ん中では何もしない）", () => {
+  it("パネルを掴むと、近づけたドックの上半分・下半分に「落とすと入る形」を出し、そこへ落とすと移す（真ん中・今いる場所では何もしない）", () => {
+    sizeBox(1680, 900);
     const dock = dockOf();
     const { host } = mount(<Shell dock={dock} />);
     const root = host.querySelector<HTMLElement>(".es-root")!;
-    root.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: 1680, bottom: 900, width: 1680, height: 900, toJSON: () => ({}) }) as DOMRect;
     const ai = transfer({ [SHELL_DND.ai]: "ai" });
     // 真ん中
     const middle = drag(root, "dragover", ai, { x: 800, y: 300 });
     expect(middle.defaultPrevented).toBe(false);
     expect(host.querySelector(".es-ghost")).toBeNull();
-    // 今いる右のドックでは出さない
-    drag(root, "dragover", ai, { x: 1600, y: 300 });
+    // 今いる右のドックの下（いちばん下にいる）では出さない
+    drag(root, "dragover", ai, { x: 1600, y: 800 });
     expect(host.querySelector(".es-ghost")).toBeNull();
-    // 左の端
+    // 右の上半分なら「上に」（ページと入れ替わる）
+    drag(root, "dragover", ai, { x: 1600, y: 100 });
+    expect(host.querySelector(".es-ghost")!.textContent).toBe("右のドック「AIと作る」を上に置く");
+    // 左の端の上半分（一覧がいる）
     const over = drag(root, "dragover", ai, { x: 30, y: 300 });
     expect(over.defaultPrevented).toBe(true);
-    expect(host.querySelector(".es-ghost")!.textContent).toBe("左のドック「AIと作る」を入れる");
-    // メインの下端（AI だけ）
-    drag(root, "dragover", ai, { x: 800, y: 860 });
-    expect(host.querySelector(".es-ghost")!.textContent).toBe("メインの下に浮かせる");
-    drag(root, "drop", ai, { x: 800, y: 860 });
-    expect(dock.onMove).toHaveBeenCalledWith("ai", "float");
+    const ghost = host.querySelector<HTMLElement>(".es-ghost")!;
+    expect(ghost.textContent).toBe("左のドック「AIと作る」を上に置く");
+    expect(ghost.style.height).toBe("441px");
+    drag(root, "dragover", ai, { x: 30, y: 700 });
+    expect(host.querySelector(".es-ghost")!.textContent).toBe("左のドック「AIと作る」を下に置く");
+    expect(host.querySelector<HTMLElement>(".es-ghost")!.style.top).toBe("453px");
+    drag(root, "drop", ai, { x: 30, y: 700 });
+    expect(dock.onMove).toHaveBeenCalledWith("ai", { side: "left", at: "bottom" });
     expect(host.querySelector(".es-ghost")).toBeNull();
-    // 一覧はメインの下端では何もしない
+    // 写真（閉じている）を右の端へ: 右にはページと AI がいる
+    const photos = transfer({ [SHELL_DND.panel.photos]: "photos" });
+    drag(root, "dragover", photos, { x: 1650, y: 800 });
+    expect(host.querySelector(".es-ghost")!.textContent).toBe("右のドック「写真」を下に置く");
+    drag(root, "drop", photos, { x: 1650, y: 800 });
+    expect(dock.onMove).toHaveBeenLastCalledWith("photos", { side: "right", at: "bottom" });
+    // 一覧を空のドックへ（ほかのパネルが無ければドック全体）
+    const empty = dockOf({ docks: { left: [{ id: "list", size: 1 }], right: [] } }, { list: true, ai: false, page: false, photos: false });
+    const { host: lone } = mount(<Shell dock={empty} railOpen={false} pageOpen={false} photosOpen={false} />);
     const list = transfer({ [SHELL_DND.list]: "list" });
-    drag(root, "dragover", list, { x: 800, y: 860 });
-    expect(host.querySelector(".es-ghost")).toBeNull();
-    drag(root, "dragover", list, { x: 1650, y: 300 });
-    drag(root, "drop", list, { x: 1650, y: 300 });
-    expect(dock.onMove).toHaveBeenLastCalledWith("list", "right");
+    drag(lone.querySelector(".es-root")!, "dragover", list, { x: 1650, y: 800 });
+    expect(lone.querySelector(".es-ghost")!.textContent).toBe("右のドック「一覧」を入れる");
+    expect(lone.querySelector<HTMLElement>(".es-ghost")!.style.height).toBe("888px");
+    drag(lone.querySelector(".es-root")!, "drop", list, { x: 1650, y: 800 });
+    expect(empty.onMove).toHaveBeenLastCalledWith("list", { side: "right", at: "top" });
+  });
+});
+
+describe("パネルの見出し（ShellPanelHead）と ×", () => {
+  it("[掴む所] 名前 …… [操作] [×]。drag のときだけ掴めて、パネルの型を載せる。× は「◯◯を閉じる」", () => {
+    const onClose = vi.fn();
+    const { host } = mount(
+      <ShellPanelHead panel="photos" drag onClose={onClose}>
+        <button type="button" aria-label="写真を足す">＋</button>
+      </ShellPanelHead>,
+    );
+    const head = host.querySelector<HTMLElement>(".es-pn-hd")!;
+    expect(head.getAttribute("draggable")).toBe("true");
+    expect(head.querySelector(".es-grip")).not.toBeNull();
+    expect(head.querySelector("h2.es-pn-tt")?.textContent).toBe("写真");
+    expect([...head.querySelectorAll("button")].map((button) => button.getAttribute("aria-label"))).toEqual(["写真を足す", "写真を閉じる"]);
+    const data = transfer();
+    drag(head, "dragstart", data);
+    expect(data.store[SHELL_DND.panel.photos]).toBe("photos");
+    act(() => head.querySelector<HTMLButtonElement>('button[aria-label="写真を閉じる"]')!.click());
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    const plain = mount(<ShellPanelHead panel="page" title="流れ" />).host.querySelector<HTMLElement>(".es-pn-hd")!;
+    expect(plain.hasAttribute("draggable")).toBe(false);
+    expect(plain.querySelector(".es-grip")).toBeNull();
+    expect(plain.querySelector(".es-pn-tt")?.textContent).toBe("流れ");
+    expect(plain.querySelector("button")).toBeNull();
+  });
+
+  it("ShellRail に onClosePanel を渡すと、レールの右上に「AIと作るを閉じる」を重ねる（シートのときは出さない）", () => {
+    const onClosePanel = vi.fn();
+    const { host } = mount(
+      <ShellRail onClosePanel={onClosePanel}>
+        <Draft />
+      </ShellRail>,
+    );
+    const close = host.querySelector<HTMLButtonElement>('aside.es-rail > button.es-pn-x--over')!;
+    expect(close.getAttribute("aria-label")).toBe("AIと作るを閉じる");
+    expect(close).toBe(host.querySelector("aside.es-rail")!.lastElementChild);
+    act(() => close.click());
+    expect(onClosePanel).toHaveBeenCalledTimes(1);
+    expect(mount(<ShellRail><Draft /></ShellRail>).host.querySelector(".es-pn-x")).toBeNull();
   });
 });
 
@@ -427,7 +587,7 @@ describe("一覧の右に並べる操作・行の削除・パネルの移動（S
   const row = (host: HTMLElement, title: string) => [...host.querySelectorAll<HTMLElement>(".es-dirow")].find((node) => node.querySelector(".es-di-t")?.textContent === title)!;
 
   it("side も onDeleteRow も渡さなければ、右クリックはブラウザのまま・行はドラッグしない・「…」も無い", () => {
-    const { host } = mount(<ShellSidebar items={items} currentId="a" me={me} />);
+    const { host } = mount(<ShellSidebar items={items} currentId="a" />);
     const target = row(host, "取材メモ");
     expect(target.hasAttribute("draggable")).toBe(false);
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
@@ -443,7 +603,7 @@ describe("一覧の右に並べる操作・行の削除・パネルの移動（S
   it("⌥クリック・⌥Enter で右に並べる。右に出しているページには印。side だけではメニューを出さない", () => {
     const side = { id: "c", onOpen: vi.fn() };
     const onSelect = vi.fn();
-    const { host } = mount(<ShellSidebar items={items} currentId="a" onSelect={onSelect} side={side} me={me} />);
+    const { host } = mount(<ShellSidebar items={items} currentId="a" onSelect={onSelect} side={side} />);
     expect(row(host, "写真の候補").querySelector(".es-di-side")!.textContent).toBe("右に表示中");
 
     act(() => row(host, "取材メモ").querySelector<HTMLButtonElement>(".es-di")!.dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true })));
@@ -464,7 +624,7 @@ describe("一覧の右に並べる操作・行の削除・パネルの移動（S
   it("onDeleteRow を渡すと、行の「…」・右クリック・Shift+F10 のメニューは「削除」だけ。選ぶと閉じて「…」へフォーカスを戻し onDeleteRow", () => {
     const onDeleteRow = vi.fn();
     const onSelect = vi.fn();
-    const { host, render } = mount(<ShellSidebar items={items} currentId="a" onSelect={onSelect} onDeleteRow={onDeleteRow} me={me} />);
+    const { host, render } = mount(<ShellSidebar items={items} currentId="a" onSelect={onSelect} onDeleteRow={onDeleteRow} />);
     const more = row(host, "取材メモ").querySelector<HTMLButtonElement>(".es-di-more")!;
     expect(more.getAttribute("aria-label")).toBe("取材メモ のメニュー");
     expect(more.getAttribute("aria-haspopup")).toBe("menu");
@@ -501,12 +661,12 @@ describe("一覧の右に並べる操作・行の削除・パネルの移動（S
     expect(row(host, "取材メモ").hasAttribute("draggable")).toBe(false);
 
     // 題名のない行は「無題 のメニュー」
-    render(<ShellSidebar items={[{ id: "d", title: "", when: "今" }]} onDeleteRow={onDeleteRow} me={me} />);
+    render(<ShellSidebar items={[{ id: "d", title: "", when: "今" }]} onDeleteRow={onDeleteRow} />);
     expect(host.querySelector(".es-di-more")!.getAttribute("aria-label")).toBe("無題 のメニュー");
   });
 
   it("行のドラッグはページ用の型を載せる（検索の結果のように並べ替えない行でも）", () => {
-    const { host } = mount(<ShellSidebar items={items} currentId="a" side={{ onOpen: vi.fn() }} me={me} />);
+    const { host } = mount(<ShellSidebar items={items} currentId="a" side={{ onOpen: vi.fn() }} />);
     const target = row(host, "取材メモ");
     expect(target.getAttribute("draggable")).toBe("true");
     const data = transfer();
@@ -516,14 +676,14 @@ describe("一覧の右に並べる操作・行の削除・パネルの移動（S
   });
 
   it("並べ替えもできる一覧では、並べ替えの値（text/plain）とページ用の型の両方を載せる", () => {
-    const { host } = mount(<ShellSidebar items={items} currentId="a" onDrop={vi.fn()} side={{ onOpen: vi.fn() }} me={me} />);
+    const { host } = mount(<ShellSidebar items={items} currentId="a" onDrop={vi.fn()} side={{ onOpen: vi.fn() }} />);
     const data = transfer();
     drag(row(host, "取材メモ"), "dragstart", data);
     expect(data.store).toEqual({ "text/plain": "b", [SHELL_DND.page]: "b" });
   });
 
   it("panel を渡すと、上段を掴んで動かせる（移すメニューは無い。ドラッグだけ）", () => {
-    const { host } = mount(<ShellSidebar items={items} panel me={me} />);
+    const { host } = mount(<ShellSidebar items={items} panel />);
     const top = host.querySelector<HTMLElement>(".es-sb-top")!;
     expect(top.getAttribute("draggable")).toBe("true");
     expect(top.querySelector(".es-grip")).not.toBeNull();
@@ -531,26 +691,39 @@ describe("一覧の右に並べる操作・行の削除・パネルの移動（S
     drag(top, "dragstart", data);
     expect(data.store[SHELL_DND.list]).toBe("list");
     expect(host.querySelector('button[aria-label="一覧のメニュー"]')).toBeNull();
-    const plain = mount(<ShellSidebar items={items} me={me} />).host.querySelector<HTMLElement>(".es-sb-top")!;
+    const plain = mount(<ShellSidebar items={items} />).host.querySelector<HTMLElement>(".es-sb-top")!;
     expect(plain.hasAttribute("draggable")).toBe(false);
     expect(plain.querySelector(".es-grip")).toBeNull();
   });
 });
 
-describe("shell.css の分割ビュー", () => {
+describe("shell.css のパネルの配置", () => {
   const css = readFileSync(path.resolve(__dirname, "../styles/shell.css"), "utf8");
   const P = ":where([data-docs-app-root]):where([data-docs-shared-ui]) ";
   const D = `${P}.es-root[data-layout="dock"][data-wide="true"]`;
 
-  it("一覧の包みは 900px 未満（wide でない）では display:contents。grid に並べるのはデスクトップだけ", () => {
-    expect(css).toContain(`${P}.es-root .es-pane{display:contents}`);
+  it("デスクトップのパネルは .es-ws の中の絶対配置（位置は style）。900px 未満の決まりは 1 か所のまま", () => {
+    expect(css).toContain(`${D} .es-ws{position:relative}`);
     expect(css).toContain(`${D} .es-doc,${D} .es-dbody{display:contents}`);
-    // 900px 未満の決まりは 1 か所のまま（分割ビューの規則は @media (max-width:900px) に入れない）
+    expect(css).toMatch(/\[data-wide="true"\] \.es-pn\{position:absolute;/);
+    expect(css).toContain(`${D} .es-pn[data-dock="left"]{left:0;`);
+    expect(css).toContain(`${D} .es-pn[data-dock="right"]{right:0;`);
     expect(css.match(/@media \(max-width:900px\)/g)).toHaveLength(1);
+    // 900px 未満: 一覧は従来どおり一覧そのものが全画面、ほかのパネルはヘッダーの下の全画面
+    const narrow = css.slice(css.indexOf("@media (max-width:900px)"));
+    expect(narrow).toContain(`${P}.es-root[data-layout="dock"] .es-pn[data-panel="list"]{display:contents}`);
+    expect(narrow).toMatch(/\[data-layout="dock"\] \.es-pn\{position:absolute;left:0;right:0;top:var\(--es-header\);bottom:0;/);
   });
 
-  it("浮かせた AI は本文と同じ幅（最大 680px）で、本文の下に浮かべた高さぶんの余白を足す", () => {
-    expect(css).toMatch(/\[data-dock="float"\]\{[^}]*width:min\(680px,calc\(100% - 48px\)\)/);
-    expect(css).toMatch(/\[data-ai="float"\] \.es-canvas\{padding-bottom:calc\(var\(--es-float-h,72px\) \+ 40px\)/);
+  it("アプリ名の帯は左上端、設定の帯は左下。左のドックが無いときは中央のヘッダーの左を空ける（900px 未満は空けない）", () => {
+    expect(css).toMatch(/\.es-root \.es-brandbar\{position:absolute;left:0;top:0;/);
+    expect(css).toMatch(/\.es-root \.es-setbar\{position:absolute;left:0;bottom:0;/);
+    expect(css).toContain(`${P}.es-root[data-left="none"] .es-dt{padding-left:112px}`);
+    const narrow = css.slice(css.indexOf("@media (max-width:900px)"));
+    expect(narrow).toContain(`${P}.es-root[data-left="none"] .es-dt{padding-left:6px}`);
+    expect(narrow).toContain(`${P}.es-root[data-view="list"] .es-brandbar{display:flex;width:100%;border-right:0}`);
+    // 浮かせた AI の規則は無い
+    expect(css).not.toContain('[data-dock="float"]');
+    expect(css).not.toContain("--es-float-h");
   });
 });
