@@ -30,6 +30,8 @@ export type ApiErrorCode =
   | "too_deep"
   | "cycle"
   | "not_folder"
+  | "not_page"
+  | "order"
   | "payload_too_large"
   | "page_full"
   | "unrestorable"
@@ -49,6 +51,10 @@ const STATUS: Record<ApiErrorCode, number> = {
   cycle: 409,
   // 入れ先がフォルダでない・フォルダをフォルダへ入れる移動（親になれるのはフォルダだけ）
   not_folder: 409,
+  // タブの移動で、動かすものがタブでない・入れ先が入れ物でない（#307）
+  not_page: 409,
+  // タブの並びの要求が、入れ物の生きているタブ全部と合わない（#307）
+  order: 409,
   payload_too_large: 413,
   page_full: 413,
   // 今の形では保存できない古い版には戻さない

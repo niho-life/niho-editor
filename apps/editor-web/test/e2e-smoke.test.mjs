@@ -242,7 +242,8 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.doesNotMatch(html, /synthetic list 100/, "only the first chunk is rendered");
     assert.doesNotMatch(html, /synthetic list 149/, "the 150th page is not rendered");
 
-    const total = await pool.query("SELECT count(*)::int AS n FROM pages WHERE owner = $1 AND deleted_at IS NULL", [STUB_OWNER]);
+    // 一覧に出る行＝タブの入れ物（kind='page'。#307）を除いた生きている行
+    const total = await pool.query("SELECT count(*)::int AS n FROM pages WHERE owner = $1 AND deleted_at IS NULL AND kind <> 'page'", [STUB_OWNER]);
     const ids = [];
     let cursor = null;
     let requests = 0;

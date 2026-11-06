@@ -745,7 +745,7 @@ export async function readStepInput(
               FROM unnest($4::text[], $5::uuid[]) WITH ORDINALITY prior(step_id, page_id, ord)
               LEFT JOIN pages s ON s.owner = $1 AND s.id = prior.page_id AND s.deleted_at IS NULL), '[]'::jsonb) AS upstream,
             COALESCE((SELECT jsonb_agg(jsonb_build_object('id', s.id, 'blocks', s.blocks) ORDER BY s.created_at, s.id)
-              FROM pages s WHERE s.owner = $1 AND s.parent = p.parent AND s.deleted_at IS NULL AND s.id <> p.id), '[]'::jsonb) AS refs,
+              FROM pages s WHERE s.owner = $1 AND s.parent = p.parent AND s.deleted_at IS NULL AND s.id <> p.id AND s.kind <> 'page'), '[]'::jsonb) AS refs,
             COALESCE(f.entities, '[]'::jsonb) AS entities, COALESCE(f.terms, '[]'::jsonb) AS terms,
             e.ai_lang, e.glossary, e.about_name, e.about
        FROM pages p

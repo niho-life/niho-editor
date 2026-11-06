@@ -140,6 +140,7 @@ SELECT p.id, p.kind, p.title, p.updated_at,
           FROM pages
          WHERE owner = $1
            AND deleted_at IS NULL
+           AND kind <> 'page'
            AND search_text ILIKE $5::text ESCAPE '\'
            AND ($6::text IS NULL OR search_text ILIKE $6::text ESCAPE '\')
            AND ($7::text IS NULL OR search_text ILIKE $7::text ESCAPE '\')

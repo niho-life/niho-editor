@@ -2,6 +2,7 @@ import { isPageId } from "./store.ts";
 import {
   CONTROL_CHARACTERS,
   GET_SQL,
+  INSERT_HOLDER_SQL,
   INSERT_PAGE_SQL,
   InvalidRecordingError,
   RECORDING_COLUMNS,
@@ -129,7 +130,7 @@ function startProblem(input: StartAudioRecordingInput): string | null {
   return null;
 }
 
-type PageRow = { id: string; kind: "rec"; title: string; lang: PageLang; created_at: Date; updated_at: Date };
+type PageRow = { id: string; kind: "rec"; title: string; lang: PageLang; page: string | null; created_at: Date; updated_at: Date };
 
 function toPage(row: PageRow): RecordingPage {
   return {
@@ -137,6 +138,7 @@ function toPage(row: PageRow): RecordingPage {
     kind: "rec",
     title: row.title,
     lang: row.lang,
+    page: row.page,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -166,6 +168,7 @@ type KeyRow = RecordingRow & {
   lang: PageLang;
   page_created_at: Date;
   page_updated_at: Date;
+  holder: string | null;
   deleted: boolean;
   audio_asset: string;
   audio_request_hash: string | null;
@@ -174,7 +177,7 @@ type KeyRow = RecordingRow & {
 // 同じ owner・同じ冪等キーで作った録音（ゴミ箱のページも含めて引き、呼び出し側で conflict にする）。$1 owner / $2 key。
 const FIND_BY_KEY_SQL = `
 SELECT ${RECORDING_COLUMNS}, r.page_id, r.audio_asset, r.audio_request_hash,
-       p.title, p.lang, p.created_at AS page_created_at, p.updated_at AS page_updated_at, p.deleted_at IS NOT NULL AS deleted
+       p.title, p.lang, p.page AS holder, p.created_at AS page_created_at, p.updated_at AS page_updated_at, p.deleted_at IS NOT NULL AS deleted
   FROM page_recordings AS r
   JOIN pages AS p ON p.owner = r.owner AND p.id = r.page_id
  WHERE r.owner = $1 AND r.audio_upload_key = $2`;
@@ -194,7 +197,7 @@ async function findByKey(db: Pick<PoolClient, "query">, owner: OwnerId, key: str
   if (row.deleted || row.audio_request_hash !== requestHash) return { status: "conflict" };
   return {
     status: "existing",
-    page: toPage({ id: row.page_id, kind: "rec", title: row.title, lang: row.lang, created_at: row.page_created_at, updated_at: row.page_updated_at }),
+    page: toPage({ id: row.page_id, kind: "rec", title: row.title, lang: row.lang, page: row.holder, created_at: row.page_created_at, updated_at: row.page_updated_at }),
     recording: toRecording(row),
     assetId: row.audio_asset,
   };
@@ -222,9 +225,14 @@ export async function startAudioRecording(pool: Connectable, owner: OwnerId, inp
     }
     await client.query("BEGIN");
     try {
-      const pageResult = await client.query<PageRow>(INSERT_PAGE_SQL, [owner, input.title, input.lang]);
+      // 録音ページ＝入れ物（kind='page'）＋ 1 つ目のタブ（kind='rec'。#307）
+      const holderResult = await client.query<{ id: string }>(INSERT_HOLDER_SQL, [owner, input.title, input.lang]);
+      const holder = holderResult.rows[0];
+      if (!holder) throw new Error("editor-store: insert returned no holder");
+      const pageResult = await client.query<PageRow>(INSERT_PAGE_SQL, [owner, input.title, input.lang, holder.id]);
       const page = pageResult.rows[0];
       if (!page) throw new Error("editor-store: insert returned no page");
+      await client.query("UPDATE pages SET last_tab = $3 WHERE owner = $1 AND id = $2", [owner, holder.id, page.id]);
       await client.query(INSERT_ASSET_SQL, [page.id, owner, assetId, objectPath, input.bytes, input.sha256, input.contentType]);
       const recordingResult = await client.query<RecordingRow>(INSERT_AUDIO_RECORDING_SQL, [
         page.id,

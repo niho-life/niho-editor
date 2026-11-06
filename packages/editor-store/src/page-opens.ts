@@ -1,4 +1,4 @@
-import type { OwnerId, PageSummary, Queryable } from "./types.ts";
+import type { OwnerId, PageRole, PageSummary, Queryable } from "./types.ts";
 
 /**
  * 「最近」（表 page_opens。migration 20261101013000_folder_order_fields_opens。旧 NIHO docs の `recent.json`）。
@@ -41,6 +41,8 @@ type RecentRow = {
   parent: string | null;
   step_status: PageSummary["stepStatus"];
   sort_order: number;
+  page: string | null;
+  role: PageRole | null;
   created_at: Date;
   updated_at: Date;
   opened_at: Date;
@@ -51,9 +53,9 @@ export async function listRecentPages(db: Queryable, owner: OwnerId, options: { 
   assertOwner(owner);
   const limit = Math.max(1, Math.min(options.limit ?? RECENT_LIMIT, RECENT_LIMIT));
   const result = await db.query<RecentRow>(
-    `SELECT p.id, p.kind, p.title, p.lang, p.parent, p.step_status, p.sort_order, p.created_at, p.updated_at, o.opened_at
+    `SELECT p.id, p.kind, p.title, p.lang, p.parent, p.step_status, p.sort_order, p.page, p.role, p.created_at, p.updated_at, o.opened_at
        FROM page_opens o JOIN pages p ON p.owner = o.owner AND p.id = o.page_id
-      WHERE o.owner = $1 AND p.deleted_at IS NULL
+      WHERE o.owner = $1 AND p.deleted_at IS NULL AND p.kind <> 'page'
       ORDER BY o.opened_at DESC, p.id
       LIMIT $2`,
     [owner, limit],
@@ -66,6 +68,8 @@ export async function listRecentPages(db: Queryable, owner: OwnerId, options: { 
     parent: row.parent,
     stepStatus: row.step_status,
     sortOrder: row.sort_order,
+    page: row.page,
+    role: row.role,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     publication: null,

@@ -7,6 +7,7 @@ import {
   isPositiveInteger,
   type Block,
   type CreatePageInput,
+  type CreateTabInput,
   type PageChunkOptions,
   type PageKind,
   type PagePatch,
@@ -124,12 +125,48 @@ export function parseCreatePage(body: unknown): InputResult<CreatePageInput> {
     result.parent = parent.toLowerCase();
   }
   if (result.kind === "folder" && (result.parent !== undefined || (result.blocks !== undefined && result.blocks.length > 0))) return { ok: false };
+  // タブの入れ物（kind='page'）は 1 つ目のタブと一緒に store が作る。直には作れない（#307）
+  if (result.kind === "page") return { ok: false };
   if (Object.prototype.hasOwnProperty.call(body, "lead")) {
     const checked = parseLead(lead);
     if (!checked.ok) return { ok: false };
     result.lead = checked.value;
   }
   return { ok: true, value: result };
+}
+
+/** タブを足す（#307）。`{ title?, lang? }` だけ（本文は持たない。まっさら）。ほかの鍵は 400。 */
+export function parseCreateTab(body: unknown): InputResult<CreateTabInput> {
+  if (!isPlainObject(body)) return { ok: false };
+  const result: CreateTabInput = {};
+  for (const key of Object.keys(body)) if (key !== "title" && key !== "lang") return { ok: false };
+  if (body.title !== undefined) {
+    if (typeof body.title !== "string" || Array.from(body.title).length > 500 || body.title.includes("\u0000")) return { ok: false };
+    result.title = body.title;
+  }
+  if (body.lang !== undefined) {
+    if (body.lang !== "ja" && body.lang !== "en") return { ok: false };
+    result.lang = body.lang;
+  }
+  return { ok: true, value: result };
+}
+
+/** タブの並び（#307）。`{ ids: [uuid, ...] }`（1 つ以上・重複なし）。 */
+export function parseTabOrder(body: unknown): InputResult<string[]> {
+  if (!isPlainObject(body) || !Array.isArray(body.ids) || body.ids.length === 0 || body.ids.length > 200) return { ok: false };
+  const ids: string[] = [];
+  for (const id of body.ids) {
+    if (typeof id !== "string" || !isPageId(id)) return { ok: false };
+    ids.push(id.toLowerCase());
+  }
+  if (new Set(ids).size !== ids.length) return { ok: false };
+  return { ok: true, value: ids };
+}
+
+/** タブを別の入れ物へ移す（#307）。`{ page: uuid }`（入れ先。タブの id でもよい）。 */
+export function parseMoveTab(body: unknown): InputResult<string> {
+  if (!isPlainObject(body) || typeof body.page !== "string" || !isPageId(body.page)) return { ok: false };
+  return { ok: true, value: body.page.toLowerCase() };
 }
 
 /** 部分更新。少なくとも 1 つは指定する。 */

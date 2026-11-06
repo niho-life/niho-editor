@@ -65,7 +65,7 @@ function memoryStore(rows: Row[]) {
       const copy: Row = { ...row, id: randomUUID(), title: duplicateTitle(row.title), token: null, rotatedAt: null };
       rows.push(copy);
       const page: DuplicatedPage = {
-        id: copy.id, kind: "note", title: copy.title, lang: "ja", blocks: copy.blocks, cover: null, lead: null, parent: null, recipe: null, stepStatus: null,
+        id: copy.id, kind: "note", title: copy.title, lang: "ja", blocks: copy.blocks, cover: null, lead: null, parent: null, recipe: null, stepStatus: null, page: null,
         createdAt: copy.createdAt, updatedAt: copy.createdAt,
       };
       return page;

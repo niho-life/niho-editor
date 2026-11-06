@@ -59,7 +59,7 @@ function memoryStore(rows: Row[] = []) {
       };
       const id = randomUUID();
       rows.push({ id, owner, deleted: false, recording });
-      return { page: { id, kind: "rec", title: input.title ?? "", lang: input.lang, createdAt: now, updatedAt: now }, recording };
+      return { page: { id, kind: "rec", title: input.title ?? "", lang: input.lang, page: null, createdAt: now, updatedAt: now }, recording };
     },
     getRecording: async (owner, id) => {
       calls.push(`get:${owner}`);

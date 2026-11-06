@@ -927,7 +927,7 @@ function EditorScreen(props: ScreenProps) {
       text,
       publicationFields,
       clearCover,
-      ai: { editor, bridge: aiBridge, title, kind: page.kind === undefined || page.kind === "folder" ? "note" : page.kind, lang, diff: aiDiffBridge },
+      ai: { editor, bridge: aiBridge, title, kind: page.kind === undefined || page.kind === "folder" || page.kind === "page" ? "note" : page.kind, lang, diff: aiDiffBridge },
     }),
     [attachPage, ready, pageId, status, flush, revision, reopenHere, shared, setShared, lang, changeLang, langNote, text, publicationFields, clearCover, editor, aiBridge, aiDiffBridge, title, page.kind],
   );

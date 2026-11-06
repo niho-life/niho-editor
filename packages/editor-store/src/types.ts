@@ -1,11 +1,29 @@
 import type { Pool } from "pg";
 
 /**
- * ページの種類（見た目と初期値を決める。設計 §3）。`folder` だけは入れ物で、本文も欄も持たず、ほかの種類と行き来しない
- * （docs/architecture/editor-recipes-and-folders.md §3.2）。
+ * ページの種類（見た目と初期値を決める。設計 §3）。`folder` は入れ物で、本文も欄も持たず、ほかの種類と行き来しない
+ * （docs/architecture/editor-recipes-and-folders.md §3.2）。`page` はタブの入れ物（#307。題名・役割・並びだけを持ち、本文は持たない。
+ * 本文はその入れ物を `page` で指すタブの行にある）。
  */
-export const PAGE_KINDS = ["note", "rec", "article", "step", "folder"] as const;
+export const PAGE_KINDS = ["note", "rec", "article", "step", "folder", "page"] as const;
 export type PageKind = (typeof PAGE_KINDS)[number];
+
+/** 本文を持ち、タブになれる種類（入れ物とフォルダ以外。step は #309 までは録音のサブページのまま）。 */
+export const TAB_KINDS = ["note", "rec", "article"] as const;
+
+/**
+ * 入れ物の役割（#307。同じフォルダの中で「同じ役割のページがあればタブを足す」を決める）。
+ * 文字起こしは `{ kind: 'transcript' }`、手順の段階は `{ kind: 'step', recipe, stepId }`。
+ */
+export type PageRole = { kind: "transcript" } | { kind: "step"; recipe: string; stepId: string };
+
+/**
+ * タブが何から作られたか（#307。系譜）。文字起こしは録音のタブとエンジン、段階は run と入力のタブ（その revision）、複製は元のタブ。
+ */
+export type MadeFrom =
+  | { kind: "transcript"; recording: string; engine: string }
+  | { kind: "step"; run: string; input: string; inputRevision: number }
+  | { kind: "dup"; from: string };
 
 export const PAGE_LANGS = ["ja", "en"] as const;
 export type PageLang = (typeof PAGE_LANGS)[number];
@@ -37,6 +55,14 @@ export type Page = {
   sortOrder: number;
   /** 楽観ロックの番号。保存のたびに +1。保存の要求はこれを `baseRevision` として持ってくる。 */
   revision: number;
+  /** タブが属する入れ物（`kind='page'` の行の id）。入れ物・フォルダ・step・入れ物の無い 1 枚だけのページは null。 */
+  page: string | null;
+  /** 入れ物の役割（タブ・フォルダは null）。 */
+  role: PageRole | null;
+  /** タブが何から作られたか（入れ物・フォルダは null。人が作ったタブも null）。 */
+  madeFrom: MadeFrom | null;
+  /** 入れ物で最後に開いたタブ（入れ物以外は null）。 */
+  lastTab: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -64,6 +90,12 @@ export type PagePublicationSummary = {
  */
 export type PageSummary = Pick<Page, "id" | "kind" | "title" | "lang" | "parent" | "stepStatus" | "sortOrder" | "createdAt" | "updatedAt"> & {
   publication: PagePublicationSummary | null;
+  /** タブが属する入れ物（#307。無い・分からないときは省く）。 */
+  page?: string | null;
+  /** 入れ物の役割（#307。無い・分からないときは省く）。 */
+  role?: PageRole | null;
+  /** 入れ物のタブの数（入れ物の行だけ。`view: 'pages'` の一覧で添える）。 */
+  tabsCount?: number;
 };
 
 /** 一覧のひと区切り。next は続きを読むときに cursor に渡す値（続きが無ければ null）。 */
@@ -73,7 +105,18 @@ export type PageChunkOptions = {
   limit?: number;
   /** 前の区切りの next。無ければ先頭から。 */
   cursor?: string | null;
+  /**
+   * 何を 1 行にするか。`tabs`（既定。今までの一覧）: 本文を持つ行（タブと入れ物の無いページ）。入れ物は出さない。
+   * `pages`: 入れ物・フォルダ・入れ物の無いページ（タブは出さず、入れ物に `tabsCount`）。一覧の画面が #308 で使う。
+   */
+  view?: "tabs" | "pages";
 };
+
+/**
+ * ページを開くときの解決（#307）。id がタブならその入れ物と自分、入れ物なら最後に開いたタブ（無ければ 1 つ目）。
+ * 入れ物の無い 1 枚だけのページは `page` が null で `tab` がそのページ、`tabs` はそれ 1 つ。
+ */
+export type ResolvedPage = { page: Page | null; tab: Page; tabs: PageSummary[] };
 
 export type CreatePageInput = {
   kind?: PageKind;
@@ -83,7 +126,21 @@ export type CreatePageInput = {
   lead?: string | null;
   /** 作るときに入れるフォルダ（本人の生きている `kind='folder'` だけ。`kind='folder'` には付けられない）。 */
   parent?: string | null;
+  /** 入れ物の役割（本文を持つ種類のとき。フォルダ・step には付けられない）。 */
+  role?: PageRole | null;
 };
+
+/** タブを足す入力（#307）。`title` が無ければ空。本文は持たない（まっさら。複製は duplicatePage）。 */
+export type CreateTabInput = {
+  title?: string;
+  lang?: PageLang;
+};
+
+/**
+ * タブを別の入れ物へ移す結果（タブか入れ先が無いときは null＝同じ 404）。
+ * `not_page` は入れ先が入れ物でない・動かすものがタブでない、`same_folder_only` は別のフォルダの入れ物へは移せない（まず入れ物を移す）。
+ */
+export type MoveTabResult = "moved" | "not_page";
 
 /** 部分更新。指定したものだけを変える。 */
 export type PagePatch = {

@@ -373,7 +373,7 @@ export async function listChatWorkspace(db: Queryable, owner: OwnerId, pageId: s
   const result = await db.query<{ id: string; title: string; kind: string; parent: string | null }>(
     `SELECT id, title, kind, parent
        FROM pages
-      WHERE owner = $1 AND deleted_at IS NULL AND kind <> 'folder'
+      WHERE owner = $1 AND deleted_at IS NULL AND kind <> 'folder' AND kind <> 'page'
         AND (id = $2 OR parent = $2 OR id = (SELECT parent FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL))
       ORDER BY (id = $2) DESC, created_at
       LIMIT $3`,
@@ -400,7 +400,7 @@ export async function listReferencePages(db: Queryable, owner: OwnerId, pageId: 
   const result = await db.query<{ id: string; title: string; kind: string; blocks: unknown }>(
     `SELECT s.id, s.title, s.kind, s.blocks
        FROM pages p
-       JOIN pages s ON s.owner = p.owner AND s.parent = p.parent AND s.deleted_at IS NULL AND s.id <> p.id
+       JOIN pages s ON s.owner = p.owner AND s.parent = p.parent AND s.deleted_at IS NULL AND s.id <> p.id AND s.kind <> 'page'
       WHERE p.owner = $1 AND p.id = $2 AND p.deleted_at IS NULL AND p.parent IS NOT NULL
       ORDER BY s.created_at, s.id`,
     [owner, pageId],

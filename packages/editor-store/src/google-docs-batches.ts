@@ -217,7 +217,10 @@ async function treeRows(db: Queryable, owner: OwnerId, rootPageId: string, lock:
          FROM pages p WHERE p.owner = $1 AND p.id = $2 AND p.deleted_at IS NULL
        UNION ALL
        SELECT c.id, t.depth + 1,
-              t.path || to_char(c.sort_order, 'FM0000000000') || to_char(c.created_at, 'YYYYMMDDHH24MISSUS') || c.id::text
+              -- タブは入れ物の並びの後ろに（入れ物の並び ＋ タブの並び。store の listPageTree と同じ規則。#307）
+              t.path || COALESCE((SELECT to_char(h.sort_order, 'FM0000000000') || to_char(h.created_at, 'YYYYMMDDHH24MISSUS') || h.id::text
+                                     FROM pages h WHERE h.owner = c.owner AND h.id = c.page), '')
+                     || to_char(c.sort_order, 'FM0000000000') || to_char(c.created_at, 'YYYYMMDDHH24MISSUS') || c.id::text
          FROM pages c JOIN tree t ON c.parent = t.id
         WHERE c.owner = $1 AND c.deleted_at IS NULL AND t.depth < 2
      )
@@ -226,7 +229,8 @@ async function treeRows(db: Queryable, owner: OwnerId, rootPageId: string, lock:
             (r.page_id IS NOT NULL) AS has_transcript,
             (r.page_id IS NOT NULL) AS has_recording
        FROM tree t
-       JOIN pages p ON p.owner = $1 AND p.id = t.id AND p.deleted_at IS NULL
+       -- 入れ物（kind='page'）は本文を持たないので、件数（上限 200）にも書き出しにも入れない
+       JOIN pages p ON p.owner = $1 AND p.id = t.id AND p.deleted_at IS NULL AND p.kind <> 'page'
        LEFT JOIN page_fields f ON f.owner = p.owner AND f.page_id = p.id
        LEFT JOIN page_recordings r ON r.owner = p.owner AND r.page_id = p.id
       ORDER BY t.path

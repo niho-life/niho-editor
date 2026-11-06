@@ -53,7 +53,7 @@ function memoryStore() {
       }
       const now = new Date(0).toISOString();
       const expiresAt = new Date(input.retentionDays * 24 * 60 * 60 * 1000).toISOString();
-      const page: RecordingPage = { id: randomUUID(), kind: "rec", title: input.title, lang: input.lang, createdAt: now, updatedAt: now };
+      const page: RecordingPage = { id: randomUUID(), kind: "rec", title: input.title, lang: input.lang, page: null, createdAt: now, updatedAt: now };
       const recording: Recording = {
         revision: 1,
         source: "audio",
@@ -493,7 +493,7 @@ describe("POST /api/pages/{id}/recording/audio/complete", () => {
     rows.find((row) => row.page.id === trashed)!.deleted = true;
     const vtt = randomUUID();
     rows.push({
-      page: { id: vtt, kind: "rec", title: "", lang: "ja", createdAt: "", updatedAt: "" },
+      page: { id: vtt, kind: "rec", title: "", lang: "ja", page: null, createdAt: "", updatedAt: "" },
       owner: "user-a",
       deleted: false,
       recording: { ...rows[0]!.recording, source: "vtt", audio: null },

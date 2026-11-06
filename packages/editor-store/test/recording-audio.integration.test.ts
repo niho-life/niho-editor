@@ -324,7 +324,8 @@ describe("recording audio on PostgreSQL", { skip: databaseUrl === undefined }, (
     assert.deepEqual(statuses, ["created", "existing", "existing", "existing"]);
     const ids = new Set(results.map((result) => (result.status === "conflict" ? null : result.page.id)));
     assert.equal(ids.size, 1, "every request gets the same page");
-    for (const table of ["pages", "assets", "page_recordings"] as const) assert.equal(await count(pool, table, owner), 1, table);
+    // pages は入れ物（kind='page'）とタブの 2 行（#307）
+    for (const table of ["pages", "assets", "page_recordings"] as const) assert.equal(await count(pool, table, owner), table === "pages" ? 2 : 1, table);
   });
 
   it("marks the upload done only when the stored size matches, once, and keeps the transcript revision", async () => {
