@@ -111,9 +111,12 @@ export function createFakeClient(): AnthropicClient {
     if (last.name === "read_page") {
       const body = isRecord(last.result) ? last.result : {};
       const id = typeof body.id === "string" ? body.id : "";
-      const markdown = typeof body.markdown === "string" ? body.markdown : "";
+      // read_page は段落ごと（n・markdown）に返る。つなげて全体の本文にする
+      const paragraphs = Array.isArray(body.paragraphs) ? body.paragraphs : [];
+      const markdown = paragraphs.map((paragraph) => (isRecord(paragraph) && typeof paragraph.markdown === "string" ? paragraph.markdown : "")).join("\n\n");
       const next = markdown.trim().length > 0 ? `${markdown.trim()}\n\n${FAKE_LINE}` : FAKE_LINE;
-      return { text: "", toolCalls: [callTool("write_page", { page_id: id, markdown: next }, 3)], stopReason: "tool_use", usage };
+      const revision = typeof body.revision === "number" ? body.revision : 0;
+      return { text: "", toolCalls: [callTool("write_page", { page_id: id, markdown: next, base_revision: revision }, 3)], stopReason: "tool_use", usage };
     }
     return { text: "[fake] 本文に 1 段落足しました。元に戻せます。", toolCalls: [], stopReason: "end_turn", usage };
   };

@@ -18,16 +18,17 @@ import {
   type OwnerId,
   type Page,
   type PageVersionSummary,
+  type Recording,
   type RestoreResult,
   type SaveResult,
 } from "@niho/editor-store";
 // 画面の部品に触れない Markdown の往復（docs-ui。Mac の保管庫と同じ変換を使う）
 import { blocksToMarkdown, markdownToBlocks } from "niho-docs-ui/page/markdown";
-import { markAiInserted } from "../ai/block-diff";
+import { blockText, diffBlocks, markAiInserted } from "../ai/block-diff";
 import type { AiComposeBackend } from "../ai/config";
 import {
   MAX_CHAT_INPUT_CHARS,
-  MAX_CHAT_TOOL_CALLS,
+  MAX_TRANSCRIPT_QUERY_CHARS,
   buildChatMessages,
   buildChatSystem,
   isChatToolName,
@@ -36,7 +37,10 @@ import {
   type ChatHistoryTurn,
   type ChatItem,
   type ChatRun,
+  type ToolOutcome,
+  paragraphLabel,
 } from "../ai/chat";
+import { wrapUntrusted } from "../ai/prompt";
 import type { AiUsageReport } from "../ai/model";
 import type { AuthProvider } from "../auth/types";
 import { PAGE_BODY_MAX_BYTES, conflictResponse, errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
@@ -44,11 +48,13 @@ import { parseBlocks } from "./page-input";
 
 /**
  * AI チャット（#38）。旧アプリ（NIHO docs）の「修正の会話」と同じ動き: **AI が道具でページを直接書き換える**。
- * 提案（ai-api.ts）は採用を待つが、こちらは依頼の中でページが変わる。安全のための約束:
+ * 依頼の中でページが変わる。安全のための約束:
  *
  * - 触れるのは「開いているページ・その親・そのサブページ」だけ（`listChatWorkspace`）。
  * - 書く前に必ず今の本文を版（`ai`）に残し、その版の番号を会話に書く → 人が「元に戻す」で戻せる。
- * - 月の上限は提案と同じ意味で働く（往復のたびに見て、上限以上ならモデルを呼ばずに止める）。
+ * - 書き込み（edit_page・write_page）は AI が読んだ版（`base_revision`）が今の版と同じときだけ（#278）。
+ *   Mac CLI の書き戻し（recordDeviceChatTurn）は、CLI が読んだ版（`deviceRevisions`）をその前提に使う。
+ * - 月の上限は往復のたびに見て、上限以上ならモデルを呼ばずに止める。
  * - 鍵・プロンプト・本文はログ・エラーに出さない。会話に残すのは作業の要約（道具・ページの名前・成否）だけ。
  */
 
@@ -70,6 +76,8 @@ export type ChatConversationStore = {
   workspace: (owner: OwnerId, pageId: string) => Promise<ChatWorkspacePage[] | null>;
   /** 同じフォルダのほかのページ（読むだけで触らせる。書けるのは作業場のページだけ）。 */
   references?: (owner: OwnerId, pageId: string) => Promise<ReferencePage[] | null>;
+  /** 録音ページの文字起こし（search_transcript。渡さなければ探せない）。他人の・無いページは null。 */
+  recording?: (owner: OwnerId, pageId: string) => Promise<Recording | null>;
   history: (owner: OwnerId, pageId: string, conversationId: string) => Promise<{ messages: AiMessage[] } | null>;
   append: (owner: OwnerId, input: ChatTurnInput) => Promise<{ conversation: { id: string }; result: AiMessage } | null>;
   changes: (owner: OwnerId, pageId: string, messageId: string) => Promise<AiMessageChange[] | null>;
@@ -150,6 +158,12 @@ function toolJson(value: unknown): string {
 }
 
 const PAGE_HAS_PARTS = "このページの本文には、文字だけにできないもの（画像・録音）が入っています。この会話では直せません。";
+/** 読んだ版（base_revision）が今の版と違う（AI は読み直して書き直せる）。 */
+const PAGE_CHANGED = "本文が変わっています。read_page で読み直してください。";
+/** search_transcript が返す一致の数の上限（それより多い分は数だけ返す）。 */
+const TRANSCRIPT_MATCHES_MAX = 20;
+/** search_transcript の一致の前後に付ける文字数。 */
+const TRANSCRIPT_CONTEXT_CHARS = 200;
 
 /**
  * 道具を実行する側。触れるのは作業場のページだけで、書いたページは `changes` に積む
@@ -166,23 +180,204 @@ function withAiMarks(before: readonly Block[], after: Block[]): Block[] {
   return marked.ok ? marked.value : after;
 }
 
+function charsOf(blocks: readonly Block[]): number {
+  return blocks.reduce((total, block) => total + Array.from(blockText(block)).length, 0);
+}
+
+function isRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+/** 秒 → `hh:mm:ss`（切り捨て）。 */
+function clock(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  return [Math.floor(total / 3600), Math.floor((total % 3600) / 60), total % 60].map((part) => String(part).padStart(2, "0")).join(":");
+}
+
+/** 直した段落の番号（1 始まり。直した・消した段落は書く前の番号、足した段落は書いたあとの番号）。 */
+function changedParagraphs(before: readonly Block[], after: readonly Block[]): number[] {
+  const numbers = new Set<number>();
+  for (const hunk of diffBlocks(before, after)) numbers.add((hunk.kind === "inserted" ? hunk.afterIndex : hunk.beforeIndex) + 1);
+  return [...numbers].sort((a, b) => a - b);
+}
+
+/** `find` が `text` に一致する位置（重なりも数える）。2 つ見つかったら打ち切る。 */
+function matchesOf(text: string, find: string): number[] {
+  const found: number[] = [];
+  for (let at = text.indexOf(find); at >= 0 && found.length < 2; at = text.indexOf(find, at + 1)) found.push(at);
+  return found;
+}
+
+/**
+ * 部分置換（edit_page）の材料: 段落（ブロック）ごとの Markdown（read_page が返すのと同じ形）と、それを空行でつないだ本文。
+ * `find` はつないだ本文で探し、**一致した段落だけ**を Markdown から組み直す。ほかの段落は元のブロックをそのまま保つ
+ * （本文の全体を Markdown に書き出して読み直すと、空の段落や段落末尾の改行（hardBreak）が落ち、頼んでいない段落まで変わる）。
+ * 書き出せないブロック（画像・録音など）があれば null。
+ */
+function paragraphsOf(blocks: readonly Block[]): { parts: string[]; joined: string } | null {
+  const parts: string[] = [];
+  for (const block of blocks) {
+    const one = blocksToMarkdown([block]);
+    if (!one.ok) return null;
+    parts.push(one.markdown.replace(/\n+$/u, ""));
+  }
+  return { parts, joined: parts.join("\n\n") };
+}
+
+/**
+ * つないだ本文の中の位置 `at` から `length` 字が掛かる段落の範囲（添字は 0 始まり、両端を含む）と、先頭の段落の開始位置。
+ * 段落と段落の間の空行（2 字）は、前の段落に付けて数える（どの位置もちょうど 1 つの段落に落ちる）。
+ */
+function paragraphRange(parts: readonly string[], at: number, length: number): { from: number; to: number; start: number } {
+  const last = Math.max(0, at + length - 1);
+  let from = 0;
+  let to = 0;
+  let start = 0;
+  for (let index = 0, offset = 0; index < parts.length; index++) {
+    const next = offset + parts[index]!.length + 2;
+    if (at >= offset && (at < next || index === parts.length - 1)) {
+      from = index;
+      start = offset;
+    }
+    if (last >= offset && (last < next || index === parts.length - 1)) to = index;
+    offset = next;
+  }
+  return { from, to: Math.max(from, to), start };
+}
+
+type TranscriptMatch = { page_id: string; title: string; time: string | null; speaker: string | null; before: string; match: string; after: string };
+
+/** 録音の文字起こしの中を語句で探す（大文字・小文字は区別しない）。 */
+function searchRecording(page: { id: string; title: string }, recording: Recording, query: string, room: number): { total: number; matches: TranscriptMatch[] } {
+  const offsets: number[] = [];
+  let text = "";
+  for (const segment of recording.segments) {
+    if (text.length > 0) text += "\n";
+    offsets.push(text.length);
+    text += segment.text;
+  }
+  const lower = text.toLowerCase();
+  // 小文字にして長さが変わる文字があるときは、そのまま探す（位置がずれないように）
+  const [hay, needle] = lower.length === text.length ? [lower, query.toLowerCase()] : [text, query];
+  const matches: TranscriptMatch[] = [];
+  let total = 0;
+  for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + needle.length)) {
+    total += 1;
+    if (matches.length >= room) continue;
+    let index = 0;
+    while (index + 1 < offsets.length && offsets[index + 1]! <= at) index += 1;
+    const segment = recording.segments[index]!;
+    const speaker = segment.speaker === null ? null : recording.speakerNames[String(segment.speaker)]?.trim() || `話者 ${segment.speaker}`;
+    matches.push({
+      page_id: page.id,
+      title: page.title || "（題名なし）",
+      time: segment.start === null ? null : clock(segment.start),
+      speaker,
+      before: Array.from(text.slice(0, at)).slice(-TRANSCRIPT_CONTEXT_CHARS).join(""),
+      match: text.slice(at, at + needle.length),
+      after: Array.from(text.slice(at + needle.length)).slice(0, TRANSCRIPT_CONTEXT_CHARS).join(""),
+    });
+  }
+  return { total, matches };
+}
+
 function createToolRunner(deps: {
   store: ChatPagesStore;
   owner: OwnerId;
   workspace: WorkspaceEntry[];
   changes: Map<string, ChatChangeInput & { title: string }>;
-  /** Device turns must save against the revision the CLI actually read. */
+  /** 録音の文字起こし（search_transcript）。渡さなければ探せない。 */
+  recording?: ChatConversationStore["recording"];
+  /**
+   * Device turns save against the revision the CLI actually read. The Mac CLI write-back has no `base_revision`
+   * in its input, so this map is its base (unchanged from before #278).
+   */
   deviceRevisions?: ReadonlyMap<string, number>;
-}) {
+}): (call: { name: string; input: unknown }) => Promise<ToolOutcome & { conflict?: true }> {
   const { store, owner } = deps;
   const find = (id: unknown) => (typeof id === "string" ? deps.workspace.find((page) => page.id === id) : undefined);
+
+  /**
+   * 書き込みの共通の道（write_page・edit_page）: 読んだ版の確認 → 本文の検査 → 版を残す → 保存 → `changes` に積む。
+   * `next` は書いたあとの本文の全体（Markdown）。
+   */
+  const commit = async (
+    target: WorkspaceEntry,
+    current: Page,
+    before: string,
+    next: string,
+    blocks: { value: Block[] },
+    base: number,
+    device: boolean,
+  ): Promise<{ ok: false; outcome: ToolOutcome & { conflict?: true } } | { ok: true; saved: Page; blocks: Block[]; chars: number; delta: number }> => {
+    // 書く前の本文を版に残す（人が元に戻せる）
+    const version = await store.createVersion(owner, target.id, "ai");
+    if (!version) return { ok: false, outcome: { ok: false, result: "そのページはもうありません。", page: current.title } };
+    const saved = await store.savePage(owner, target.id, { blocks: withAiMarks(current.blocks, blocks.value) }, { baseRevision: base });
+    if (!saved) return { ok: false, outcome: { ok: false, result: "そのページはもうありません。", page: current.title } };
+    if (saved.status === "page_full") return { ok: false, outcome: { ok: false, result: "ページ全体の30 MiB上限を超えるため保存できませんでした。本文や画像を減らしてください。", page: current.title } };
+    if (saved.status !== "saved") {
+      return { ok: false, outcome: { ok: false, result: device ? "別の画面で保存されたので書けませんでした。read_page で読み直してください。" : PAGE_CHANGED, page: current.title, conflict: true } };
+    }
+    const chars = Array.from(next).length;
+    const delta = chars - Array.from(before).length;
+    const existing = deps.changes.get(target.id);
+    deps.changes.set(target.id, {
+      pageId: target.id,
+      title: current.title,
+      change: existing?.change ?? "edited",
+      // 版は依頼の中で最初に書いたときのもの（依頼の前の本文）
+      version: existing?.version ?? version.version,
+      revision: saved.page.revision,
+      chars,
+      delta: existing ? existing.delta + delta : delta,
+    });
+    return { ok: true, saved: saved.page, blocks: blocks.value, chars, delta };
+  };
+
+  /** 書いたあとの本文（Markdown）を保存できる blocks にする。 */
+  const parseNext = (next: string, title: string): { ok: true; value: Block[] } | { ok: false; outcome: ToolOutcome } => {
+    // AI は記事の先頭に `#` の題名を付けがちなので、見出しの段階は 2・3 にそろえる（画像などの対応外は断る）
+    const parsed = markdownToBlocks(next, { headings: "clamp" });
+    if (!parsed.ok) return { ok: false, outcome: { ok: false, result: `本文を読めませんでした: ${parsed.reason}`, page: title } };
+    const blocks = parseBlocks(parsed.blocks);
+    if (!blocks.ok) return { ok: false, outcome: { ok: false, result: "本文が大きすぎるか、保存できない形です。", page: title } };
+    return { ok: true, value: blocks.value };
+  };
+
+  /** 書き込みの前の確認（作業場・書けるか・読んだ版）。通れば今のページと本文の Markdown。 */
+  const prepareWrite = async (
+    input: Record<string, unknown>,
+  ): Promise<{ ok: false; outcome: ToolOutcome & { conflict?: true } } | { ok: true; target: WorkspaceEntry; current: Page; before: string; base: number; device: boolean }> => {
+    const target = find(input.page_id);
+    if (!target) return { ok: false, outcome: { ok: false, result: "そのページは、この会話では書けません。list_pages の id を使ってください。" } };
+    if (!target.writable) return { ok: false, outcome: { ok: false, result: "そのページは読むだけです（同じフォルダのほかのページ）。書けるのは開いているページとその親・サブページだけです。", page: target.title } };
+    const deviceRevision = deps.deviceRevisions?.get(target.id);
+    const device = deviceRevision !== undefined;
+    // Mac CLI の書き戻しは base_revision を持たない（CLI が読んだ版＝deviceRevisions が前提）
+    const base = deviceRevision ?? (isRevision(input.base_revision) ? input.base_revision : undefined);
+    if (base === undefined) return { ok: false, outcome: { ok: false, result: "base_revision に、read_page で返った revision を渡してください。", page: target.title } };
+    const current = await store.getPage(owner, target.id);
+    if (!current) return { ok: false, outcome: { ok: false, result: "そのページはもうありません。", page: target.title } };
+    if (current.revision !== base) {
+      return { ok: false, outcome: { ok: false, result: device ? "別の画面で保存されたので書けませんでした。" : PAGE_CHANGED, page: current.title, conflict: true } };
+    }
+    const before = blocksToMarkdown(current.blocks);
+    if (!before.ok) return { ok: false, outcome: { ok: false, result: PAGE_HAS_PARTS, page: current.title } };
+    return { ok: true, target, current, before: before.markdown, base, device };
+  };
 
   return async (call: { name: string; input: unknown }) => {
     const input = isPlainObject(call.input) ? call.input : {};
     if (!isChatToolName(call.name)) return { ok: false, result: "その道具はありません。" };
 
     if (call.name === "list_pages") {
-      const pages = deps.workspace.map((page) => ({ id: page.id, title: page.title || "（題名なし）", kind: page.kind, open: page.open, writable: page.writable }));
+      const pages = [];
+      for (const page of deps.workspace) {
+        const current = await store.getPage(owner, page.id);
+        if (!current) continue;
+        pages.push({ id: page.id, title: page.title || "（題名なし）", kind: page.kind, open: page.open, writable: page.writable, chars: charsOf(current.blocks), revision: current.revision });
+      }
       return { ok: true, result: toolJson({ pages }) };
     }
 
@@ -193,48 +388,109 @@ function createToolRunner(deps: {
       if (!page) return { ok: false, result: "そのページはもうありません。", page: target.title };
       const markdown = blocksToMarkdown(page.blocks);
       if (!markdown.ok) return { ok: false, result: PAGE_HAS_PARTS, page: page.title };
-      return { ok: true, result: toolJson({ id: page.id, title: page.title, markdown: markdown.markdown }), page: page.title };
+      const total = page.blocks.length;
+      for (const key of ["from", "to"] as const) {
+        if (input[key] !== undefined && !isRevision(input[key])) return { ok: false, result: `${key} には 1 以上の段落の番号を渡してください。`, page: page.title };
+      }
+      const ranged = input.from !== undefined || input.to !== undefined;
+      const from = isRevision(input.from) ? input.from : 1;
+      const to = isRevision(input.to) ? input.to : total;
+      if (ranged && isRevision(input.from) && isRevision(input.to) && from > to) {
+        return { ok: false, result: `from（${from}）は to（${to}）以下にしてください。`, page: page.title };
+      }
+      if (ranged && (from > total || to > total)) return { ok: false, result: `範囲が本文の外です。この本文は ${total} 段落です。`, page: page.title };
+      const paragraphs = [];
+      for (let index = from - 1; index < to; index++) {
+        const one = blocksToMarkdown([page.blocks[index]!]);
+        if (!one.ok) return { ok: false, result: PAGE_HAS_PARTS, page: page.title };
+        paragraphs.push({ n: index + 1, markdown: one.markdown.replace(/\n+$/u, "") });
+      }
+      return { ok: true, result: toolJson({ id: page.id, title: page.title, revision: page.revision, total, from: Math.min(from, total), to, paragraphs }), page: page.title };
+    }
+
+    if (call.name === "edit_page") {
+      if (typeof input.find !== "string" || input.find.length === 0) return { ok: false, result: "find に、本文の中の置き換える文字列を渡してください。" };
+      if (typeof input.replace !== "string") return { ok: false, result: "replace に、置き換えたあとの文字列を渡してください。" };
+      const ready = await prepareWrite(input);
+      if (!ready.ok) return ready.outcome;
+      // 段落ごとの Markdown で探し、一致した段落だけを組み直す（ほかの段落は元のブロックのまま）
+      const paragraphsNow = paragraphsOf(ready.current.blocks);
+      if (!paragraphsNow) return { ok: false, result: PAGE_HAS_PARTS, page: ready.current.title };
+      const found = matchesOf(paragraphsNow.joined, input.find);
+      if (found.length === 0) {
+        return { ok: false, result: "find が本文に見つかりませんでした（0 か所）。read_page で今の本文を読み、そのとおりに写してください。", page: ready.current.title };
+      }
+      if (found.length > 1) {
+        return { ok: false, result: "find が本文の 2 か所以上に一致しました。1 か所に決まるよう、前後を含めてもっと長く指定してください。", page: ready.current.title };
+      }
+      const at = found[0]!;
+      const range = paragraphRange(paragraphsNow.parts, at, input.find.length);
+      const segment = paragraphsNow.parts.slice(range.from, range.to + 1).join("\n\n");
+      const rel = at - range.start;
+      const nextSegment = segment.slice(0, rel) + input.replace + segment.slice(rel + input.find.length);
+      const replaced = parseNext(nextSegment, ready.current.title);
+      if (!replaced.ok) return replaced.outcome;
+      // 対象外の段落は元のブロックをそのまま継ぐ。ページ全体の大きさの上限はここで見る
+      const checked = parseBlocks([...ready.current.blocks.slice(0, range.from), ...replaced.value, ...ready.current.blocks.slice(range.to + 1)]);
+      if (!checked.ok) return { ok: false, result: "本文が大きすぎるか、保存できない形です。", page: ready.current.title };
+      const next = [...paragraphsNow.parts.slice(0, range.from), nextSegment, ...paragraphsNow.parts.slice(range.to + 1)].join("\n\n");
+      const written = await commit(ready.target, ready.current, paragraphsNow.joined, next, { value: checked.value }, ready.base, ready.device);
+      if (!written.ok) return written.outcome;
+      const paragraphs = changedParagraphs(ready.current.blocks, written.blocks);
+      return {
+        ok: true,
+        result: toolJson({ id: ready.target.id, revision: written.saved.revision, paragraphs, chars: written.chars, delta: written.delta }),
+        page: ready.current.title,
+        detail: `${paragraphLabel(paragraphs)}を直しました`,
+        paragraphs,
+      };
     }
 
     if (call.name === "write_page") {
+      // 確かめる順は #278 の前と同じ（作業場 → 書けるか → 本文の形 → 読んだ版。Mac CLI の書き戻しの結果を変えない）
       const target = find(input.page_id);
       if (!target) return { ok: false, result: "そのページは、この会話では書けません。list_pages の id を使ってください。" };
       if (!target.writable) return { ok: false, result: "そのページは読むだけです（同じフォルダのほかのページ）。書けるのは開いているページとその親・サブページだけです。", page: target.title };
       if (typeof input.markdown !== "string") return { ok: false, result: "markdown に本文の全体を渡してください。", page: target.title };
-      // AI は記事の先頭に `#` の題名を付けがちなので、見出しの段階は 2・3 にそろえる（画像などの対応外は断る）
-      const parsed = markdownToBlocks(input.markdown, { headings: "clamp" });
-      if (!parsed.ok) return { ok: false, result: `本文を読めませんでした: ${parsed.reason}`, page: target.title };
-      const blocks = parseBlocks(parsed.blocks);
-      if (!blocks.ok) return { ok: false, result: "本文が大きすぎるか、保存できない形です。", page: target.title };
-      const current = await store.getPage(owner, target.id);
-      if (!current) return { ok: false, result: "そのページはもうありません。", page: target.title };
-      const deviceRevision = deps.deviceRevisions?.get(target.id);
-      if (deviceRevision !== undefined && current.revision !== deviceRevision) {
-        return { ok: false, result: "別の画面で保存されたので書けませんでした。", page: current.title, conflict: true };
+      const blocks = parseNext(input.markdown, target.title);
+      if (!blocks.ok) return blocks.outcome;
+      const ready = await prepareWrite(input);
+      if (!ready.ok) return ready.outcome;
+      const written = await commit(ready.target, ready.current, ready.before, input.markdown, blocks, ready.base, ready.device);
+      if (!written.ok) return written.outcome;
+      return { ok: true, result: toolJson({ id: ready.target.id, revision: written.saved.revision, chars: written.chars, delta: written.delta }), page: ready.current.title };
+    }
+
+    if (call.name === "search_transcript") {
+      const query = typeof input.query === "string" ? input.query.trim() : "";
+      const length = Array.from(query).length;
+      if (length === 0 || length > MAX_TRANSCRIPT_QUERY_CHARS) return { ok: false, result: `query に探す語句（1〜${MAX_TRANSCRIPT_QUERY_CHARS} 字）を渡してください。` };
+      let candidates = deps.workspace.filter((page) => page.kind === "rec");
+      if (input.page_id !== undefined) {
+        const target = find(input.page_id);
+        if (!target || target.kind !== "rec") return { ok: false, result: "そのページは、この会話で探せる録音ではありません。list_pages の kind が rec のページの id を使ってください。" };
+        candidates = [target];
       }
-      const before = blocksToMarkdown(current.blocks);
-      if (!before.ok) return { ok: false, result: PAGE_HAS_PARTS, page: current.title };
-      // 書く前の本文を版に残す（人が元に戻せる）
-      const version = await store.createVersion(owner, target.id, "ai");
-      if (!version) return { ok: false, result: "そのページはもうありません。", page: current.title };
-      const saved = await store.savePage(owner, target.id, { blocks: withAiMarks(current.blocks, blocks.value) }, { baseRevision: deviceRevision ?? current.revision });
-      if (!saved) return { ok: false, result: "そのページはもうありません。", page: current.title };
-      if (saved.status === "page_full") return { ok: false, result: "ページ全体の30 MiB上限を超えるため保存できませんでした。本文や画像を減らしてください。", page: current.title };
-      if (saved.status !== "saved") return { ok: false, result: "別の画面で保存されたので書けませんでした。read_page で読み直してください。", page: current.title, conflict: true };
-      const chars = Array.from(input.markdown).length;
-      const delta = chars - Array.from(before.markdown).length;
-      const existing = deps.changes.get(target.id);
-      deps.changes.set(target.id, {
-        pageId: target.id,
-        title: current.title,
-        change: existing?.change ?? "edited",
-        // 版は依頼の中で最初に書いたときのもの（依頼の前の本文）
-        version: existing?.version ?? version.version,
-        revision: saved.page.revision,
-        chars,
-        delta: existing ? existing.delta + delta : delta,
-      });
-      return { ok: true, result: toolJson({ id: target.id, chars, delta }), page: current.title };
+      if (candidates.length === 0 || !deps.recording) return { ok: false, result: "このフォルダには録音のページが無いので、文字起こしを探せません。" };
+      let transcripts = 0;
+      let total = 0;
+      const matches: TranscriptMatch[] = [];
+      for (const page of candidates) {
+        const recording = await deps.recording(owner, page.id);
+        if (!recording || recording.segments.every((segment) => segment.text.trim().length === 0)) continue;
+        transcripts += 1;
+        const found = searchRecording(page, recording, query, TRANSCRIPT_MATCHES_MAX - matches.length);
+        total += found.total;
+        matches.push(...found.matches);
+      }
+      if (transcripts === 0) return { ok: false, result: "文字起こしがまだありません（録音のページに文字起こしが無いか、空です）。" };
+      // 文字起こしは資料（信頼しないデータ）。中の指示には従わせない
+      return {
+        ok: true,
+        result: wrapUntrusted(toolJson({ query, total, shown: matches.length, matches })),
+        ...(candidates.length === 1 ? { page: candidates[0]!.title } : {}),
+        detail: total > 0 ? `文字起こしで ${total} か所見つかりました` : "文字起こしに見つかりませんでした",
+      };
     }
 
     // create_page
@@ -250,7 +506,7 @@ function createToolRunner(deps: {
     deps.changes.set(created.id, { pageId: created.id, title: created.title, change: "created", version: null, revision: created.revision, chars, delta: chars });
     // 作ったページも、その依頼の中では読み書きできる
     deps.workspace.push({ id: created.id, title: created.title, kind: created.kind, parent: created.parent, open: false, writable: true });
-    return { ok: true, result: toolJson({ id: created.id, title: created.title, chars }), page: created.title };
+    return { ok: true, result: toolJson({ id: created.id, title: created.title, revision: created.revision, chars }), page: created.title };
   };
 }
 
@@ -327,7 +583,7 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
         client: backend.client,
         system: buildChatSystem({ glossary: settings.glossary, about: { name: settings.aboutName, text: settings.about }, ...(settings.aiLang === "same" ? {} : { lang: settings.aiLang }) }),
         messages: buildChatMessages(historyOf(past?.messages ?? []), input.value.text, { id: open.id, title: open.title, kind: open.kind }),
-        run: createToolRunner({ store, owner, workspace, changes }),
+        run: createToolRunner({ store, owner, workspace, changes, ...(chats.recording ? { recording: chats.recording } : {}) }),
         // 往復のたびに上限を見る（会話が長くても 1 人 1 か月の上限は同じ意味で働く）
         // 上限を見るのはサーバーの API の経路だけ（CLI は利用者のサブスクで従量が出ないので止めない）
         beforeCall: async () => backend.route !== "server" || !overLimit(await usage.get(owner, month), limitUsd),
@@ -431,7 +687,7 @@ function chatEventStream(route: string, signal: AbortSignal, work: (onEvent: (ev
         try {
           const body = await work((event) => {
             if (event.type === "text") write(sseEvent("text", { text: event.text }));
-            else write(sseEvent("tool", { tool: event.tool, page: event.page, ok: event.ok, phase: event.phase }));
+            else write(sseEvent("tool", { tool: event.tool, page: event.page, ok: event.ok, phase: event.phase, ...(event.detail ? { detail: event.detail } : {}) }));
           });
           write(sseEvent("done", body));
         } catch (error) {
@@ -464,6 +720,12 @@ type DeviceTurnInput = {
   writes: { pageId: string; markdown: string; baseRevision: number }[];
 };
 
+/**
+ * CLI の書き戻しで受けるページの数の上限。#278 で道具の上限（MAX_CHAT_TOOL_CALLS）を 12 → 40 に上げたが、
+ * Mac CLI の経路は変えないので、前と同じ 12 のまま固定する。
+ */
+const MAX_DEVICE_TURN_WRITES = 12;
+
 /** エンジンの短い id（鍵・端末の情報を入れない）。 */
 const ENGINE_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,95}$/;
 
@@ -475,7 +737,7 @@ function parseDeviceTurnBody(body: unknown): { ok: true; value: DeviceTurnInput 
   if (body.reply !== undefined && typeof body.reply !== "string") return { ok: false };
   const reply = typeof body.reply === "string" ? body.reply.trim() : "";
   if (Array.from(reply).length > MESSAGE_TEXT_MAX_CHARS) return { ok: false };
-  if (!Array.isArray(body.writes) || body.writes.length > MAX_CHAT_TOOL_CALLS) return { ok: false };
+  if (!Array.isArray(body.writes) || body.writes.length > MAX_DEVICE_TURN_WRITES) return { ok: false };
   const writes: DeviceTurnInput["writes"] = [];
   for (const raw of body.writes) {
     if (!isPlainObject(raw) || !hasOnlyKeys(raw, ["pageId", "markdown", "baseRevision"])) return { ok: false };
