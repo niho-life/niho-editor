@@ -244,6 +244,25 @@ export async function listAiChats(pageId: string, options: { signal?: AbortSigna
   return conversations as AiChatSummary[];
 }
 
+/** Mac の CLI に渡す文脈の 1 ファイル（`context/<name>.md`）。サーバー経路が指示に入れる節と同じもの。 */
+export type AiContextFile = { name: string; title: string; markdown: string };
+
+const CONTEXT_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/** Mac の CLI に渡す文脈（あなたについて・この録音について・文書ガイド・固有名詞。無いものは含まれない）。 */
+export async function fetchAiChatContext(pageId: string, options: { signal?: AbortSignal } = {}): Promise<AiContextFile[]> {
+  const data = await get(pagePath(pageId, "/ai/context"), options.signal);
+  if (!isRecord(data) || !Array.isArray(data.context)) throw new AiRequestError("failed");
+  const files: AiContextFile[] = [];
+  for (const item of data.context) {
+    if (!isRecord(item) || typeof item.name !== "string" || !CONTEXT_NAME.test(item.name) || typeof item.title !== "string" || typeof item.markdown !== "string") {
+      throw new AiRequestError("failed");
+    }
+    files.push({ name: item.name, title: item.title, markdown: item.markdown });
+  }
+  return files;
+}
+
 /** 1 つの会話とその発言（古い順）。 */
 export async function getAiChat(pageId: string, conversationId: string, options: { signal?: AbortSignal } = {}): Promise<AiChat> {
   const data = await get(pagePath(pageId, `/ai/conversations/${encodeURIComponent(conversationId)}`), options.signal);

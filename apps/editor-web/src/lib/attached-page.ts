@@ -49,6 +49,8 @@ export type AttachedAiStep = {
 
 export type AttachedAiSteps = {
   ownerId: string;
+  /** 最新の run に文書ガイドがあれば、その手順の名前（AI の欄の「読むもの」の札）。無ければ null。 */
+  guide: string | null;
   options: readonly AttachedAiStep[];
   start: (id: string) => Promise<{ ok: boolean; message: string }>;
 };

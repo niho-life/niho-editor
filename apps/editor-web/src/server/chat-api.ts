@@ -33,9 +33,13 @@ import {
   WEB_SEARCH_COST_MICRO_USD,
   buildChatMessages,
   buildChatSystem,
+  chatContextSections,
   isChatToolName,
   runChatTurn,
+  type ChatContextSection,
   type ChatEvent,
+  type ChatGuide,
+  type ChatRecordingInfo,
   type ChatHistoryTurn,
   type ChatItem,
   type ChatRun,
@@ -83,8 +87,10 @@ export type ChatConversationStore = {
   references?: (owner: OwnerId, pageId: string) => Promise<ReferencePage[] | null>;
   /** 録音ページの文字起こし（search_transcript。渡さなければ探せない）。他人の・無いページは null。 */
   recording?: (owner: OwnerId, pageId: string) => Promise<Recording | null>;
-  /** 録音ページの「この録音について」（背景・登場人物・固有名詞）。開いているのが録音ページのとき、指示の文脈に入れる。 */
+  /** 録音ページの「この録音について」（背景・登場人物・固有名詞）。開いているのが録音ページ・録音の下の段階のページのとき、指示の文脈に入れる。 */
   fields?: (owner: OwnerId, pageId: string) => Promise<PageFields>;
+  /** 最新の run の文書ガイドと手順の固有名詞（録音ページ・録音の下の段階のページで。run が無ければ null）。指示の文脈に入れる。 */
+  guide?: (owner: OwnerId, pageId: string) => Promise<ChatGuide | null>;
   history: (owner: OwnerId, pageId: string, conversationId: string) => Promise<{ messages: AiMessage[] } | null>;
   append: (owner: OwnerId, input: ChatTurnInput) => Promise<{ conversation: { id: string }; result: AiMessage } | null>;
   changes: (owner: OwnerId, pageId: string, messageId: string) => Promise<AiMessageChange[] | null>;
@@ -600,8 +606,8 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
             affordable: async () => limitUsd === null || Math.round(limitUsd * 1e6) - (await usage.get(owner, month)).costMicroUsd >= WEB_SEARCH_COST_MICRO_USD,
           }
         : "off";
-    // 開いているのが録音ページなら「この録音について」（背景・登場人物・固有名詞）も指示の文脈に入れる（AI の欄の「読むもの」と同じ）
-    const recordingInfo = open.kind === "rec" && chats.fields ? await chats.fields(owner, open.id) : null;
+    // 「この録音について」（背景・登場人物・固有名詞）と文書ガイドも指示の文脈に入れる（AI の欄の「読むもの」と同じもの）
+    const context = await loadChatContext(chats, owner, open);
     const respond = async (onEvent?: (event: ChatEvent) => void): Promise<unknown> => {
       const changes = new Map<string, ChatChangeInput & { title: string }>();
       const run = await runChatTurn({
@@ -610,7 +616,7 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
           glossary: settings.glossary,
           about: { name: settings.aboutName, text: settings.about },
           ...(settings.aiLang === "same" ? {} : { lang: settings.aiLang }),
-          ...(recordingInfo ? { recording: recordingInfo } : {}),
+          ...context,
           ...(webSearch !== undefined && webSearch !== "off" ? { webSearch: true } : {}),
         }),
         messages: buildChatMessages(historyOf(past?.messages ?? []), input.value.text, { id: open.id, title: open.title, kind: open.kind }),
@@ -668,6 +674,48 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
     // 画面が `Accept: text/event-stream` で頼んだときだけ、途中の文と道具を流す（最後の done は 200 の JSON と同じ本文）
     if (wantsEventStream(request)) return chatEventStream(route, request.signal, respond);
     return jsonResponse(200, await respond());
+  });
+}
+
+/**
+ * 指示の文脈にする「この録音について」と文書ガイド（サーバー経路の指示と Mac の `context/*.md` が同じものを使う）。
+ * 録音ページは自分の欄と最新の run のガイド、録音の下の段階のページ（記事本文など）は親の録音のものを読む。
+ * ほかのページには渡さない（執筆だけのページに録音の背景やガイドは出さない）。
+ */
+async function loadChatContext(
+  chats: ChatConversationStore,
+  owner: OwnerId,
+  open: ChatWorkspacePage,
+): Promise<{ recording?: ChatRecordingInfo; guide?: ChatGuide }> {
+  const recordingId = open.kind === "rec" ? open.id : open.kind === "step" ? open.parent : null;
+  if (!recordingId) return {};
+  const [recording, guide] = await Promise.all([chats.fields ? chats.fields(owner, recordingId) : null, chats.guide ? chats.guide(owner, open.id) : null]);
+  return { ...(recording ? { recording } : {}), ...(guide ? { guide } : {}) };
+}
+
+/**
+ * GET /api/pages/{id}/ai/context — この Mac の CLI に渡す `context/*.md`（あなたについて・この録音について・文書ガイド・固有名詞）。
+ * サーバー経路が指示に入れる節と同じもの（`chatContextSections`）を、ファイルの形（name・title・markdown）で返す。
+ * 未認証は 401、他人のページ・無いページ・フォルダは同じ 404。
+ */
+export function getAiChatContext(request: Request, id: string, deps: ChatApiDeps): Promise<Response> {
+  const route = "GET /api/pages/[id]/ai/context";
+  return guarded(route, async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    const chats = deps.conversations();
+    if (!chats) return errorResponse("unavailable");
+    const owner = session.userId;
+    const writable = await chats.workspace(owner, id);
+    const open = writable?.find((page) => page.open);
+    if (!open) return notFoundResponse();
+    const settings = (await deps.settings?.()?.(owner)) ?? DEFAULT_EDITOR_SETTINGS;
+    const sections = chatContextSections({
+      glossary: settings.glossary,
+      about: { name: settings.aboutName, text: settings.about },
+      ...(await loadChatContext(chats, owner, open)),
+    });
+    return jsonResponse(200, { context: sections.map((section: ChatContextSection) => ({ name: section.name, title: section.title, markdown: section.section })) });
   });
 }
 

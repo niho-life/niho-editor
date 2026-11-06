@@ -1,13 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import type { AiMessage, AiMessageChange, Block, ChatTurnInput, ChatWorkspacePage, CreatePageInput, Page } from "@niho/editor-store";
+import { DEFAULT_EDITOR_SETTINGS, type AiMessage, type AiMessageChange, type Block, type ChatTurnInput, type ChatWorkspacePage, type CreatePageInput, type Page } from "@niho/editor-store";
 import type { ConverseInput, Turn } from "../ai/anthropic";
 import { createFakeClient } from "../ai/fake-client";
-import { DEFAULT_EDITOR_SETTINGS } from "@niho/editor-store";
 import { diffBlocks } from "../ai/block-diff";
 import type { AiComposeBackend } from "../ai/config";
 import type { AuthProvider } from "../auth/types";
-import { recordDeviceChatTurn, runAiChat, undoAiChat, type ChatApiDeps, type ChatConversationStore, type ChatPagesStore, type ChatUsageStore } from "./chat-api";
+import { getAiChatContext, recordDeviceChatTurn, runAiChat, undoAiChat, type ChatApiDeps, type ChatConversationStore, type ChatPagesStore, type ChatUsageStore } from "./chat-api";
 
 const ORIGIN = "http://editor.test";
 const NOW = new Date("2026-11-01T03:00:00Z");
@@ -1218,6 +1217,98 @@ describe("この録音について（録音ページの背景・登場人物・�
     await chat(note.id, { text: "直して" }, deps("user-a", store, { ai: ai2, conversations: chats }));
     expect(fields).not.toHaveBeenCalled();
     expect(ai2.systems[0]).not.toContain("この録音について");
+  });
+});
+
+describe("文書ガイドを指示の文脈に入れる（#279）", () => {
+  const GUIDE = { recipeName: "合成の手順", guide: "常体でそろえる。見出しは短く。", terms: [{ term: "円覚寺", reading: "えんがくじ", variants: ["円学寺"], note: "" }] };
+  const fieldsOf = async () => ({
+    entities: [{ name: "佐藤", reading: "", role: "店主", note: "" }],
+    terms: [{ term: "北鎌倉", reading: "", variants: [], note: "" }],
+    background: "北鎌倉の珈琲店主に聞いた。",
+  });
+
+  function recWithStep() {
+    const store = memoryStore();
+    const rec = store.add("user-a", { title: "合成の録音", kind: "rec" });
+    const step = store.add("user-a", { title: "記事本文", kind: "step", parent: rec.id });
+    const note = store.add("user-a", { title: "合成のメモ" });
+    const guide = vi.fn(async (_owner: string, pageId: string) => (pageId === note.id ? null : GUIDE));
+    const fields = vi.fn(fieldsOf);
+    const chats: ChatConversationStore = { ...memoryConversations(store), fields, guide };
+    return { store, rec, step, note, guide, fields, chats };
+  }
+
+  it("手順の成果物のページ（録音の下の段階）で頼むと、親の録音の欄と最新の run のガイドが system に入る", async () => {
+    const { store, rec, step, fields, guide, chats } = recWithStep();
+    const ai = recordingBackend([turn({ text: "読みました。" })]);
+    await chat(step.id, { text: "推敲して" }, deps("user-a", store, { ai, conversations: chats }));
+    // 欄は親の録音のもの、ガイドは開いているページから引く（run は録音の下にある）
+    expect(fields).toHaveBeenCalledWith("user-a", rec.id);
+    expect(guide).toHaveBeenCalledWith("user-a", step.id);
+    const system = ai.systems[0]!;
+    expect(system).toContain("## 文書ガイド（お手本。文体・構成の指示。事実の根拠にはしない）\n<untrusted_data>\n手順: 合成の手順\n\n常体でそろえる。見出しは短く。\n</untrusted_data>");
+    expect(system).toContain("- 佐藤: 店主");
+    // 固有名詞は 録音 → 手順（run の写し）の順で並ぶ
+    expect(system.indexOf("- 北鎌倉")).toBeGreaterThan(-1);
+    expect(system.indexOf("- 北鎌倉")).toBeLessThan(system.indexOf("- 円覚寺（えんがくじ）"));
+  });
+
+  it("録音ページでも入り、ふつうのページには文書ガイドも録音の欄も出さない", async () => {
+    const { store, rec, note, fields, guide, chats } = recWithStep();
+    const onRec = recordingBackend([turn({ text: "読みました。" })]);
+    await chat(rec.id, { text: "要約して" }, deps("user-a", store, { ai: onRec, conversations: chats }));
+    expect(onRec.systems[0]).toContain("## 文書ガイド");
+
+    fields.mockClear();
+    guide.mockClear();
+    const onNote = recordingBackend([turn({ text: "読みました。" })]);
+    await chat(note.id, { text: "直して" }, deps("user-a", store, { ai: onNote, conversations: chats }));
+    expect(fields).not.toHaveBeenCalled();
+    expect(guide).not.toHaveBeenCalled();
+    expect(onNote.systems[0]).not.toContain("文書ガイド（お手本");
+    expect(onNote.systems[0]).not.toContain("この録音について");
+  });
+
+  it("run が無いとき（ガイドが null）は文書ガイドを出さず、録音の欄だけ入る", async () => {
+    const { store, rec, chats } = recWithStep();
+    const none: ChatConversationStore = { ...chats, guide: async () => null };
+    const ai = recordingBackend([turn({ text: "読みました。" })]);
+    await chat(rec.id, { text: "要約して" }, deps("user-a", store, { ai, conversations: none }));
+    expect(ai.systems[0]).not.toContain("文書ガイド（お手本");
+    expect(ai.systems[0]).toContain("## この録音について");
+  });
+
+  describe("GET /api/pages/{id}/ai/context（Mac の CLI に渡す context/*.md）", () => {
+    const settings: NonNullable<ChatApiDeps["settings"]> = () => async () => ({ ...DEFAULT_EDITOR_SETTINGS, glossary: [{ term: "材木座", reading: "", variants: [], note: "" }], aboutName: "合成の呼び名", about: "合成の自己紹介" });
+    const get = (id: string, d: ChatApiDeps) => getAiChatContext(new Request(`${ORIGIN}/api/pages/${id}/ai/context`, { headers: { host: "editor.test" } }), id, d);
+
+    it("サーバー経路の system と同じ節を、ファイル名・題名つきで返す", async () => {
+      const { store, step, chats } = recWithStep();
+      const base = deps("user-a", store, { conversations: chats });
+      const response = await get(step.id, { ...base, settings });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { context: { name: string; title: string; markdown: string }[] };
+      expect(body.context.map((file) => [file.name, file.title])).toEqual([
+        ["about", "あなたについて"],
+        ["recording", "この録音について"],
+        ["guide", "文書ガイド"],
+        ["glossary", "固有名詞と誤りやすい表記"],
+      ]);
+      const ai = recordingBackend([turn({ text: "読みました。" })]);
+      await chat(step.id, { text: "推敲して" }, { ...base, ai: () => ai, settings });
+      // 札と中身が一致する: ファイルの中身は、指示（system）にそのまま入っている節
+      for (const file of body.context) expect(ai.systems[0]).toContain(file.markdown);
+    });
+
+    it("未認証は 401、他人のページ・無いページは 404、何も無いページは空の一覧", async () => {
+      const { store, note, chats } = recWithStep();
+      expect((await get(note.id, deps(null, store, { conversations: chats }))).status).toBe(401);
+      expect((await get(note.id, deps("user-b", store, { conversations: chats }))).status).toBe(404);
+      expect((await get(randomUUID(), deps("user-a", store, { conversations: chats }))).status).toBe(404);
+      const empty = await get(note.id, deps("user-a", store, { conversations: chats }));
+      expect(await empty.json()).toEqual({ context: [] });
+    });
   });
 });
 
