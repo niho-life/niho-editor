@@ -385,6 +385,43 @@ describe("AiPanel", () => {
     expect(server.calls.filter((call) => call.url.endsWith("/ai/chat/turns"))).toHaveLength(4);
   });
 
+  it("画像のあるページも Mac CLI に niho-asset: の行で渡し、入れ子の中の画像だけ断る（#281）", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const aiTurn = vi.fn(async (turnId: string, request: Record<string, unknown>) => {
+      void turnId;
+      void request;
+      return {
+        finalEvent: { type: "Done" as const, text: "CLI の返答", stop_reason: "EndTurn" as const, session_id: null, usage: { input_tokens: 1, output_tokens: 1, cost_usd: null, model_used: "gpt-5", cost_known: false }, duration_ms: 1, continuations: 0 },
+        page: null,
+        pageRemoved: false,
+        extraFiles: 0,
+      };
+    });
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-5"], effort: true, resume: true }]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    const assetId = "0b6f1c3e-7d2a-4c1b-9e8f-2a3b4c5d6e7f";
+    let blocks: unknown[] = [{ type: "paragraph", content: [{ type: "text", text: "本文" }] }, { type: "image", attrs: { assetId, alt: "合成の写真" } }];
+    defaultServer();
+    await render(PAGE_1, context(PAGE_1, { saved: vi.fn(() => ({ title: "合成ページ", blocks: blocks as never, revision: 1 })) }));
+    await until(() => enginePill()?.textContent?.includes("Codex CLI") ?? false);
+    setValue("ですます調に");
+    await press("Enter");
+    await until(() => aiTurn.mock.calls.length === 1);
+    const sent = aiTurn.mock.calls[0]![1] as { page: { markdown: string }; instruction: string };
+    expect(sent.page.markdown).toBe(`本文\n\n![合成の写真](niho-asset:${assetId})`);
+    expect(sent.instruction).toContain("niho-asset:");
+    await until(() => logText().includes("CLI の返答を保存しました"));
+
+    blocks = [{ type: "blockquote", content: [{ type: "image", attrs: { assetId } }] }];
+    setValue("もう一度");
+    await press("Enter");
+    await until(() => container!.textContent!.includes("箇条書き・引用・囲み・表の中に画像や録音がある"));
+    expect(aiTurn.mock.calls).toHaveLength(1);
+  });
+
   it("puts the Mac route, model and effort behind one button at the bottom of the input, sends the effort, and remembers them on this Mac", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     const aiTurn = vi.fn(async (turnId: string, request: Record<string, unknown>) => {

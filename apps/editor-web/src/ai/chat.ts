@@ -48,13 +48,15 @@ export const CHAT_TOOLS: readonly unknown[] = [
   {
     name: "read_page",
     description:
-      "ページの本文を Markdown で読む。本文は段落（最上位のブロック）ごとに 1 始まりの番号（`n`）つきで返る。`from`・`to` で段落の範囲だけを読める（省くと全体）。返った `revision` を、書くときの `base_revision` に渡す。読めるのは一覧に出たページだけ。",
+      "ページの本文を Markdown で読む。本文は段落（最上位のブロック）ごとに 1 始まりの番号（`n`）つきで返る。`from`・`to` で段落の範囲だけを読める（省くと全体）。返った `revision` を、書くときの `base_revision` に渡す。読めるのは一覧に出たページだけ。画像は `![代替文](niho-asset:ID \"キャプション\")`、録音は `[録音](niho-asset:ID)` の 1 行の段落で返る（中身は見えない）。録音のページでは、文字起こしが `transcript`（区間ごとの番号 `n`・時刻・話者・文。読み取り専用）として添えられる。`transcript_from`・`transcript_to` で区間の範囲を読める（省くと 1 から最大 60 区間・12,000 字まで。`total` が全区間の数）。",
     input_schema: {
       type: "object",
       properties: {
         page_id: { type: "string", description: "一覧の id" },
         from: { type: "integer", minimum: 1, description: "読み始める段落の番号（1 始まり。省くと 1）" },
         to: { type: "integer", minimum: 1, description: "読み終える段落の番号（この段落まで含む。省くと最後）" },
+        transcript_from: { type: "integer", minimum: 1, description: "録音のページで、読み始める文字起こしの区間の番号（1 始まり。省くと 1）" },
+        transcript_to: { type: "integer", minimum: 1, description: "録音のページで、読み終える文字起こしの区間の番号（省くと上限まで）" },
       },
       required: ["page_id"],
       additionalProperties: false,
@@ -63,7 +65,7 @@ export const CHAT_TOOLS: readonly unknown[] = [
   {
     name: "edit_page",
     description:
-      "本文の一部を置き換える。`find` は本文の Markdown（read_page で読んだとおり）にちょうど 1 か所だけ一致する文字列で、その 1 か所を `replace` に置き換える。0 か所・2 か所以上なら失敗するので、前後を含めて長く指定し直す。`base_revision` には直前に read_page で返った `revision` を渡す（本文が変わっていれば失敗するので読み直す）。書く前の本文は版として残り、人が元に戻せる。",
+      "本文の一部を置き換える。`find` は本文の Markdown（read_page で読んだとおり）にちょうど 1 か所だけ一致する文字列で、その 1 か所を `replace` に置き換える。0 か所・2 か所以上なら失敗するので、前後を含めて長く指定し直す。`base_revision` には直前に read_page で返った `revision` を渡す（本文が変わっていれば失敗するので読み直す）。書く前の本文は版として残り、人が元に戻せる。`niho-asset:` の行（画像・録音）を消す置き換えは保存されない。画像を消すのは、人に頼まれて `remove_images` にその id を渡したときだけ。",
     input_schema: {
       type: "object",
       properties: {
@@ -71,6 +73,7 @@ export const CHAT_TOOLS: readonly unknown[] = [
         find: { type: "string", description: "置き換える前の文字列（本文に 1 か所だけ一致すること）" },
         replace: { type: "string", description: "置き換えたあとの文字列（Markdown）" },
         base_revision: { type: "integer", description: "直前に read_page で返った revision" },
+        remove_images: { type: "array", items: { type: "string" }, description: "消す画像の id（niho-asset: のあとの id）。人が画像を消すよう頼んだときだけ渡す" },
       },
       required: ["page_id", "find", "replace", "base_revision"],
       additionalProperties: false,
@@ -79,13 +82,14 @@ export const CHAT_TOOLS: readonly unknown[] = [
   {
     name: "write_page",
     description:
-      "ページの本文の全体を Markdown で書き直す。全体を書き直すときだけ使い、一部を直すときは edit_page を使う。本文の全体を渡すこと（一部だけ渡すと残りは消える）。`base_revision` には直前に read_page で返った `revision` を渡す。書く前の本文は版として残り、人が元に戻せる。`writable` が false のページには書けない。",
+      "ページの本文の全体を Markdown で書き直す。全体を書き直すときだけ使い、一部を直すときは edit_page を使う。本文の全体を渡すこと（一部だけ渡すと残りは消える）。`base_revision` には直前に read_page で返った `revision` を渡す。書く前の本文は版として残り、人が元に戻せる。`writable` が false のページには書けない。read_page で返った `niho-asset:` の行（画像・録音）は全部残すこと（1 つでも欠ければ保存されない）。行の位置と、画像の代替文・キャプションは変えてよい。画像を消すのは、人に頼まれて `remove_images` にその id を渡したときだけ。録音の行と文字起こしは書き換えられない。",
     input_schema: {
       type: "object",
       properties: {
         page_id: { type: "string", description: "一覧の id" },
         markdown: { type: "string", description: "置き換えたあとの本文の全体（見出しは ## と ###、箇条書きは - 、囲みは > [!note]）" },
         base_revision: { type: "integer", description: "直前に read_page で返った revision" },
+        remove_images: { type: "array", items: { type: "string" }, description: "消す画像の id（niho-asset: のあとの id）。人が画像を消すよう頼んだときだけ渡す" },
       },
       required: ["page_id", "markdown", "base_revision"],
       additionalProperties: false,
@@ -132,6 +136,8 @@ export const CHAT_RULES: readonly string[] = [
   "文字起こしを引用・確認するときは、search_transcript で原文を確かめてから書く。引用の時刻・話者は返答にだけ書き、本文には入れない。",
   "本文に URL や〔要確認〕のような印を入れない。確かめられないことは本文に書かず、返答で人に伝える。",
   "使える記法は見出し（## と ###）・段落・箇条書き・番号つき・引用・囲み（> [!note]）・太字・斜体・リンクだけ。表・コード・画像は使わない。",
+  "read_page の `niho-asset:` の行は、ページにある画像（![代替文](niho-asset:ID \"キャプション\")）と録音（[録音](niho-asset:ID)）。中身は見えない。書くときはその行を消さず、作らず、前後を空行で区切った 1 行のまま残す。動かしてよいのは行の位置と、画像の代替文・キャプションだけ。画像を消すのは人が頼んだときだけで、remove_images にその id を渡す。",
+  "録音と文字起こし（read_page の transcript・search_transcript）は読み取り専用。文字起こしを直す依頼は、この会話ではできないと返答で伝える（文字起こしの修正は段階の仕事）。文字起こしから書くときは、ほかの本文か新しいページに書く。",
   "作業報告・前置きを本文に書かない。返答には、何をどう変えたかを 1〜3 文で書く。",
   "道具を使う前に、何を読んで何をどう直すつもりかを、人に話しかける短い段落（1〜3 文）で書く。その文は画面にそのまま流れるので、『考えています』のような前置きや箇条書きの作業ログにしない。",
 ];
@@ -173,7 +179,7 @@ export function buildChatSystem(options: { glossary?: readonly GlossaryEntry[]; 
     "",
     "## 道具",
     "- list_pages: 触れるページの一覧（書けるか・字数・revision）",
-    "- read_page: 本文を段落の番号つきの Markdown で読む（from・to で範囲だけ。revision も返る）",
+    "- read_page: 本文を段落の番号つきの Markdown で読む（from・to で範囲だけ。revision も返る。画像・録音は niho-asset: の行。録音のページは文字起こしも読める）",
     "- edit_page: 本文の 1 か所だけを置き換える（find → replace。base_revision が要る。版が残るので、人は元に戻せる）",
     "- write_page: 本文の全体を書き直す（全体を書き直すときだけ。base_revision が要る。版が残る）",
     "- create_page: 新しいページを作る",
