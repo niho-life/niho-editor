@@ -25,7 +25,7 @@ const TICKET: ImageUploadTicket = {
   expiresAt: "2030-01-08T00:00:00.000Z",
   maxBytes: 1,
 };
-const IMAGE = { assetId: ASSET, pageId: PAGE, status: "ready", bytes: 1, contentType: "image/png", alt: null, credit: null, consent: false };
+const IMAGE = { assetId: ASSET, pageId: PAGE, status: "ready", bytes: 1, contentType: "image/png", alt: null, credit: null, consent: false, share: false };
 
 function respond(status: number, body: unknown) {
   return vi.fn(async () => new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
@@ -81,6 +81,13 @@ describe("image upload client", () => {
     expect(init.method).toBe("PATCH");
     // 指定した欄だけを送る
     expect(JSON.parse(init.body as string)).toEqual({ alt: "合成の写真", consent: true });
+
+    // 共有画像の許諾は別の欄（それだけを送る）。無い応答は false と読む
+    const share = respond(200, { image: { ...IMAGE, consent: true, share: true } });
+    expect(await saveImageMeta(ASSET, { share: true }, share as unknown as typeof fetch)).toMatchObject({ consent: true, share: true });
+    expect(JSON.parse((share.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)).toEqual({ share: true });
+    const { share: _share, ...older } = IMAGE;
+    expect(await completeImageUpload(PAGE, ASSET, respond(200, { image: older }) as unknown as typeof fetch)).toMatchObject({ share: false });
 
     for (const [status, body] of [
       [409, { error: "incomplete", reason: "size_mismatch" }],

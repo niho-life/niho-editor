@@ -77,6 +77,11 @@ export interface AssetRecord {
   readonly alt: string | null;
   readonly credit: string | null;
   readonly consent: boolean;
+  /**
+   * 共有画像にも使ってよい（OG 画像・`Article.image`）。掲載許諾（consent）とは別の、画像ごとの許諾。
+   * Missing means false. Only a cover with both consent and share makes the published version say `coverShareable`.
+   */
+  readonly share?: boolean;
 }
 
 /**

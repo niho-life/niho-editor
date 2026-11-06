@@ -42,6 +42,29 @@ describe("editor settings persistence (Issue #220)", { skip: databaseUrl === und
     );
   });
 
+  it("saves the public author introduction apart from the other fields, null clearing it (and the table keeps the limits)", async () => {
+    const owner = "synthetic-author-" + randomUUID();
+    const fresh = await getEditorSettings(pool, owner);
+    assert.deepEqual([fresh.authorRole, fresh.authorBio], [null, null]);
+    // The first save of a row may carry only the introduction
+    const first = await saveEditorSettings(pool, owner, { authorRole: "合成の肩書" });
+    assert.deepEqual([first.authorRole, first.authorBio], ["合成の肩書", null]);
+    const both = await saveEditorSettings(pool, owner, { authorBio: "合成の\n紹介文" });
+    assert.deepEqual([both.authorRole, both.authorBio], ["合成の肩書", "合成の 紹介文"]);
+    // Other fields leave it as it is; null clears one field only
+    assert.equal((await saveEditorSettings(pool, owner, { aboutName: "合成" })).authorRole, "合成の肩書");
+    const cleared = await saveEditorSettings(pool, owner, { authorRole: null });
+    assert.deepEqual([cleared.authorRole, cleared.authorBio], [null, "合成の 紹介文"]);
+    assert.deepEqual(await getEditorSettings(pool, owner), cleared);
+    for (const [column, length] of [["author_role", 121], ["author_bio", 601]] as const) {
+      await assert.rejects(
+        () => pool.query(`UPDATE editor_settings SET ${column} = $2 WHERE owner = $1`, [owner, "あ".repeat(length)]),
+        (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "23514",
+        column,
+      );
+    }
+  });
+
   it("keeps the Web search switch on by default and saves it apart from the other fields (#283)", async () => {
     const owner = "synthetic-web-search-" + randomUUID();
     assert.equal((await getEditorSettings(pool, owner)).webSearch, true);

@@ -6,7 +6,7 @@
 
 import { SLUG_MAX_LENGTH, SLUG_PATTERN, type Block, type Inline, type Lang } from "@niho/editor-publish-contract";
 import type { BlockType, Condition, DestinationDeclaration } from "./declaration.js";
-import { assetState, exceedsLimits, toPublishedBlocks } from "./snapshot.js";
+import { assetState, exceedsLimits, publishedAlt, toPublishedBlocks } from "./snapshot.js";
 import { cleanLine, cleanText, codePointLength, hasConfirmMarker } from "./text.js";
 import type { AssetRecord, DraftPage, Notice, Problem } from "./types.js";
 
@@ -46,6 +46,11 @@ export interface ReadinessFacts {
   readonly headings: number;
   /** Confirm markers in the body, title and lead. */
   readonly confirms: number;
+  /**
+   * Images the published version would carry (each body figure once, and the cover) whose alt text resolves to
+   * empty, by the same rule as the published version (`publishedAlt`). Missing assets are not counted (they are problems already).
+   */
+  readonly imagesWithoutAlt: number;
   /** The page title still equals a generated final-stage name. */
   readonly titleIsFinalStepName: boolean;
   /** Problems found in the body regardless of destination (unknown nodes, images, limits). */
@@ -186,6 +191,13 @@ export function collectFacts(
   if (hasConfirmMarker(lead)) confirms += 1;
 
   const cover: CoverFact = page.coverAssetId === null ? "none" : assetState(index.get(page.coverAssetId));
+  let imagesWithoutAlt = 0;
+  for (const figure of conversion.figures) {
+    const found = index.get(figure.assetId);
+    if (found && publishedAlt(figure, found) === "") imagesWithoutAlt += 1;
+  }
+  const coverAsset = page.coverAssetId === null ? undefined : index.get(page.coverAssetId);
+  if (coverAsset && publishedAlt(null, coverAsset) === "") imagesWithoutAlt += 1;
   const { category, valid: categoryValid } = categoryOf(choices.category);
   const { related, valid: relatedValid } = relatedOf(choices.related);
   return {
@@ -204,6 +216,7 @@ export function collectFacts(
     markTypes: [...markTypes],
     headings,
     confirms,
+    imagesWithoutAlt,
     titleIsFinalStepName: (serverFacts.finalStepNames ?? []).some((name) => cleanLine(name) === title),
     bodyProblems,
     notices: conversion.notices,
@@ -226,6 +239,10 @@ function conditionMet(condition: Condition, facts: ReadinessFacts): boolean {
       return facts.confirms === 0;
     case "relatedLive":
       return facts.relatedValid && facts.related.length > 0 && facts.relatedLive === true;
+    case "title":
+      return codePointLength(facts.title) <= condition.max;
+    case "images":
+      return !condition.alt || facts.imagesWithoutAlt === 0;
   }
 }
 

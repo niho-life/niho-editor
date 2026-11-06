@@ -24,7 +24,7 @@ import { EXTRA_KEYS, FIXES, type ExtraKey, type Fix } from "./types.js";
 
 export const DECLARATION_SCHEMA_VERSION = 1 as const;
 
-export const CONDITION_KINDS = ["lang", "cover", "lead", "category", "headings", "noConfirm", "relatedLive"] as const;
+export const CONDITION_KINDS = ["lang", "cover", "lead", "category", "headings", "noConfirm", "relatedLive", "title", "images"] as const;
 export type ConditionKind = (typeof CONDITION_KINDS)[number];
 
 export type BlockType = Block["type"];
@@ -48,6 +48,13 @@ export type HeadingsCondition = ConditionBase & { readonly kind: "headings"; rea
 export type NoConfirmCondition = ConditionBase & { readonly kind: "noConfirm" };
 /** At least one related experience, and the server says they are live (`null` = unknown = not met). */
 export type RelatedLiveCondition = ConditionBase & { readonly kind: "relatedLive" };
+/** The title is at most `max` characters (code points). An empty title is the built-in `title` problem. */
+export type TitleCondition = ConditionBase & { readonly kind: "title"; readonly max: number };
+/**
+ * With `alt`, every image the published version carries (each body figure and the cover) has non-empty alt
+ * text, resolved the way the published version resolves it (the node's alt, else the asset's). `alt: false` always holds.
+ */
+export type ImagesCondition = ConditionBase & { readonly kind: "images"; readonly alt: boolean };
 
 export type Condition =
   | LangCondition
@@ -56,7 +63,9 @@ export type Condition =
   | CategoryCondition
   | HeadingsCondition
   | NoConfirmCondition
-  | RelatedLiveCondition;
+  | RelatedLiveCondition
+  | TitleCondition
+  | ImagesCondition;
 
 export interface DestinationDeclaration {
   readonly schemaVersion: typeof DECLARATION_SCHEMA_VERSION;
@@ -107,6 +116,7 @@ export const DECLARATION_LIMITS = {
   maxCategoryLength: 160,
   maxLead: 10_000,
   maxHeadings: 100,
+  maxTitle: 500,
   maxHost: 253,
   maxPath: 64,
 } as const;
@@ -128,6 +138,8 @@ const KIND_KEYS: { readonly [K in ConditionKind]: { readonly allowed: readonly s
   headings: { allowed: ["min"], required: ["min"] },
   noConfirm: { allowed: [], required: [] },
   relatedLive: { allowed: [], required: [] },
+  title: { allowed: ["max"], required: ["max"] },
+  images: { allowed: ["alt"], required: ["alt"] },
 };
 
 type Fields = Readonly<Record<string, unknown>>;
@@ -300,6 +312,16 @@ function conditionAt(value: unknown, path: string, issues: Issues, ids: Set<stri
       case "relatedLive":
         condition = { ...base, kind };
         break;
+      case "title": {
+        const max = integerAt(fields.max, child(path, "max"), issues, 1, DECLARATION_LIMITS.maxTitle);
+        condition = max === undefined ? undefined : { ...base, kind, max };
+        break;
+      }
+      case "images": {
+        const alt = fields.alt === undefined ? undefined : typeof fields.alt === "boolean" ? fields.alt : issues.add(child(path, "alt"), "type");
+        condition = alt === undefined ? undefined : { ...base, kind, alt };
+        break;
+      }
     }
   }
   return issues.count === before ? condition : undefined;

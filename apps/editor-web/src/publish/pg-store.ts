@@ -172,6 +172,7 @@ function toAssetRecord(row: DraftAssetRow): AssetRecord {
     alt: row.alt,
     credit: row.credit,
     consent: row.consent,
+    share: row.share,
   };
 }
 

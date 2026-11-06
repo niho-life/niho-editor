@@ -47,6 +47,7 @@ export function SettingsHubView({ initial, audio, account }: { initial: Settings
       onWebSearch={(webSearch) => void apply({ webSearch })}
       aboutName={settings.aboutName}
       about={settings.about}
+      author={{ role: settings.authorRole, bio: settings.authorBio }}
       glossary={settings.glossary}
       recipes={settings.recipes}
       canAddRecipe={settings.recipes.length < settings.limits.recipes}

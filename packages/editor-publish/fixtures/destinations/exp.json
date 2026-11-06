@@ -17,6 +17,8 @@
     { "id": "category", "kind": "category", "oneOf": ["walks", "food", "stay"], "message": "カテゴリを選んでください", "fix": "category" },
     { "id": "headings", "kind": "headings", "min": 1, "message": "本文に見出しを 1 つ以上入れてください", "fix": "body" },
     { "id": "no-confirm", "kind": "noConfirm", "message": "未確認の印（CONFIRM）を解消してください", "fix": "body" },
-    { "id": "related-live", "kind": "relatedLive", "message": "掲載中の関連する体験を選んでください", "fix": "related" }
+    { "id": "related-live", "kind": "relatedLive", "message": "掲載中の関連する体験を選んでください", "fix": "related" },
+    { "id": "title", "kind": "title", "max": 110, "message": "題名を 110 字以内にしてください", "fix": "body" },
+    { "id": "image-alt", "kind": "images", "alt": true, "message": "写真に代替テキスト（alt）を入れてください", "fix": "body" }
   ]
 }

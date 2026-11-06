@@ -29,6 +29,8 @@ export const LIMITS: SettingsDto["limits"] = {
   instructionChars: 8_000,
   aboutChars: 2_000,
   aboutNameChars: 80,
+  authorRoleChars: 120,
+  authorBioChars: 600,
 };
 
 export { DEFAULT_RECIPE_IDS };
@@ -40,6 +42,8 @@ export function dto(patch: Partial<SettingsDto> = {}): SettingsDto {
     aboutName: "",
     about: "",
     webSearch: true,
+    authorRole: null,
+    authorBio: null,
     recipes: DEFAULT_RECIPE_IDS.map((id) => ({
       id,
       ...structuredClone(DEFAULTS[id]!),

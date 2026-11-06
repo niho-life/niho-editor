@@ -26,11 +26,15 @@ DestinationDeclaration
   requires: Condition[]
 Condition = { id, message, fix, kind, …kind ごとの引数 }
   kind: lang(equals) | cover(consent) | lead(max?) | category(oneOf?) | headings(min) | noConfirm | relatedLive
+      | title(max) | images(alt)
   fix : lang | cover | lead | category | body | related     ← 「直す」で開く欄
 ```
 
 - 語彙は閉じている。**未知の `kind`・未知のフィールド・型の違いは宣言ごと拒否**し、その発信先は「いまは公開できません」になる（無視して公開を通さない＝fail closed）。
 - 「関連する体験が掲載中」（`relatedLive`）のような外の事実は、サーバーが `facts` として渡す。`null`（不明）は**満たさない**扱い。
+- `title(max)`：題名（整えたあとの 1 行）が `max` 文字以内。数えるのは code point（絵文字・サロゲートペアも 1 字）。`max` は必須で 1〜500 の整数。空の題名はどの発信先でも要る条件（`title`）が先に止める。
+- `images(alt)`：`alt: true` なら、公開版に入る画像（本文の `figure` それぞれと `cover`）の代替テキストが空でない。代替テキストの決め方は公開版と**同じ関数**（`publishedAlt`：画像ノードの `alt` → 資産の `alt` → 空）で数えるので、「条件を満たしたのに公開版の alt が空」は起きない。カバーはノードを持たないので資産の `alt` だけを見る。見つからない資産は数えない（別の問題で止まる）。`alt: false` は常に満たす。
+- どちらも `fix` は既存の `body`（本文の画面で直す）。`fix` の語彙は増やしていない。
 
 ### 公開の前に（評価）
 
@@ -56,7 +60,9 @@ Condition = { id, message, fix, kind, …kind ごとの引数 }
 - **知らないノードは黙って落とさず、公開の前の問題（`fix: body`）にする**。録音は意図して落とし、`notices` に出す。空の段落は落とす。
 - 変換後は `markdown` を契約の `renderMarkdown` で作り、最後に契約の `parsePublishedDoc(doc, { requireProjection: true })` で自己検証する。通らなければ公開を失敗にする。
 - 公開版は深く freeze し、`fingerprint`（正規化した内容の SHA-256）を持つ。**「更新あり」は「いまの下書きの fingerprint が公開版と違う」こと**で、保存の時刻では決めない（直して元に戻せば「更新あり」でなくなる）。
-- 入力の約束：画像ノードは `attrs: { assetId, alt, caption? }`、資産は `{ id, kind, bytes, sha256, contentType, alt, credit, consent }`（#33 の編集がこの形で保存する）。
+- 入力の約束：画像ノードは `attrs: { assetId, alt, caption? }`、資産は `{ id, kind, bytes, sha256, contentType, alt, credit, consent, share? }`（#33 の編集がこの形で保存する。`share` が無い資産は false）。
+- `coverShareable`：カバーがあり、その資産が使える形で**掲載許諾（`consent`）と共有画像の許諾（`share`）の両方**を持つときだけ、公開版のトップレベルに `coverShareable: true` を入れる。それ以外は**欄そのものを出さない**（`false` を書かない）。掲載許諾は「ページに載せてよい」、共有画像の許諾は「SNS・検索結果に出る OG 画像や `Article.image` にも使ってよい」で、画像ごとに別に持つ（`assets.share`。カバーの欄の 2 つ目のチェック）。fingerprint にも値があるときだけ入れるので、許諾の無い既存のページは「更新あり」にならず、公開版と ETag も変わらない。許諾を付ければ「更新あり」になる。
+- `authorProfile`：公開した時点の著者紹介（設定 › 公開用の著者紹介の肩書 `role`・紹介文 `bio`）を、`author` と同じく公開版に固定する（あとで設定を変えても既存の公開版は変わらず、次に公開・更新したときに入る）。値は 1 行に整え、空は `null`、両方 `null` なら欄を出さない。`author` の中には入れない（`author` は入れ子の厳密なオブジェクトで、古い検証器が未知のキーで拒否するため）。著者名と同じく内容ではないので fingerprint には入れない。著者のポート（`AuthorSource.read`）が `{ name, handle, url, profile? }` を返し、`author` には契約の 3 つだけを渡す。プレビューには入れない（プレビュー token に結んでいない。公開版だけ）。
 
 ### 状態と主ボタン
 

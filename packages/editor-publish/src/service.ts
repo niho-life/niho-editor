@@ -136,9 +136,17 @@ export interface DeclarationSource {
   get(handle: string): Promise<unknown>;
 }
 
+/**
+ * The author at publish time: the contract's `Author`, plus the public introduction (肩書・紹介文) when the author
+ * wrote one. The profile is fixed into the published version like the name (later edits do not change it).
+ */
+export interface PublishAuthor extends Author {
+  readonly profile?: { readonly role: string | null; readonly bio: string | null } | null;
+}
+
 /** The author's profile at publish time. */
 export interface AuthorSource {
-  read(actorId: string): Promise<Author>;
+  read(actorId: string): Promise<PublishAuthor>;
 }
 
 export interface FactsQuery {
@@ -254,6 +262,7 @@ interface Context {
   readonly slug: unknown;
   readonly serverFacts: ServerFacts;
   readonly author: Author;
+  readonly authorProfile: NonNullable<PublishAuthor["profile"]> | null;
 }
 
 function validIds(actorId: unknown, pageId: unknown): boolean {
@@ -372,7 +381,7 @@ export class PublishService {
     if (EXTRA_KEYS.some((key) => extras[key] && !declaration.extras.includes(key))) return forbidden("extras");
 
     const serverFacts = await this.ports.facts.read({ actorId, pageId, dest, handle, related: stringsOf(settings.related), category: typeof settings.category === "string" ? settings.category : null });
-    const author = await this.ports.authors.read(actorId);
+    const read = await this.ports.authors.read(actorId);
     const context: Context = {
       mode,
       actorId,
@@ -386,7 +395,9 @@ export class PublishService {
       related: settings.related ?? [],
       slug: input.slug,
       serverFacts,
-      author,
+      // Only the contract's fields go into `author` (it is strict); the profile goes to the top-level `authorProfile`.
+      author: { name: read.name, handle: read.handle, url: read.url },
+      authorProfile: read.profile ?? null,
     };
     return this.ports.store.transaction((tx) => this.placeInTransaction(tx, context));
   }
@@ -449,6 +460,7 @@ export class PublishService {
       ...(context.serverFacts.categoryDisplay === undefined ? {} : { categoryDisplay: context.serverFacts.categoryDisplay }),
       related: facts.related,
       author: context.author,
+      authorProfile: context.authorProfile,
       version,
       publishedAt,
       updatedAt: now,

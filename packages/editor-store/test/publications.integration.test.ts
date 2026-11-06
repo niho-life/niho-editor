@@ -292,8 +292,11 @@ describe("PostgreSQL publications (0009)", { skip: databaseUrl === undefined }, 
         savedAt: saved.rows[0]!.updated_at.toISOString(),
       });
       assert.deepEqual(await listDraftAssets(pool, pageId), [
-        { id: assetId, kind: "image", bytes: 120000, sha256: fakeSha("photo"), contentType: "image/jpeg", alt: "合成の写真", credit: null, consent: true },
+        { id: assetId, kind: "image", bytes: 120000, sha256: fakeSha("photo"), contentType: "image/jpeg", alt: "合成の写真", credit: null, consent: true, share: false },
       ]);
+      // 共有画像の許諾は別の列（既定 false）
+      await pool.query("UPDATE assets SET share = true WHERE id = $1", [assetId]);
+      assert.equal((await listDraftAssets(pool, pageId))[0]?.share, true);
       assert.equal(await getDraftPage(pool, "not-a-uuid"), null);
       assert.deepEqual(await listDraftAssets(pool, "not-a-uuid"), []);
 

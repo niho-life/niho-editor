@@ -302,7 +302,7 @@ describe("the real step executor", () => {
       compose: () => ({ client: client.client, model: "claude-sonnet-5-5", provider: "claude", route: "server", engine: "anthropic:claude-sonnet-5-5" }),
       usage: () => memoryUsage(),
       limitUsd: () => null,
-      settings: () => async () => ({ aiLang: "en", glossary: [{ term: "NIHO", reading: "ニホ", variants: [], note: "" }], recipes: [], aboutName: "", about: "", webSearch: true }),
+      settings: () => async () => ({ aiLang: "en", glossary: [{ term: "NIHO", reading: "ニホ", variants: [], note: "" }], recipes: [], aboutName: "", about: "", webSearch: true, authorRole: null, authorBio: null }),
       now,
       env: {},
     });
@@ -317,7 +317,7 @@ describe("the real step executor", () => {
       compose: () => ({ client: client.client, model: "claude-sonnet-5-5", provider: "claude", route: "server", engine: "anthropic:claude-sonnet-5-5" }),
       usage: () => memoryUsage(),
       limitUsd: () => null,
-      settings: () => async () => ({ aiLang: "same", glossary: [], recipes: [], aboutName: "合成の呼び名", about: "合成の自己紹介です。", webSearch: true }),
+      settings: () => async () => ({ aiLang: "same", glossary: [], recipes: [], aboutName: "合成の呼び名", about: "合成の自己紹介です。", webSearch: true, authorRole: null, authorBio: null }),
       references: () => async () => [
         { id: "ref-1", title: "同じフォルダのページ", kind: "note", blocks: [{ type: "paragraph", content: [{ type: "text", text: "参考の本文" }] }] },
       ],

@@ -101,6 +101,12 @@ const runtimeScenarios: Readonly<Record<string, () => Outcome>> = {
   ),
   "doc-slug-too-long": () => validationOutcome(parsePublishedDoc({ ...fixtures.doc, slug: "a".repeat(161) })),
   "doc-not-json": () => validationOutcome(parsePublishedDoc({ ...fixtures.doc, version: Number.NaN })),
+  "doc-author-profile-role-too-long": () => validationOutcome(
+    parsePublishedDoc({ ...fixtures.doc, authorProfile: { role: "r".repeat(121), bio: null } }, { requireProjection: true }),
+  ),
+  "doc-author-profile-bio-at-limit-valid": () => validationOutcome(
+    parsePublishedDoc({ ...fixtures.doc, authorProfile: { role: null, bio: "海".repeat(600) } }, { requireProjection: true }),
+  ),
   "blocks-figure-without-assets": () =>
     validationOutcome(parseBlocks([{ type: "figure", assetId: "asset-figure-01", caption: null }])),
   "index-dest-mismatch": () => validationOutcome(parsePublishedIndex(fixtures.index, { dest: "exp" })),

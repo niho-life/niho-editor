@@ -8,7 +8,7 @@ import type { ShellMenuItem } from "./types";
 
 /**
  * editor.niho.life の設定（オーナー決定 2026-11-05。モック docs/mockups/editor-settings-refine-v1.html）。
- * 3 層に分ける: 一覧（EditorSettingsHub）→ 詳細ページ（あなたについて・固有名詞・手順）→ 集中編集のシート（段階の指示・文書ガイド）。
+ * 3 層に分ける: 一覧（EditorSettingsHub）→ 詳細ページ（あなたについて・公開用の著者紹介・固有名詞・手順）→ 集中編集のシート（段階の指示・文書ガイド）。
  *
  * - 一覧には変えられる物だけを行にする。行そのものが詳細へのリンク（「編集」ボタンは置かない）。提案の言語だけはその場で決める。
  * - 変えられない事実は使う場所へ移した（形式→ファイル選択の accept と断る文、上限・30 日→「データ」の ⓘ と録音の断り、
@@ -24,6 +24,9 @@ export type EditorSettingsAiLang = "same" | "ja" | "en";
 export type EditorSettingsTerm = { term: string; reading: string; variants: string[]; note: string };
 
 export type EditorSettingsAbout = { name: string; text: string };
+
+/** 公開用の著者紹介（肩書・紹介文）。画面では空文字で持ち、保存のとき空は「なし」になる。 */
+export type EditorSettingsAuthor = { role: string; bio: string };
 
 /** `chunked`: 長い入力は区切って処理する（全文を書き直す段階。editor の手順だけ。無ければ false）。 */
 export type EditorSettingsStep = { id: string; name: string; instruction: string; profile: string; chunked?: boolean };
@@ -79,6 +82,7 @@ export type EditorSettingsAudioFacts = { maxBytes: number; maxDurationSec: numbe
 export const EDITOR_SETTINGS_HREF = {
   hub: "/settings",
   about: "/settings/about",
+  author: "/settings/author",
   terms: "/settings/terms",
   recipe: (id: string) => `/settings/recipes/${encodeURIComponent(id)}`,
   /** 「アカウント」の群から入る 2 つ（URL は設定の下ではなく今のまま）。 */
@@ -98,6 +102,9 @@ export const EDITOR_SETTINGS_TEXT = {
   nearLimit: "今月の上限に近づいています。上限に届くと、月が替わるまで AI の提案を使えません",
   overLimit: "今月の上限に届いたので、月が替わるまで AI の提案を使えません",
   aboutSub: "AI に毎回渡す、あなたの説明と書き方の希望。公開はされません",
+  author: "公開用の著者紹介",
+  authorSub: "公開した記事に名前と一緒に載る肩書と紹介文。公開した時点の内容が記事に残ります（あとで直しても、公開し直すまで記事は変わりません）",
+  authorEmpty: "まだ書いていません",
   termsSub: "AI の提案と文字起こし修正に、この表記のとおりに書くよう渡します",
   termEmpty: "表記を入れてください",
   fixedSteps: "既定の手順は段階の数を変えられません",
@@ -313,6 +320,8 @@ export type EditorSettingsHubProps = {
   onWebSearch?: (on: boolean) => void;
   aboutName: string;
   about: string;
+  /** 公開用の著者紹介（肩書・紹介文。空は null）。渡したときだけ「アカウント」の群に行を出す。 */
+  author?: { role: string | null; bio: string | null };
   glossary: EditorSettingsTerm[];
   /** 効いている手順（既定の並び → 足したものの並び）。 */
   recipes: EditorSettingsRecipe[];
@@ -340,6 +349,7 @@ export function EditorSettingsHub(props: EditorSettingsHubProps) {
   const { busy, recipes, usage, storageUsage, audio, onNavigate } = props;
   const glossary = props.glossary ?? [];
   const about = aboutSummary(props.aboutName ?? "", props.about ?? "");
+  const author = props.author ? aboutSummary(props.author.role ?? "", props.author.bio ?? "") : "";
   const usageInfo = useDisclosure("使用量の内訳");
   const storageInfo = useDisclosure("保存とデータについて");
   const shown = glossary.slice(0, 4).map((entry) => entry.term);
@@ -374,6 +384,17 @@ export function EditorSettingsHub(props: EditorSettingsHubProps) {
               <Icon name="chev" />
             </span>
           </a>
+          {props.author && (
+            <a className="es-row es-row--link" {...linkTo(EDITOR_SETTINGS_HREF.author, onNavigate)}>
+              <span className="es-row-k">{EDITOR_SETTINGS_TEXT.author}</span>
+              <span className={author ? "es-row-v" : "es-row-v es-row-v--none"}>
+                <span className="es-row-1l">{author || EDITOR_SETTINGS_TEXT.authorEmpty}</span>
+              </span>
+              <span className="es-row-e">
+                <Icon name="chev" />
+              </span>
+            </a>
+          )}
         </div>
       </Group>
 
@@ -593,6 +614,67 @@ export function EditorSettingsAboutPage({ status, busy, value, onChange, limits,
           やめる
         </a>
         <button type="button" className="es-btn es-btn--primary es-btn--sm" aria-label="あなたについてを保存" {...busyProps(blocked)} onClick={() => !blocked && onSave()}>
+          保存
+        </button>
+      </div>
+    </SubPage>
+  );
+}
+
+// ===== 2b. 公開用の著者紹介（/settings/author） =====
+
+export type EditorSettingsAuthorPageProps = {
+  status: string;
+  busy: boolean;
+  value: EditorSettingsAuthor;
+  onChange: (next: EditorSettingsAuthor) => void;
+  limits: { authorRoleChars: number; authorBioChars: number };
+  onSave: () => void;
+  onNavigate: (href: string) => void;
+};
+
+export function EditorSettingsAuthorPage({ status, busy, value, onChange, limits, onSave, onNavigate }: EditorSettingsAuthorPageProps) {
+  const roleId = useId();
+  const bioId = useId();
+  const hintId = useId();
+  const roleChars = charCount(value.role);
+  const bioChars = charCount(value.bio);
+  const overRole = roleChars > limits.authorRoleChars;
+  const overBio = bioChars > limits.authorBioChars;
+  const blocked = busy || overRole || overBio;
+  return (
+    <SubPage title={EDITOR_SETTINGS_TEXT.author} sub={<span>{EDITOR_SETTINGS_TEXT.authorSub}</span>} status={status} onNavigate={onNavigate}>
+      <div className="es-form es-form--set">
+        <div className="es-field">
+          <label htmlFor={roleId}>肩書</label>
+          <input id={roleId} className="es-input" value={value.role} aria-invalid={overRole || undefined} onChange={(event) => onChange({ ...value, role: event.target.value })} />
+          <small className="es-cnt">
+            {fmt(roleChars)} / {fmt(limits.authorRoleChars)} 字
+          </small>
+        </div>
+        <div className="es-field">
+          <label htmlFor={bioId}>紹介文</label>
+          <textarea id={bioId} className="es-area" rows={5} value={value.bio} aria-describedby={hintId} aria-invalid={overBio || undefined} onChange={(event) => onChange({ ...value, bio: event.target.value })} />
+          <small id={hintId} className="es-cnt">
+            {fmt(bioChars)} / {fmt(limits.authorBioChars)} 字・改行は空白になります
+          </small>
+        </div>
+        {overRole && (
+          <p role="alert" className="es-danger">
+            肩書が長すぎるので保存できません。{fmt(limits.authorRoleChars)} 字までにしてください。
+          </p>
+        )}
+        {overBio && (
+          <p role="alert" className="es-danger">
+            紹介文が長すぎるので保存できません。{fmt(limits.authorBioChars)} 字までにしてください。
+          </p>
+        )}
+      </div>
+      <div className="es-set-foot">
+        <a className="es-btn es-btn--quiet es-btn--sm" aria-label="公開用の著者紹介の編集をやめる" {...linkTo(EDITOR_SETTINGS_HREF.hub, onNavigate)}>
+          やめる
+        </a>
+        <button type="button" className="es-btn es-btn--primary es-btn--sm" aria-label="公開用の著者紹介を保存" {...busyProps(blocked)} onClick={() => !blocked && onSave()}>
           保存
         </button>
       </div>

@@ -35,6 +35,8 @@ describe("v1 constants", () => {
       minLimit: 1,
       maxLimit: 100,
       defaultLimit: 50,
+      maxAuthorRoleChars: 120,
+      maxAuthorBioChars: 600,
     });
     expect(PREVIEW_TOKEN_MAX_TTL_SECONDS).toBe(900);
     expect(IMAGE_CONTENT_TYPES.some((type) => type.startsWith("audio/") || type.includes("svg"))).toBe(false);

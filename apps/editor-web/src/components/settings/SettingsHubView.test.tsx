@@ -63,6 +63,15 @@ describe("SettingsHubView（/settings）", () => {
     expect(logout).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the public author introduction under アカウント and links to its page", async () => {
+    await open(dto({ authorRole: "合成の案内人", authorBio: null }));
+    const row = link("公開用の著者紹介")!;
+    expect(row.getAttribute("href")).toBe("/settings/author");
+    expect(row.textContent).toContain("合成の案内人");
+    await act(async () => row.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })));
+    expect(push).toHaveBeenCalledWith("/settings/author");
+  });
+
   it("goes to the detail pages through the router (the rows are links)", async () => {
     await open();
     expect(link("あなたについて")?.getAttribute("href")).toBe("/settings/about");
