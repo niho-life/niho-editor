@@ -36,6 +36,8 @@ PR/push/merge-groupでは合成データを使うLinuxテストだけを実行�
 
 一時Actions artifactは3日で期限切れになる。採用用のprereleaseはconsumerの受入とrollback期間が終わるまで維持する。再実行は別attemptの別候補として扱い、前の候補を上書きしない。
 
+再試行はGitHubの **Re-run all jobs** を使う。plan/build/verify/publishを同じattemptに揃えるため、成功済みjobを残す部分再実行は、古い成果物のdownloadや重いbuildの前に拒否する。新しいattemptでは全工程を再実行し、別の候補tagと証跡を作る。
+
 ## 失敗と撤退
 
 設定不足・古い版・main外source・検査失敗は公開前に停止する。consumer側の証明不一致でも停止し、privateでの自動full buildへ切り替えない。既存の公式署名鍵・配布feedを変更する必要はない。workflowの成功やprereleaseの存在だけで公式配布済みとは扱わない。

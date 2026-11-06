@@ -17,6 +17,17 @@ from unittest import mock
 import candidate
 
 
+class WorkflowAttemptTest(unittest.TestCase):
+    def test_partial_reruns_require_all_jobs_before_build_or_verification(self) -> None:
+        script = Path(__file__).with_name("require-attempt.sh")
+        for producer, current, expected in [("1", "1", 0), ("2", "2", 0), ("1", "2", 1), ("", "2", 1), ("unknown", "2", 1)]:
+            with self.subTest(producer=producer, current=current):
+                result = subprocess.run(["bash", str(script), producer, current], text=True, capture_output=True)
+                self.assertEqual(result.returncode, expected)
+                if expected:
+                    self.assertIn("Re-run all jobs", result.stderr)
+
+
 SOURCE_SHA = "a" * 40
 CONTROLLER_SHA = "b" * 40
 VERSION = "1.2.3"

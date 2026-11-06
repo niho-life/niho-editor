@@ -228,7 +228,7 @@ def command_plan(args: argparse.Namespace) -> dict[str, str]:
     git(repository, ["merge-base", "--is-ancestor", args.source_sha, args.controller_sha], "plan")
     contract = source_contract(repository, args.source_sha)
     require(semver_parts(args.version) >= semver_parts(contract["version"]), "plan", "VersionBelowSource")
-    outputs = {"source-sha": args.source_sha, "version": args.version, "release-tag": release_tag(args.version, args.source_sha, run_id, run_attempt)}
+    outputs = {"source-sha": args.source_sha, "version": args.version, "release-tag": release_tag(args.version, args.source_sha, run_id, run_attempt), "run-attempt": run_attempt}
     try:
         with Path(args.github_output).open("a", encoding="utf-8") as target:
             for key, value in outputs.items():

@@ -34,7 +34,7 @@ jobs:
       - name: Test candidate DATA protocol with synthetic inputs
         run: python3 -m unittest discover -s scripts/editor-candidate -p '*_test.py'
       - name: Check the build wrapper
-        run: shellcheck scripts/editor-candidate/build.sh
+        run: shellcheck scripts/editor-candidate/*.sh
 
   plan:
     needs: tests
@@ -45,6 +45,7 @@ jobs:
       source-sha: ${{ steps.plan.outputs.source-sha }}
       version: ${{ steps.plan.outputs.version }}
       release-tag: ${{ steps.plan.outputs.release-tag }}
+      run-attempt: ${{ steps.plan.outputs.run-attempt }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -75,6 +76,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 60
     outputs:
+      run-attempt: ${{ needs.plan.outputs.run-attempt }}
       artifact-id: ${{ steps.upload.outputs.artifact-id }}
       artifact-digest: sha256:${{ steps.upload.outputs.artifact-digest }}
     steps:
@@ -84,6 +86,10 @@ jobs:
           ref: ${{ github.sha }}
           path: control
           persist-credentials: false
+      - name: Require a complete workflow attempt
+        env:
+          PRODUCER_ATTEMPT: ${{ needs.plan.outputs.run-attempt }}
+        run: bash control/scripts/editor-candidate/require-attempt.sh "$PRODUCER_ATTEMPT" "$GITHUB_RUN_ATTEMPT"
       - name: Checkout the selected product source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -127,6 +133,7 @@ jobs:
       contents: read
       actions: read
     outputs:
+      run-attempt: ${{ needs.build.outputs.run-attempt }}
       artifact-id: ${{ steps.upload.outputs.artifact-id }}
       artifact-digest: sha256:${{ steps.upload.outputs.artifact-digest }}
     steps:
@@ -136,6 +143,10 @@ jobs:
           ref: ${{ github.sha }}
           path: control
           persist-credentials: false
+      - name: Require a complete workflow attempt
+        env:
+          PRODUCER_ATTEMPT: ${{ needs.build.outputs.run-attempt }}
+        run: bash control/scripts/editor-candidate/require-attempt.sh "$PRODUCER_ATTEMPT" "$GITHUB_RUN_ATTEMPT"
       - name: Checkout the selected source for contract comparison
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -184,6 +195,10 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Require a complete workflow attempt
+        env:
+          PRODUCER_ATTEMPT: ${{ needs.verify_mac.outputs.run-attempt }}
+        run: bash scripts/editor-candidate/require-attempt.sh "$PRODUCER_ATTEMPT" "$GITHUB_RUN_ATTEMPT"
       - name: Download the exact verified artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
