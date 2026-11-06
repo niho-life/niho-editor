@@ -63,6 +63,7 @@ fn run_once(
     timeout: Duration::from_secs(10 * 60),
     max_budget_usd: None,
     tool_policy: ToolPolicy::None,
+    web_search: true,
   };
   let state = Arc::new(Mutex::new(Outcome::default()));
   let sink = state.clone();
@@ -73,6 +74,7 @@ fn run_once(
       TurnEvent::TextDelta(_) => "textDelta",
       TurnEvent::ToolUse { .. } => "toolUse",
       TurnEvent::ToolResult { .. } => "toolResult",
+      TurnEvent::Notice { .. } => "notice",
       TurnEvent::Done { .. } => "done",
       TurnEvent::Error { .. } => "error",
     };

@@ -22,12 +22,15 @@
 //!   `dir/.agents/agents/` に置いて `--mode accept-edits` で動かす（`.agents` は終わったら消す）。道具の step の引数のパスが
 //!   `dir` の外（`..`・リンクで外へ出るものも）・書き先が `writable` の下の `.md` でない・ほかの道具は止める。道具の step は
 //!   `ToolUse`・`ToolResult`（ファイル名と成否）で流し、`Done.text` は最後の道具より後の文にする。
+//! - 修正の会話で `web_search` が true なら、エージェントの `tools` に Web の道具（[`WEB_TOOLS`]。search_web・
+//!   read_url_content）も足す（#283。run_command などコマンド実行は足さない）。init の道具の一覧（版の全体が出る）に
+//!   search_web が無ければ `Notice { WebSearchUnsupported }` を出して検索なしで続け、search_web が 1 依頼で 5 回を超えたら止める。
 
 use crate::classify::{classify_agy_failure, error_event, reason_message};
 use crate::claude::{self, file_name_only};
 use crate::process::{is_uuid, run_child, set_mode, write_private_file, PrivateDir, TURN_DIR_PREFIX};
-use crate::turn::{Breach, FolderAccess, StreamHandler, TurnCtx};
-use crate::types::{Effort, Provider, ReasonCode, StopReason, ToolPolicy, TurnEvent, Usage};
+use crate::turn::{Breach, FolderAccess, StreamHandler, TurnCtx, WebSearchCount};
+use crate::types::{Effort, NoticeCode, Provider, ReasonCode, StopReason, ToolPolicy, TurnEvent, Usage};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
@@ -84,6 +87,12 @@ const EDITOR_TOOLS: [(&str, &str); 5] = [
   ("replace_file_content", "Edit"),
   ("multi_replace_file_content", "Edit"),
 ];
+/// 修正の会話で `web_search` のときだけ足す Web の道具と、画面に出す名前（claude のツール名に揃える）。名前は agy 1.5.1 の
+/// 実行ファイルの中の道具名と、既存の init の一覧（agy 1.3.5 の実機）で確かめた（2026-11-06。本物の呼び出しの引数の形は
+/// まだ確かめていない）。道具名が変わったら、ここだけを直す。
+pub(crate) const WEB_TOOLS: [(&str, &str); 2] = [("search_web", "WebSearch"), ("read_url_content", "WebFetch")];
+/// 回数を数える検索の道具（ページを読む方は数えない）。
+const WEB_SEARCH_TOOL: &str = WEB_TOOLS[0].0;
 /// 書く道具（書き先は `TargetFile`）。
 const EDITOR_WRITE_TOOLS: [&str; 3] = ["write_to_file", "replace_file_content", "multi_replace_file_content"];
 /// 道具の引数のうち、パスとして見る鍵（値は作業フォルダの中の絶対パスでなければ止める）。ほかの鍵も、中身・説明でなければ
@@ -182,9 +191,18 @@ pub(crate) fn reader_agent_markdown(system_prompt: &str) -> String {
   format!("{READER_FRONTMATTER}{system_prompt}")
 }
 
-/// 修正の会話のエージェント（読む 2 つと書く 3 つの道具）。
-pub(crate) fn editor_agent_markdown(system_prompt: &str) -> String {
-  format!("{EDITOR_FRONTMATTER}{system_prompt}")
+/// 修正の会話のエージェント（読む 2 つと書く 3 つの道具。`web` なら Web の道具も足す）。
+pub(crate) fn editor_agent_markdown(system_prompt: &str, web: bool) -> String {
+  if !web {
+    return format!("{EDITOR_FRONTMATTER}{system_prompt}");
+  }
+  let web_tools: Vec<&str> = WEB_TOOLS.iter().map(|(tool, _)| *tool).collect();
+  let frontmatter = EDITOR_FRONTMATTER.replacen(
+    "multi_replace_file_content]",
+    &format!("multi_replace_file_content, {}]", web_tools.join(", ")),
+    1,
+  );
+  format!("{frontmatter}{system_prompt}")
 }
 
 /// 作業フォルダに agy が決まりとして読むもの（`.agents`・`AGENTS.md`・`GEMINI.md`）があるか。修正の会話は `dir` を cwd に
@@ -266,8 +284,11 @@ struct EditorStep {
 }
 
 /// 許した 5 つの道具か・引数のパスが作業フォルダの中か・書き先が `writable` の下の `.md` か。外れたら（ログの種類, 文）。
+/// Web を許したときは Web の道具（[`WEB_TOOLS`]）も通す（書く道具ではない。引数の `/`・`~`・`file:` で始まる値は同じく
+/// 作業フォルダの中でなければ止める）。
 fn check_editor_step(folder: &FolderAccess, name: &str, step: &Value) -> Result<EditorStep, (String, &'static str)> {
-  let Some(&(_, label)) = EDITOR_TOOLS.iter().find(|(tool, _)| *tool == name) else {
+  let web_tool = WEB_TOOLS.iter().find(|(tool, _)| folder.web && *tool == name);
+  let Some(&(_, label)) = EDITOR_TOOLS.iter().find(|(tool, _)| *tool == name).or(web_tool) else {
     return Err((tool_kind(name), EDITOR_TOOL_MESSAGE));
   };
   let write = EDITOR_WRITE_TOOLS.contains(&name);
@@ -293,6 +314,19 @@ fn check_editor_step(folder: &FolderAccess, name: &str, step: &Value) -> Result<
     if path_like && !is_inside(folder, text) {
       return Err(("path_outside".to_string(), OUTSIDE_PATH_MESSAGE));
     }
+  }
+  if web_tool.is_some() {
+    // 検索語は出さない。ページを読む道具は、引数の URL のホスト名だけ
+    checked.summary = (name != WEB_SEARCH_TOOL)
+      .then(|| {
+        parameters
+          .values()
+          .filter_map(Value::as_str)
+          .map(claude::host_only)
+          .find(|host| !host.is_empty())
+      })
+      .flatten();
+    return Ok(checked);
   }
   let summary_key = match name {
     "view_file" => Some("AbsolutePath"),
@@ -407,6 +441,8 @@ pub(crate) struct AgyConverter {
   unverified_writes: HashSet<String>,
   /// step_index の無い道具の step に振った数
   unnumbered_steps: u64,
+  /// search_web の回数（修正の会話で Web を許したとき）
+  searches: WebSearchCount,
 }
 
 impl AgyConverter {
@@ -425,6 +461,7 @@ impl AgyConverter {
       finished: HashSet::new(),
       unverified_writes: HashSet::new(),
       unnumbered_steps: 0,
+      searches: WebSearchCount::default(),
     }
   }
 
@@ -526,7 +563,7 @@ impl AgyConverter {
 
   /// init のエージェントが工程用（音声を読む回は文字起こし用、修正の会話は修正用）のものか。ツールの一覧（init.tools）は
   /// 独自のエージェントでも全体が出るので、数は問わない。
-  fn check_init(&mut self, init: &Value) {
+  fn check_init(&mut self, init: &Value, events: &mut Vec<TurnEvent>) {
     // 実際に使うモデルの ID（`gemini-3.8-flash` に `--effort low` を付けると `gemini-3.8-flash-low` と出る）
     self.usage.model_used = init
       .get("model")
@@ -536,6 +573,18 @@ impl AgyConverter {
       .map(str::to_string);
     if init.get("agent").and_then(Value::as_str) == Some(self.agent_name()) {
       self.init_seen = true;
+      // Web を許した修正の会話で、版の道具の一覧に search_web が無い（この版では検索できない）。黙って落とさず、検索なしで
+      // 続ける。一覧が無ければ見分けられないので知らせない
+      let web = matches!(&self.role, Role::Editor(folder) if folder.web);
+      let lacks_search = init
+        .get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| !tools.iter().any(|tool| tool.as_str() == Some(WEB_SEARCH_TOOL)));
+      if web && lacks_search {
+        events.push(TurnEvent::Notice {
+          code: NoticeCode::WebSearchUnsupported,
+        });
+      }
       return;
     }
     let message = match self.role {
@@ -567,6 +616,12 @@ impl AgyConverter {
       }
     };
     if !self.tool_names.contains_key(&id) {
+      if name == WEB_SEARCH_TOOL {
+        if let Some(breach) = self.searches.record(&id) {
+          self.breach = Some(breach);
+          return;
+        }
+      }
       self.tool_names.insert(id.clone(), checked.label);
       if checked.write {
         self.unverified_writes.insert(id.clone());
@@ -735,7 +790,7 @@ impl StreamHandler for AgyConverter {
     self.observe_conversation(body);
     if self.breach.is_none() {
       match kind {
-        "init" => self.check_init(body),
+        "init" => self.check_init(body, &mut events),
         "step_update" => self.handle_step(body, &mut events),
         "result" => self.handle_result(body),
         _ => {}
@@ -847,7 +902,7 @@ struct EditorAgent {
 
 impl EditorAgent {
   /// `.agents` が無いこと（入力の検査で確かめている）。あれば作らずに失敗する（前からあるものは消さない）。
-  fn write(dir: &Path, system_prompt: &str) -> std::io::Result<Self> {
+  fn write(dir: &Path, system_prompt: &str, web: bool) -> std::io::Result<Self> {
     let root = dir.join(AGENTS_DIR);
     create_private_dir(&root)?;
     let agent = Self { root };
@@ -858,7 +913,7 @@ impl EditorAgent {
     }
     write_private_file(
       &path.join("agent.md"),
-      editor_agent_markdown(system_prompt).as_bytes(),
+      editor_agent_markdown(system_prompt, web).as_bytes(),
       true,
     )?;
     Ok(agent)
@@ -873,7 +928,7 @@ impl Drop for EditorAgent {
 
 /// 修正の会話: 作業フォルダ（`dir` の実体）に修正用のエージェントを置き、そこを cwd にして動かす。
 fn run_editor(ctx: &TurnCtx, folder: &FolderAccess, emit: &mut dyn FnMut(TurnEvent)) -> TurnEvent {
-  let _agent = match EditorAgent::write(&folder.dir, &ctx.req.system_prompt) {
+  let _agent = match EditorAgent::write(&folder.dir, &ctx.req.system_prompt, folder.web) {
     Ok(agent) => agent,
     Err(err) => return ctx.setup_failed(format!("agy editor agent: {err}")),
   };
@@ -1274,7 +1329,7 @@ mod tests {
       .iter()
       .any(|arg| arg == "--conversation" || arg == "--dangerously-skip-permissions" || arg == "-p"));
 
-    let markdown = editor_agent_markdown("あなたは編集者です。");
+    let markdown = editor_agent_markdown("あなたは編集者です。", false);
     assert!(markdown.starts_with(EDITOR_FRONTMATTER));
     assert!(markdown.ends_with("---\nあなたは編集者です。"));
     assert!(EDITOR_FRONTMATTER.contains(&format!("\nname: {EDITOR_AGENT_NAME}\n")));
@@ -1291,10 +1346,10 @@ mod tests {
     assert!(!has_workspace_rules(dir));
     let path = dir.join(".agents/agents/niho-docs-editor/agent.md");
     {
-      let _agent = EditorAgent::write(dir, "あなたは編集者です。").unwrap();
+      let _agent = EditorAgent::write(dir, "あなたは編集者です。", false).unwrap();
       assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
-        editor_agent_markdown("あなたは編集者です。")
+        editor_agent_markdown("あなたは編集者です。", false)
       );
       #[cfg(unix)]
       {
@@ -1307,7 +1362,7 @@ mod tests {
       }
       assert!(has_workspace_rules(dir));
       // あれば作らずに失敗し、前からあるものは消さない
-      assert!(EditorAgent::write(dir, "別の指示").is_err());
+      assert!(EditorAgent::write(dir, "別の指示", false).is_err());
       assert!(path.exists());
     }
     assert!(!dir.join(".agents").exists());
@@ -1615,6 +1670,164 @@ mod tests {
       ],
     );
     assert_eq!(editor_breach(&converter).map(|breach| breach.0), Some("subagent"));
+  }
+
+  fn web_editor_dir(name: &str) -> EditorDir {
+    let mut dir = editor_dir(name);
+    dir.folder.web = true;
+    dir
+  }
+
+  fn init_with_tools(tools: &[&str]) -> String {
+    json!({"event":"init","init":{"model":"gemini-3.8-flash-low","cwd":"/x","tools":tools,"permission_mode":"request-review","agent":EDITOR_AGENT_NAME}}).to_string()
+  }
+
+  #[test]
+  fn editor_agent_with_web_search_adds_only_the_web_tools() {
+    let markdown = editor_agent_markdown("あなたは編集者です。", true);
+    assert!(markdown.contains(
+      "\ntools: [view_file, list_dir, write_to_file, replace_file_content, multi_replace_file_content, search_web, read_url_content]\n"
+    ));
+    assert!(markdown.contains("\nsubagent: false\n"));
+    assert!(markdown.contains("\ncommandExecutionPolicy: off\n"));
+    assert!(markdown.ends_with("あなたは編集者です。"));
+    for denied in ["run_command", "browser", "send_command_input"] {
+      assert!(!markdown.contains(denied), "{denied}");
+    }
+    // Web を切ったときは今までどおり
+    assert!(editor_agent_markdown("x", false).starts_with(EDITOR_FRONTMATTER));
+    assert!(!editor_agent_markdown("x", false).contains("search_web"));
+  }
+
+  #[test]
+  fn editor_web_tools_become_tool_events_and_other_tools_still_stop() {
+    let dir = web_editor_dir("web");
+    let mut converter = AgyConverter::editor(None, dir.folder.clone());
+    let events = feed(
+      &mut converter,
+      &[
+        init_with_tools(&[
+          "manage_task",
+          "view_file",
+          "run_command",
+          "search_web",
+          "read_url_content",
+        ]),
+        user_input(CONVERSATION),
+        tool_step(1, "ACTIVE", "search_web", json!({"query":"秘密の検索語"})),
+        tool_step(1, "DONE", "search_web", json!({"query":"秘密の検索語"})),
+        tool_step(
+          2,
+          "DONE",
+          "read_url_content",
+          json!({"Url":"https://Shop.Example.jp/hours?id=1"}),
+        ),
+      ],
+    );
+    assert_eq!(
+      events,
+      vec![
+        TurnEvent::ToolUse {
+          id: "step-1".into(),
+          name: "WebSearch".into(),
+          summary: String::new()
+        },
+        TurnEvent::ToolResult {
+          id: "step-1".into(),
+          name: "WebSearch".into(),
+          ok: true
+        },
+        TurnEvent::ToolUse {
+          id: "step-2".into(),
+          name: "WebFetch".into(),
+          summary: "shop.example.jp".into()
+        },
+        TurnEvent::ToolResult {
+          id: "step-2".into(),
+          name: "WebFetch".into(),
+          ok: true
+        },
+      ]
+    );
+    assert!(!format!("{events:?}").contains("秘密の検索語"));
+    assert!(converter.breach().is_none());
+    // Web を許しても、コマンド実行・ブラウザ・サブエージェントの道具と、ローカルのファイルを指す URL は止める
+    let cases = [
+      ("run_command", json!({"CommandLine":"ls"}), "tool:run_command"),
+      ("browser_subagent", json!({}), "tool:browser_subagent"),
+      ("read_url_content", json!({"Url":"file:///etc/passwd"}), "path_outside"),
+      ("search_web", json!({"query":"x","Path":"/etc"}), "path_outside"),
+    ];
+    for (name, parameters, kind) in cases {
+      let mut converter = AgyConverter::editor(None, dir.folder.clone());
+      let events = feed(
+        &mut converter,
+        &[
+          init_with_tools(&["run_command", "search_web", "read_url_content"]),
+          user_input(CONVERSATION),
+          tool_step(3, "ACTIVE", name, parameters),
+        ],
+      );
+      assert!(events.is_empty(), "{name}");
+      assert_eq!(
+        converter.breach().map(|breach| breach.kind.as_str()),
+        Some(kind),
+        "{name}"
+      );
+    }
+  }
+
+  #[test]
+  fn editor_init_without_search_web_is_a_notice_and_the_turn_goes_on() {
+    let dir = web_editor_dir("web-missing");
+    let mut converter = AgyConverter::editor(None, dir.folder.clone());
+    let events = feed(
+      &mut converter,
+      &[init_line(EDITOR_AGENT_NAME), user_input(CONVERSATION)],
+    );
+    assert_eq!(
+      events,
+      vec![TurnEvent::Notice {
+        code: NoticeCode::WebSearchUnsupported
+      }]
+    );
+    assert!(converter.breach().is_none());
+    // 一覧に search_web があれば知らせない。Web を切った回も知らせない
+    let mut converter = AgyConverter::editor(None, dir.folder.clone());
+    assert!(feed(&mut converter, &[init_with_tools(&["view_file", "search_web"])]).is_empty());
+    let plain = editor_dir("web-off");
+    let mut converter = AgyConverter::editor(None, plain.folder.clone());
+    assert!(feed(&mut converter, &[init_line(EDITOR_AGENT_NAME)]).is_empty());
+  }
+
+  #[test]
+  fn the_sixth_agy_search_web_stops_the_turn() {
+    let dir = web_editor_dir("web-limit");
+    let mut converter = AgyConverter::editor(None, dir.folder.clone());
+    let mut lines = vec![
+      init_with_tools(&["search_web", "read_url_content"]),
+      user_input(CONVERSATION),
+    ];
+    for index in 1..=5 {
+      lines.push(tool_step(index, "ACTIVE", "search_web", json!({"query":"q"})));
+      lines.push(tool_step(index, "DONE", "search_web", json!({"query":"q"})));
+    }
+    lines.push(tool_step(
+      9,
+      "DONE",
+      "read_url_content",
+      json!({"Url":"https://a.example/"}),
+    ));
+    feed(&mut converter, &lines);
+    assert!(converter.breach().is_none());
+    feed(
+      &mut converter,
+      &[tool_step(10, "ACTIVE", "search_web", json!({"query":"q"}))],
+    );
+    assert_eq!(
+      converter.breach().map(|breach| (breach.kind.as_str(), breach.code)),
+      Some(("web_search_limit", ReasonCode::TransientFailure))
+    );
   }
 
   #[test]

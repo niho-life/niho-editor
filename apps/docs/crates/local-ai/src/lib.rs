@@ -39,8 +39,8 @@ pub use runtime::{InstallerConfig, LogFn, Runtime};
 pub use status::{provider_status, provider_status_with};
 pub use turn::{run_turn, run_turn_with, TurnHandle, MAX_SYSTEM_PROMPT_BYTES, MAX_USER_PROMPT_BYTES};
 pub use types::{
-  Capabilities, ClaudeUpdateResult, Effort, LocalAiError, Provider, ProviderStatus, ReasonCode, StopReason, ToolPolicy,
-  TurnEvent, TurnRequest, Usage,
+  Capabilities, ClaudeUpdateResult, Effort, LocalAiError, NoticeCode, Provider, ProviderStatus, ReasonCode, StopReason,
+  ToolPolicy, TurnEvent, TurnRequest, Usage,
 };
 pub use usage::{provider_usage, provider_usage_with, ProviderUsage, UsageWindow};
 
