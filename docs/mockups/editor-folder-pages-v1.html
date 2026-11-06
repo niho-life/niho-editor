@@ -17,8 +17,9 @@
     - **AI チャットはアプリ全体で 1 つ。** ページを移っても会話は残る（Cursor の composer と同じ）。探す範囲は、今開いているページの
       入っているフォルダ（固定なので、範囲や「今のタブ」の表示は置かない）。
     - **パネルは全部動かせる**（Cursor の感じ）: 一覧・AIと作る・ページ・写真 を、左右のレールの上／下へドラッグで置ける。
-      同じレールに 2 つ以上あれば上下に分かれ、境目をドラッグして高さを変える。× で閉じ、ヘッダーのボタンで出す。配置は localStorage に残る。
-      中央のエディタ（タブの帯 › 題名 › 本文）だけは固定。
+      同じレールに 2 つ以上あれば上下に分かれ、境目をドラッグして高さを変える。× で閉じる。ヘッダー右上のボタンは閉じているパネルの分だけ出る
+      （開いているパネルには × があるので出さない）。配置は localStorage に残る。中央のエディタ（タブの帯 › 題名 › 本文）だけは固定。
+    - 一覧の今のページは網掛けせず、名前を太くするだけ。
     - **アプリ名・アイコンはいつでも画面の左上端**（左レールの一番上の左端）。**設定はいつでも画面の最下端**（左下）。どちらもパネルの配置に関係なく。
     - 「ページ」パネルは「流れ」だけ。役割・タブ・字数は帯と右下にあるので置かない。今の行には「◯◯ から」を 1 行添える。
       作り直す・同じ入力でもう 1 つ はタブの ▾。
@@ -175,7 +176,8 @@ body.dragging .ph{cursor:grabbing}
 .sb-list{flex:1;min-height:0;overflow:auto;padding:2px 8px 10px}
 .row{position:relative;display:flex;align-items:center;gap:6px;min-height:34px;padding:4px 4px 4px calc(8px + var(--d,0) * 16px);border-radius:8px;cursor:pointer;user-select:none;flex-wrap:wrap}
 .row:hover{background:var(--sand2)}
-.row.on{background:#fff;box-shadow:0 1px 2px rgba(28,28,26,.06),0 0 0 1px var(--line)}
+/* 今のページ: 網掛けは付けず、名前を太くするだけ */
+.row.on b{font-weight:600;color:var(--ink)}
 .row b{flex:1;min-width:0;font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .when{font-size:12px;color:var(--faint);white-space:nowrap;width:40px;text-align:right}
 .row .n{font-size:12px;font-weight:600;color:var(--moss);background:var(--pale);border-radius:999px;padding:0 6px;line-height:18px;flex:none}
@@ -213,9 +215,11 @@ body.dragging .ph{cursor:grabbing}
 .dt .ins{display:flex;align-items:center;gap:2px;margin-left:6px;padding-left:10px;border-left:1px solid var(--line2)}
 .dt .ins .ib{color:var(--faint)}
 .dt .ins .ib:hover{color:var(--ink)}
+/* パネルを出すボタン: 閉じているパネルの分だけ出す（開いているパネルには × があるので、ヘッダーには出さない） */
 .dt .tg{display:flex;align-items:center;gap:2px;margin-left:4px;padding-left:8px;border-left:1px solid var(--line2)}
 .dt .tg .ib{color:var(--faint)}
-.dt .tg .ib.on{color:var(--ink);background:var(--sand2)}
+.dt .tg .ib.on{display:none}
+.dt .tg:not(:has(.ib:not(.on))){display:none}
 .pubbtn{height:30px;padding:0 13px;border-radius:8px;font-weight:600;font-size:13.5px;color:var(--ink);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:none}
 .pubbtn:hover{background:var(--sand)}
 /* タブの帯: ページ名の上、本文のコンテンツ幅（680px）と同じ薄い罫線。右端に ＋。タブが 2 つ以上なら左にタブ */
