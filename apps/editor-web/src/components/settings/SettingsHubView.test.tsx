@@ -25,8 +25,13 @@ import { SettingsHubView } from "./SettingsHubView";
 const AUDIO = { maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30 };
 const USAGE: UsageSummary = { month: "2026-10", inputTokens: 1234, outputTokens: 56, costUsd: 0.42, limitUsd: 5, nearLimit: false };
 const STORAGE_USAGE: MediaStorageUsage = { imageBytes: "1073741824", audioBytes: "4096", totalBytes: "1073745920" };
+const DESTINATIONS = {
+  faces: [{ handle: "exp" as const, label: "NIHO Experience", host: null, path: null, available: false, reason: "role" as const, published: 0 }],
+  sites: [{ id: "11111111-2222-4333-8444-555555555555", handle: "synthetic", mode: "api" as const, siteUrl: "https://synthetic.example", urlShape: { host: "synthetic.example", path: "posts" }, articleUrl: "https://synthetic.example/posts/{slug}", apiUrl: "https://api.example.invalid", assetPolicy: "copy-on-import" as const, pushEnabled: false as const, createdAt: "2030-01-01T00:00:00.000Z", removedAt: null, keys: [], published: 0 }],
+  modes: ["api" as const, "wordpress" as const, "ghost" as const],
+};
 
-const open = (initial: SettingsDto = dto()) => mount(<SettingsHubView initial={initial} audio={AUDIO} account={{ name: "合成の名前", initial: "合" }} />);
+const open = (initial: SettingsDto = dto()) => mount(<SettingsHubView initial={initial} audio={AUDIO} account={{ name: "合成の名前", caption: "synthetic@example.invalid", initial: "合" }} destinations={DESTINATIONS} />);
 
 beforeEach(() => {
   for (const mock of [push, save, usage, storageUsage, logout]) mock.mockReset();
@@ -52,12 +57,15 @@ describe("SettingsHubView（/settings）", () => {
     expect(buttons().map((item) => item.textContent?.trim())).not.toContain("編集");
   });
 
-  it("puts 役割とつながり and 発信先 under アカウント, and ログアウト at the bottom", async () => {
+  it("puts the account and each destination in separate groups, and ログアウト at the bottom", async () => {
     await open();
     const me = document.querySelector<HTMLAnchorElement>("a.es-row--me")!;
     expect(me.getAttribute("href")).toBe("/account");
     expect(me.textContent).toContain("合成の名前");
-    await act(async () => link("発信先")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })));
+    expect(me.textContent).toContain("synthetic@example.invalid");
+    expect(link("NIHO Experience")?.textContent).toContain("未接続");
+    expect(link("synthetic.example")?.textContent).toContain("接続済み");
+    await act(async () => link("発信先を追加・管理")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })));
     expect(push).toHaveBeenCalledWith("/destinations");
     await click("ログアウト");
     expect(logout).toHaveBeenCalledTimes(1);
@@ -161,4 +169,3 @@ describe("SettingsHubView（/settings）", () => {
     expect(unnamed()).toEqual([]);
   });
 });
-

@@ -34,6 +34,7 @@ function destProps(patch: Partial<EditorDestinationsPageProps> = {}): EditorDest
     busy: false,
     faces: FACES,
     sites: SITES,
+    onOpenFace: noop,
     onOpenSite: noop,
     draft: null,
     onAdd: noop,
@@ -114,22 +115,24 @@ describe("EditorDestinationsPage", () => {
     expect(markup).toMatch(/<a class="es-back" href="\/settings">[\s\S]*?設定<\/a><h1>発信先<\/h1>/);
   });
 
-  it("lists the faces with their reason, and every connected site", () => {
+  it("lists faces and sites with only their normal connection state", () => {
     const shown = plain(destHtml());
     expect(shown).toContain("NIHO Experience");
-    expect(shown).toContain("experience.niho.life/guides");
-    expect(shown).toContain("公開中 2");
-    // 役割が無い面は、理由を一言（URL は出さない）
-    expect(shown).toContain(EDITOR_DESTINATIONS_TEXT.noRole);
-    expect(shown).toContain("mika-sato.example/posts");
+    expect(shown).toContain("接続済み");
+    expect(shown).toContain("未接続");
+    expect(shown).not.toContain("experience.niho.life/guides");
+    expect(shown).not.toContain("公開中 2");
+    expect(shown).not.toContain(EDITOR_DESTINATIONS_TEXT.noRole);
+    expect(shown).not.toContain("mika-sato.example/posts");
     expect(shown).toContain("note.mika-sato.example");
-    expect(shown).toContain(EDITOR_DESTINATIONS_TEXT.modes.wordpress);
+    expect(destHtml()).toContain('aria-label="NIHO Experience の詳細"');
     expect(destHtml()).toContain('aria-label="mika-sato.example の設定"');
   });
 
   it("says いまは公開できません for a face whose conditions cannot be read", () => {
     const shown = plain(destHtml({ faces: [{ ...FACES[0]!, available: false, reason: "unavailable", host: null, path: null }] }));
-    expect(shown).toContain(EDITOR_DESTINATIONS_TEXT.unavailable);
+    expect(shown).toContain("接続を確認できません");
+    expect(shown).not.toContain("未接続");
   });
 
   it("offers 発信先を追加 until the form is open, and then the form instead", () => {

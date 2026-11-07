@@ -103,6 +103,17 @@ export class NihoExperienceApiClient {
     return body.items.map(parseArticleLink);
   }
 
+  /** Provider links are optional; their outage must not erase a verified destination connection. */
+  async connectionState(session: Session, request: SessionRequest): Promise<{ roles: NihoEditorRoles; links: readonly ArticleLinkDto[]; linksUnavailable?: true }> {
+    const roles = await this.roles(session, request);
+    if (!roles.roles.includes("writer") || !roles.destinations.includes("exp")) return { roles, links: [] };
+    try {
+      return { roles, links: await this.links(session, request) };
+    } catch {
+      return { roles, links: [], linksUnavailable: true };
+    }
+  }
+
   async decide(session: Session, request: SessionRequest, id: string, decision: "accept" | "decline"): Promise<ArticleLinkDto> {
     if (!UUID.test(id)) throw new Error("invalid invitation id");
     return parseArticleLink(await this.request(session, request, "article-links", `/api/auth/experience-editor-connect/article-links/${id}/${decision}`, { method: "POST", body: "{}" }));

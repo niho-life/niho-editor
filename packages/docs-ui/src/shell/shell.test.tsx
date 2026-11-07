@@ -107,10 +107,9 @@ describe("EditorShell", () => {
         x
       </EditorShell>,
     );
-    expect([...withSettings.matchAll(/class="es-sb-me/g)]).toHaveLength(1);
+    expect([...withSettings.matchAll(/class="es-sb-settings/g)]).toHaveLength(1);
     const foot = withSettings.slice(withSettings.indexOf('class="es-setbar"'));
-    expect(foot).toMatch(/^class="es-setbar"><button type="button" class="es-sb-me" aria-current="page"><svg/);
-    expect(foot).toContain("<b>設定</b>");
+    expect(foot).toMatch(/^class="es-setbar"><button type="button" class="es-sb-settings" aria-label="設定、未処理の招待 1 件" aria-current="page"><svg/);
     expect(foot).toContain('aria-label="未処理の招待 1 件"');
     expect(foot).not.toContain("aria-haspopup");
     // 設定の帯は本文（main）のあと（Tab の順も本文の後）
@@ -211,7 +210,7 @@ describe("ShellSidebar", () => {
 
   it("現在のページは aria-current=page。「設定」は一覧の中には無い（枠が左下に出す）", () => {
     expect([...html.matchAll(/aria-current="page"/g)]).toHaveLength(1);
-    expect(html).not.toContain("es-sb-me");
+    expect(html).not.toContain("es-sb-settings");
     expect(html).not.toContain("es-sb-foot");
   });
 

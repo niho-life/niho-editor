@@ -127,6 +127,7 @@ export {
   EditorSitePage,
   type EditorAddSiteDraft,
   type EditorDestinationFace,
+  type EditorDestinationConnectionState,
   type EditorDestinationMode,
   type EditorDestinationSite,
   type EditorDestinationsPageProps,
@@ -134,8 +135,9 @@ export {
   type EditorSiteKeyView,
   type EditorSitePageProps,
   type EditorSitePublished,
+  editorDestinationConnection,
 } from "./editor-destinations";
-export { AccountPage, type AccountLink, type AccountPageProps, type AccountRole } from "./account";
+export { AccountPage, EditorAccountPage, type AccountLink, type AccountPageProps, type AccountRole, type EditorAccountPageProps } from "./account";
 export {
   EDITOR_SETTINGS_HREF,
   EDITOR_SETTINGS_TEXT,

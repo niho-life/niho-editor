@@ -97,6 +97,64 @@ function sessionResponse() {
 }
 
 describe("NIHO Experience editor auth", () => {
+  it("refreshes a legacy session's missing name while keeping its NIHO actor", async () => {
+    const auth = provider(exchangeFetch("Synthetic Writer"), loginRandomValues());
+    const started = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start?sameAccount=1`, {
+      headers: { cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}` },
+    }), returnTo: "/account" });
+    const pair = pendingCookie(started);
+    const pending = JSON.parse(Buffer.from(pair.split("=", 2)[1]!, "base64url").toString("utf8"));
+    expect(pending.accountHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(pending)).not.toContain(USER_ID);
+    const response = await auth.completeLogin(formPost(EDITOR, pair));
+    expect(response.headers.get("location")).toBe("/account");
+    const cookies = response.headers.getSetCookie();
+    const name = cookiePair(cookies, EXPERIENCE_EDITOR_NAME_COOKIE);
+    const session = await auth.getSession({ headers: new Headers({ cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}; ${name}` }) });
+    expect(session?.userId).toBe(USER_ID);
+    expect(session?.profile?.name).toBe("Synthetic Writer");
+  });
+
+  it("rejects another actor during a same-account refresh and preserves the old cookies", async () => {
+    let exchanged = false;
+    const revocations: string[] = [];
+    const oldRefresh = "O".repeat(43);
+    const auth = provider(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/session")) {
+        const value = sessionResponse();
+        if (exchanged) value.actor.id = "different-synthetic-user";
+        return json(value);
+      }
+      if (url.endsWith("/exchange")) {
+        exchanged = true;
+        const value = connectionResponse("Other Writer");
+        value.user.id = "different-synthetic-user";
+        return json(value);
+      }
+      if (url.includes("accounts:signInWithCustomToken")) return json({ idToken: ID_TOKEN, refreshToken: FIREBASE_REFRESH, expiresIn: "3600" });
+      if (url.endsWith("/revoke")) { revocations.push(JSON.parse(String(init?.body)).refreshToken); return new Response(null, { status: 204 }); }
+      throw new Error("unexpected upstream request");
+    }, loginRandomValues());
+    const oldCookies = `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}; ${EXPERIENCE_EDITOR_REFRESH_COOKIE}=${oldRefresh}`;
+    const started = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start?sameAccount=1`, { headers: { cookie: oldCookies } }), returnTo: "/account" });
+    const response = await auth.completeLogin(formPost(EDITOR, `${pendingCookie(started)}; ${oldCookies}`));
+    expect(response.headers.get("location")).toBe("/account?identity=mismatch");
+    expect(response.headers.getSetCookie()).toEqual([expect.stringContaining(`${EXPERIENCE_EDITOR_PENDING_COOKIE}=;`)]);
+    expect(revocations).toEqual([NIHO_REFRESH]);
+    expect(revocations).not.toContain(oldRefresh);
+  });
+
+  it("does not start a same-account refresh when the existing actor cannot be verified", async () => {
+    const auth = provider(async () => json({}, 401), loginRandomValues());
+    const response = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start?sameAccount=1`, {
+      headers: { cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}` },
+    }), returnTo: "/account" });
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toContain("error=unavailable");
+    expect(response.headers.getSetCookie()).toEqual([expect.stringContaining(`${EXPERIENCE_EDITOR_PENDING_COOKIE}=;`)]);
+  });
+
   it("POSTs PKCE login fields to the fixed NIHO start endpoint without contacting the Photo connect API", async () => {
     const auth = provider(async () => { throw new Error("no upstream request is expected"); }, loginRandomValues());
     const response = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start`), returnTo: "/p/new" });

@@ -85,7 +85,7 @@ function SettingsFrame({ title, sidebar: forcedSidebar, pendingInvites = 0, over
       header={<ShellHeader plain title={title} showListButton={!sidebarOpen} onToggleList={() => setSidebarOpen(true)} />}
       sidebarOpen={sidebarOpen}
       railOpen={false}
-      settings={settings}
+      settings={{ ...settings, account: { name: ME.name, caption: ME.email, initial: ME.initial, onOpen: () => navigate("account") } }}
       overlay={overlay}
     >
       {children}
@@ -280,7 +280,8 @@ export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: bo
           storageUsage={{ totalBytes: "105472", imageBytes: "0", audioBytes: "105472" }}
           storageUsageNote={null}
           audio={{ maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30 }}
-          account={{ name: ME.name, initial: ME.initial }}
+          account={{ name: ME.name, caption: ME.email, initial: ME.initial }}
+          destinations={{ faces: [{ id: "exp", label: "NIHO Experience", available: false, reason: "role" }], sites: [] }}
           onLogout={() => navigate("login")}
           onNavigate={go}
         />
@@ -360,6 +361,7 @@ export function WebDestDemo({ forced }: { forced: PagesForced & { add?: boolean;
   return (
     <SettingsFrame title="発信先" sidebar={forced.sidebar} pendingInvites={1}>
       <EditorDestinationsPage
+        onOpenFace={() => navigate("account")}
         status={issued ? "新しい鍵はこの 1 回だけ出ます" : ""}
         busy={false}
         faces={[

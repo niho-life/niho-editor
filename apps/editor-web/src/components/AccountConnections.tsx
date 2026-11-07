@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { EDITOR_SETTINGS_HREF, Icon, linkTo } from "niho-docs-ui/shell";
+import { Icon, linkTo } from "niho-docs-ui/shell";
 import type { ArticleLinkDto, NihoEditorRoles } from "@/auth/niho-experience-api";
 import styles from "./AccountConnections.module.css";
 
@@ -14,21 +14,32 @@ const STATE_LABEL: Record<ArticleLinkDto["state"], string> = {
   EXPIRED: "期限が切れました",
 };
 
-export function AccountConnections({ initial }: { initial: { roles: NihoEditorRoles; links: readonly ArticleLinkDto[] } | null }) {
+export type AccountConnectionsState =
+  | { status: "ready"; roles: NihoEditorRoles; links: readonly ArticleLinkDto[]; linksUnavailable?: boolean }
+  | { status: "error" };
+
+export function AccountConnections({ initial }: { initial: AccountConnectionsState }) {
   const router = useRouter();
   const [data, setData] = useState(initial);
   const [busy, setBusy] = useState<string | null>(null);
   const busyRef = useRef(false);
-  const [error, setError] = useState(initial ? "" : "NIHO の役割と招待を確認できませんでした。少し待ってから再読み込みしてください。");
+  const [operationError, setOperationError] = useState("");
+  const [error, setError] = useState(initial.status === "error" ? "接続を確認できませんでした。少し待ってから再読み込みしてください。" : initial.linksUnavailable ? "体験とのつながりを確認できませんでした。" : "");
 
-  async function reload() {
+  async function reload(failure = "最新の接続状態を確認できませんでした。少し待ってから、もう一度お試しください。"): Promise<boolean> {
     setError("");
     try {
       const response = await fetch("/api/account/article-links", { cache: "no-store", credentials: "same-origin" });
       if (!response.ok) throw new Error();
-      setData(await response.json() as { roles: NihoEditorRoles; links: ArticleLinkDto[] });
+      const next = await response.json() as { roles: NihoEditorRoles; links: ArticleLinkDto[]; linksUnavailable?: boolean };
+      setData({ status: "ready", ...next });
+      if (next.linksUnavailable) setError("体験とのつながりを確認できませんでした。");
+      return true;
     } catch {
-      setError("最新の状態を確認できませんでした。別の端末で変更した場合も、再読み込みすると反映されます。");
+      // 古い「接続済み」を確定状態として残さない。
+      setData({ status: "error" });
+      setError(failure);
+      return false;
     }
   }
 
@@ -37,6 +48,7 @@ export function AccountConnections({ initial }: { initial: { roles: NihoEditorRo
     busyRef.current = true;
     setBusy(id);
     setError("");
+    setOperationError("");
     try {
       const response = await fetch(`/api/account/article-links/${id}/${decision}`, {
         method: "POST", headers: { "content-type": "application/json" }, body: "{}", credentials: "same-origin",
@@ -44,23 +56,23 @@ export function AccountConnections({ initial }: { initial: { roles: NihoEditorRo
       if (!response.ok) throw new Error();
       await reload();
     } catch {
-      setError("招待の状態が変わったか、NIHO に接続できませんでした。最新の状態を再読み込みしてから、もう一度お試しください。");
+      await reload();
+      setOperationError("招待の操作中に問題が発生しました。最新の状態を確認して、必要ならもう一度お試しください。");
     } finally { busyRef.current = false; setBusy(null); }
   }
 
-  const writer = data?.roles.version === 1 && data.roles.roles.includes("writer") && data.roles.destinations.includes("exp");
+  const writer = data.status === "ready" && data.roles.version === 1 && data.roles.roles.includes("writer") && data.roles.destinations.includes("exp");
   return (
     <div className="es-page">
-      {/* 設定の一覧の「アカウント」から入るページ。戻るのは設定（オーナー決定 2026-11-06） */}
-      <a className="es-back" {...linkTo(EDITOR_SETTINGS_HREF.hub, (href) => router.push(href))}>
+      <a className="es-back" {...linkTo("/destinations", (href) => router.push(href))}>
         <Icon name="back" />
-        設定
+        発信先
       </a>
-      <h1>役割とつながり</h1>
+      <h1>NIHO Experience</h1>
       <div className={styles.root}>
         <section className={styles.card} aria-labelledby="account-role-title">
-          <h2 id="account-role-title">記事ライター</h2>
-          <p>{writer ? "NIHO Experience へ記事を公開できます。公開のたびに現在の役割を確認します。" : "現在、NIHO Experience へ公開できる記事ライターの役割はありません。私的なページの作成と編集は続けられます。"}</p>
+          <h2 id="account-role-title">接続状態</h2>
+          <p>{data.status === "error" ? "接続を確認できません" : writer ? "接続済み" : "未接続"}</p>
         </section>
         <section className={styles.card} aria-labelledby="account-links-title">
           <div className={styles.heading}>
@@ -68,7 +80,8 @@ export function AccountConnections({ initial }: { initial: { roles: NihoEditorRo
             <button type="button" className={styles.secondary} onClick={() => void reload()} disabled={busy !== null}>最新の状態を確認</button>
           </div>
           {error ? <p role="alert" className={styles.error}>{error}</p> : null}
-          {!data ? null : data.links.length === 0 ? <p>招待や承諾済みのつながりはありません。</p> : (
+          {operationError ? <p role="alert" className={styles.error}>{operationError}</p> : null}
+          {data.status === "error" || data.linksUnavailable ? null : data.links.length === 0 ? <p>招待や承諾済みのつながりはありません。</p> : (
             <ul className={styles.list}>
               {data.links.map((link) => (
                 <li key={link.id} className={styles.link}>

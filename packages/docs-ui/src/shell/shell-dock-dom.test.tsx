@@ -286,7 +286,7 @@ describe("EditorShell のパネルの配置（dock）", () => {
     expect(brands(root)).toEqual(["es-sb-top"]);
     expect([...root.querySelector(".es-sb-top")!.children].map((node) => node.className)).toEqual(["es-brand", "es-grip", "es-sp", "es-ib"]);
     expect(root.querySelector(".es-sb")!.getAttribute("data-brand")).toBe("true");
-    expect(root.querySelector(".es-setbar .es-sb-me")?.textContent).toBe("設定");
+    expect(root.querySelector(".es-setbar .es-sb-settings")?.getAttribute("aria-label")).toBe("設定");
     expect(root.dataset.left).toBe("dock");
     // 検索を開いたら行は検索欄だけ（アプリ名も隠す）
     render(

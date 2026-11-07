@@ -23,6 +23,17 @@ export DEPLOY_ENV="$tmp/deploy.env"
 source "$dir/lib.sh"
 load_deploy_env
 
+# An older deploy.env must not silently remove a previously connected destination.
+check "example explicitly declares both article flags" "$(require_explicit_article_settings; printf ok)" ok
+for missing in EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED EDITOR_ARTICLE_AUTHORITY_API_ENABLED; do
+  grep -v "^${missing}=" "$dir/deploy.env.example" > "$tmp/implicit-article.env"
+  if (DEPLOY_ENV="$tmp/implicit-article.env" require_explicit_article_settings) 2>/dev/null; then
+    check "deployment rejects omitted $missing" accepted rejected
+  else
+    check "deployment rejects omitted $missing" rejected rejected
+  fi
+done
+
 # Stub: `secrets describe` succeeds when the secret exists, `secrets versions list` prints the state of the newest version.
 secret_exists=1
 newest_state=""

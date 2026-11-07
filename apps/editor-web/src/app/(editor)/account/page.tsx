@@ -1,23 +1,15 @@
 import type { Metadata } from "next";
-import { AccountConnections } from "@/components/AccountConnections";
+import { AccountView } from "@/components/AccountView";
 import { requireSession } from "@/server/session";
-import { headers } from "next/headers";
-import { getAuthProvider } from "@/auth";
-import { NihoExperienceApiClient } from "@/auth/niho-experience-api";
+import { frameMe } from "@/server/frame";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "役割とつながり" };
+export const metadata: Metadata = { title: "アカウント" };
 
-/** 役割とつながり（題名だけ。中身は #42）。 */
-export default async function AccountPage() {
+/** session から読んだ本人情報。表示名を認可には使わない。 */
+export default async function AccountPage({ searchParams }: { searchParams: Promise<{ identity?: string }> }) {
   const session = await requireSession("/account");
-  const request = { headers: await headers() };
-  let initial = null;
-  try {
-    const client = new NihoExperienceApiClient(getAuthProvider());
-    const [roles, links] = await Promise.all([client.roles(session, request), client.links(session, request)]);
-    initial = { roles, links };
-  } catch { /* The recovery UI is intentional; upstream failures never become permission. */ }
-  return <AccountConnections initial={initial} />;
+  const query = await searchParams;
+  return <AccountView account={frameMe(session)} refreshIdentity={session.mode === "niho"} identityMismatch={query.identity === "mismatch"} />;
 }

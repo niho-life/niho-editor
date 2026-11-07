@@ -71,6 +71,8 @@ migrate ジョブには `DATABASE_URL`（migrate ロール）と `EDITOR_APP_DAT
 
 ## 4. 毎回の配備
 
+`deploy.env` は `EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED` と `EDITOR_ARTICLE_AUTHORITY_API_ENABLED` をそれぞれ明示する。配備は環境変数を全量で置き換えるため、どちらかが未記載なら build・配備の前に止める。既存の発信先を維持するときは、接続先・audience・許可する実行 ID・固定 Secret 参照も揃えて残す。意図して無効化するときだけ `false` を指定する。
+
 ```sh
 scripts/editor-deploy/deploy.sh            # 現在の HEAD を配備する（clean な worktree で）
 scripts/editor-deploy/deploy.sh --no-build # いま動いている image のまま配備し直す（Secret の新しい版を読ませる）

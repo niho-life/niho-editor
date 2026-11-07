@@ -9,7 +9,7 @@ describe("frameMe", () => {
       initial: "合",
     });
     expect(frameMe({ userId: "u", mode: "stub", profile: { name: "開発ユーザー" } })).toEqual({ name: "開発ユーザー", caption: "stub", initial: "開" });
-    expect(frameMe({ userId: "u", mode: "niho" })).toEqual({ name: "NIHO アカウント", caption: "", initial: "N" });
+    expect(frameMe({ userId: "u", mode: "niho" })).toEqual({ name: "名前を取得できません", caption: "", initial: "?" });
   });
 });
 

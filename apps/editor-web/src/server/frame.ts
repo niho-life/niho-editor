@@ -1,10 +1,11 @@
 import type { Session } from "../auth/types";
 
-/** 本人（設定の一覧の「アカウント」の行）。名前が無ければ「NIHO アカウント」、補足はメール（stub では「stub」）。 */
+/** 本人（枠の左下と設定・アカウント）。名前が無ければ取得不能と明示する。 */
 export function frameMe(session: Session): { name: string; caption: string; initial: string } {
-  const name = session.profile?.name || "NIHO アカウント";
+  const profileName = session.profile?.name.trim();
+  const name = profileName || "名前を取得できません";
   const caption = session.profile?.email ?? (session.mode === "stub" ? "stub" : "");
-  return { name, caption, initial: Array.from(name)[0] ?? "" };
+  return { name, caption, initial: profileName ? (Array.from(name)[0] ?? "?") : "?" };
 }
 
 /**

@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   EDITOR_SETTINGS_TEXT,
+  EditorAccountPage,
   EditorSettingsAboutPage,
   EditorSettingsAuthorPage,
   EditorSettingsHub,
@@ -51,7 +52,11 @@ function hubProps(patch: Partial<EditorSettingsHubProps> = {}): EditorSettingsHu
     storageUsage: { imageBytes: "1073741824", audioBytes: "4096", totalBytes: "1073745920" },
     storageUsageNote: null,
     audio: { maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30 },
-    account: { name: "合成の名前", initial: "合" },
+    account: { name: "合成の名前", caption: "synthetic@example.invalid", initial: "合" },
+    destinations: {
+      faces: [{ id: "exp", label: "NIHO Experience", available: false, reason: "role" }],
+      sites: [{ id: "11111111-2222-4333-8444-555555555555", label: "synthetic.example" }],
+    },
     onLogout: noop,
     onNavigate: noop,
     ...patch,
@@ -153,9 +158,9 @@ function buttonAttrs(markup: string, name: string): string | undefined {
 describe("EditorSettingsHub（/settings）", () => {
   it("has the groups アカウント / AI / 手順 / データ, a status line, and no 「編集」 button anywhere", () => {
     const markup = hub();
-    for (const id of ["es-s-account", "es-s-ai", "es-s-steps", "es-s-data"]) expect(markup).toContain(`id="${id}"`);
+    for (const id of ["es-s-account", "es-s-destinations", "es-s-ai", "es-s-steps", "es-s-data"]) expect(markup).toContain(`id="${id}"`);
     const titles = [...markup.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(([, title]) => title);
-    expect(titles).toEqual(["アカウント", "AI", "手順", "データ"]);
+    expect(titles).toEqual(["アカウント", "発信先", "AI", "手順", "データ"]);
     expect(markup).toContain('role="status"');
     expect([...markup.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)].map(([, inner]) => (inner ?? "").replace(/<[^>]*>/g, "").trim())).not.toContain("編集");
     // 事実は一覧から外した（エンジン・時間切れ・受け付ける形式・保存の節）
@@ -163,20 +168,28 @@ describe("EditorSettingsHub（/settings）", () => {
     for (const gone of ["Deepgram", "時間切れ", "受け付ける形式", "文字起こし</h2>"]) expect(markup.includes(gone) || shown.includes(gone)).toBe(false);
   });
 
-  it("puts 本人（役割とつながり）and 発信先 in アカウント, and ログアウト last", () => {
+  it("puts session 本人 first and destinations in their own group, and ログアウト last", () => {
     const markup = hub();
     const account = markup.slice(markup.indexOf('id="es-s-account"'), markup.indexOf('id="es-s-ai"'));
     expect(account).toMatch(/<a class="es-row es-row--link es-row--me" href="\/account">/);
     expect(account).toContain('<span class="es-av" aria-hidden="true">合</span>');
-    expect(account).toContain("<b>合成の名前</b><small>役割とつながり</small>");
-    expect(account).toMatch(/href="\/destinations"[^>]*>[\s\S]*?発信先/);
-    // 名前が空なら太字は「役割とつながり」だけ
-    const nameless = hub({ account: { name: " ", initial: "?" } });
-    expect(nameless).toContain("<b>役割とつながり</b></span>");
-    expect(nameless).not.toContain("<small>役割とつながり</small>");
+    expect(account).toContain("<b>合成の名前</b><small>synthetic@example.invalid</small>");
+    const destinations = markup.slice(markup.indexOf('id="es-s-destinations"'), markup.indexOf('id="es-s-ai"'));
+    expect(destinations).toMatch(/href="\/destinations\/experience"[^>]*>[\s\S]*?NIHO Experience[\s\S]*?未接続/);
+    expect(destinations).toMatch(/href="\/destinations\/11111111-2222-4333-8444-555555555555"[^>]*>[\s\S]*?synthetic.example[\s\S]*?接続済み/);
+    expect(destinations).toMatch(/href="\/destinations"[^>]*>[\s\S]*?発信先を追加・管理/);
+    const nameless = hub({ account: { name: " ", caption: "", initial: "?" } });
+    expect(nameless).toContain("<b>名前を取得できません</b></span>");
     // ログアウトはデータの群の後ろ（いちばん下）
     expect(markup.indexOf('class="es-logout"')).toBeGreaterThan(markup.indexOf('id="es-s-data"'));
     expect(textOf(markup.slice(markup.indexOf('class="es-logout"')))).toContain("ログアウト");
+  });
+
+  it("shows role as disconnected and only unavailable as a connection error", () => {
+    expect(textOf(hub())).toContain("NIHO Experience 未接続");
+    const failed = hub({ destinations: { faces: [{ id: "exp", label: "NIHO Experience", available: false, reason: "unavailable" }], sites: [] } });
+    expect(textOf(failed)).toContain("NIHO Experience 接続を確認できません");
+    expect(textOf(failed)).not.toContain("NIHO Experience 未接続");
   });
 
   it("links the rows to the detail pages", () => {
@@ -268,6 +281,15 @@ describe("EditorSettingsHub（/settings）", () => {
     const busy = hub({ busy: true });
     expect(buttonAttrs(busy, "手順を追加")).toContain('aria-disabled="true"');
     expect(busy).not.toMatch(/<button[^>]*\sdisabled=""/);
+  });
+});
+
+describe("EditorAccountPage（/account）", () => {
+  it("shows only the session account name and caption, with settings as its parent", () => {
+    const markup = renderToStaticMarkup(<EditorAccountPage account={{ name: "合成の名前", caption: "synthetic@example.invalid", initial: "合" }} onNavigate={noop} />);
+    expect(markup).toMatch(/<a class="es-back" href="\/settings">[\s\S]*?設定<\/a><h1>アカウント<\/h1>/);
+    expect(textOf(markup)).toContain("合成の名前 synthetic@example.invalid");
+    expect(textOf(markup)).not.toContain("記事ライター");
   });
 });
 
