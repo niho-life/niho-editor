@@ -166,7 +166,6 @@ export {
   isStorableText,
   recordingDataProblem,
   recordingTextBytes,
-  updateRecording,
   type Connectable,
   type CreateRecordingInput,
   RECORDING_AUDIO_STATUSES,
@@ -178,7 +177,6 @@ export {
   type RecordingPage,
   type RecordingSegment,
   type RecordingSource,
-  type UpdateRecordingResult,
 } from "./recordings.ts";
 export * from "./publications.ts";
 export {

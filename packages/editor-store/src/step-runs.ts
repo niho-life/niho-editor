@@ -805,28 +805,21 @@ export async function heartbeatAttempt(db: Queryable, ref: AttemptRef, options: 
 export type StepInput = StepMaterials & { previousBlocks: Block[] | null };
 
 /**
- * ページの本文を資料として読む SQL（`x` は pages の行）。録音のタブで文字起こし（`page_recordings.segments`）があれば、
- * 段落ごとに「[分:秒] 話者: 文」の段落にする（#309。#310 までは録音のタブ＝文字起こし）。それ以外は `blocks` のまま。
+ * ページの本文を資料として読む SQL（`x` は pages の行）。文字起こしのタブ（#310。page_transcripts）に段落があれば、
+ * 段落ごとに「[分:秒] 話者: 文」の段落にする（#309）。それ以外は `blocks` のまま。
  */
-const SEGMENT_PARAGRAPHS_SQL = (source: string) => `
-  (SELECT jsonb_agg(jsonb_build_object('type', 'paragraph', 'content', jsonb_build_array(jsonb_build_object('type', 'text', 'text',
-            CASE WHEN jsonb_typeof(s.seg->'start') = 'number'
-                 THEN '[' || floor((s.seg->>'start')::numeric / 60)::int::text || ':' || lpad(floor(mod((s.seg->>'start')::numeric, 60))::int::text, 2, '0') || '] '
-                 ELSE '' END
-            || CASE WHEN jsonb_typeof(s.seg->'speaker') = 'number'
-                    THEN COALESCE(pr.speaker_names->>(s.seg->>'speaker'), '話者' || (s.seg->>'speaker')) || ': '
-                    ELSE '' END
-            || COALESCE(s.seg->>'text', '')))) ORDER BY s.ord)
-     FROM ${source} pr, jsonb_array_elements(pr.segments) WITH ORDINALITY s(seg, ord)
-    WHERE pr.owner = x.owner AND pr.page_id = x.id)`;
-
-// 文字起こしのタブ（#310。page_transcripts）と、古い録音のタブ（page_recordings に段落）は「[分:秒] 話者: 文」の段落に。それ以外は blocks
 const PAGE_TEXT_SQL = `
   CASE WHEN EXISTS (SELECT 1 FROM page_transcripts pt WHERE pt.owner = x.owner AND pt.page_id = x.id AND jsonb_array_length(pt.segments) > 0)
-       THEN ${SEGMENT_PARAGRAPHS_SQL("page_transcripts")}
-       WHEN x.kind = 'rec'
-        AND EXISTS (SELECT 1 FROM page_recordings pr WHERE pr.owner = x.owner AND pr.page_id = x.id AND jsonb_array_length(pr.segments) > 0)
-       THEN ${SEGMENT_PARAGRAPHS_SQL("page_recordings")}
+       THEN (SELECT jsonb_agg(jsonb_build_object('type', 'paragraph', 'content', jsonb_build_array(jsonb_build_object('type', 'text', 'text',
+                      CASE WHEN jsonb_typeof(s.seg->'start') = 'number'
+                           THEN '[' || floor((s.seg->>'start')::numeric / 60)::int::text || ':' || lpad(floor(mod((s.seg->>'start')::numeric, 60))::int::text, 2, '0') || '] '
+                           ELSE '' END
+                      || CASE WHEN jsonb_typeof(s.seg->'speaker') = 'number'
+                              THEN COALESCE(pr.speaker_names->>(s.seg->>'speaker'), '話者' || (s.seg->>'speaker')) || ': '
+                              ELSE '' END
+                      || COALESCE(s.seg->>'text', '')))) ORDER BY s.ord)
+               FROM page_transcripts pr, jsonb_array_elements(pr.segments) WITH ORDINALITY s(seg, ord)
+              WHERE pr.owner = x.owner AND pr.page_id = x.id)
        ELSE x.blocks END`;
 
 /**

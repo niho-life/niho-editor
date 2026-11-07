@@ -6,12 +6,13 @@ import type { Block, OwnerId, Page, PageKind, PageLang, Queryable, StepStatus } 
  * 写すのは kind・lang・blocks・lead と題名（「〜のコピー」）。cover・recipe・step_status・共有・公開・版は写さない。
  * タブ（#307。`page` が入れ物を指す行）の複製は**同じ入れ物の新しいタブ**（同じフォルダに並び、並びは末尾、`made_from` は `{kind:'dup', from}`）。
  * 入れ物の無い行（手順のサブページ・移行前の行）の複製は、今までどおり上の段の 1 枚（parent は付けない）。
- * 録音ページ（#36。page_recordings の行がある）は、文字起こし（段落・話者名・原本の名前と SHA-256）も同じ文の中で写す。
+ * 録音ページ（#36。page_recordings の行がある）は、録音の行（言語・エンジン・長さ・原本の名前と SHA-256）も同じ文の中で写す
+ * （段落・話者名は録音の行に無い。文字起こしのタブが持つ）。
  * 文字起こしのタブ（#310。page_transcripts の行がある）も、本文（段落・話者名・長さ）を同じ文の中で写す（版は写さない。revision は 1 から）。
  * 録音の revision は 1 から数え直す（別の録音になるので、元の録音の編集とは競合しない）。
- * 音声（#36 段 2a。資産は 1 つのページに属する）は写さない: コピーは文字起こしだけで、audio_* は既定の none。
- * 2 本目以降の音声（新しい migration の page_recording_audios）と文字起こしの案（page_recording_candidates）も、同じ理由で写さない。
- * 音声から作った録音（source = 'audio'）も録音の行を写す（音声のない音声由来の録音は 0008 が許す。文字起こしは残る）。
+ * 音声（#36 段 2a。資産は 1 つのページに属する）は写さない: コピーの録音の行は audio_* が既定の none。
+ * 2 本目以降の音声（新しい migration の page_recording_audios）も、同じ理由で写さない。
+ * 音声から作った録音（source = 'audio'）も録音の行を写す（音声のない音声由来の録音は 0008 が許す）。
  * フォルダ（kind = 'folder'）は複製しない（null。API は先に kind を見て bad_request を返す）。
  */
 
@@ -90,9 +91,8 @@ touched AS (
 ),
 recording AS (
   INSERT INTO page_recordings
-         (page_id, owner, source, language, engine, duration_sec, source_name, source_sha256, segments, speaker_names, created_at, updated_at)
-  SELECT c.id, r.owner, r.source, r.language, r.engine, r.duration_sec, r.source_name, r.source_sha256,
-         r.segments, r.speaker_names, c.created_at, c.created_at
+         (page_id, owner, source, language, engine, duration_sec, source_name, source_sha256, created_at, updated_at)
+  SELECT c.id, r.owner, r.source, r.language, r.engine, r.duration_sec, r.source_name, r.source_sha256, c.created_at, c.created_at
     FROM copied AS c
     JOIN page_recordings AS r ON r.owner = $1 AND r.page_id = $2
   RETURNING page_id

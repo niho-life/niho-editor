@@ -7,6 +7,7 @@ import { after, before, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
 import type { Pool as PgPool, PoolClient } from "pg";
 import { MIGRATION_FILE_PATTERN, applyMigrations, defaultMigrationsDir } from "../src/migrate.ts";
+import { duplicatePage } from "../src/duplicate.ts";
 import { EditorStore } from "../src/store.ts";
 import {
   createTranscriptTab,
@@ -18,7 +19,7 @@ import {
   restoreTranscriptVersion,
   updateTranscript,
 } from "../src/transcripts.ts";
-import type { RecordingSegment } from "../src/recordings.ts";
+import { InvalidRecordingError, type RecordingData, type RecordingSegment } from "../src/recordings.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 // 合成のユーザー ID・段落だけを使う
@@ -61,7 +62,7 @@ describe("transcript tabs on PostgreSQL（#310）", { skip: databaseUrl === unde
   async function recordingInFolder(owner = OWNER): Promise<{ folder: string; rec: string }> {
     const folder = (await store.createPage(owner, { kind: "folder", title: "合成の取材" })).id;
     const rec = (await store.createPage(owner, { kind: "rec", title: "合成の録音", parent: folder }))!.id;
-    await pool.query("INSERT INTO page_recordings (page_id, owner, source, language, segments) VALUES ($1, $2, 'audio', 'ja', '[]'::jsonb)", [rec, owner]);
+    await pool.query("INSERT INTO page_recordings (page_id, owner, source, language) VALUES ($1, $2, 'audio', 'ja')", [rec, owner]);
     return { folder, rec };
   }
 
@@ -107,7 +108,7 @@ describe("transcript tabs on PostgreSQL（#310）", { skip: databaseUrl === unde
 
   it("wraps a recording outside a folder into a folder named after it (holder and tabs move together)", async () => {
     const rec = (await store.createPage(OWNER, { kind: "rec", title: "外の録音" }))!;
-    await pool.query("INSERT INTO page_recordings (page_id, owner, source, language, segments) VALUES ($1, $2, 'audio', 'ja', '[]'::jsonb)", [rec.id, OWNER]);
+    await pool.query("INSERT INTO page_recordings (page_id, owner, source, language) VALUES ($1, $2, 'audio', 'ja')", [rec.id, OWNER]);
     const home = await withClient((client) => ensureRecordingFolder(client, OWNER, rec.id));
     assert.ok(home);
     const folder = await store.getPage(OWNER, home.folder);
@@ -155,6 +156,151 @@ describe("transcript tabs on PostgreSQL（#310）", { skip: databaseUrl === unde
     await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [tab]);
     assert.equal(await getTranscript(pool, OWNER, tab), null);
     assert.deepEqual(await listTranscriptTabs(pool, OWNER, rec), []);
+  });
+
+  const rename = (speaker: number, name: string | null) => (data: RecordingData): RecordingData => {
+    const speakerNames = { ...data.speakerNames };
+    if (name === null) delete speakerNames[String(speaker)];
+    else speakerNames[String(speaker)] = name;
+    return { segments: data.segments, speakerNames };
+  };
+  const editText = (index: number, text: string) => (data: RecordingData): RecordingData => ({
+    segments: data.segments.map((item, at) => (at === index ? { ...item, text } : item)),
+    speakerNames: data.speakerNames,
+  });
+  const rowOf = async (tab: string) => (await pool.query("SELECT * FROM page_transcripts WHERE page_id = $1", [tab])).rows[0] as Record<string, unknown> | undefined;
+
+  /** 段落（SEGMENTS）・話者名（1 番）・長さ 4 秒を入れた文字起こしのタブ（revision 2）。 */
+  async function seededTab(): Promise<{ rec: string; tab: string }> {
+    const { rec } = await recordingInFolder();
+    const { tab } = await withClient(async (client) => createTranscriptTab(client, OWNER, (await ensureRecordingFolder(client, OWNER, rec))!, { engine: "fake", language: "ja", durationSec: 4 }));
+    const written = await updateTranscript(pool, OWNER, tab, 1, (data) => ({ ...data, segments: SEGMENTS, speakerNames: { "1": "司会役" } }));
+    assert.ok(written?.status === "ok" && written.transcript.revision === 2);
+    return { rec, tab };
+  }
+
+  it("saves with the current revision and moves it on; an old revision is a conflict that returns the latest and changes nothing", async () => {
+    const { tab } = await seededTab();
+    const first = await updateTranscript(pool, OWNER, tab, 2, editText(0, "合成の一つ目を直した"));
+    assert.ok(first?.status === "ok");
+    assert.equal(first.transcript.revision, 3);
+    assert.equal(first.transcript.segments[0]?.text, "合成の一つ目を直した");
+    assert.ok(Date.parse(first.transcript.updatedAt) >= Date.parse(first.transcript.createdAt));
+
+    const before = await rowOf(tab);
+    let called = false;
+    const stale = await updateTranscript(pool, OWNER, tab, 2, (data) => {
+      called = true;
+      return editText(1, "上書き")(data);
+    });
+    assert.ok(stale?.status === "conflict");
+    assert.deepEqual(stale.transcript, first.transcript, "the latest transcript comes back");
+    assert.equal(called, false, "the change is not applied to the newer data");
+    assert.deepEqual(await rowOf(tab), before, "nothing was written");
+    assert.equal((await updateTranscript(pool, OWNER, tab, 99, rename(1, "先の版")))?.status, "conflict");
+
+    const second = await updateTranscript(pool, OWNER, tab, 3, rename(2, "記録役"));
+    assert.ok(second?.status === "ok");
+    assert.equal(second.transcript.revision, 4);
+    assert.deepEqual(second.transcript.speakerNames, { "1": "司会役", "2": "記録役" });
+    assert.equal(second.transcript.segments[0]?.text, "合成の一つ目を直した", "the earlier edit is kept");
+  });
+
+  it("writes a new length only when the change returns one（音声・字幕を足して長くなるとき）", async () => {
+    const { tab } = await seededTab();
+    // 長さを返さない書き換え（文章・話者）は今の長さのまま
+    const edited = await updateTranscript(pool, OWNER, tab, 2, editText(0, "直した"));
+    assert.ok(edited?.status === "ok");
+    assert.equal(edited.transcript.durationSec, 4);
+    // 足す書き換えは、新しい長さ（ずらす量 ＋ 足す側の長さ）を返す
+    const appended = await updateTranscript(pool, OWNER, tab, 3, (data) => ({
+      segments: [...data.segments, { start: data.durationSec ?? 0, end: (data.durationSec ?? 0) + 2, text: "続きです", speaker: 1 }],
+      speakerNames: data.speakerNames,
+      durationSec: (data.durationSec ?? 0) + 2,
+    }));
+    assert.ok(appended?.status === "ok");
+    assert.equal(appended.transcript.durationSec, 6);
+    assert.equal(appended.transcript.segments.at(-1)?.start, 4);
+    assert.equal((await getTranscript(pool, OWNER, tab))?.durationSec, 6);
+    // null は「長さが分からない」
+    const cleared = await updateTranscript(pool, OWNER, tab, 4, (data) => ({ segments: data.segments, speakerNames: data.speakerNames, durationSec: null }));
+    assert.ok(cleared?.status === "ok");
+    assert.equal(cleared.transcript.durationSec, null);
+  });
+
+  it("lets only one of two concurrent writes with the same revision through", async () => {
+    const { tab } = await seededTab();
+    const results = await Promise.all([
+      updateTranscript(pool, OWNER, tab, 2, editText(0, "画面 A の文")),
+      updateTranscript(pool, OWNER, tab, 2, editText(0, "画面 B の文")),
+    ]);
+    assert.deepEqual(results.map((result) => result?.status).sort(), ["conflict", "ok"]);
+    const winner = results.find((result) => result?.status === "ok");
+    const loser = results.find((result) => result?.status === "conflict");
+    assert.ok(winner?.status === "ok" && loser?.status === "conflict");
+    assert.deepEqual(loser.transcript, winner.transcript, "the loser gets the winner's text back");
+    const stored = await getTranscript(pool, OWNER, tab);
+    assert.equal(stored?.revision, 3);
+    assert.equal(stored?.segments[0]?.text, winner.transcript.segments[0]?.text);
+  });
+
+  it("writes nothing when the change is refused or has the wrong shape", async () => {
+    const { tab } = await seededTab();
+    const before = await rowOf(tab);
+    const refused = await updateTranscript(pool, OWNER, tab, 2, () => ({ rejected: "name" }));
+    assert.deepEqual(refused, { status: "rejected", reason: "name" });
+    assert.deepEqual(await rowOf(tab), before);
+
+    const bad: Array<[string, (data: RecordingData) => RecordingData]> = [
+      ["text", editText(0, "a\u0000b")],
+      ["text", editText(0, "あ".repeat(5001))],
+      ["speaker_names", rename(3, "いない話者")],
+      ["name", rename(1, " 前後に空白 ")],
+      ["segments", (data) => ({ segments: Array.from({ length: 20_001 }, () => data.segments[0]!), speakerNames: data.speakerNames })],
+      ["speaker", (data) => ({ segments: [{ ...data.segments[0]!, speaker: 0 }], speakerNames: {} })],
+      ["time", (data) => ({ segments: [{ ...data.segments[0]!, start: 2, end: 1 }], speakerNames: {} })],
+    ];
+    for (const [problem, mutate] of bad) {
+      await assert.rejects(
+        () => updateTranscript(pool, OWNER, tab, 2, mutate),
+        (error: unknown) => error instanceof InvalidRecordingError && error.problem === problem,
+        problem,
+      );
+      assert.deepEqual(await rowOf(tab), before, `${problem}: nothing was written`);
+    }
+    // 断った後も同じ revision でそのまま書ける（lock・transaction が残っていない）
+    assert.equal((await updateTranscript(pool, OWNER, tab, 2, rename(2, "あとから")))?.status, "ok");
+  });
+
+  it("moves the page's update time on when the transcript is edited, but not on a conflict", async () => {
+    const { tab } = await seededTab();
+    const before = await store.getPage(OWNER, tab);
+    assert.ok(before);
+    assert.equal((await updateTranscript(pool, OWNER, tab, 2, editText(0, "直した")))?.status, "ok");
+    const after = await store.getPage(OWNER, tab);
+    assert.ok(after && Date.parse(after.updatedAt) > Date.parse(before.updatedAt), "pages.updated_at moved on");
+    assert.equal((await updateTranscript(pool, OWNER, tab, 2, (data) => data))?.status, "conflict");
+    assert.equal((await store.getPage(OWNER, tab))?.updatedAt, after.updatedAt, "a conflict changes nothing");
+  });
+
+  it("copies the body with a transcript tab when it is duplicated, as an independent tab that starts again at revision 1", async () => {
+    const { rec, tab } = await seededTab();
+    assert.equal((await updateTranscript(pool, OWNER, tab, 2, rename(2, "聞き手")))?.status, "ok");
+    const copy = await duplicatePage(pool, OWNER, tab);
+    assert.ok(copy);
+    assert.notEqual(copy.id, tab);
+    const copied = await getTranscript(pool, OWNER, copy.id);
+    assert.ok(copied);
+    assert.equal(copied.revision, 1, "the copy starts again at revision 1");
+    assert.deepEqual(copied.segments, SEGMENTS);
+    assert.deepEqual(copied.speakerNames, { "1": "司会役", "2": "聞き手" });
+    assert.equal(copied.recordingPageId, rec);
+    // 別のタブになる: コピーを直しても元は変わらない
+    assert.equal((await updateTranscript(pool, OWNER, copy.id, 1, editText(0, "コピーだけ直した")))?.status, "ok");
+    const original = await getTranscript(pool, OWNER, tab);
+    assert.equal(original?.revision, 3);
+    assert.equal(original?.segments[0]?.text, SEGMENTS[0]!.text);
+    assert.equal(await duplicatePage(pool, OTHER, tab), null);
   });
 
   it("drops the transcript rows when the tab is hard-deleted, and keeps the body when the recording is", async () => {

@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Pool as PgPool } from "pg";
 import { applyMigrations, defaultMigrationsDir, readMigrations } from "../src/migrate.ts";
 import { completeAudioUpload, startAudioRecording, type StartAudioRecordingInput } from "../src/recording-audio.ts";
-import { InvalidRecordingError, getRecording, updateRecording, type Connectable, type RecordingSegment } from "../src/recordings.ts";
+import { InvalidRecordingError, getRecording, type Connectable, type RecordingSegment } from "../src/recordings.ts";
 import { EditorStore } from "../src/store.ts";
 import { getTranscript, listTranscriptTabs, updateTranscript } from "../src/transcripts.ts";
 import {
@@ -307,7 +307,7 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.equal(row.page_id, pageId);
     assert.equal(row.generation, 0);
     assert.equal(row.diarize, true);
-    assert.equal(row.replace, false);
+    assert.equal("replace" in row || "candidate" in row || "candidate_revision" in row, false, "the columns of the old paths are gone (#310)");
     assert.deepEqual(row.terms, ["合成語", "Synthetic"]);
     // 書き先: 「文字起こし」ページ（役割 transcript の入れ物）の新しいタブ。録音はフォルダに包まれる（#310）
     assert.equal(row.target_tab, created.tab);
@@ -416,7 +416,6 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.equal(claim.run.owner, OWNER);
     assert.equal(claim.run.pageId, pageId);
     assert.equal(claim.run.diarize, false);
-    assert.equal(claim.run.replace, false);
     assert.deepEqual(claim.run.terms, ["合成語"]);
     assert.equal(claim.audio?.status, "uploaded");
     assert.equal(claim.audio?.objectPath, `audio/${claim.audio?.assetId}`);
@@ -509,6 +508,26 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     const failed = await latestRun(pool, OWNER, pageId);
     assert.equal(failed?.status, "failed");
     assert.equal(failed?.errorCode, "internal");
+  });
+
+  it("fails a run that has no target tab (from before #310) without writing anything, whichever side finishes it", async () => {
+    const pageId = await uploadedRecording(pool);
+    const insert = async (status: "queued" | "running") =>
+      (await pool.query<{ id: string }>(
+        `INSERT INTO transcription_runs (owner, page_id, engine, status, language, base_revision, started_at)
+         VALUES ($1, $2, 'fake', $3, 'ja', 1, CASE WHEN $3 = 'running' THEN clock_timestamp() END) RETURNING id`,
+        [OWNER, pageId, status],
+      )).rows[0]!.id;
+    const id = await insert("queued");
+    const claim = await claimRun(pool, id);
+    assert.ok(claim);
+    assert.equal(claim.run.tab, null);
+    const before = await recordingRow(pool, pageId);
+    assert.equal(await finishRun(pool, id, claim.generation, { segments: RESULT, durationSec: 5 }), "superseded");
+    const failed = await runRow(pool, id);
+    assert.deepEqual([failed?.status, failed?.error_code], ["failed", "internal"]);
+    assert.deepEqual(await recordingRow(pool, pageId), before, "the recording row is untouched");
+    assert.deepEqual(await listTranscriptTabs(pool, OWNER, pageId), [], "and no tab appeared");
   });
 
   it("fails a run only for the current generation, or a queued run before it is claimed, and keeps the audio for another try", async () => {
@@ -677,7 +696,6 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     const revision = after?.revision;
     assert.equal(await finishMacTranscription(pool, OWNER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "succeeded");
     assert.equal((await getTranscript(pool, OWNER, started.tab))?.revision, revision, "a completion retry does not apply the transcript twice");
-    assert.deepEqual((await getRecording(pool, OWNER, pageId))?.segments, [], "the recording tab's own segments are not written");
     assert.equal(await finishMacTranscription(pool, OTHER, pageId, started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "stale");
     assert.equal(await finishMacTranscription(pool, OWNER, randomUUID(), started.run.id, operationId, started.generation, { segments: RESULT, durationSec: 5 }), "stale");
   });

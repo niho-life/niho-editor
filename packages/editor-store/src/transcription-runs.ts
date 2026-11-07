@@ -21,7 +21,7 @@ import type { OwnerId, PageLang, Queryable } from "./types.ts";
  * 録音の文字起こしの実行（#36 段 2b。migrations/0012_transcription_runs.sql）。手順（#37）の実行の表とは別の経路。
  *
  * 流れ: 開始（enqueueTranscription）で run を queued で作る → 実行する側が claimRun で running にして世代を 1 つ進める →
- * 保存先の音声をエンジンに渡す → finishRun で段落を page_recordings に書き、run を succeeded にする（1 transaction）。
+ * 保存先の音声をエンジンに渡す → finishRun で段落を書き先のタブ（page_transcripts）に書き、run を succeeded にする（1 transaction）。
  * 途中の失敗は failRun（短い code だけ）。音声は消さないので、失敗しても「もう一度」（新しい run）ができる。
  *
  * 状態遷移は step-runs.ts と同じ流儀で、すべて「世代（generation）と状態を条件にした UPDATE」で行う。claim のたびに世代が進み、
@@ -31,9 +31,10 @@ import type { OwnerId, PageLang, Queryable } from "./types.ts";
  * 1 つのページで有効な run（queued・running）は 1 つだけ（部分 unique index と、録音の行の FOR UPDATE）。
  * 音声が複数ある録音（#36 段 3b-4）は、**すべての音声**を順に文字起こしして 1 本につなぐ（claim が音声の列を渡し、実行する側が
  * 前の音声の長さだけ時刻をずらす）。
- * #310: 結果の書き先は run の `target_tab`（開始のときに作る「文字起こし」ページの新しいタブ。transcripts.ts）。録音の正本
- * （page_recordings.segments）には書かない。開始後にタブが直されていれば（revision が進んでいれば）結果を捨てる。
- * `target_tab` の無い古い run（migration より前）だけは、今までどおり正本に書く。
+ * #310: 結果の書き先は run の `target_tab`（開始のときに作る「文字起こし」ページの新しいタブ。transcripts.ts）。
+ * 開始後にタブが直されていれば（revision が進んでいれば）結果を捨てる。
+ * `target_tab` の無い run は #310 より前の古い run で、終わったものの履歴としてだけ残る（動いている・待っている古い run が無いことを
+ * migration `drop_recording_candidates` が確かめてから、録音の正本の段落を落とした）。書き先が無ければ結果は書かず失敗にする。
  * 読み書きは全て本人の・ゴミ箱でないページだけ（claimRun・finishRun・failRun は実行する側が run の id で呼ぶ）。
  * 本文・音声・エンジンの応答・鍵はこの表に持たない。
  */
@@ -76,7 +77,7 @@ export type TranscriptionRunView = {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
-  /** 結果を書く文字起こしのタブ（#310。migration より前の run は null＝正本に書いた）。 */
+  /** 結果を書く文字起こしのタブ（#310。書き先の無い古い run は null）。 */
   tab: string | null;
 };
 
@@ -169,9 +170,8 @@ export type ClaimedTranscription = {
     owner: OwnerId;
     pageId: string;
     diarize: boolean;
-    replace: boolean;
     terms: string[];
-    /** 結果を書く文字起こしのタブ（#310。古い run は null＝正本）。 */
+    /** 結果を書く文字起こしのタブ（#310。書き先の無い古い run は null）。 */
     tab: string | null;
   };
   /** この実行の世代。finishRun・failRun に渡す。 */
@@ -186,13 +186,13 @@ export type ClaimedTranscription = {
 export type TranscriptionOutput = { segments: readonly RecordingSegment[]; durationSec: number | null };
 
 /**
- * succeeded: 段落を書いて run を確定した / superseded: 開始後にタブ（古い run なら録音）が直された・消えた（書かずに失敗）/
+ * succeeded: 段落を書いて run を確定した / superseded: 開始後にタブが直された・消えた・書き先が無い（書かずに失敗）/
  * stale: 世代が古い・running でない（掃除・別の実行のあと）。何も書いていない。
  */
 export type FinishTranscriptionResult = "succeeded" | "superseded" | "stale";
 
 type RunRow = {
-  /** 書き先のタブ（#310。古い run は null＝正本）。 */
+  /** 書き先のタブ（#310。書き先の無い古い run は null）。 */
   target_tab: string | null;
   id: string;
   status: TranscriptionRunStatus;
@@ -294,15 +294,11 @@ function sameMacLocalSettings(value: unknown): boolean {
 }
 
 type LockRow = {
-  base_revision: number;
   language: PageLang;
   engine: string | null;
   duration_sec: number | null;
-  segments: RecordingSegment[];
-  speaker_names: Record<string, string>;
   audio_status: "none" | "uploading" | "uploaded";
   expired: boolean;
-  has_segments: boolean;
   /** 2 本目以降（#36 段 3b-4）に、まだアップロード中のものがあるか。 */
   parts_uploading: boolean;
   /** 2 本目以降に、期限を過ぎたものがあるか。 */
@@ -312,10 +308,9 @@ type LockRow = {
 // 本人の・ゴミ箱でないページの録音を押さえる（同じページの開始を直列にする）。$1 owner / $2 page id。
 // 期限は DB の時計で比べる（期限が無い行は、期限切れとしない。消えていれば実行のときに audio_missing になる）。
 const LOCK_RECORDING_SQL = `
-SELECT r.language, r.engine, r.duration_sec::float8 AS duration_sec, r.segments, r.speaker_names,
-       r.audio_status, r.revision AS base_revision,
+SELECT r.language, r.engine, r.duration_sec::float8 AS duration_sec,
+       r.audio_status,
        COALESCE(r.audio_expires_at <= clock_timestamp(), false) AS expired,
-       jsonb_array_length(r.segments) > 0 AS has_segments,
        EXISTS (
          SELECT 1 FROM page_recording_audios AS m
           WHERE m.owner = r.owner AND m.page_id = r.page_id AND m.status <> 'uploaded'
@@ -337,8 +332,8 @@ SELECT ${RUN_COLUMNS}
 
 // $1 owner / $2 page id / $3 engine / $4 language / $5 diarize / $6 terms / $7 base revision（書き先のタブの revision）/ $8 target tab
 const INSERT_RUN_SQL = `
-INSERT INTO transcription_runs AS t (owner, page_id, engine, status, language, diarize, replace, terms, base_revision, target_tab)
-VALUES ($1, $2, $3, 'queued', $4, $5, false, $6::jsonb, $7, $8::uuid)
+INSERT INTO transcription_runs AS t (owner, page_id, engine, status, language, diarize, terms, base_revision, target_tab)
+VALUES ($1, $2, $3, 'queued', $4, $5, $6::jsonb, $7, $8::uuid)
 RETURNING ${RUN_COLUMNS}`;
 
 // $1 owner / $2 tab id。書き先のタブ（本人の・ゴミ箱でない）の今の revision。
@@ -478,9 +473,9 @@ const FIND_MAC_OPERATION_SQL = `SELECT ${MAC_RUN_COLUMNS} FROM transcription_run
 // $1 owner / $2 page id / $3 language / $4 terms / $5 target tab / $6 base revision（タブの revision）/ $7 operation / $8 settings / $9 manifest
 const INSERT_MAC_RUN_SQL = `
 INSERT INTO transcription_runs AS t
-  (owner, page_id, engine, executor, status, language, diarize, replace, terms, target_tab, base_revision,
+  (owner, page_id, engine, executor, status, language, diarize, terms, target_tab, base_revision,
    generation, operation_id, settings, audio_manifest, started_at)
-VALUES ($1, $2, 'gemini-cli', 'mac-cli', 'running', $3, true, false, $4::jsonb, $5::uuid, $6,
+VALUES ($1, $2, 'gemini-cli', 'mac-cli', 'running', $3, true, $4::jsonb, $5::uuid, $6,
         1, $7::uuid, $8::jsonb, $9::jsonb, clock_timestamp())
 RETURNING ${MAC_RUN_COLUMNS}`;
 
@@ -497,9 +492,9 @@ function macRun(row: MacRunRow): MacTranscriptionRun {
 
 const INSERT_MAC_LOCAL_RUN_SQL = `
 INSERT INTO transcription_runs AS t
-  (owner, page_id, engine, executor, status, language, diarize, replace, terms, target_tab, base_revision,
+  (owner, page_id, engine, executor, status, language, diarize, terms, target_tab, base_revision,
    generation, operation_id, settings, audio_manifest, started_at)
-VALUES ($1, $2, 'apple-local', 'mac-local', 'running', $3, true, false, $4::jsonb, $5::uuid, $6,
+VALUES ($1, $2, 'apple-local', 'mac-local', 'running', $3, true, $4::jsonb, $5::uuid, $6,
         1, $7::uuid, $8::jsonb, $9::jsonb, clock_timestamp())
 RETURNING ${MAC_RUN_COLUMNS}`;
 
@@ -696,15 +691,12 @@ export async function startMacLocalTranscription(
 
 /**
  * 再開できるか: 書き先のタブ（#310）が生きていて、開始のときから直されていない（revision が同じ）。
- * 書き先の無い古い run は、録音の正本が開始のときから変わっていないこと。
+ * 書き先の無い古い run は再開できない。
  */
 async function targetUnchanged(client: Pick<PoolClient, "query">, owner: OwnerId, row: MacRunRow): Promise<boolean> {
-  if (row.target_tab !== null) {
-    const current = (await client.query<{ revision: number }>(TAB_REVISION_SQL, [owner, row.target_tab])).rows[0];
-    return current !== undefined && current.revision === row.base_revision;
-  }
-  const recording = (await client.query<LockRow>(LOCK_RECORDING_SQL, [owner, row.page_id])).rows[0];
-  return recording !== undefined && recording.base_revision === row.base_revision;
+  if (row.target_tab === null) return false;
+  const current = (await client.query<{ revision: number }>(TAB_REVISION_SQL, [owner, row.target_tab])).rows[0];
+  return current !== undefined && current.revision === row.base_revision;
 }
 
 const RESUME_MAC_SQL = `
@@ -841,7 +833,7 @@ export async function resumeMacLocalTranscription(
   }
 }
 
-type ClaimRow = RunRow & { owner: string; page_id: string; diarize: boolean; replace: boolean; terms: unknown; generation: number };
+type ClaimRow = RunRow & { owner: string; page_id: string; diarize: boolean; terms: unknown; generation: number };
 
 // queued の run だけを running にして世代を 1 つ進める（同時に何本来ても 1 本だけが通る）。$1 run id。
 const CLAIM_SQL = `
@@ -850,7 +842,7 @@ UPDATE transcription_runs AS t
        generation = t.generation + 1,
        started_at = GREATEST(clock_timestamp(), t.created_at)
  WHERE t.id = $1 AND t.status = 'queued' AND t.executor = 'server'
-RETURNING ${RUN_COLUMNS}, t.owner, t.page_id, t.diarize, t.replace, t.terms, t.generation`;
+RETURNING ${RUN_COLUMNS}, t.owner, t.page_id, t.diarize, t.terms, t.generation`;
 
 /**
  * queued の run を実行中にする（世代を 1 つ進め、開始の時刻を入れる）。他が claim 済み・終わっている・無い・不正な id は null。
@@ -875,7 +867,7 @@ export async function claimRun(db: Queryable, runId: string): Promise<ClaimedTra
     throw error;
   }
   return {
-    run: { ...toView(row), engine: row.engine as TranscriptionEngineName, executor: "server", owner: row.owner, pageId: row.page_id, diarize: row.diarize, replace: row.replace, terms, tab: row.target_tab },
+    run: { ...toView(row), engine: row.engine as TranscriptionEngineName, executor: "server", owner: row.owner, pageId: row.page_id, diarize: row.diarize, terms, tab: row.target_tab },
     generation: row.generation,
     audio,
     parts,
@@ -888,20 +880,19 @@ type FinishLockRow = {
   page_id: string;
   status: TranscriptionRunStatus;
   generation: number;
-  replace: boolean;
   engine: TranscriptionLedgerEngineName;
-  /** 書き先のタブ（#310。古い run は null＝正本）。 */
+  /** 書き先のタブ（#310。書き先の無い古い run は null）。 */
   target_tab: string | null;
   executor: "server" | "mac-cli" | "mac-local";
   operation_id: string | null;
   audio_manifest: unknown;
 };
 
-const LOCK_RUN_SQL = "SELECT owner, page_id, status, generation, replace, engine, target_tab, base_revision, executor, operation_id, audio_manifest FROM transcription_runs WHERE id = $1 FOR UPDATE";
+const LOCK_RUN_SQL = "SELECT owner, page_id, status, generation, engine, target_tab, base_revision, executor, operation_id, audio_manifest FROM transcription_runs WHERE id = $1 FOR UPDATE";
 
 // 録音の行を押さえる（run → 録音 の順に lock を取る。開始は録音の行だけを押さえて run の行を lock しないので、順が逆転しない）
-const LOCK_SEGMENTS_SQL = `
-SELECT jsonb_array_length(segments) > 0 AS has_segments, revision AS current_revision
+const LOCK_RECORDING_ROW_SQL = `
+SELECT 1
   FROM page_recordings
  WHERE owner = $1 AND page_id = $2
    FOR UPDATE`;
@@ -911,19 +902,6 @@ SELECT 1
   FROM pages
  WHERE owner = $1 AND id = $2 AND deleted_at IS NULL
    FOR UPDATE`;
-
-// 段落を書く。話者名の表は空にする（番号の付け方が変わるので、前の名前は当てはまらない）。revision を進めるので、
-// 開いている画面の古い revision の書き込みは 409（最新を受け取って当て直す）になる。長さはエンジンが返したときだけ置き換える。
-// $1 owner / $2 page id / $3 segments / $4 engine / $5 duration
-const WRITE_SEGMENTS_SQL = `
-UPDATE page_recordings AS r
-   SET segments = $3::jsonb,
-       speaker_names = '{}'::jsonb,
-       engine = $4::text,
-       duration_sec = COALESCE($5::numeric, r.duration_sec),
-       revision = r.revision + 1,
-       updated_at = GREATEST(clock_timestamp(), r.updated_at)
- WHERE r.owner = $1 AND r.page_id = $2`;
 
 // $1 run id / $2 generation
 const SUCCEED_SQL = `
@@ -968,8 +946,7 @@ function cleanOutput(output: TranscriptionOutput): { segments: RecordingSegment[
  * 実行の結果を確定する。1 つの transaction で、run の行を FOR UPDATE で押さえ、世代が一致して running のときだけ:
  * - 書き先のタブがある run（#310）: そのタブ（page_transcripts）に段落・長さ・エンジンを書いて succeeded。タブが消えた・開始後に
  *   直されていた（revision が進んだ）なら書かずに failed（superseded）
- * - 古い run（書き先なし）で開始時revisionと現在revisionが違う: replace指定でも書かずに run を failed（internal）にする（superseded）
- * - それ以外の古い run: page_recordings の段落・話者名（空）・エンジン・長さを書いて revision を 1 進め、ページの更新時刻も進め、run を succeeded にする
+ * - 書き先の無い古い run: 書かずに failed（internal。superseded）
  * 世代が違う・running でない・不正な id は何もしない（stale）。結果の形が規則に合わなければ InvalidRecordingError（何も書かない）。
  */
 type MacFinishGuard = { owner: OwnerId; pageId: string; operationId: string; executor: "mac-cli" | "mac-local" };
@@ -1002,13 +979,12 @@ async function finishRunChecked(
         await rollback(client);
         return "stale";
       }
-      let macRecording: LockRow | null = null;
       if (mac) {
         if (run.executor !== mac.executor || run.owner !== mac.owner || run.page_id !== mac.pageId || run.operation_id !== mac.operationId) {
           await rollback(client);
           return "stale";
         }
-        macRecording = (await client.query<LockRow>(LOCK_RECORDING_SQL, [run.owner, run.page_id])).rows[0] ?? null;
+        const macRecording = (await client.query<LockRow>(LOCK_RECORDING_SQL, [run.owner, run.page_id])).rows[0] ?? null;
         const pageExists = macRecording && (await client.query(LOCK_ACTIVE_PAGE_SQL, [run.owner, run.page_id])).rowCount === 1;
         if (!macRecording || !pageExists) {
           await client.query(FAIL_MAC_INTERNAL_SQL, [runId, generation, "internal", mac.executor]);
@@ -1026,43 +1002,25 @@ async function finishRunChecked(
         await rollback(client);
         return "stale";
       }
-      const serverRecording = mac
-        ? null
-        : (await client.query<{ has_segments: boolean; current_revision: number }>(LOCK_SEGMENTS_SQL, [run.owner, run.page_id])).rows[0] ?? null;
+      const serverRecording = mac ? null : (await client.query(LOCK_RECORDING_ROW_SQL, [run.owner, run.page_id])).rows[0] ?? null;
       if (!mac && (!serverRecording || (await client.query(LOCK_ACTIVE_PAGE_SQL, [run.owner, run.page_id])).rowCount !== 1)) {
         await client.query(FAIL_SERVER_SQL, [runId, generation, "internal"]);
         await client.query("COMMIT");
         return "superseded";
       }
-      if (run.target_tab !== null) {
-        // 書き先のタブ（#310）に書く。正本（page_recordings）には触らない
-        const written = await writeTranscriptSegments(client, run.owner, run.target_tab, run.base_revision, { segments: clean.segments, durationSec: clean.durationSec, engine: run.engine });
-        if (written !== "written") {
-          // タブが消えた、または開始後に直された: 遅れて届いた結果を書かずに失敗にする
-          await client.query(mac ? FAIL_MAC_INTERNAL_SQL : FAIL_SERVER_SQL, mac ? [runId, generation, "internal", mac.executor] : [runId, generation, "internal"]);
-          await client.query("COMMIT");
-          return "superseded";
-        }
-        await client.query(TOUCH_PAGE_SQL, [run.owner, run.page_id]);
-        const finished = await client.query(SUCCEED_SQL, [runId, generation]);
-        if (finished.rowCount !== 1) throw new Error("editor-store: transcription run disappeared");
-        await client.query("COMMIT");
-        return "succeeded";
-      }
-      const recording = mac
-        ? macRecording && { has_segments: macRecording.has_segments, current_revision: macRecording.base_revision }
-        : serverRecording;
-      if (!recording || recording.current_revision !== run.base_revision || (recording.has_segments && !run.replace)) {
-        // 開始後に録音・段落が変わった（または録音が無くなった）: replace指定でも利用者の編集を上書きしない
+      // 書き先のタブ（#310）に書く。書き先の無い古い run は書かずに失敗にする
+      const written = run.target_tab === null
+        ? null
+        : await writeTranscriptSegments(client, run.owner, run.target_tab, run.base_revision, { segments: clean.segments, durationSec: clean.durationSec, engine: run.engine });
+      if (written !== "written") {
+        // 書き先が無い・タブが消えた・開始後に直された: 遅れて届いた結果を書かずに失敗にする
         await client.query(mac ? FAIL_MAC_INTERNAL_SQL : FAIL_SERVER_SQL, mac ? [runId, generation, "internal", mac.executor] : [runId, generation, "internal"]);
         await client.query("COMMIT");
         return "superseded";
       }
-      await client.query("SELECT set_config('niho.recording_candidate_reason', 'asr', true)");
-      await client.query(WRITE_SEGMENTS_SQL, [run.owner, run.page_id, JSON.stringify(clean.segments), run.engine, clean.durationSec]);
       await client.query(TOUCH_PAGE_SQL, [run.owner, run.page_id]);
-      const done = await client.query(SUCCEED_SQL, [runId, generation]);
-      if (done.rowCount !== 1) throw new Error("editor-store: transcription run disappeared");
+      const finished = await client.query(SUCCEED_SQL, [runId, generation]);
+      if (finished.rowCount !== 1) throw new Error("editor-store: transcription run disappeared");
       await client.query("COMMIT");
       return "succeeded";
     } catch (error) {

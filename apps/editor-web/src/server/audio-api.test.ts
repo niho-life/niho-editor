@@ -62,8 +62,6 @@ function memoryStore() {
         durationSec: input.durationSec,
         sourceName: input.sourceName,
         sourceSha256: null,
-        segments: [],
-        speakerNames: {},
         audio: { status: "uploading", bytes: input.bytes, contentType: input.contentType, expiresAt },
         createdAt: now,
         updatedAt: now,
@@ -285,11 +283,11 @@ describe("POST /api/recordings/audio/start", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     const body = await response.json();
-    expect(Object.keys(body).sort()).toEqual(["page", "recording", "speakers", "upload"]);
+    expect(Object.keys(body).sort()).toEqual(["page", "recording", "upload"]);
     expect(body.page).toMatchObject({ kind: "rec", title: "合成の会議", lang: "en" });
-    expect(body.recording).toMatchObject({ revision: 1, source: "audio", language: "en", durationSec: 3.5, sourceName: "合成の会議.m4a", segments: [] });
+    expect(body.recording).toMatchObject({ revision: 1, source: "audio", language: "en", durationSec: 3.5, sourceName: "合成の会議.m4a" });
+    expect(body.recording).not.toHaveProperty("segments");
     expect(body.recording.audio).toEqual({ status: "uploading", bytes: 5, contentType: "audio/mp4", expiresAt: expect.any(String) });
-    expect(body.speakers).toEqual([]);
     expect(body.upload).toEqual({ url: expect.stringMatching(/^\/api\/dev\/fake-storage\//), method: "PUT", headers: { "Content-Type": "audio/mp4" }, expiresAt: expect.any(String), maxBytes: 5 });
 
     expect(startUpload).toHaveBeenCalledWith({ objectPath: `audio/${assetId}`, contentType: "audio/mp4", sizeBytes: 5, origin: ORIGIN });
@@ -459,7 +457,7 @@ describe("POST /api/pages/{id}/recording/audio/complete", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     const body = await response.json();
-    expect(Object.keys(body).sort()).toEqual(["recording", "speakers"]);
+    expect(Object.keys(body).sort()).toEqual(["recording"]);
     expect(body.recording.audio).toEqual({ status: "uploaded", bytes: 5, contentType: "audio/mp4", expiresAt: expect.any(String) });
     expect(stat).toHaveBeenCalledTimes(1);
 

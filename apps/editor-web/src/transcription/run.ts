@@ -21,7 +21,7 @@ import { normalizeEngineResult } from "./normalize";
  * - 音声が複数ある録音（#36 段 3b-4）は、**すべての音声を順に**文字起こしして 1 本につなぐ（compose-parts.ts。前の音声の
  *   長さだけ時刻をずらし、話者の番号は音声ごとに振り直す）。1 回の実行の時間切れ（既定 20 分）は全部で共有する
  *   （1 つの task の締め切りを超えないため。足りなければ `EDITOR_TRANSCRIBE_TIMEOUT_SEC` を上げる）。
- * - 確定で書くのは run の書き先の文字起こしのタブ（`run.tab`。#310。古い run は正本。store の finishRun が分ける）。
+ * - 確定で書くのは run の書き先の文字起こしのタブ（`run.tab`。#310。書き先の無い古い run は書かずに失敗にする。store の finishRun が分ける）。
  * - エンジンは **run に記録された名前**で引く（タブごとに別のエンジンで作れるため）。その鍵がサーバーに無ければ engine_unavailable。
  *
  * - 途中の失敗は短い code にして run を failed にする（failRun。世代が一致するときだけ）。音声は消さないので「もう一度」ができる。
@@ -141,7 +141,7 @@ export async function executeRun(deps: ExecuteRunDeps): Promise<ExecuteRunOutcom
     const finished = await deps.store.finishRun(deps.runId, generation, normalized);
     if (finished === "succeeded") return { status: "succeeded" };
     if (finished === "superseded") {
-      // 開始後にタブ（古い run なら録音）が直された・消えた: store が書かずに failed（internal）にした
+      // 開始後にタブが直された・消えた（書き先の無い古い run も）: store が書かずに failed（internal）にした
       logFailure("internal");
       return { status: "failed", errorCode: "internal" };
     }

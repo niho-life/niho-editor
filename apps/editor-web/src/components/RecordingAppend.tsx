@@ -21,7 +21,7 @@ function isVtt(file: File): boolean {
  * - 何件でも選べる（複数回の録音・複数のファイル）。選んだ順に 1 件ずつ送り、途中で失敗したらそこで止めて、何件足せたかを出す
  *   （足せた分はサーバーに残る）。
  * - 書き込みは本文の保存の列（enqueue）に並べ、`baseRevision` は送る直前の revision を使う。足す関数（`append`）と、
- *   競合（409）から最新を取り出す関数（`conflictOf`）は呼ぶ側が渡す（録音の正本と文字起こしのタブで API が違う）。
+ *   競合（409）から最新を取り出す関数（`conflictOf`）は呼ぶ側が渡す（文字起こしのタブの API を呼ぶ。#310）。
  */
 export function RecordingAppend<S>({
   revision,

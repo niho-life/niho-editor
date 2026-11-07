@@ -716,7 +716,8 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.equal(created.status, 201);
     assert.equal(created.headers.get("cache-control"), "private, no-store");
     assert.equal(created.headers.get("x-robots-tag"), "noindex, nofollow");
-    const { page, recording, transcript: tabId } = await created.json();
+    const createdBody = await created.json();
+    const { page, recording, transcript: tabId } = createdBody;
     createdIds.push(page.id, tabId);
     assert.equal(page.kind, "rec");
     assert.equal(page.title, "合成の録音 e2e");
@@ -725,8 +726,8 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.equal(recording.durationSec, 6);
     assert.match(recording.sourceSha256, /^[0-9a-f]{64}$/);
     // 段落と話者名は文字起こしのタブ（#310）。録音の行は持たない
-    assert.deepEqual(recording.segments, []);
-    assert.deepEqual(recording.speakerNames, {});
+    assert.equal("segments" in recording || "speakerNames" in recording, false);
+    assert.equal("speakers" in createdBody, false, "the recording answers carry no speakers (the tab does)");
     assert.match(tabId, /^[0-9a-f-]{36}$/);
 
     const read = await fetch(`${base}/api/pages/${page.id}/recording`);
@@ -830,10 +831,14 @@ describe("editor-web e2e (stub, next dev)", () => {
     const other = await pool.query("INSERT INTO pages (owner, kind, title) VALUES ($1, 'rec', 'synthetic other recording') RETURNING id", [OTHER_OWNER]);
     const otherId = other.rows[0].id;
     createdIds.push(otherId);
+    await pool.query(`INSERT INTO page_recordings (page_id, owner, source, language) VALUES ($1, $2, 'vtt', 'ja')`, [otherId, OTHER_OWNER]);
+    // 他人の文字起こしのタブ（本文あり）
+    const otherTab = (await pool.query("INSERT INTO pages (owner, kind, title) VALUES ($1, 'note', 'synthetic other transcript') RETURNING id", [OTHER_OWNER])).rows[0].id;
+    createdIds.push(otherTab);
     await pool.query(
-      `INSERT INTO page_recordings (page_id, owner, source, language, segments, speaker_names)
-       VALUES ($1, $2, 'vtt', 'ja', $3::jsonb, $4::jsonb)`,
-      [otherId, OTHER_OWNER, JSON.stringify([{ start: 0, end: 1, text: "他人の合成の段落", speaker: 1 }]), JSON.stringify({ 1: "他人の話し手" })],
+      `INSERT INTO page_transcripts (page_id, owner, recording_page_id, engine, language, segments, speaker_names)
+       VALUES ($1, $2, $3, 'vtt-import', 'ja', $4::jsonb, $5::jsonb)`,
+      [otherTab, OTHER_OWNER, otherId, JSON.stringify([{ start: 0, end: 1, text: "他人の合成の段落", speaker: 1 }]), JSON.stringify({ 1: "他人の話し手" })],
     );
     const plain = (await (await write("POST", "/api/pages", {})).json()).page;
     createdIds.push(plain.id);
@@ -843,17 +848,20 @@ describe("editor-web e2e (stub, next dev)", () => {
       headers: [...response.headers.entries()].filter(([name]) => name !== "date").sort(),
       body: await response.text(),
     });
-    for (const [label, call] of [
-      ["GET recording", (id) => fetch(`${base}/api/pages/${id}/recording`)],
-      ["PATCH recording", (id) => write("PATCH", `/api/pages/${id}/recording`, { baseRevision: 1, renameSpeaker: { speaker: 1, name: "書き換え" } })],
+    for (const [label, mine, call] of [
+      ["GET recording", otherId, (id) => fetch(`${base}/api/pages/${id}/recording`)],
+      ["GET transcript", otherTab, (id) => fetch(`${base}/api/pages/${id}/transcript`)],
+      ["PATCH transcript", otherTab, (id) => write("PATCH", `/api/pages/${id}/transcript`, { baseRevision: 1, renameSpeaker: { speaker: 1, name: "書き換え" } })],
     ]) {
       const results = [];
-      for (const id of [otherId, randomUUID(), "not-a-uuid", plain.id]) results.push(await snapshot(await call(id)));
+      for (const id of [mine, randomUUID(), "not-a-uuid", plain.id]) results.push(await snapshot(await call(id)));
       assert.equal(results[0].status, 404, label);
       assert.equal(results[0].body, '{"error":"not_found"}', label);
       for (const result of results.slice(1)) assert.deepEqual(result, results[0], `${label} responses must be identical`);
     }
-    const untouched = await pool.query("SELECT revision, speaker_names FROM page_recordings WHERE page_id = $1", [otherId]);
+    // 録音の PATCH は無い（段落は文字起こしのタブ。#310）
+    assert.equal((await write("PATCH", `/api/pages/${otherId}/recording`, { baseRevision: 1, renameSpeaker: { speaker: 1, name: "書き換え" } })).status, 405);
+    const untouched = await pool.query("SELECT revision, speaker_names FROM page_transcripts WHERE page_id = $1", [otherTab]);
     assert.deepEqual(untouched.rows[0], { revision: 1, speaker_names: { 1: "他人の話し手" } });
   });
 
@@ -877,7 +885,7 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.equal(page.kind, "rec");
     assert.equal(page.title, "合成の音声 e2e");
     assert.equal(recording.source, "audio");
-    assert.deepEqual(recording.segments, []);
+    assert.equal("segments" in recording, false, "the recording row holds no transcript (the tab does)");
     assert.equal(recording.audio.status, "uploading");
     assert.equal(recording.audio.bytes, 4);
     assert.equal(Date.parse(recording.audio.expiresAt) - Date.parse(recording.createdAt), 30 * 24 * 60 * 60 * 1000);
@@ -893,7 +901,7 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.equal(done.status, 200);
     const doneBody = await done.json();
     assert.equal(doneBody.recording.audio.status, "uploaded");
-    assert.deepEqual(doneBody.speakers, []);
+    assert.equal("speakers" in doneBody, false);
     const again = await write("POST", `/api/pages/${page.id}/recording/audio/complete`);
     assert.equal(again.status, 200, "completing twice is fine");
     assert.deepEqual((await again.json()).recording.audio, doneBody.recording.audio);
@@ -938,7 +946,7 @@ describe("editor-web e2e (stub, next dev)", () => {
       [assetId, OTHER_OWNER, theirId, `audio/${assetId}`, sha256],
     );
     await pool.query(
-      `INSERT INTO page_recordings (page_id, owner, source, language, segments, audio_asset, audio_status) VALUES ($1, $2, 'audio', 'ja', '[]', $3, 'uploading')`,
+      `INSERT INTO page_recordings (page_id, owner, source, language, audio_asset, audio_status) VALUES ($1, $2, 'audio', 'ja', $3, 'uploading')`,
       [theirId, OTHER_OWNER, assetId],
     );
     const snapshot = async (response) => ({
@@ -1001,7 +1009,7 @@ describe("editor-web e2e (stub, next dev)", () => {
     const readBody = await read.json();
     assert.deepEqual(readBody.transcription, done);
     assert.equal(readBody.recording.audio.status, "uploaded", "the audio stays");
-    assert.deepEqual(readBody.recording.segments, [], "the recording row holds no transcript (the tab does)");
+    assert.equal("segments" in readBody.recording, false, "the recording row holds no transcript (the tab does)");
     assert.deepEqual(readBody.transcripts.map((tab) => [tab.id, tab.label, tab.engine, tab.segmentCount]), [[firstTab, "開発の偽物", "fake", 3]]);
     // 録音はフォルダに包まれ、文字起こしのタブは同じフォルダの「文字起こし」ページのタブ
     const placed = await pool.query("SELECT kind, parent, page, made_from FROM pages WHERE id = ANY($1::uuid[]) ORDER BY kind", [[pageId, firstTab]]);
@@ -1073,8 +1081,8 @@ describe("editor-web e2e (stub, next dev)", () => {
       [assetId, OTHER_OWNER, theirId, `audio/${assetId}`, "e".repeat(64)],
     );
     await pool.query(
-      `INSERT INTO page_recordings (page_id, owner, source, language, segments, audio_asset, audio_status, audio_expires_at)
-       VALUES ($1, $2, 'audio', 'ja', '[]', $3, 'uploaded', clock_timestamp() + interval '30 days')`,
+      `INSERT INTO page_recordings (page_id, owner, source, language, audio_asset, audio_status, audio_expires_at)
+       VALUES ($1, $2, 'audio', 'ja', $3, 'uploaded', clock_timestamp() + interval '30 days')`,
       [theirId, OTHER_OWNER, assetId],
     );
     const snapshot = async (response) => ({
@@ -1183,8 +1191,8 @@ describe("editor-web e2e (stub, next dev)", () => {
         [assetId, owner, id, `audio/${assetId}`, total, sha256],
       );
       await pool.query(
-        `INSERT INTO page_recordings (page_id, owner, source, language, segments, audio_asset, audio_status, audio_expires_at)
-         VALUES ($1, $2, 'audio', 'ja', '[]', $3, $4, ${expiresSql})`,
+        `INSERT INTO page_recordings (page_id, owner, source, language, audio_asset, audio_status, audio_expires_at)
+         VALUES ($1, $2, 'audio', 'ja', $3, $4, ${expiresSql})`,
         [id, owner, assetId, status],
       );
       return id;
@@ -1242,7 +1250,7 @@ describe("editor-web e2e (stub, next dev, the fake transcription engine fails) (
 
     const read = await (await fetch(`${base}/api/pages/${pageId}/recording`)).json();
     assert.equal(read.recording.audio.status, "uploaded", "the audio is kept after a failure");
-    assert.deepEqual(read.recording.segments, []);
+    assert.equal("segments" in read.recording, false);
     assert.equal(read.recording.revision, 1);
     assert.deepEqual(read.transcription, failed);
     // 書き先のタブは空のまま残る（#310）。「もう一度」は同じタブに書き直す

@@ -17,7 +17,7 @@ import type { AuthProvider } from "../auth/types";
 import { AUDIO_RETENTION_DAYS, audioLimits, audioRequestHash, validateAudioStart, type AudioStartRejection } from "../recording/audio-limits";
 import { StorageError, type ObjectStorage, type StoredObject, type UploadTicket } from "../storage/types";
 import { errorResponse, expectedOrigin, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
-import { withSpeakers } from "./recordings-api";
+import { withRecording } from "./recordings-api";
 
 /**
  * 録音の音声のアップロード（#36 段 2a・段 3b-4）の API: 上限の取得・開始・完了と、**2 本目以降の音声を足す**（parts）。
@@ -206,7 +206,7 @@ export function startAudioRoute(request: Request, deps: AudioApiDeps): Promise<R
     });
     if (started.status === "conflict") return audioError("idempotency_conflict");
     if (started.status === "created") {
-      return jsonResponse(201, { page: started.page, ...withSpeakers(started.recording), upload: uploadBody(ticket, start.sizeBytes) });
+      return jsonResponse(201, { page: started.page, ...withRecording(started.recording), upload: uploadBody(ticket, start.sizeBytes) });
     }
     // 同じキー・同じ内容の再送: 先に作った録音を返す。まだアップロード中なら、その資産の場所に ticket を作り直す
     const audio = started.recording.audio;
@@ -215,13 +215,13 @@ export function startAudioRoute(request: Request, deps: AudioApiDeps): Promise<R
       const again = await storage.startUpload({ objectPath: audioObjectPath(started.assetId), contentType: audio.contentType, sizeBytes: audio.bytes, origin });
       upload = uploadBody(again, audio.bytes);
     }
-    return jsonResponse(200, { page: started.page, ...withSpeakers(started.recording), upload });
+    return jsonResponse(200, { page: started.page, ...withRecording(started.recording), upload });
   });
 }
 
 /**
  * POST /api/pages/{id}/recording/audio/complete — アップロードの完了。保存先の object の大きさが申告どおりなら uploaded にする。
- * 200 `{ recording, speakers }`（GET と同じ形）。済んでいればそのまま 200。object が無い・大きさが違うは 409 incomplete。
+ * 200 `{ recording }`（GET と同じ形）。済んでいればそのまま 200。object が無い・大きさが違うは 409 incomplete。
  */
 export function completeAudioRoute(request: Request, id: string, deps: AudioApiDeps): Promise<Response> {
   return guarded("POST /api/pages/[id]/recording/audio/complete", async () => {
@@ -238,14 +238,14 @@ export function completeAudioRoute(request: Request, id: string, deps: AudioApiD
     if (info.status === "uploaded") {
       // 済んだものは保存先に問い合わせない（期限で消えた後も、済んだ記録は済んだまま）
       const recording = await store.getRecording(session.userId, id);
-      return recording ? jsonResponse(200, withSpeakers(recording)) : notFoundResponse();
+      return recording ? jsonResponse(200, withRecording(recording)) : notFoundResponse();
     }
     const stored: StoredObject | null = await storage.stat(info.objectPath);
     if (!stored) return audioError("incomplete", "missing");
     const result = await store.completeAudioUpload(session.userId, id, { sizeBytes: stored.sizeBytes });
     if (!result) return notFoundResponse();
     if (result.status === "size_mismatch") return audioError("incomplete", "size_mismatch");
-    return jsonResponse(200, withSpeakers(result.recording));
+    return jsonResponse(200, withRecording(result.recording));
   });
 }
 

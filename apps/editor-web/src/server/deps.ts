@@ -50,7 +50,6 @@ import {
   finishMacTranscription,
   finishMacLocalTranscription,
   updateImageMeta,
-  updateRecording,
   updateTranscript,
 } from "@niho/editor-store";
 import { getAuthProvider, getPhotoAuthProvider } from "../auth";
@@ -128,7 +127,6 @@ export const recordingDeps: RecordingsApiDeps = {
     return {
       createRecordingPage: (owner, input) => createRecordingPage(pool, owner, input),
       getRecording: (owner, pageId) => getRecording(pool, owner, pageId),
-      updateRecording: (owner, pageId, baseRevision, mutate) => updateRecording(pool, owner, pageId, baseRevision, mutate),
       latestTranscription: (owner, pageId) => latestRun(pool, owner, pageId),
       // 音声の列（#36 段 3b-4）と、この録音から作った文字起こしのタブ（#310）
       listAudioParts: (owner, pageId) => listAudioParts(pool, owner, pageId),

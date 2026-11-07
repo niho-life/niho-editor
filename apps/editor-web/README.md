@@ -129,10 +129,11 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 ## 録音と文字起こし（#36 段 1）
 
 - **API**（全て本人の・ゴミ箱でないページだけ。未認証 401、DB が無い 503、更新系は同じ origin でなければ 403）:
-  `POST /api/recordings/import-vtt`（本文 `{ name, vtt, lang? }`。録音ページ（`kind=rec`・本文は空）と文字起こしを 1 つの transaction で作り、201 `{ page, recording, speakers }`）・
-  `GET /api/pages/{id}/recording`（200 `{ recording, speakers }`）・`PATCH /api/pages/{id}/recording`（`baseRevision` と、`edits`・`renameSpeaker`・`mergeSpeakers` のちょうど 1 つ）。
+  `POST /api/recordings/import-vtt`（本文 `{ name, vtt, lang? }`。録音ページ（`kind=rec`・本文は空）と、段落を入れた文字起こしのタブを 1 つの transaction で作り、201 `{ page, transcript, recording }`）・
+  `GET /api/pages/{id}/recording`（200 `{ recording, transcription, audios, transcripts, engines, defaultEngine }`。録音の行は段落・話者名を持たない。#310）。
+  段落の編集・話者名・話者をまとめる・あとの `.vtt` を足すのは文字起こしのタブの `PATCH /api/pages/{タブ}/transcript`（`baseRevision` と、`edits`・`renameSpeaker`・`mergeSpeakers`・`appendVtt` のちょうど 1 つ。設計は [editor-recipes-and-folders.md](../../docs/architecture/editor-recipes-and-folders.md) §3.6）。録音の `PATCH`（`/api/pages/{id}/recording`）は #310 の contract（migration `drop_recording_candidates`）で外した。
   別の人・存在しない・不正な id・削除済み・録音の無いページは同じ 404。400 の本文は `{"error":"bad_request","reason":…}`（`body`・`name`・`lang`・`vtt_empty`・`vtt_too_large`・`vtt_invalid`・`index`・`text`・`speaker`・`merge`）。
-- **競合**: 書き込みは `baseRevision` が今の `revision` と同じときだけ（行を `FOR UPDATE` で押さえて比べる）。違えば書かずに 409 `{"error":"conflict","recording","speakers"}` で最新を返す（画面は自分の文章を残したまま、最新に当て直せる）。成功すると `revision` が 1 進む。
+- **競合**: 書き込みは `baseRevision` が今の `revision` と同じときだけ（行を `FOR UPDATE` で押さえて比べる）。違えば書かずに 409 `{"error":"conflict","transcript","speakers"}` で最新を返す（画面は自分の文章を残したまま、最新に当て直せる）。成功すると `revision` が 1 進む。
 - **形**: `segments` は docs-core の `SpeechResultV1` と同じ `{ start, end, text, speaker }`（時刻は秒、話者は 1 始まりの番号か null）。名前は `speakerNames`（番号 → 名前）の表に 1 つだけ持ち、表示は番号から引く（名前を変えると全段落に反映される）。話者名の規則は docs-core の `resolveTranscriptSpeakerName`（60 文字・改行とコロンなし・「話者N」の形は不可・NFKC で同じに見える名前は不可）と、制御文字なし。
 - **VTT**（`src/recording/vtt-import.ts`）: docs-core の `parseVtt` で検査し、cue を段落にする。`<v 話者>` は最初に出た順に 1 から番号を付け、規則に合わない名前は番号だけ。1 つの cue に別々の話者がいれば話者ごとに分ける。タグは外し、文字参照は文字に戻す。題名はファイル名（パスと拡張子を除く）、原本は SHA-256 と名前だけを持つ。
 - **上限**: VTT は UTF-8 で 4 MiB（取り込みの要求の本文は 5 MiB まで。超えたら 413）、段落は 20,000 個・1 段落 5,000 文字・本文の合計 8 MiB（docs-core の文字起こしの同期上限と同じ）、1 回の `edits` は 200 件（`PATCH` の本文は 4 MiB まで）。
@@ -149,8 +150,8 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 
 - **API**（作法は段 1 と同じ: 未認証 401、DB が無い 503、更新系は同じ origin でなければ 403、別の人・存在しない・不正な id・削除済み・音声の無いページは同じ 404）:
   `GET /api/recordings/audio/limits`（200 `{ maxBytes, maxDurationSec, retentionDays, extensions, contentTypes }`）・
-  `POST /api/recordings/audio/start`（本文 `{ name, contentType, sizeBytes, sha256, lang?, durationSec? }`、任意の `Idempotency-Key`（UUID）。201 `{ page, recording, speakers, upload: { url, method: "PUT", headers, expiresAt, maxBytes } }`。録音ページ（`kind=rec`・本文は空）・音声の資産・録音（状態 uploading・段落は空）を 1 つの transaction で作る）・
-  `POST /api/pages/{id}/recording/audio/complete`（200 `{ recording, speakers }`）。`GET /api/pages/{id}/recording` の `recording.audio` は `{ status: "uploading" | "uploaded", bytes, contentType, expiresAt }`、音声の無い録音（VTT）は null。
+  `POST /api/recordings/audio/start`（本文 `{ name, contentType, sizeBytes, sha256, lang?, durationSec? }`、任意の `Idempotency-Key`（UUID）。201 `{ page, recording, upload: { url, method: "PUT", headers, expiresAt, maxBytes } }`。録音ページ（`kind=rec`・本文は空）・音声の資産・録音（状態 uploading）を 1 つの transaction で作る）・
+  `POST /api/pages/{id}/recording/audio/complete`（200 `{ recording }`）。`GET /api/pages/{id}/recording` の `recording.audio` は `{ status: "uploading" | "uploaded", bytes, contentType, expiresAt }`、音声の無い録音（VTT）は null。
 - **流れ**: start → ブラウザが `upload.url` へ `upload.headers` を付けて直接 PUT（credentials なし。サーバーは音声を受け取らない）→ complete（保存先の object の大きさが申告と同じなら uploaded）。画面から呼ぶ関数は `src/lib/audio-upload-client.ts`（画面への組み込みは段 3）。
 - **エラー**: 400 `{"error":"bad_request","reason":…}`（`body`・`idempotency_key`・`name`・`content_type`・`extension`・`size`・`too_large`・`sha256`・`lang`・`duration`・`too_long`）、413（開始の本文が 16 KiB 超）、503 `storage_unavailable`（保存先を使わない設定）、502 `storage_failed`（保存先の失敗。中身は出さない）、409 `idempotency_conflict`（同じキーで内容が違う・そのキーのページがゴミ箱にある）、409 `{"error":"incomplete","reason":"missing"|"size_mismatch"}`。
 - **冪等**: 同じ `Idempotency-Key`・同じ内容（名前・種類・大きさ・sha256・言語・長さを正規化した SHA-256 で比べる）は 200 で同じページ。アップロード中なら ticket を作り直し、済んでいれば `upload: null`。complete は何度呼んでもよい（済んだものは保存先に問い合わせない）。

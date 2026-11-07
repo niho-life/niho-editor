@@ -1,5 +1,5 @@
-/** 録音（server の形）を、docs-ui の ShellRecording に渡す形にする純粋な関数と、時刻の表示の好み（端末ごと）。 */
-import type { Recording } from "@niho/editor-store";
+/** 録音・文字起こし（server の形）を、docs-ui の ShellRecording に渡す形にする純粋な関数と、時刻の表示の好み（端末ごと）。 */
+import type { Recording, RecordingData } from "@niho/editor-store";
 import { SHELL_TONES, type ShellSegment, type ShellSpeaker, type ShellTone } from "niho-docs-ui/shell";
 import type { RecordingSpeaker } from "./recording-client";
 
@@ -28,10 +28,10 @@ export function speakerTone(speaker: number | null): ShellTone {
 }
 
 /**
- * 録音の段落。id は段落の位置（0 始まり）。drafts は、まだ保存されていない（確定した）文章。
+ * 文字起こしのタブの段落。id は段落の位置（0 始まり）。drafts は、まだ保存されていない（確定した）文章。
  * currentId は、いま再生している段落の id（#36 段 3b-2。その段落だけ current）。
  */
-export function shellSegments(recording: Pick<Recording, "segments" | "speakerNames">, drafts: Readonly<Record<number, string>>, currentId: string | null = null): ShellSegment[] {
+export function shellSegments(recording: Pick<RecordingData, "segments" | "speakerNames">, drafts: Readonly<Record<number, string>>, currentId: string | null = null): ShellSegment[] {
   return recording.segments.map((segment, index) => ({
     id: String(index),
     who: segment.speaker === null ? NO_SPEAKER_LABEL : speakerLabel(segment.speaker, recording.speakerNames[String(segment.speaker)]),

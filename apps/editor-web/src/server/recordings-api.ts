@@ -11,25 +11,23 @@ import {
   type RecordingPage,
   type TranscriptTabSummary,
   type TranscriptionRunView,
-  type UpdateRecordingResult,
 } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
 import { appendTranscript, type AppendRejection } from "../recording/append-transcript";
 import { audioPartBody } from "./audio-api";
 import type { TranscriptionEngineName } from "../transcription/engine";
 import { SEGMENT_EDITS_MAX, editSegments, type SegmentEdit, type SegmentEditRejection } from "../recording/edit-segments";
-import { listSpeakers, mergeSpeakers, renameSpeaker, type SpeakerRejection, type SpeakerSummary } from "../recording/speakers";
+import { mergeSpeakers, renameSpeaker, type SpeakerRejection } from "../recording/speakers";
 import { VTT_IMPORT_ENGINE, VTT_IMPORT_MAX_BYTES, importVtt, readVtt, type VttImportFailure } from "../recording/vtt-import";
 import { errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
 import { transcriptionRunBody } from "./transcription-api";
 
 /**
- * 録音と文字起こし（#36 段 1 → #310）の API: VTT の取り込み（録音ページと文字起こしのタブを作る）、録音の読み取り（音声・実行・
- * 文字起こしのタブの一覧）、正本（#310 より前の録音）の段落の編集・話者名の変更・話者をまとめる・あとの音声の文字起こし（.vtt）を足す
- * （段 3b-3。時刻は前の音声の長さだけずらす。文字起こしのタブには transcript-api.ts が同じ本文で行う）。
+ * 録音と文字起こし（#36 段 1 → #310）の API: VTT の取り込み（録音ページと文字起こしのタブを作る）と、録音の読み取り（音声・実行・
+ * 文字起こしのタブの一覧）。段落の編集・話者名・話者をまとめる・あとの音声の文字起こし（.vtt）を足す書き換えの要求の形
+ * （`parseRecordingPatch`）は、文字起こしのタブの API（transcript-api.ts）が使う。録音そのものは段落を持たない（#310）。
  * 全て本人の・ゴミ箱でないページだけ。未認証 401、DB なし 503、別の人・存在しない・不正な id・削除済み・録音の無いページは同じ 404、
  * 更新系は同じ origin の画面からだけ（違えば 403）。エラーの本文は短い code と理由だけ（内部の情報を出さない）。
- * 書き込みは revision を見る: 別の画面で先に直されていたら上書きせず 409 で最新を返す（自分の文章は呼び出し側に残る）。
  */
 
 export type RecordingMutationRejection = SpeakerRejection | SegmentEditRejection | AppendRejection;
@@ -39,12 +37,6 @@ export type RecordingsStore = {
   /** VTT の取り込み（`transcript` は段落を入れた文字起こしのタブ。#310）。 */
   createRecordingPage: (owner: OwnerId, input: CreateRecordingInput) => Promise<{ page: RecordingPage; recording: Recording; transcript: string }>;
   getRecording: (owner: OwnerId, pageId: string) => Promise<Recording | null>;
-  updateRecording: (
-    owner: OwnerId,
-    pageId: string,
-    baseRevision: number,
-    mutate: RecordingMutation<RecordingMutationRejection>,
-  ) => Promise<UpdateRecordingResult<RecordingMutationRejection> | null>;
   /** 最新の文字起こしの run（#36 段 2b）。あれば GET の応答に `transcription`（run が無ければ null）を足す。 */
   latestTranscription?: (owner: OwnerId, pageId: string) => Promise<TranscriptionRunView | null>;
   /** 音声の列（#36 段 3b-4）。あれば GET の応答に `audios` を足す。 */
@@ -74,7 +66,7 @@ export type RecordingsApiDeps = {
  */
 export const VTT_IMPORT_BODY_MAX_BYTES = VTT_IMPORT_MAX_BYTES + 1024 * 1024;
 /**
- * 録音の書き換えの要求の本文の上限。段落 200 件 × 5,000 文字が日本語で収まる 4 MiB に、`appendVtt`（4 MiB までの VTT を
+ * 文字起こしの書き換えの要求の本文の上限。段落 200 件 × 5,000 文字が日本語で収まる 4 MiB に、`appendVtt`（4 MiB までの VTT を
  * JSON の文字列にしたもの）が入る余裕（1 MiB）を足す（取り込みの VTT_IMPORT_BODY_MAX_BYTES と同じ）。
  */
 export const RECORDING_PATCH_BODY_MAX_BYTES = VTT_IMPORT_BODY_MAX_BYTES;
@@ -118,8 +110,6 @@ function recordingBody(recording: Recording) {
     durationSec: recording.durationSec,
     sourceName: recording.sourceName,
     sourceSha256: recording.sourceSha256,
-    segments: recording.segments.map(({ start, end, text, speaker }) => ({ start, end, text, speaker })),
-    speakerNames: { ...recording.speakerNames },
     // 音声（#36 段 2a）。音声の無い録音は null。bytes・contentType は申告の値、expiresAt は保存先から消える見込みの時刻
     audio: recording.audio
       ? { status: recording.audio.status, bytes: recording.audio.bytes, contentType: recording.audio.contentType, expiresAt: recording.audio.expiresAt }
@@ -129,9 +119,9 @@ function recordingBody(recording: Recording) {
   };
 }
 
-/** 録音の応答（`{ recording, speakers }`。GET と同じ形。音声の API（audio-api.ts）も使う）。 */
-export function withSpeakers(recording: Recording): { recording: ReturnType<typeof recordingBody>; speakers: SpeakerSummary[] } {
-  return { recording: recordingBody(recording), speakers: listSpeakers(recording) };
+/** 録音の応答（`{ recording }`。GET と同じ形。音声の API（audio-api.ts）も使う）。段落・話者は文字起こしのタブの API（`{ transcript, speakers }`）。 */
+export function withRecording(recording: Recording): { recording: ReturnType<typeof recordingBody> } {
+  return { recording: recordingBody(recording) };
 }
 
 /** 応答に載せる文字起こしのタブの 1 行（#310。本文は `/api/pages/{tab}/transcript`）。`label` はタブの帯と同じ札。 */
@@ -171,7 +161,7 @@ function parseImport(body: unknown): { ok: true; value: ImportRequest } | { ok: 
   return { ok: true, value: { name: body.name, vtt: body.vtt, lang } };
 }
 
-/** POST /api/recordings/import-vtt — VTT を取り込んで録音ページと文字起こしのタブを作る（201 で `{ page, transcript, recording, speakers }`。#310）。 */
+/** POST /api/recordings/import-vtt — VTT を取り込んで録音ページと文字起こしのタブを作る（201 で `{ page, transcript, recording }`。#310）。 */
 export function importVttRoute(request: Request, deps: RecordingsApiDeps): Promise<Response> {
   return guarded("POST /api/recordings/import-vtt", async () => {
     const session = await deps.auth().getSession(request);
@@ -198,12 +188,12 @@ export function importVttRoute(request: Request, deps: RecordingsApiDeps): Promi
       segments: value.segments,
       speakerNames: value.speakerNames,
     });
-    return jsonResponse(201, { page: created.page, transcript: created.transcript, ...withSpeakers(created.recording) });
+    return jsonResponse(201, { page: created.page, transcript: created.transcript, ...withRecording(created.recording) });
   });
 }
 
 /**
- * GET /api/pages/{id}/recording — 録音（`{ recording, speakers, transcription, audios, transcripts, engines, defaultEngine }`）。
+ * GET /api/pages/{id}/recording — 録音（`{ recording, transcription, audios, transcripts, engines, defaultEngine }`）。
  * transcription は最新の文字起こしの run（#36 段 2b。無ければ null）、audios は音声の列（#36 段 3b-4。足した順）、
  * transcripts はこの録音から作った文字起こしのタブ（#310。入れ物の中の並び。無ければ空）。無ければ同じ 404。
  */
@@ -221,9 +211,9 @@ export function getRecordingRoute(request: Request, id: string, deps: Recordings
       store.listAudioParts?.(owner, id) ?? [],
       store.listTranscripts?.(owner, id) ?? [],
     ]);
-    if (!store.latestTranscription && !store.listAudioParts && !store.listTranscripts && !deps.engines && !deps.defaultEngine) return jsonResponse(200, withSpeakers(recording));
+    if (!store.latestTranscription && !store.listAudioParts && !store.listTranscripts && !deps.engines && !deps.defaultEngine) return jsonResponse(200, withRecording(recording));
     return jsonResponse(200, {
-      ...withSpeakers(recording),
+      ...withRecording(recording),
       transcription: run ? transcriptionRunBody(run) : null,
       audios: audios.map(audioPartBody),
       transcripts: transcripts.map(transcriptTabBody),
@@ -267,7 +257,7 @@ function parseEdits(value: unknown): SegmentEdit[] | null {
 }
 
 /**
- * 書き換えの要求（録音の正本と文字起こしのタブで同じ。transcript-api.ts も使う）: `baseRevision` と、edits・renameSpeaker・mergeSpeakers・appendVtt の
+ * 文字起こしのタブの書き換えの要求（transcript-api.ts が使う）: `baseRevision` と、edits・renameSpeaker・mergeSpeakers・appendVtt の
  * ちょうど 1 つ。形が違えば body（400）。
  * 値の中身（範囲の外の index・規則に合わない名前・存在しない話者・足せない段落）は mutate が断る
  * （400 index・text・name・speaker・merge・append_*）。
@@ -305,28 +295,4 @@ export function parseRecordingPatch(body: unknown): PatchResult {
   const { from, into } = merge;
   if (typeof from !== "number" || typeof into !== "number") return { ok: false, reason: "body" };
   return { ok: true, value: { baseRevision, mutate: (data) => mergeSpeakers(data, from, into) } };
-}
-
-/**
- * PATCH /api/pages/{id}/recording — 段落の編集・話者名の変更・話者をまとめる・あとの .vtt を足す（1 回に 1 つ）。
- * 200 `{ recording, speakers }`。別の画面で先に直されていたら 409 `{ error: "conflict", recording, speakers }`（最新。何も書かない）。
- */
-export function patchRecordingRoute(request: Request, id: string, deps: RecordingsApiDeps): Promise<Response> {
-  return guarded("PATCH /api/pages/[id]/recording", async () => {
-    const session = await deps.auth().getSession(request);
-    if (!session) return errorResponse("unauthorized");
-    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
-    const store = deps.store();
-    if (!store) return errorResponse("unavailable");
-    // 本文の検査は id の有無より先（どの id でも同じ順に判定し、存在を漏らさない）
-    const body = await readBody(request, RECORDING_PATCH_BODY_MAX_BYTES);
-    if (!body.ok) return body.response;
-    const patch = parseRecordingPatch(body.value);
-    if (!patch.ok) return badRequest(patch.reason);
-    const result = await store.updateRecording(session.userId, id, patch.value.baseRevision, patch.value.mutate);
-    if (!result) return notFoundResponse();
-    if (result.status === "rejected") return badRequest(result.reason);
-    if (result.status === "conflict") return jsonResponse(409, { error: "conflict", ...withSpeakers(result.recording) });
-    return jsonResponse(200, withSpeakers(result.recording));
-  });
 }

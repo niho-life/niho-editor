@@ -20,7 +20,7 @@ export type TranscriptionRun = {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
-  /** 結果を書く文字起こしのタブ（#310。古い run は null）。 */
+  /** 結果を書く文字起こしのタブ（#310。書き先の無い古い run は null）。 */
   tab: string | null;
 };
 
