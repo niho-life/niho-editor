@@ -421,6 +421,8 @@ function createToolRunner(deps: {
     const target = find(input.page_id);
     if (!target) return { ok: false, outcome: { ok: false, result: "そのページは、この会話では書けません。list_pages の id を使ってください。" } };
     if (!target.writable) return { ok: false, outcome: { ok: false, result: "そのページは読むだけです（同じフォルダのほかのページ）。書けるのは開いているページとその親・サブページだけです。", page: target.title } };
+    // 文字起こしのタブ（#310）の本文は画面に出ない（段落は page_transcripts）。書いても見えないので断る
+    if (target.transcriptOf !== null) return { ok: false, outcome: { ok: false, result: "文字起こしのタブの本文は書けません。文字起こしは読み取り専用で、直すのは「文字起こし修正」の段階の仕事です。書くなら別のページか新しいページへ。", page: target.title } };
     const deviceRevision = deps.deviceRevisions?.get(target.id);
     const device = deviceRevision !== undefined;
     // Mac CLI の書き戻しは base_revision を持たない（CLI が読んだ版＝deviceRevisions が前提）
