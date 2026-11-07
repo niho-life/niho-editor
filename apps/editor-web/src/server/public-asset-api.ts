@@ -37,7 +37,7 @@ export function pgPublicAssetStore(db: Queryable): PublicAssetStore {
            JOIN publication_versions pv ON pv.page_id = p.page_id AND pv.version = p.version AND pv.handle = p.handle
            JOIN pages page ON page.id = p.page_id AND page.deleted_at IS NULL
            JOIN assets a ON a.page_id = page.id AND a.owner = page.owner
-          WHERE p.stopped_at IS NULL
+          WHERE p.stopped_at IS NULL AND p.dest = 'site'
             AND a.kind = 'image' AND a.upload_status = 'ready' AND a.consent = true
             AND a.sha256 = $1
           LIMIT 64`,
@@ -61,7 +61,8 @@ function publishedAsset(snapshot: unknown, file: string, id: string): PublishedA
   const document = { ...snapshot as Record<string, unknown> };
   delete document.fingerprint;
   const parsed = parsePublishedDoc(document, { requireProjection: true });
-  if (!parsed.ok) return null;
+  // Assets are public only when a current personal-site publication authorizes them.
+  if (!parsed.ok || parsed.value.dest !== "site") return null;
   const assets = [...parsed.value.assets, ...(parsed.value.cover ? [parsed.value.cover] : [])];
   return assets.find((asset) => {
     if (asset.id !== id || asset.sha256 !== file.slice(0, 64)) return false;

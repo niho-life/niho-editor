@@ -76,7 +76,6 @@ const SIDE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** 設定系のページ（ヘッダーの題名と、左下の「設定」の現在地）。 */
 const SETTINGS_ROUTES = [
-  { path: "/destinations/experience", title: "NIHO Experience" },
   { path: "/destinations", title: "発信先" },
   { path: "/settings", title: "設定" },
 ] as const;

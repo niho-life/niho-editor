@@ -5,7 +5,7 @@ import { checkStartupConfig } from "./startup-check";
 describe("checkStartupConfig: public API settings (#40)", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("reports invalid face credentials and rate limit without their values and keeps starting", () => {
+  it("ignores retired face credentials and reports an invalid rate limit without its value", () => {
     const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     checkStartupConfig({
@@ -15,10 +15,7 @@ describe("checkStartupConfig: public API settings (#40)", () => {
       EDITOR_PUBLIC_API_RATE_LIMIT_PER_MINUTE: "lots",
     });
     expect(exit).not.toHaveBeenCalled();
-    expect(error.mock.calls).toEqual([
-      ["editor-web: EDITOR_FACE_CREDENTIALS is invalid; NIHO faces cannot read the public API"],
-      ["editor-web: EDITOR_PUBLIC_API_RATE_LIMIT_PER_MINUTE is invalid; using the default"],
-    ]);
+    expect(error.mock.calls).toEqual([["editor-web: EDITOR_PUBLIC_API_RATE_LIMIT_PER_MINUTE is invalid; using the default"]]);
     expect(JSON.stringify(error.mock.calls)).not.toContain("secret-looking-value");
   });
 

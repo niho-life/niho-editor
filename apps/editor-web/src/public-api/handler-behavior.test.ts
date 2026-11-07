@@ -6,7 +6,7 @@ import { decodeCursor, encodeCursor } from "./cursor";
 import { createPublicApi, newRequestId, type PublicApiOptions, type PublicApiRequest } from "./handler";
 import { createFixedWindowLimiter } from "./rate-limit";
 import type { PublicApiSource } from "./source";
-import { buildFixture, docPath, listPath, previewPath, publication, SITE_A, type Fixture } from "./testing/contract-scenarios";
+import { buildFixture, docPath, listPath, previewPath, publication, SITE_A, SITE_B, type Fixture } from "./testing/contract-scenarios";
 import { createRng, syntheticUuid } from "./testing/synthetic";
 import { worldFaces, worldSource } from "./testing/world-source";
 
@@ -55,7 +55,7 @@ describe("rate limit (per credential hash, fixed window inside one instance)", (
     expect(JSON.parse(limited.body ?? "null")).toEqual({ error: { code: "rate_limited", requestId: "req_behavior", retryable: true } });
     expect(calls.length).toBe(before);
     // 別の資格は数えが別
-    expect((await server.handle(get(listPath("exp"), fixture.keys.exp))).status).toBe(200);
+    expect((await server.handle(get(listPath(SITE_B), fixture.keys.siteB))).status).toBe(200);
     // 次の窓で戻る
     now = "2026-10-01T00:01:00.000Z";
     expect((await server.handle(get(listPath(SITE_A), fixture.keys.siteA))).status).toBe(200);
@@ -95,7 +95,7 @@ describe("failures", () => {
 
   it("turns a store failure into 503 and records only the error name (never the credential, token or URL)", async () => {
     const recorded: string[] = [];
-    const failing = new Error(`connection refused for ${fixture.keys.siteA} ${fixture.keys.previewExp}`);
+    const failing = new Error(`connection refused for ${fixture.keys.siteA} ${fixture.keys.previewSiteA}`);
     failing.name = "StoreDown";
     const source: PublicApiSource = {
       ...worldSource(fixture.world),
@@ -106,7 +106,7 @@ describe("failures", () => {
     try {
       const server = createPublicApi({ source, faces: worldFaces(fixture.world), clock: { now: () => fixture.world.now }, onUnexpected: (name) => recorded.push(name) });
       const list = await server.handle(get(listPath(SITE_A), fixture.keys.siteA));
-      const preview = await server.handle(get(previewPath(fixture.keys.previewExp), fixture.keys.exp));
+      const preview = await server.handle(get(previewPath(fixture.keys.previewSiteA), fixture.keys.siteA));
       for (const response of [list, preview]) {
         expect(response.status).toBe(503);
         expect(codeOf(response.body)).toBe("temporarily_unavailable");
@@ -116,7 +116,7 @@ describe("failures", () => {
       expect(recorded).toEqual(["StoreDown", "StoreDown"]);
       // 既定の記録（console.error）も name だけ
       const defaults = createPublicApi({ source, faces: worldFaces(fixture.world), clock: { now: () => fixture.world.now } });
-      await defaults.handle(get(previewPath(fixture.keys.previewExp), fixture.keys.exp));
+      await defaults.handle(get(previewPath(fixture.keys.previewSiteA), fixture.keys.siteA));
       const logged = JSON.stringify(spy.mock.calls);
       expect(logged).toContain("StoreDown");
       for (const secret of Object.values(fixture.keys)) expect(logged).not.toContain(secret);
@@ -148,7 +148,7 @@ describe("stored snapshots", () => {
     const categoryDisplay = { labelEn: "Walks", labelJa: "散策", displayOrder: 4, revision: 7 };
     const world: ReferenceWorld = {
       ...fixture.world,
-      publications: fixture.world.publications.map((item) => item.pageId !== fixture.ids.expLive ? item : {
+      publications: fixture.world.publications.map((item) => item.pageId !== fixture.ids.siteLive ? item : {
         ...item,
         snapshot: { ...item.snapshot, category: "walks", categoryDisplay },
       }),
@@ -167,12 +167,12 @@ describe("stored snapshots", () => {
       clock: { now: () => world.now },
     });
 
-    const list = await server.handle(get(listPath("exp"), fixture.keys.exp));
-    const document = await server.handle(get(docPath("exp", fixture.ids.expLive), fixture.keys.exp));
-    const preview = await server.handle(get(previewPath(fixture.keys.previewExp), fixture.keys.exp));
+    const list = await server.handle(get(listPath(SITE_A), fixture.keys.siteA));
+    const document = await server.handle(get(docPath(SITE_A, fixture.ids.siteLive), fixture.keys.siteA));
+    const preview = await server.handle(get(previewPath(fixture.keys.previewSiteA), fixture.keys.siteA));
     expect(list.status).toBe(200);
     expect((JSON.parse(list.body ?? "null") as { items: { id: string; categoryDisplay?: unknown }[] }).items
-      .find((item) => item.id === fixture.ids.expLive)?.categoryDisplay).toEqual(categoryDisplay);
+      .find((item) => item.id === fixture.ids.siteLive)?.categoryDisplay).toEqual(categoryDisplay);
     expect(JSON.parse(document.body ?? "null")).toMatchObject({ category: "walks", categoryDisplay });
     expect(JSON.parse(preview.body ?? "null")).toMatchObject({ category: "walks", categoryDisplay });
   });
@@ -182,7 +182,7 @@ describe("stored snapshots", () => {
     const authorProfile = { role: "合成の案内人", bio: "海辺の朝を書きます。" };
     const world: ReferenceWorld = {
       ...fixture.world,
-      publications: fixture.world.publications.map((item) => item.pageId !== fixture.ids.expLive ? item : {
+      publications: fixture.world.publications.map((item) => item.pageId !== fixture.ids.siteLive ? item : {
         ...item,
         snapshot: { ...item.snapshot, cover, coverShareable: true, authorProfile },
       }),
@@ -202,22 +202,22 @@ describe("stored snapshots", () => {
     });
     const plain = api(fixture.world);
 
-    const list = JSON.parse((await server.handle(get(listPath("exp"), fixture.keys.exp))).body ?? "null") as { items: Record<string, unknown>[] };
-    const item = list.items.find((entry) => entry.id === fixture.ids.expLive);
+    const list = JSON.parse((await server.handle(get(listPath(SITE_A), fixture.keys.siteA))).body ?? "null") as { items: Record<string, unknown>[] };
+    const item = list.items.find((entry) => entry.id === fixture.ids.siteLive);
     expect(item).toMatchObject({ cover, coverShareable: true, authorProfile });
     // The other items of the same list carry neither field (never `false` or an empty profile)
-    for (const other of list.items.filter((entry) => entry.id !== fixture.ids.expLive)) {
+    for (const other of list.items.filter((entry) => entry.id !== fixture.ids.siteLive)) {
       expect(Object.keys(other)).not.toContain("coverShareable");
       expect(Object.keys(other)).not.toContain("authorProfile");
     }
-    const document = await server.handle(get(docPath("exp", fixture.ids.expLive), fixture.keys.exp));
+    const document = await server.handle(get(docPath(SITE_A, fixture.ids.siteLive), fixture.keys.siteA));
     expect(document.status).toBe(200);
     expect(JSON.parse(document.body ?? "null")).toMatchObject({ coverShareable: true, authorProfile, author: expect.not.objectContaining({ role: expect.anything() }) });
-    const preview = await server.handle(get(previewPath(fixture.keys.previewExp), fixture.keys.exp));
+    const preview = await server.handle(get(previewPath(fixture.keys.previewSiteA), fixture.keys.siteA));
     expect(JSON.parse(preview.body ?? "null")).toMatchObject({ cover, coverShareable: true });
 
     // A version without the fields has no such keys in its answer (its body and ETag are what they were)
-    const before = await plain.handle(get(docPath("exp", fixture.ids.expLive), fixture.keys.exp));
+    const before = await plain.handle(get(docPath(SITE_A, fixture.ids.siteLive), fixture.keys.siteA));
     const beforeBody = JSON.parse(before.body ?? "null") as Record<string, unknown>;
     expect(Object.keys(beforeBody)).not.toContain("coverShareable");
     expect(Object.keys(beforeBody)).not.toContain("authorProfile");

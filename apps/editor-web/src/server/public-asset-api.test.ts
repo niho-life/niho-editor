@@ -12,7 +12,7 @@ const BYTES = Uint8Array.of(1, 2, 3);
 const SHA = createHash("sha256").update(BYTES).digest("hex");
 const FILE = `${SHA}.jpg`;
 const ASSET = { id: ID, url: `https://assets.editor.example/assets/${FILE}`, contentType: "image/jpeg" as const, bytes: 3, sha256: SHA, alt: "Figure-specific alt", credit: null };
-const SNAPSHOT = { ...snapshot({ id: "00000000-0000-4000-8000-000000000001", dest: "exp", slug: "sample", title: "Sample", updatedAt: "2026-11-03T00:00:00.000Z" }), range: "live", cover: ASSET, fingerprint: "cd".repeat(32) };
+const SNAPSHOT = { ...snapshot({ id: "00000000-0000-4000-8000-000000000001", dest: "site", slug: "sample", title: "Sample", updatedAt: "2026-11-03T00:00:00.000Z" }), range: "live", cover: ASSET, fingerprint: "cd".repeat(32) };
 const ROW: PublicAssetRow = { snapshot: SNAPSHOT, assetId: ID, objectPath: `image/${ID}`, bytes: 3, sha256: SHA, contentType: "image/jpeg" };
 
 function deps(rows: readonly PublicAssetRow[] = [ROW], stored: { bytes?: Uint8Array; body?: ReadableStream<Uint8Array>; contentType?: string | null; sizeBytes?: number } | null = {}, readTimeoutMs?: number) {
@@ -48,6 +48,14 @@ describe("public current-publication assets", () => {
       expect(await response.json()).toEqual({ error: "not_found" });
       expect(fixture.readObject).not.toHaveBeenCalled();
     }
+  });
+
+  it("never serves an asset whose only authorization is a legacy Experience snapshot", async () => {
+    const legacy = { ...ROW, snapshot: { ...SNAPSHOT, dest: "exp" } } as PublicAssetRow;
+    const fixture = deps([legacy]);
+    const response = await readPublicAssetRoute(FILE, fixture.value);
+    expect(response.status).toBe(404);
+    expect(fixture.readObject).not.toHaveBeenCalled();
   });
 
   it("fails closed with 503 for missing dependencies and inconsistent private storage", async () => {

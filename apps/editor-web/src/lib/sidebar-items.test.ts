@@ -145,7 +145,7 @@ describe("arrangeSidebarItems", () => {
       [page("article", { kind: "step", stepStatus: "run", publication: { dest: "niho", handle: "takuya", range: "live", stopped: false } })],
       { now: NOW },
     );
-    expect(items[0]).toMatchObject({ busy: true, sub: { text: "NIHO", dest: "niho" } });
+    expect(items[0]).toMatchObject({ busy: true, sub: { text: "作成中…" } });
   });
 
   it("never drops rows whose parents form a cycle", () => {
@@ -225,7 +225,7 @@ describe("arrangeSidebarItems: 入れ物とタブ（#308）", () => {
       [holder("p1"), tab("t1", "p1", 1, { publication: { ...live, stopped: true } }), tab("t2", "p1", 2, { publication: live })],
       { now: NOW },
     );
-    expect(items[0]!.sub).toEqual({ text: "NIHO Experience", dest: "exp" });
+    expect(items[0]!.sub).toBeUndefined();
   });
 
   it("並びは入れ物（と入れ物の無い行）の間で決まる。タブの id で聞いても入れ物の兄弟", () => {
@@ -274,11 +274,7 @@ describe("arrangeSidebarItems: 2 行目の公開先（#39）", () => {
       ],
       { now: NOW },
     );
-    expect(rows.map((row) => row.sub)).toEqual([
-      { text: "NIHO Experience", dest: "exp" },
-      { text: "NIHO", dest: "niho" },
-      { text: "自分のサイト", dest: "site" },
-    ]);
+    expect(rows.map((row) => row.sub)).toEqual([undefined, undefined, { text: "自分のサイト", dest: "site" }]);
   });
 
   it("公開をやめたページは「公開をやめた」（印なし）。公開の無いページは今までどおり", () => {
@@ -286,12 +282,12 @@ describe("arrangeSidebarItems: 2 行目の公開先（#39）", () => {
       [{ ...page("a"), publication: { ...live, stopped: true } }, { ...page("b", { kind: "rec" }), publication: null }, page("c")],
       { now: NOW },
     );
-    expect(rows.map((row) => row.sub)).toEqual([{ text: "公開をやめた" }, undefined, undefined]);
+    expect(rows.map((row) => row.sub)).toEqual([undefined, undefined, undefined]);
   });
 
   it("公開中は録音・作成中より先に出す（モック v6 の順）", () => {
     const rec = { ...page("rec", { kind: "rec", title: "鎌倉の録音" }), publication: live };
-    expect(arrangeSidebarItems([rec], { now: NOW })[0]!.sub).toEqual({ text: "NIHO Experience", dest: "exp" });
+    expect(arrangeSidebarItems([rec], { now: NOW })[0]!.sub).toBeUndefined();
   });
 });
 

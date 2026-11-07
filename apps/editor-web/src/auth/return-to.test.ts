@@ -10,8 +10,8 @@ describe("safeReturnTo", () => {
       expect(safeReturnTo(path), path).toBe(path);
     }
     expect(safeReturnTo("/p/new?from=recording")).toBe("/p/new?from=recording");
-    expect(safeReturnTo("/p/new?destination=exp&lang=en&experience=morning-walk")).toBe("/p/new?destination=exp&lang=en&experience=morning-walk");
-    expect(safeReturnTo("/p/new?lang=en&destination=exp")).toBe("/p/new?destination=exp&lang=en");
+    expect(safeReturnTo("/p/new?destination=exp&lang=en&experience=morning-walk")).toBe("/p/new");
+    expect(safeReturnTo("/p/new?lang=en&destination=exp")).toBe("/p/new");
   });
 
   it("drops the query and the hash, except the recording start", () => {

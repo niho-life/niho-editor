@@ -4,12 +4,13 @@
  * while there is a problem. PublishService re-checks everything on its own and does not rely on it.
  */
 
-import { FACE_DESTS, type Extras, type PublicationRange } from "@niho/editor-publish-contract";
+import { type Extras, type PublicationRange } from "@niho/editor-publish-contract";
 import { destinationUrl, parseDestinationDeclaration, type DestinationDeclaration } from "./declaration.js";
 import { evaluateReadiness, type ReadinessFacts } from "./readiness.js";
 import { slugFromTitle, suggestSlug, validateSlug, type SlugError } from "./slug.js";
 import {
   EXTRA_KEYS,
+  PUBLISHABLE_FACE_DESTS,
   destOf,
   roleAllows,
   storageBlockOf,
@@ -147,7 +148,7 @@ export function sheetPlan(input: SheetPlanInput): SheetPlan {
   const status = deriveStatus(input.publication, input.draftFingerprint);
   const declarations = new Map<string, DestinationDeclaration | null>();
   const destinations: SheetDestination[] = [];
-  for (const dest of FACE_DESTS) {
+  for (const dest of PUBLISHABLE_FACE_DESTS) {
     const declaration = declarationOf(input.declarations[dest], dest);
     declarations.set(dest, declaration);
     const reason: DestinationBlock | null = !roleAllows(input.roles, dest) ? "role" : declaration === null ? "unavailable" : null;

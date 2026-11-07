@@ -226,8 +226,9 @@ export function createPublicApi(options: PublicApiOptions): PublicApi {
       const handle = await api.siteHandleByKeyHash(digest, now);
       return handle !== null && isConnectionHandle(handle) ? { kind: "site", handle } : null;
     }
-    const audience = faces.audienceByHash(digest, now);
-    return isFaceDest(audience) ? { kind: "face", dest: audience } : null;
+    // Face credentials are retained in the wire/config parser for compatibility, but no operating face is readable.
+    void faces;
+    return null;
   }
 
   /** 本人のサイトの鍵は自分の接続の handle だけ、面の資格は自分の面の handle だけ。 */

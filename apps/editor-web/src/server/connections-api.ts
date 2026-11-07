@@ -2,13 +2,9 @@ import { isConnectionHandle, type FaceDest } from "@niho/editor-publish-contract
 import {
   CONNECTION_MODES,
   ConnectionService,
-  FACE_LABELS,
   isConnectionMode,
   isSiteUrl,
   isUrlShape,
-  parseDestinationDeclaration,
-  roleAllows,
-  PUBLISHABLE_FACE_DESTS,
   type ConnectionMode,
   type ConnectionView,
   type ExportArchive,
@@ -162,41 +158,6 @@ function issuedKeyDto(key: { id: string; plaintext: string; masked: string; crea
   return { id: key.id, plaintext: key.plaintext, masked: key.masked, createdAt: key.createdAt };
 }
 
-/** 役割と宣言から、NIHO の面の行を作る。役割の無い面の宣言は読まない。 */
-async function faceRows(wiring: PublishWiring, actorId: string, counts: Map<string, number>): Promise<FaceDestinationDto[]> {
-  let roles: readonly string[];
-  try {
-    roles = await wiring.publish.roles.read(actorId);
-  } catch {
-    // 現在の役割を確認できないことは「役割なし」ではない。本人のサイト一覧はこの失敗と独立して返す。
-    return PUBLISHABLE_FACE_DESTS.map((handle) => ({
-      handle,
-      label: FACE_LABELS[handle],
-      host: null,
-      path: null,
-      available: false,
-      reason: "unavailable",
-      published: counts.get(handle) ?? 0,
-    }));
-  }
-  const rows: FaceDestinationDto[] = [];
-  for (const handle of PUBLISHABLE_FACE_DESTS) {
-    const allowed = roleAllows(roles, handle);
-    const parsed = allowed ? parseDestinationDeclaration(await wiring.publish.declarations.get(handle)) : null;
-    const declaration = parsed?.ok ? parsed.value : null;
-    rows.push({
-      handle,
-      label: declaration?.label ?? FACE_LABELS[handle],
-      host: declaration?.host ?? null,
-      path: declaration?.path ?? null,
-      available: declaration !== null,
-      reason: !allowed ? "role" : declaration === null ? "unavailable" : null,
-      published: counts.get(handle) ?? 0,
-    });
-  }
-  return rows;
-}
-
 type CreateInput = { handle: string; mode: ConnectionMode; siteUrl: string; urlShape?: UrlShape };
 
 /** POST の本文（`{ handle, mode, siteUrl, urlShape? }` だけ）。細かい断りは ConnectionService が決める。 */
@@ -252,17 +213,17 @@ function refusal(reason: string): Response {
 }
 
 /**
- * 役割で出せる面と、本人のサイトの接続（解除したものは出さない）。
+ * 本人のサイトの接続（解除したものは出さない）。運営面は返さない。
  * route（GET /api/destinations）と、画面の最初の値を読む server component（app/(editor)/destinations/page.tsx）の両方が使う。
  */
 export async function destinationsFor(wiring: PublishWiring, actorId: string, countLive: LivePublishedCounter): Promise<DestinationsDto> {
   const listed = await new ConnectionService(wiring.connections).listConnections({ actorId });
   if (!listed.ok) throw new Error(`connections are not available: ${listed.reason}`);
   const live = listed.connections.filter((connection) => connection.removedAt === null);
-  // 数えるのは本人のページの公開版だけ（面の handle は全員で共有するので、owner を必ず渡す）
-  const counts = await countLive(actorId, [...PUBLISHABLE_FACE_DESTS, ...live.map((connection) => connection.handle)]);
+  // 数えるのは本人のページの公開版だけなので、owner を必ず渡す。
+  const counts = await countLive(actorId, live.map((connection) => connection.handle));
   return {
-    faces: await faceRows(wiring, actorId, counts),
+    faces: [],
     sites: live.map((connection) => siteDto(connection, counts.get(connection.handle) ?? 0)),
     modes: [...CONNECTION_MODES],
   };

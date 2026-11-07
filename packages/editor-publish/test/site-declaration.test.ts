@@ -86,7 +86,7 @@ describe("PublishService through the connection adapters", () => {
       .toEqual({ ok: false, reason: "forbidden_destination", detail: "extras" });
   });
 
-  it("Experience still works through the same declaration source", async () => {
+  it("refuses Experience before declaration or facts can make it publishable", async () => {
     const world = createSiteWorld();
     const result = await world.publisher.publish({
       actorId: ACTOR,
@@ -94,6 +94,6 @@ describe("PublishService through the connection adapters", () => {
       target: { dest: "exp" },
       settings: SETTINGS.exp,
     });
-    expect(result).toMatchObject({ ok: true, publication: { dest: "exp" } });
+    expect(result).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
   });
 });

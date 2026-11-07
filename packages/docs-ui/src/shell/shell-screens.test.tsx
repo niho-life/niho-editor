@@ -116,11 +116,10 @@ describe("PublishSheet（publish）", () => {
     expect(html).toContain('role="checkbox" aria-checked="true"');
   });
 
-  it("本人のサイトは範囲を持たず、「体験ページに載せる」は NIHO Experience のときだけ（無効）", () => {
-    const html = form({ picked: "site" });
+  it("本人サイトに運営面の範囲・追加掲載・Experienceの説明を出さない", () => {
+    const html = form({ picked: "site", dests: DESTS.filter((dest) => dest.id === "site") });
     expect(html).not.toContain("一覧・検索に出る");
-    expect(html).toContain("NIHO Experience のときだけ");
-    expect(html).toMatch(/aria-disabled="true" class="es-chk es-chk--on es-chk--off"/);
+    for (const text of ["NIHO Experience", "あわせて", "NIHOアプリに載せる", "体験ページに載せる"]) expect(html).not.toContain(text);
   });
 
   it("接続していない発信先は選べず「接続する ›」。名前は見えている文字そのもの（aria-label で置き換えない。WCAG 2.5.3・#43）", () => {

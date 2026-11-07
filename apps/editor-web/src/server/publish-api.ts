@@ -11,14 +11,12 @@ import {
   ConnectionService,
   EXTRA_KEYS,
   FACE_LABELS,
-  PUBLISHABLE_FACE_DESTS,
   PublishService,
   collectFacts,
   destOf,
   destinationUrl,
   draftFingerprint,
   parseDestinationDeclaration,
-  roleAllows,
   sheetPlan,
   slugFromTitle,
   slugStem,
@@ -235,7 +233,6 @@ export async function loadPublishSheet(
   query: Partial<PublishSelection>,
 ): Promise<PublishSheetDto | null> {
   const ports = wiring.publish;
-  const roles = await ports.roles.read(actorId);
   const storageMode = await ports.storage.read(actorId);
   const listed = await new ConnectionService(wiring.connections).listConnections({ actorId });
   if (!listed.ok) throw new Error("connections are not available");
@@ -248,7 +245,9 @@ export async function loadPublishSheet(
     const publication = await tx.getPublication(pageId);
     const version = publication ? await tx.getVersion(pageId, publication.version) : null;
     // 選択の既定は、公開している（やめたものを含む）発信先
-    const handle = query.handle ?? publication?.handle ?? null;
+    const handle = query.handle !== undefined
+      ? (isConnectionHandle(query.handle) ? query.handle : null)
+      : publication?.dest === "site" ? publication.handle : null;
     const taken = handle === null || publication?.handle === handle ? [] : await takenUnder(tx, handle, query.slug ?? slugFromTitle(page.title, page.id), pageId);
     const reviewProblem = handle === null ? null : await tx.reviewGate?.(actorId, pageId, handle) ?? null;
     return { page, assets, publication, version, handle, taken, reviewProblem };
@@ -270,7 +269,7 @@ export async function loadPublishSheet(
           slug: query.slug ?? null,
         };
 
-  const handles = [...PUBLISHABLE_FACE_DESTS.filter((face) => roleAllows(roles, face)), ...sites];
+  const handles = [...sites];
   const declarations: Record<string, unknown> = {};
   await Promise.all(
     [...new Set(handles)].map(async (entry) => {
@@ -288,7 +287,7 @@ export async function loadPublishSheet(
   const plan = sheetPlan({
     pageId,
     title: page.title,
-    roles,
+    roles: [],
     storageMode,
     sites,
     declarations,
@@ -313,7 +312,7 @@ export async function loadPublishSheet(
   });
 
   const suggested = slugFromTitle(page.title, page.id);
-  const destinations: PublishDestinationDto[] = plan.destinations.filter((entry) => entry.dest !== "niho").map((entry) => {
+  const destinations: PublishDestinationDto[] = plan.destinations.filter((entry) => entry.dest === "site").map((entry) => {
     const parsed = entry.available ? parseDestinationDeclaration(declarations[entry.handle]) : null;
     const declaration = parsed?.ok ? parsed.value : null;
     // 選んでいる発信先は、いま評価した URL（slug が使えなければ null。前の URL や提案を見せない）
@@ -332,9 +331,9 @@ export async function loadPublishSheet(
   const photosBlocked = plan.selected !== null && !wiring.photosReady && hasPhotos(page);
 
   return {
-    status: plan.status,
+    status: publication !== null && publication.dest !== "site" ? "private" : plan.status,
     publication:
-      publication === null || version === null
+      publication === null || publication.dest !== "site" || version === null
         ? null
         : {
             handle: publication.handle,
@@ -362,7 +361,7 @@ export async function loadPublishSheet(
     slugPrefix: selectedDeclaration?.ok ? destinationUrl(selectedDeclaration.value, "") : null,
     primary: photosBlocked || reviewProblem !== null ? null : plan.primary,
     changesDestination: plan.changesDestination,
-    canStop: plan.canStop,
+    canStop: publication?.dest === "site" && plan.canStop,
   };
 }
 

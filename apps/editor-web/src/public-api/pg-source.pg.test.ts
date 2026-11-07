@@ -318,21 +318,23 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
      * NIHO 面が廃止される前に公開済みだった版のみを明示seedする。新規公開の権限は迂回せず、
      * 正規transactionと buildSnapshot で読み取り／停止の互換性に必要な旧wireだけを作る。
      */
-    async function seedLegacyNiho(side: Side, page: SeedPage, slug: string): Promise<void> {
+    async function seedLegacyFace(side: Side, page: SeedPage, dest: "exp" | "niho", slug: string, range: "live" | "unlisted" = "live"): Promise<void> {
       const now = side.clock.now();
+      const settings = SETTINGS[dest];
+      const canonicalUrl = dest === "exp" ? `https://exp.example.com/guides/${slug}` : `https://niho.example.com/article/${slug}`;
       await side.store.transaction(async (tx) => {
         const draft = await tx.getPage(page.id);
         if (!draft) throw new Error("legacy seed page missing");
         const built = await buildSnapshot({
           page: draft,
           assets: await tx.listAssets(page.id),
-          dest: "niho",
+          dest,
           slug,
-          canonicalUrl: `https://niho.example.com/article/${slug}`,
-          range: "live",
-          extras: SETTINGS.niho.extras,
-          category: SETTINGS.niho.category,
-          related: SETTINGS.niho.related,
+          canonicalUrl,
+          range,
+          extras: settings.extras,
+          category: settings.category,
+          related: settings.related,
           author: { name: "Example Writer", handle: "example-writer", url: "https://writer.example.com/" },
           version: 1,
           publishedAt: now,
@@ -340,16 +342,16 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
           assetUrls: memoryAssetUrls(),
         });
         if (!built.ok) throw new Error(`legacy snapshot invalid: ${JSON.stringify(built.issues)}`);
-        await tx.addVersion({ pageId: page.id, version: 1, handle: "niho", snapshot: built.snapshot });
+        await tx.addVersion({ pageId: page.id, version: 1, handle: dest, snapshot: built.snapshot });
         await tx.putPublication({
           pageId: page.id,
-          dest: "niho",
-          handle: "niho",
+          dest,
+          handle: dest,
           slug,
-          range: "live",
-          extras: SETTINGS.niho.extras,
-          category: SETTINGS.niho.category,
-          related: SETTINGS.niho.related,
+          range,
+          extras: settings.extras,
+          category: settings.category,
+          related: settings.related,
           version: 1,
           publishedAt: now,
           updatedAt: now,
@@ -405,33 +407,37 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
       expect(result).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
     });
     tick();
-    await both("seed legacy NIHO live", (side) => seedLegacyNiho(side, pages.legacyNihoLive, "legacy-niho-live"));
-    await both("seed legacy NIHO stopped", (side) => seedLegacyNiho(side, pages.legacyNihoStopped, "legacy-niho-stopped"));
+    await both("seed legacy NIHO live", (side) => seedLegacyFace(side, pages.legacyNihoLive, "niho", "legacy-niho-live"));
+    await both("seed legacy NIHO stopped", (side) => seedLegacyFace(side, pages.legacyNihoStopped, "niho", "legacy-niho-stopped"));
     await both("reject legacy NIHO update", (side) => side.publisher.update(place(pages.legacyNihoLive.id, NIHO, SETTINGS.niho)), (result) => {
       expect(result).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
     });
     tick();
     await both("stop legacy NIHO", (side) => side.publisher.stop({ actorId: ACTOR, pageId: pages.legacyNihoStopped.id }), (result) => expect(result.ok).toBe(true));
     tick();
-    await both("publish unlisted", (side) => side.publisher.publish(place(pages.unlisted.id, EXP, { ...SETTINGS.exp, range: "unlisted" })), published);
+    await both("seed legacy Experience unlisted", (side) => seedLegacyFace(side, pages.unlisted, "exp", "unlisted", "unlisted"));
     tick();
     await both("publish stopped", (side) => side.publisher.publish(place(pages.stopped.id, ALPHA, SETTINGS.site)), published);
     tick();
     await both("stop stopped", (side) => side.publisher.stop({ actorId: ACTOR, pageId: pages.stopped.id }), (result) => expect(result.ok).toBe(true));
     tick();
-    await both("publish expToSite", (side) => side.publisher.publish(place(pages.expToSite.id, EXP, SETTINGS.exp)), published);
+    await both("seed legacy Experience to site", (side) => seedLegacyFace(side, pages.expToSite, "exp", "experience-to-site"));
     tick();
     await both("move expToSite", (side) => side.publisher.changeDestination(place(pages.expToSite.id, ALPHA, SETTINGS.site)), published);
     tick();
-    await both("publish republished", (side) => side.publisher.publish(place(pages.republished.id, EXP, SETTINGS.exp)), published);
+    await both("seed legacy Experience republished", (side) => seedLegacyFace(side, pages.republished, "exp", "republished"));
     tick();
     await both("stop republished", (side) => side.publisher.stop({ actorId: ACTOR, pageId: pages.republished.id }), (result) => expect(result.ok).toBe(true));
     tick();
-    await both("republish republished", (side) => side.publisher.publish(place(pages.republished.id, EXP, SETTINGS.exp)), published);
+    await both("reject republish to Experience", (side) => side.publisher.publish(place(pages.republished.id, EXP, SETTINGS.exp)), (result) => {
+      expect(result).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
+    });
     tick();
     await both("publish siteToFace", (side) => side.publisher.publish(place(pages.siteToFace.id, ALPHA, SETTINGS.site)), published);
     tick();
-    await both("move siteToFace", (side) => side.publisher.changeDestination(place(pages.siteToFace.id, EXP, SETTINGS.exp)), published);
+    await both("reject move from site to Experience", (side) => side.publisher.changeDestination(place(pages.siteToFace.id, EXP, SETTINGS.exp)), (result) => {
+      expect(result).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
+    });
     tick();
     // 公開したあとで下書きを直し、更新を公開し、もう一度直す（公開版は追従せず、プレビューは今の下書き）
     await both("edit live1", (side) => side.editDraft(pages.live1, "Coastal walk live one, revised", "How to get there"));
@@ -521,7 +527,8 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
           requestId: "req_pg_compare",
         };
         answers.push(await (side.name === "memory" ? memoryApi : pgApi).handle(message));
-        if (side.name === "memory" && !request.url.includes("cursor=") && !(answers[0]?.body ?? "").includes("\"nextCursor\":\"")) {
+        // 参照モデルは旧face資格を読めるが、本番handlerは意図的に閉鎖済み。本人サイトだけ契約参照と比較する。
+        if (side.name === "memory" && request.face === undefined && !request.url.includes("cursor=") && !(answers[0]?.body ?? "").includes("\"nextCursor\":\"")) {
           const credentialForReference = request.face ?? (request.key ? side.keys.get(request.key) : undefined);
           expect(answers[0], `${label} (reference)`).toEqual(
             await reference.handle({ ...message, headers: { ...(credentialForReference ? { authorization: `Bearer ${credentialForReference}` } : {}), ...request.headers } }),
@@ -538,13 +545,10 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
     const alphaList = await ask("list alpha", { url: "/v1/site-alpha/published.json", key: "alpha2" });
     expect(alphaList.status).toBe(200);
     const alphaItems = (body(alphaList).items as { id: string; title: string }[]);
-    expect(alphaItems.map((item) => item.id).sort()).toEqual([pages.live1.id, pages.live2.id, pages.live3.id, pages.expToSite.id].sort());
+    expect(alphaItems.map((item) => item.id).sort()).toEqual([pages.live1.id, pages.live2.id, pages.live3.id, pages.expToSite.id, pages.siteToFace.id].sort());
     expect(alphaList.body).not.toContain("DRAFT-ONLY");
     const walks = [
-      ["site-alpha", { key: "alpha2" }, "", 4],
-      ["exp", { face: EXP_TOKEN }, "&include=unlisted", 3],
-      ["exp", { face: EXP_TOKEN }, "", 2],
-      ["niho", { face: NIHO_TOKEN }, "", 1],
+      ["site-alpha", { key: "alpha2" }, "", 5],
     ] as const;
     for (const [handle, auth, include, expected] of walks) {
       let cursor: string | null = null;
@@ -558,8 +562,8 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
       } while (cursor !== null && pagesWalked < 20);
       expect(pagesWalked, `${handle}${include}`).toBe(expected);
     }
-    const expWithUnlisted = await ask("list exp unlisted", { url: "/v1/exp/published.json?include=unlisted", face: EXP_TOKEN });
-    expect((body(expWithUnlisted).items as { id: string }[]).map((item) => item.id)).toContain(pages.unlisted.id);
+    expect((await ask("closed Experience list", { url: "/v1/exp/published.json?include=unlisted", face: EXP_TOKEN })).status).toBe(401);
+    expect((await ask("closed NIHO list", { url: "/v1/niho/published.json", face: NIHO_TOKEN })).status).toBe(401);
     expect((await ask("site include", { url: "/v1/site-alpha/published.json?include=unlisted", key: "alpha2" })).status).toBe(400);
 
     // 単体（全ページ × 全 handle）・ETag と 304・HEAD
@@ -578,16 +582,13 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
     const updated = await statusOf("site-alpha", pages.live1.id, { key: "alpha2" });
     expect(body(updated)).toMatchObject({ title: "Coastal walk live one, revised", version: 2 });
     expect((await statusOf("site-alpha", pages.stopped.id, { key: "alpha2" })).status).toBe(410);
-    const moved = await statusOf("exp", pages.expToSite.id, { face: EXP_TOKEN });
-    expect(moved.status).toBe(410);
-    expect(body(moved).movedTo).toBeUndefined();
-    expect((await statusOf("niho", pages.legacyNihoLive.id, { face: NIHO_TOKEN })).status).toBe(200);
+    expect((await statusOf("exp", pages.expToSite.id, { face: EXP_TOKEN })).status).toBe(401);
+    expect((await statusOf("niho", pages.legacyNihoLive.id, { face: NIHO_TOKEN })).status).toBe(401);
     const legacyStopped = await statusOf("niho", pages.legacyNihoStopped.id, { face: NIHO_TOKEN });
-    expect(legacyStopped.status).toBe(410);
-    expect(body(legacyStopped).movedTo).toBeUndefined();
-    expect((await statusOf("site-alpha", pages.siteToFace.id, { key: "alpha2" })).status).toBe(410);
-    expect((await statusOf("exp", pages.republished.id, { face: EXP_TOKEN })).status).toBe(200);
-    expect((await statusOf("exp", pages.draftOnly.id, { face: EXP_TOKEN })).status).toBe(404);
+    expect(legacyStopped.status).toBe(401);
+    expect((await statusOf("site-alpha", pages.siteToFace.id, { key: "alpha2" })).status).toBe(200);
+    expect((await statusOf("exp", pages.republished.id, { face: EXP_TOKEN })).status).toBe(401);
+    expect((await statusOf("exp", pages.draftOnly.id, { face: EXP_TOKEN })).status).toBe(401);
 
     // 失効・旧鍵・解除した接続の鍵・別の handle
     expect((await ask("old key", { url: "/v1/site-alpha/published.json", key: "alpha1" })).status).toBe(401);
@@ -598,10 +599,8 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
     const preview = await ask("preview live1", { url: `/v1/preview/${previews.live1.token}.json`, key: "alpha2" });
     expect(preview.status).toBe(200);
     expect(body(preview)).toMatchObject({ title: "DRAFT-ONLY unpublished title", preview: { dest: "site", noindex: true }, version: saved.get(pages.live1.id)?.revision });
-    const unlistedPreview = await ask("preview unlisted", { url: `/v1/preview/${previews.unlisted.token}.json`, face: EXP_TOKEN });
-    expect(unlistedPreview.status).toBe(200);
-    expect(body(unlistedPreview)).toMatchObject({ category: "walks", categoryDisplay: CATEGORY_DISPLAY });
-    expect((await ask("preview other face", { url: `/v1/preview/${previews.unlisted.token}.json`, face: NIHO_TOKEN })).status).toBe(404);
+    expect((await ask("closed Experience preview", { url: `/v1/preview/${previews.unlisted.token}.json`, face: EXP_TOKEN })).status).toBe(401);
+    expect((await ask("closed other-face preview", { url: `/v1/preview/${previews.unlisted.token}.json`, face: NIHO_TOKEN })).status).toBe(401);
     expect((await ask("preview expired", { url: `/v1/preview/${previews.expired.token}.json`, key: "alpha2" })).status).toBe(404);
 
     // token に結んだ著者は、いまの公開版の著者より先に使う（公開・更新が本人のいまの名前で組むのと同じ）。Postgres の側だけ
@@ -618,7 +617,7 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
     expect(body(renamedPreview)).toMatchObject({ author: bound, canonicalUrl: body(preview).canonicalUrl, title: "DRAFT-ONLY unpublished title" });
     expect(body(preview).author).toMatchObject({ name: "Example Writer" });
 
-    expect(compared).toBeGreaterThan(60);
+    expect(compared).toBeGreaterThan(40);
   }, 60_000);
 
   it("builds a preview for a handle the page was never published to from the connection or the face's declaration and the token's author", async () => {
@@ -656,12 +655,11 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
       version: 1,
       preview: { expiresAt: "2026-10-01T12:15:00.000Z", dest: "site", noindex: true },
     });
-    // 面へは宣言の URL で組む（宣言が無ければ組めない）
+    // 旧面token・資格・宣言が全部残っていても面プレビューは閉じる。
     const face = await api.handle(request(tokens.face, EXP_TOKEN));
-    expect(face.status).toBe(200);
-    expect(JSON.parse(face.body ?? "null")).toMatchObject({ dest: "exp", canonicalUrl: "https://exp.example.com/guides/coastal-walk-never-published", author: writer });
+    expect(face.status).toBe(401);
     const undeclared = createPublicApi({ source: pgPublicApiSource(pool, { assetUrls: memoryAssetUrls() }), faces: faceCredentialSource([expFace]), clock });
-    expect((await undeclared.handle(request(tokens.face, EXP_TOKEN))).status).toBe(404);
+    expect((await undeclared.handle(request(tokens.face, EXP_TOKEN))).status).toBe(401);
     // 著者を結んでいない token は、公開したことも無ければ組めない
     expect((await api.handle(request(tokens.anonymous, created.key.plaintext))).status).toBe(404);
     // 資産の URL が作れないとき（置き場の未設定）は 503（理由は出さない）

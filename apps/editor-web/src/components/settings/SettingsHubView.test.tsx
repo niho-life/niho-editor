@@ -65,7 +65,7 @@ describe("SettingsHubView（/settings）", () => {
     expect(link("名前を再取得")).toBeUndefined();
     expect(me.textContent).toContain("合成の名前");
     expect(me.textContent).toContain("synthetic@example.invalid");
-    expect(link("NIHO Experience")?.textContent).toContain("未接続");
+    expect(link("NIHO Experience")).toBeUndefined();
     expect(link("synthetic.example")?.textContent).toContain("接続済み");
     await act(async () => link("発信先を追加・管理")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })));
     expect(push).toHaveBeenCalledWith("/destinations");

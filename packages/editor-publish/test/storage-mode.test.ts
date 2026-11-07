@@ -32,34 +32,34 @@ describe("storageBlockOf", () => {
 describe("PublishService and the storage mode", () => {
   it.each(["LOCAL", "CLOSING"] as const)("%s: publish, update and changeDestination are refused and write nothing", async (mode) => {
     const world = createWorld();
-    ok(await world.service.publish(world.input("niho")));
+    ok(await world.service.publish(world.input("site")));
     world.storage.set(ACTOR, mode);
     const before = world.store.dump();
     const expected = { ok: false, reason: "storage_not_cloud", detail: mode };
 
-    expect(await world.service.publish(world.input("niho"))).toEqual(expected);
-    expect(await world.service.update(world.input("niho"))).toEqual(expected);
-    expect(await world.service.changeDestination(world.input("exp"))).toEqual(expected);
+    expect(await world.service.publish(world.input("site"))).toEqual(expected);
+    expect(await world.service.update(world.input("site"))).toEqual(expected);
+    expect(await world.service.changeDestination(world.input("site"))).toEqual(expected);
     expect(world.store.dump()).toBe(before);
   });
 
   it("refuses a first publication too", async () => {
     const world = createWorld();
     world.storage.set(ACTOR, "LOCAL");
-    expect(await world.service.publish(world.input("exp"))).toEqual({ ok: false, reason: "storage_not_cloud", detail: "LOCAL" });
+    expect(await world.service.publish(world.input("site"))).toEqual({ ok: false, reason: "storage_not_cloud", detail: "LOCAL" });
     expect(world.store.publication(PAGE_ID)).toBeNull();
   });
 
   it("refuses a mode it does not know (fail closed)", async () => {
     const world = createWorld();
     world.storage.set(ACTOR, "ARCHIVED" as never);
-    expect(await world.service.publish(world.input("niho"))).toEqual({ ok: false, reason: "storage_not_cloud", detail: "unknown" });
+    expect(await world.service.publish(world.input("site"))).toEqual({ ok: false, reason: "storage_not_cloud", detail: "unknown" });
   });
 
   it("stopping stays possible in every mode", async () => {
     for (const mode of ["LOCAL", "CLOSING"] as const) {
       const world = createWorld();
-      ok(await world.service.publish(world.input("niho")));
+      ok(await world.service.publish(world.input("site")));
       world.storage.set(ACTOR, mode);
       const result = await world.service.stop({ actorId: ACTOR, pageId: PAGE_ID });
       expect(result, mode).toMatchObject({ ok: true, status: "stopped" });
@@ -70,17 +70,17 @@ describe("PublishService and the storage mode", () => {
   it("treats UNSET like CLOUD", async () => {
     const world = createWorld();
     world.storage.set(ACTOR, "UNSET");
-    ok(await world.service.publish(world.input("niho")));
+    ok(await world.service.publish(world.input("site")));
   });
 
   it("reads the mode on every operation and does not keep it", async () => {
     const world = createWorld();
-    ok(await world.service.publish(world.input("niho")));
+    ok(await world.service.publish(world.input("site")));
     const reads = world.storage.reads;
     world.storage.set(ACTOR, "LOCAL");
-    expect((await world.service.update(world.input("niho"))).ok).toBe(false);
+    expect((await world.service.update(world.input("site"))).ok).toBe(false);
     world.storage.set(ACTOR, "CLOUD");
-    ok(await world.service.update(world.input("niho")));
+    ok(await world.service.update(world.input("site")));
     expect(world.storage.reads).toBe(reads + 2);
   });
 });

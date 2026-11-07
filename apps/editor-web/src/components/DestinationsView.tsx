@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { EditorDestinationsPage, type EditorAddSiteDraft, type EditorDestinationFace } from "niho-docs-ui/shell";
+import { EditorDestinationsPage, type EditorAddSiteDraft } from "niho-docs-ui/shell";
 import { createSite, loadDestinations, type DestinationsDto, type IssuedKeyDto } from "@/lib/destinations-client";
 import { DESTINATION_MESSAGES } from "@/publish/messages";
 
@@ -12,11 +12,6 @@ import { DESTINATION_MESSAGES } from "@/publish/messages";
  *
  * 作ったときの平文の鍵は、この component の state に 1 回だけ置く（「閉じる」で消える）。保存もログも URL も通さない。
  */
-
-/** 面の説明（誰向けか・出せる理由）。モック v6 の語彙。宣言には無い値なので画面が持つ。 */
-const FACE_WORDS: Record<"exp", { who: string; role: string }> = {
-  exp: { who: "旅行者向け · 英語", role: "ライター" },
-};
 
 const EMPTY_DRAFT: EditorAddSiteDraft = { mode: "api", handle: "", siteUrl: "https://", path: "" };
 
@@ -29,22 +24,6 @@ export function DestinationsView({ initial }: DestinationsViewProps) {
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<EditorAddSiteDraft | null>(null);
   const [issuedKey, setIssuedKey] = useState<IssuedKeyDto | null>(null);
-
-  const faces: EditorDestinationFace[] = destinations.faces.flatMap((face) =>
-    face.handle === "exp"
-      ? [{
-          id: face.handle,
-          label: face.label,
-          host: face.host,
-          path: face.path,
-          who: FACE_WORDS.exp.who,
-          role: FACE_WORDS.exp.role,
-          available: face.available,
-          reason: face.reason,
-          published: face.published,
-        }]
-      : [],
-  );
 
   const create = async () => {
     if (busy || draft === null) return;
@@ -89,9 +68,9 @@ export function DestinationsView({ initial }: DestinationsViewProps) {
     <EditorDestinationsPage
       status={status}
       busy={busy}
-      faces={faces}
+      faces={[]}
       sites={destinations.sites.map((site) => ({ id: site.id, handle: site.handle, host: site.urlShape.host, path: site.urlShape.path, mode: site.mode, published: site.published }))}
-      onOpenFace={(id) => router.push(id === "exp" ? "/destinations/experience" : `/destinations/${id}`)}
+      onOpenFace={() => undefined}
       onOpenSite={(id) => router.push(`/destinations/${id}`)}
       onNavigate={(href) => router.push(href)}
       draft={draft}
