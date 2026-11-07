@@ -1665,13 +1665,14 @@ describe("public API v1 (production build, PostgreSQL)", () => {
     assert.equal(draft.canonicalUrl, "https://e2e.example.net/e2e-live");
     // 著者は token に結んだ本人のもの（公開版の著者ではない）
     assert.deepEqual(draft.author, { name: "開発ユーザー", handle: null, url: null });
-    assert.equal((await read(`/v1/preview/${token}.json`, expToken)).status, 404, "another destination's credential");
+    assert.equal((await read(`/v1/preview/${token}.json`, otherKey)).status, 404, "another site's credential");
+    assert.equal((await read(`/v1/preview/${token}.json`, expToken)).status, 401, "retired face credentials are never authenticated");
     assert.equal((await read(`/v1/preview/${token}.json`)).status, 401);
     assert.equal((await read(`/v1/preview/${expiredPreview}.json`, key)).status, 404);
     assert.equal((await read(`/v1/e2e-site/published/${token}.json`, key)).status, 400);
   });
 
-  it("previews with the publish sheet's wiring (#39): stub roles open a face, photos get EDITOR_ASSET_ORIGIN, an unpublished page gets the site's URL", async () => {
+  it("previews a personal site with the publish sheet wiring, denies face issuance, and uses EDITOR_ASSET_ORIGIN for photos", async () => {
     const issue = async (pageId, handle, category) => {
       const response = await fetch(`${dev.base}/api/pages/${pageId}/preview-token`, {
         method: "POST",
