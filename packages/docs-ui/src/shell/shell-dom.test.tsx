@@ -53,8 +53,9 @@ const ME = { onOpen: () => undefined };
 const nameOf = (el: Element | null | undefined) => el?.getAttribute("aria-label") ?? el?.textContent?.trim() ?? "";
 
 describe("一覧のフォルダの行とアイコン（kind = 'folder'）", () => {
-  it("空のフォルダも開閉の場所を取るが押せない。中身のあるフォルダは開閉を押せる。題名の前にアイコン", () => {
+  it("トグルとその空きを出さず、フォルダのアイコン・名前で開閉する。通常のページは選択する", () => {
     const onToggle = vi.fn();
+    const onSelect = vi.fn();
     const host = mount(
       <ShellSidebar
         items={[
@@ -64,16 +65,21 @@ describe("一覧のフォルダの行とアイコン（kind = 'folder'）", () =
           { id: "s1", title: "記事本文", when: "昨日", depth: 2, icon: "spark", sub: { text: "記事制作" } },
         ]}
         onToggleFolder={onToggle}
+        onSelect={onSelect}
        
       />,
     );
-    const toggles = [...host.querySelectorAll<HTMLButtonElement>("button.es-ditw")];
-    expect(toggles.map((button) => button.getAttribute("aria-label"))).toEqual(["取材 の中"]);
-    const placeholder = host.querySelector(".es-ditw--none")!;
-    expect(placeholder.tagName).toBe("SPAN");
-    expect(placeholder.getAttribute("aria-hidden")).toBe("true");
-    act(() => toggles[0]!.click());
+    expect(host.querySelector(".es-ditw")).toBeNull();
+    const rows = [...host.querySelectorAll<HTMLButtonElement>(".es-di")];
+    expect(rows.map((button) => button.getAttribute("aria-expanded"))).toEqual(["false", "true", null, null]);
+    act(() => rows[1]!.querySelector<SVGElement>("svg")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     expect(onToggle).toHaveBeenCalledWith("f2");
+    act(() => rows[1]!.querySelector(".es-di-t")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(onToggle).toHaveBeenCalledTimes(2);
+    expect(onSelect).not.toHaveBeenCalled();
+    act(() => rows[2]!.click());
+    expect(onSelect).toHaveBeenCalledWith("r1");
+    expect(host.querySelector(".es-when")).toBeNull();
     expect(host.querySelectorAll(".es-di-t .es-di-ki")).toHaveLength(4);
     expect(host.querySelector(".es-di-t--spark")?.textContent).toBe("記事本文");
   });

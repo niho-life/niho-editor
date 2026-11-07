@@ -11,7 +11,7 @@ export type ShellSidebarProps = {
   items: ShellListItem[];
   currentId?: string;
   onSelect?: (id: string) => void;
-  /** フォルダの行の開閉を押した（開いているかは呼ぶ側が持ち、閉じているフォルダの中の行は渡さない）。 */
+  /** フォルダのアイコン・名前を押した（開閉の状態は呼ぶ側が持ち、閉じている中の行は渡さない）。 */
   onToggleFolder?: (id: string) => void;
   /** 上の 1 行の右端の「一覧をしまう」。 */
   onCollapse?: () => void;
@@ -198,32 +198,20 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
             }
             onDragEnd={drag ? () => drag.onEnd() : undefined}
           >
-            {item.folder && onToggleFolder && item.empty === true && (
-              // 中身の無いフォルダ: 開閉は押せない。幅だけ取って、中身のあるフォルダと題名の位置を揃える
-              <span className="es-ditw es-ditw--none" aria-hidden="true">
-                ▾
-              </span>
-            )}
-            {item.folder && onToggleFolder && item.empty !== true && (
-              <button
-                type="button"
-                className="es-ditw"
-                aria-label={`${item.title || "無題"} の中`}
-                aria-expanded={item.open ?? false}
-                onClick={() => onToggleFolder(item.id)}
-              >
-                <span aria-hidden="true">{item.open ? "▾" : "▸"}</span>
-              </button>
-            )}
             <button
               type="button"
               className={`es-di${on ? " es-di--on" : ""}${item.sub || item.busy || onSide ? "" : " es-di--one"}`}
               aria-current={on ? "page" : undefined}
-              onClick={(event) => (event.altKey && sideOpen ? sideOpen(sideIdOf(item)) : onSelect?.(openId))}
+              aria-expanded={item.folder && onToggleFolder ? item.empty !== true && (item.open ?? false) : undefined}
+              onClick={(event) => {
+                if (item.folder && onToggleFolder) onToggleFolder(item.id);
+                else if (event.altKey && sideOpen) sideOpen(sideIdOf(item));
+                else onSelect?.(openId);
+              }}
               onKeyDown={
                 rowActions
                   ? (event) => {
-                      if (event.key === "Enter" && event.altKey && sideOpen) {
+                      if (event.key === "Enter" && event.altKey && sideOpen && !item.folder) {
                         event.preventDefault();
                         sideOpen(sideIdOf(item));
                       } else if (rowActions.menu && (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))) {
@@ -246,7 +234,6 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
                   </em>
                 )}
               </span>
-              <span className="es-when">{item.when}</span>
               {(item.sub || item.busy || onSide) && (
                 <span className="es-di-sub">
                   {/* 手順が動いている行の回るマーク。状態の言葉は sub の文字が持つので、マークは支援技術から隠す */}

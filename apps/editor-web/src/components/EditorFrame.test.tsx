@@ -162,6 +162,16 @@ function chunkResponse(pages: PageSummary[], next: string | null): Response {
 }
 
 describe("EditorFrame", () => {
+  it.each([false, true])("Mac の殻のときだけウィンドウボタンの余白を渡す（shell=%s）", async (shell) => {
+    if (shell) Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    try {
+      await mount({ pages: [page(PAGE_ID, "合成のページ")] });
+      expect(container!.querySelector(".es-root")!.getAttribute("data-window-controls")).toBe(shell ? "true" : null);
+      expect(container!.querySelector(".es-when")).toBeNull();
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    }
+  });
   it("写真への導線や空のアプリ欄を出さず、ページ一覧を表示する", async () => {
     await mount({ pages: [page(PAGE_ID, "合成のページ")] });
     const sidebar = container!.querySelector('aside[aria-label="ページ"]')!;
@@ -2320,7 +2330,7 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
       for (let at = li.parentElement; at && !at.classList.contains("es-sb-list"); at = at.parentElement) if (at.tagName === "UL") depth++;
       return [li.querySelector(".es-di-t")?.textContent, depth - 1];
     });
-  const twisty = (title: string) => container!.querySelector<HTMLButtonElement>(`.es-sb-list button[aria-label="${title} の中"]`);
+  const twisty = (title: string) => [...container!.querySelectorAll<HTMLButtonElement>(".es-sb-list .es-di[aria-expanded]")].find((button) => button.querySelector(".es-di-t")?.textContent === title);
 
   it("出すのは 1 本の木（フォルダ › ページ › 録音のサブページ）。フォルダ（kind）の行で開閉できる", async () => {
     await mount({ pages: [{ ...page(PARENT, "鎌倉の記事"), kind: "folder" as const }, { ...inside(PARENT, CHILD, "取材メモ"), kind: "rec" as const }, { ...inside(CHILD, SUB, "文字起こし修正"), kind: "step" as const }] });

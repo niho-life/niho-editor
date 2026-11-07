@@ -18,6 +18,8 @@ export type ShellSettingsLink = {
 };
 
 export type EditorShellProps = {
+  /** ホストのウィンドウボタン用に、画面上端を空ける。 */
+  windowControls?: boolean;
   /** 一覧のパネル（ShellSidebar）。 */
   sidebar: ReactNode;
   /** ヘッダー（ShellHeader）。 */
@@ -89,7 +91,7 @@ function SettingsBar({ settings }: { settings: ShellSettingsLink }) {
  * 最初のフォーカス先は「本文へ移動」（skip link。普段は見えず、フォーカスで現れる）。押すと本文（main）へフォーカスを移す。
  * URL の # は変えない（呼ぶ側の hash の route を壊さない）。
  */
-export function EditorShell({ sidebar, header, rail, page, photos, toolbar, sidebarOpen, railOpen, pageOpen, photosOpen, settings, overlay, children, corner, dock }: EditorShellProps) {
+export function EditorShell({ windowControls, sidebar, header, rail, page, photos, toolbar, sidebarOpen, railOpen, pageOpen, photosOpen, settings, overlay, children, corner, dock }: EditorShellProps) {
   const main = useRef<HTMLElement | null>(null);
   const root = useRef<HTMLDivElement | null>(null);
   const ws = useRef<HTMLDivElement | null>(null);
@@ -123,6 +125,7 @@ export function EditorShell({ sidebar, header, rail, page, photos, toolbar, side
       <div
         className="es-root"
         data-editor-shell
+        data-window-controls={windowControls ? "true" : undefined}
         data-sidebar={sidebarOpen ? "open" : "closed"}
         data-rail={shown.ai ? "open" : "closed"}
         data-view={view}
@@ -218,6 +221,7 @@ export function EditorShell({ sidebar, header, rail, page, photos, toolbar, side
       ref={root}
       className="es-root"
       data-editor-shell
+      data-window-controls={windowControls ? "true" : undefined}
       data-layout="dock"
       data-wide={wide ? "true" : "false"}
       data-sidebar={shown.list ? "open" : "closed"}

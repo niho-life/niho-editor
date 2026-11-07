@@ -184,7 +184,9 @@ describe("ShellSidebar", () => {
     expect(html).not.toContain("es-newbtn");
   });
 
-  it("1行は題名＋時刻。2行目は公開先・録音・作成中のときだけ。無題は薄く「無題」", () => {
+  it("1行は題名だけで時刻を出さない。2行目は公開先・録音・作成中のときだけ。無題は薄く「無題」", () => {
+    expect(html).not.toContain("es-when");
+    expect(html).not.toContain("たった今");
     expect([...html.matchAll(/class="es-di-sub"/g)]).toHaveLength(2);
     expect(html).toContain("es-di es-di--on es-di--one");
     expect(html).toContain('<i class="es-dest es-dest--exp" aria-hidden="true"></i>NIHO Experience');
@@ -196,10 +198,9 @@ describe("ShellSidebar", () => {
     // 「文字起こし修正」は、その上の行（フォルダ）の <li> の中の <ul> に入る
     expect(html).toMatch(/Takuya さんと話したこと[\s\S]*?<ul><li><div class="es-dirow"><button[^>]*>.*?文字起こし修正/);
     expect([...html.matchAll(/<ul>/g)]).toHaveLength(2);
-    expect(html).toContain('aria-label="Takuya さんと話したこと の中" aria-expanded="true"');
-    // フォルダでない行には開閉のボタンを出さない
-    expect([...html.matchAll(/class="es-ditw"/g)]).toHaveLength(1);
-    // 開閉をつながない画面（Mac の殻など）では、ボタンを出さずに木だけを出す
+    expect(html).toContain('aria-expanded="true"');
+    // フォルダの行自体が開閉ボタンで、専用トグルやその空きを持たない
+    expect(html).not.toContain("es-ditw");
     expect(renderToStaticMarkup(sidebar())).not.toContain("es-ditw");
   });
 

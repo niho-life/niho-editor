@@ -6,6 +6,7 @@ import "niho-docs-ui/styles/shell.css";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageKind, PageLang, PageSummary, StepStatus } from "@niho/editor-store";
+import { isShellWindow } from "niho-desktop-bridge/shell-bridge";
 import {
   EditorShell,
   SHELL_PANELS,
@@ -64,6 +65,10 @@ export type { AttachedPage };
 
 /** shell.css と同じ境目（これ以下は一覧・ページのどちらかを全画面で出す）。 */
 const NARROW_QUERY = "(max-width: 900px)";
+// 殻の印は起動時に固定。SSR はブラウザとして描き、hydrate 後に端末の表示へ揃える。
+const subscribeHost = () => () => undefined;
+const hasWindowControls = () => typeof window !== "undefined" && isShellWindow(window);
+const serverWindowControls = () => false;
 
 const PAGE_PATH = /^\/p\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 /** 右に並べたページ（`?side=`）の id の形。 */
@@ -457,6 +462,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const narrow = useSyncExternalStore(subscribeNarrow, isNarrowNow, () => initial.initialNarrow);
+  const windowControls = useSyncExternalStore(subscribeHost, hasWindowControls, serverWindowControls);
 
   const [list, setList] = useState<ListState>({ pages: initial.pages, next: initial.next, opened: null, details: null, gone: new Set() });
   // 非同期の操作（ドラッグの並べ替え）が、描画を待たずに今の一覧を読む
@@ -1198,6 +1204,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     <FrameContext.Provider value={frame}>
       <div ref={frameRoot} data-docs-app-root="" data-docs-shared-ui="" style={{ position: "fixed", inset: 0 }}>
         <EditorShell
+          windowControls={windowControls}
           sidebarOpen={sidebarOpen}
           railOpen={railShown}
           pageOpen={pageShown}

@@ -28,6 +28,7 @@ function Index() {
       <p>モック v6（#48）フェーズ1・2の画面。状態はこのページの useState で持ち、DocsHost・通信・保存は使わない。</p>
       <ul>
         <li><a href="#/split">分割ビューの実機ドラッグ確認（合成ページ）</a></li>
+        <li><a href="#/split?mac=1">Macの余白・スクロール・フォルダの確認（合成ページ）</a></li>
         {SCREENS.map((screen) => (
           <li key={screen.id}>
             <a href={`#/${screen.id}`}>{screen.label}</a> <code>{screen.id}</code>
@@ -62,7 +63,7 @@ function Body({ id, forced }: { id: string; forced: ScreenForced }) {
 function App() {
   const { hash, route, params } = useRoute();
   if (route === "" ) return <Index />;
-  if (route === "split") return <SplitDemo />;
+  if (route === "split") return <SplitDemo windowControls={params.has("mac")} />;
   if (route === "_check") return <Check />;
   const id = route.startsWith("page:") || route.startsWith("preview:") || findScreen(route) ? route : "";
   if (!id) return <Index />;
