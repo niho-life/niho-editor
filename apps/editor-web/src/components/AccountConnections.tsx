@@ -23,6 +23,7 @@ export function AccountConnections({ initial }: { initial: AccountConnectionsSta
   const [data, setData] = useState(initial);
   const [busy, setBusy] = useState<string | null>(null);
   const busyRef = useRef(false);
+  const [operationError, setOperationError] = useState("");
   const [error, setError] = useState(initial.status === "error" ? "接続を確認できませんでした。少し待ってから再読み込みしてください。" : initial.linksUnavailable ? "体験とのつながりを確認できませんでした。" : "");
 
   async function reload(failure = "最新の接続状態を確認できませんでした。少し待ってから、もう一度お試しください。"): Promise<boolean> {
@@ -47,6 +48,7 @@ export function AccountConnections({ initial }: { initial: AccountConnectionsSta
     busyRef.current = true;
     setBusy(id);
     setError("");
+    setOperationError("");
     try {
       const response = await fetch(`/api/account/article-links/${id}/${decision}`, {
         method: "POST", headers: { "content-type": "application/json" }, body: "{}", credentials: "same-origin",
@@ -54,7 +56,8 @@ export function AccountConnections({ initial }: { initial: AccountConnectionsSta
       if (!response.ok) throw new Error();
       await reload();
     } catch {
-      await reload("招待の操作後に接続状態を確認できませんでした。少し待ってから、もう一度お試しください。");
+      await reload();
+      setOperationError("招待の操作中に問題が発生しました。最新の状態を確認して、必要ならもう一度お試しください。");
     } finally { busyRef.current = false; setBusy(null); }
   }
 
@@ -77,6 +80,7 @@ export function AccountConnections({ initial }: { initial: AccountConnectionsSta
             <button type="button" className={styles.secondary} onClick={() => void reload()} disabled={busy !== null}>最新の状態を確認</button>
           </div>
           {error ? <p role="alert" className={styles.error}>{error}</p> : null}
+          {operationError ? <p role="alert" className={styles.error}>{operationError}</p> : null}
           {data.status === "error" || data.linksUnavailable ? null : data.links.length === 0 ? <p>招待や承諾済みのつながりはありません。</p> : (
             <ul className={styles.list}>
               {data.links.map((link) => (

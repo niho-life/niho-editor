@@ -105,4 +105,16 @@ describe("AccountConnections", () => {
     expect(container!.textContent).not.toContain("接続済み");
     expect(container!.querySelector('[role="alert"]')?.textContent).toContain("最新の接続状態を確認できません");
   });
+
+  it.each([403, 503])("keeps a failed invitation operation visible when its following GET succeeds (%s)", async (status) => {
+    vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => Promise.resolve(
+      init?.method === "POST" ? Response.json({}, { status }) : Response.json({ roles, links: [pending] }),
+    )));
+    await act(async () => root!.render(<AccountConnections initial={{ status: "ready", roles, links: [pending] }} />));
+    const accept = [...container!.querySelectorAll("button")].find((button) => button.textContent === "承諾する")!;
+    await act(async () => accept.click());
+    expect(container!.textContent).toContain("接続済み");
+    expect(container!.textContent).toContain("返事を待っています");
+    expect(container!.querySelector('[role="alert"]')?.textContent).toContain("招待の操作中に問題が発生しました");
+  });
 });

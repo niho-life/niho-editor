@@ -177,19 +177,20 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.match(response.headers.get("content-type") ?? "", /^text\/html/);
     const html = await response.text();
     assert.match(html, /aria-label="ページの一覧"/);
-    // 左の一覧の上は 1 行: アプリ名 Editor と、アイコンだけの「検索（⌘K）」「新しいページ（⌘N）」（言葉は aria-label）。左下は「設定」の直リンク
+    // 一覧上部は1行、左下は現在の本人と設定の独立した入口。
     assert.match(html, /class="es-sb-top"[^>]*><span class="es-brand" role="img" aria-label="Editor"/, "the app name sits at the left of the list's top row");
     assert.doesNotMatch(html, /class="es-brandbar"/, "no separate app-name band above the list");
     assert.match(html, /aria-label="検索（⌘K）"/);
     assert.match(html, /aria-label="新しいページ（⌘N）"/);
     assert.doesNotMatch(html, /es-sb-acts/, "the two-row search / new-page block is gone");
-    assert.match(html, /class="es-sb-me"[^>]*><svg[\s\S]*?<\/svg><b>設定<\/b>/, "the bottom-left is a plain 設定 link");
+    assert.match(html, /class="es-sb-account"[\s\S]*?<b>開発ユーザー<\/b>/, "the bottom-left identifies the current account");
+    assert.match(html, /class="es-sb-settings" aria-label="設定"/, "settings keeps a separate direct entry");
     for (const path of ["/p/new", "/p/new?from=recording", "/destinations", "/account", "/settings"]) {
       const screen = await fetch(`${base}${path}`);
       assert.equal(screen.status, 200, path);
       const text = await screen.text();
       assert.match(text, /aria-label="ページの一覧"/, path);
-      // 本人の名前は左下ではなく、設定の一覧の「アカウント」の行に出る
+      assert.match(text, /class="es-sb-account"[\s\S]*?<b>開発ユーザー<\/b>/, path);
       if (path === "/settings") assert.match(text, /開発ユーザー/, "the settings hub shows the stub profile");
     }
   });
