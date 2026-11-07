@@ -8,6 +8,7 @@ import { Check } from "./check";
 import { AccountDemo, DestDemo, LoginDemo, PreviewDemo, SettingsDemo, SiteDemo, WebDestDemo, WebSettingsDemo, WebSiteDemo } from "./pages";
 import type { ShellDest } from "../src/shell";
 import { Screen, type ScreenForced } from "./screen";
+import { SplitDemo } from "./split-demo";
 import { SCREENS, findScreen, parseHash } from "./screens";
 
 function useRoute() {
@@ -26,6 +27,7 @@ function Index() {
       <h1>NIHO editor 枠（shell）ギャラリー</h1>
       <p>モック v6（#48）フェーズ1・2の画面。状態はこのページの useState で持ち、DocsHost・通信・保存は使わない。</p>
       <ul>
+        <li><a href="#/split">分割ビューの実機ドラッグ確認（合成ページ）</a></li>
         {SCREENS.map((screen) => (
           <li key={screen.id}>
             <a href={`#/${screen.id}`}>{screen.label}</a> <code>{screen.id}</code>
@@ -60,6 +62,7 @@ function Body({ id, forced }: { id: string; forced: ScreenForced }) {
 function App() {
   const { hash, route, params } = useRoute();
   if (route === "" ) return <Index />;
+  if (route === "split") return <SplitDemo />;
   if (route === "_check") return <Check />;
   const id = route.startsWith("page:") || route.startsWith("preview:") || findScreen(route) ? route : "";
   if (!id) return <Index />;

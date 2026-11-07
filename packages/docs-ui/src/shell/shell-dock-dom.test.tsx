@@ -466,7 +466,7 @@ describe("EditorShell のパネルの配置（dock）", () => {
     const data = transfer({ [SHELL_DND.page]: "page-b", "text/plain": "page-b" });
     drag(root, "dragenter", data);
     const zones = [...host.querySelectorAll<HTMLElement>(".es-dz")];
-    expect(zones.map((zone) => zone.textContent)).toEqual(["ここで開くメインを替える", "右に並べるメインはそのまま"]);
+    expect(zones.map((zone) => zone.textContent)).toEqual(["", ""]);
     drag(zones[1]!, "dragover", data);
     expect(zones[1]!.className).toContain("es-dz--hot");
     drag(zones[1]!, "drop", data);
@@ -474,19 +474,19 @@ describe("EditorShell のパネルの配置（dock）", () => {
     expect(host.querySelector(".es-dzs")).toBeNull();
   });
 
-  it("右のページがあれば「右のページを替える」。右のページの帯は真ん中の「メインに置く」だけ", () => {
+  it("ページの落とし先は文字の無い枠だけ。右のページの帯は真ん中だけに落とせる", () => {
     const dock = dockOf({ side: <span>右</span> });
     const { host } = mount(<Shell dock={dock} />);
     const root = host.querySelector<HTMLElement>(".es-root")!;
     drag(root, "dragenter", transfer({ [SHELL_DND.page]: "page-c" }));
-    expect([...host.querySelectorAll(".es-dz")].map((zone) => zone.textContent)).toEqual(["ここで開くメインを替える", "右のページを替える"]);
+    expect([...host.querySelectorAll(".es-dz")].map((zone) => zone.textContent)).toEqual(["", ""]);
     drag(root, "dragend", transfer());
     expect(host.querySelector(".es-dzs")).toBeNull();
 
     const band = transfer({ [SHELL_DND.side]: "page-b" });
     drag(root, "dragenter", band);
     const zones = [...host.querySelectorAll<HTMLElement>(".es-dz")];
-    expect(zones.map((zone) => zone.textContent)).toEqual(["メインに置くいまのメインは右へ移ります"]);
+    expect(zones.map((zone) => zone.textContent)).toEqual([""]);
     drag(zones[0]!, "drop", band);
     expect(dock.onDropSide).toHaveBeenCalledTimes(1);
   });
@@ -506,15 +506,15 @@ describe("EditorShell のパネルの配置（dock）", () => {
     expect(host.querySelector(".es-ghost")).toBeNull();
     // 右の上半分なら「上に」（ページと入れ替わる）
     drag(root, "dragover", ai, { x: 1600, y: 100 });
-    expect(host.querySelector(".es-ghost")!.textContent).toBe("右のドック「AIと作る」を上に置く");
+    expect(host.querySelector(".es-ghost")!.textContent).toBe("");
     // 左の端の上半分（一覧がいる）
     const over = drag(root, "dragover", ai, { x: 30, y: 300 });
     expect(over.defaultPrevented).toBe(true);
     const ghost = host.querySelector<HTMLElement>(".es-ghost")!;
-    expect(ghost.textContent).toBe("左のドック「AIと作る」を上に置く");
+    expect(ghost.textContent).toBe("");
     expect(ghost.style.height).toBe("441px");
     drag(root, "dragover", ai, { x: 30, y: 700 });
-    expect(host.querySelector(".es-ghost")!.textContent).toBe("左のドック「AIと作る」を下に置く");
+    expect(host.querySelector(".es-ghost")!.textContent).toBe("");
     expect(host.querySelector<HTMLElement>(".es-ghost")!.style.top).toBe("453px");
     drag(root, "drop", ai, { x: 30, y: 700 });
     expect(dock.onMove).toHaveBeenCalledWith("ai", { side: "left", at: "bottom" });
@@ -522,7 +522,7 @@ describe("EditorShell のパネルの配置（dock）", () => {
     // 写真（閉じている）を右の端へ: 右にはページと AI がいる
     const photos = transfer({ [SHELL_DND.panel.photos]: "photos" });
     drag(root, "dragover", photos, { x: 1650, y: 800 });
-    expect(host.querySelector(".es-ghost")!.textContent).toBe("右のドック「写真」を下に置く");
+    expect(host.querySelector(".es-ghost")!.textContent).toBe("");
     drag(root, "drop", photos, { x: 1650, y: 800 });
     expect(dock.onMove).toHaveBeenLastCalledWith("photos", { side: "right", at: "bottom" });
     // 一覧を空のドックへ（ほかのパネルが無ければドック全体）
@@ -530,7 +530,7 @@ describe("EditorShell のパネルの配置（dock）", () => {
     const { host: lone } = mount(<Shell dock={empty} railOpen={false} pageOpen={false} photosOpen={false} />);
     const list = transfer({ [SHELL_DND.list]: "list" });
     drag(lone.querySelector(".es-root")!, "dragover", list, { x: 1650, y: 800 });
-    expect(lone.querySelector(".es-ghost")!.textContent).toBe("右のドック「一覧」を入れる");
+    expect(lone.querySelector(".es-ghost")!.textContent).toBe("");
     expect(lone.querySelector<HTMLElement>(".es-ghost")!.style.height).toBe("888px");
     drag(lone.querySelector(".es-root")!, "drop", list, { x: 1650, y: 800 });
     expect(empty.onMove).toHaveBeenLastCalledWith("list", { side: "right", at: "top" });

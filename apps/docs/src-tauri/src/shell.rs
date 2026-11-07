@@ -54,6 +54,17 @@ impl ShellMode {
   }
 }
 
+/// Web の画面は HTML5 DnD を使う。Tauri のファイル用 handler は macOS でも
+/// ページやパネルのドラッグを横取りするため、旧い同梱画面でだけ使う。
+/// Context の設定を変えるので、常駐中に作り直す窓にも同じ設定が引き継がれる。
+pub fn configure_drag_drop(config: &mut tauri::Config, mode: ShellMode) {
+  for window in &mut config.app.windows {
+    if window.label == "main" {
+      window.drag_drop_enabled = matches!(mode, ShellMode::Local);
+    }
+  }
+}
+
 /// `NIHO_DOCS_SHELL` の値と、開発の起動かどうかから読む画面を決める。
 /// 配布版は環境変数の値にかかわらず editor.niho.life。開発版は未指定または不正な値なら同梱画面。
 pub fn shell_mode(value: Option<&str>, dev: bool) -> ShellMode {
@@ -1213,6 +1224,27 @@ pub async fn shell_transcribe_stop(state: State<'_, AppState>, job_id: String) -
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn web_screens_receive_dom_drags_and_legacy_local_keeps_native_file_drops() {
+    let mut config: tauri::Config = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+    assert!(
+      !config.app.windows[0].drag_drop_enabled,
+      "配布設定で HTML5 DnD を遮らない"
+    );
+    for mode in [ShellMode::Local, ShellMode::Remote, ShellMode::Dev, ShellMode::Local] {
+      configure_drag_drop(&mut config, mode);
+      // resident::recreate_main_window は app.config() の窓を clone して使う。
+      let recreated = config
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "main")
+        .unwrap()
+        .clone();
+      assert_eq!(recreated.drag_drop_enabled, mode == ShellMode::Local, "{mode:?}");
+    }
+  }
 
   #[test]
   fn recovery_source_uses_the_browser_contract_field_names() {

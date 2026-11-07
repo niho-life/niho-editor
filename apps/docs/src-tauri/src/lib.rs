@@ -2622,8 +2622,11 @@ fn stop_everything(state: &AppState) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  let context = tauri::generate_context!();
+  let mut context = tauri::generate_context!();
   let dev = is_dev_launch();
+  let shell_mode = shell::shell_mode(std::env::var(shell::SHELL_ENV).ok().as_deref(), dev);
+  // 窓が作られる前に決める。setup で navigate した後では native handler を外せない。
+  shell::configure_drag_drop(context.config_mut(), shell_mode);
   // 自動更新は release ビルドで、tauri.conf.json の updater の公開鍵を差し替えてから（それまでは plugin を入れない）。
   // 開発・試験の起動は本番の版へ差し替わらないよう切る
   let updates = updater::enabled(context.config()) && !dev;
@@ -2656,7 +2659,6 @@ pub fn run() {
       }
       // Mac の殻（設計 §13）: 配布版は常に editor.niho.life を読む。同梱画面は開発起動だけで使う。
       // URL は shell.rs の定数だけ。remote から呼べるコマンドは capabilities/remote-editor.json で決まる。
-      let shell_mode = shell::shell_mode(std::env::var(shell::SHELL_ENV).ok().as_deref(), dev);
       if let Some(url) = shell::remote_url(shell_mode) {
         if let Some(window) = app.get_webview_window("main") {
           if let Err(error) = window.navigate(url) {
