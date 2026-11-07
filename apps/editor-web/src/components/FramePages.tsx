@@ -142,10 +142,14 @@ export function OpenPage({
   const pageLead = current ? current.lead ?? null : lead;
   // フォルダは本文のエディタを出さず、中身の一覧と「新しいページ」「録音から」だけ（§3.2）
   if (summary.kind === "folder") return <FolderPage summary={summary} revision={current?.revision ?? revision} aboveTitle={aboveTitle} />;
+  // 文字起こしのタブ（#310）かどうかは本文（page_transcripts）の有無で（複製したタブも。サーバーが `transcriptOf` に元の録音を入れる）。
+  // 本文のエディタは出さず（題名だけ）、その下に段落（TranscriptPage）
+  const transcriptOf = summary.transcriptOf ?? null;
   const editor = (
     <PageEditor
       key={fresh?.count ?? 0}
       aboveTitle={aboveTitle}
+      bodyless={transcriptOf !== null}
       page={{
         id,
         title: current?.title ?? summary.title,
@@ -172,9 +176,8 @@ export function OpenPage({
     />
   );
   // タブの帯（#308）はページのいちばん上。流れ（#309）の状態は FlowWatcher が読み続け、「ページ」パネルに出す（本文には帯もボタンも置かない）。
-  // 録音のタブ（「この録音について」・再生・文字起こしの開始・文字起こしのタブの一覧）と文字起こしのタブ（#310。段落）はその下。
-  // 文字起こしのタブかどうかは本文（page_transcripts）の有無で（複製したタブも。サーバーが `transcriptOf` に元の録音を入れる）
-  const transcriptOf = summary.transcriptOf ?? null;
+  // 録音のタブ（「この録音について」・再生・文字起こしの開始・文字起こしのタブの一覧）はその下、本文の前。
+  // 文字起こしのタブ（#310）は題名（本文なしのエディタ）の下に段落
   return (
     <>
       <PageTabs key={`tabs-${id}`} page={summary} tabs={tabs} saveNow={saveNow} />
@@ -185,8 +188,8 @@ export function OpenPage({
           <RecordingTranscript key={id} pageId={id} />
         </>
       )}
-      {transcriptOf && <TranscriptPage key={`transcript-${id}`} tabId={id} recording={transcriptOf} />}
       {editor}
+      {transcriptOf && <TranscriptPage key={`transcript-${id}`} tabId={id} recording={transcriptOf} />}
     </>
   );
 }

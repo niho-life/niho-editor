@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type EditorProps = {
+  bodyless?: boolean;
   page?: { id: string | null; title?: string; blocks?: unknown[]; revision?: number | null; lang?: string };
   createOnOpen?: boolean;
   onCreated?: (id: string) => void;
@@ -48,6 +49,9 @@ vi.mock("./FolderPage", () => ({
 }));
 vi.mock("./RecordingTranscript", () => ({
   RecordingTranscript: ({ pageId }: { pageId: string }) => <div data-transcript={pageId} />,
+}));
+vi.mock("./TranscriptPage", () => ({
+  TranscriptPage: ({ tabId, recording }: { tabId: string; recording: string }) => <div data-transcript-page={`${tabId}:${recording}`} />,
 }));
 // 流れ（#309）は FlowWatcher.test.tsx が見る。ここは、流れの見張り・文字起こし・本文の並びと渡す値だけを見る
 vi.mock("./FlowWatcher", () => ({
@@ -186,22 +190,22 @@ describe("OpenPage: the tab bar, the flow watcher, the transcript, then the titl
   const PAGE = "33333333-3333-4333-8333-333333333333";
   const HOLDER = "55555555-5555-4555-8555-555555555555";
   const OTHER = "66666666-6666-4666-8666-666666666666";
-  const summary = (kind: "note" | "rec" | "step" | "folder", parent: string | null = null) => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent, stepStatus: null, sortOrder: 0, page: kind === "folder" || kind === "step" ? null : HOLDER, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
+  const summary = (kind: "note" | "rec" | "step" | "folder", parent: string | null = null, transcriptOf: string | null = null) => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent, stepStatus: null, sortOrder: 0, page: kind === "folder" || kind === "step" ? null : HOLDER, transcriptOf, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
   const tab = (id: string, tabPos: number, tabName: string | null = null) => ({ id, kind: "note" as const, title: "録音", tabName, tabPos, stepStatus: null });
 
-  async function open(kind: "note" | "rec" | "step" | "folder", parent: string | null = null, tabs: ReturnType<typeof tab>[] = [tab(PAGE, 1)]) {
+  async function open(kind: "note" | "rec" | "step" | "folder", parent: string | null = null, tabs: ReturnType<typeof tab>[] = [tab(PAGE, 1)], transcriptOf: string | null = null) {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
     await act(async () => {
-      root!.render(<OpenPage summary={summary(kind, parent)} tabs={tabs} blocks={[]} revision={1} />);
+      root!.render(<OpenPage summary={summary(kind, parent, transcriptOf)} tabs={tabs} blocks={[]} revision={1} />);
     });
     return container;
   }
 
   const order = (host: HTMLElement) =>
     [...host.children].map((node) =>
-      node.classList.contains("es-tabbar") ? "tabbar" : (node.getAttribute("data-steps") ?? node.getAttribute("data-transcript") ?? (node.hasAttribute("data-recording-info") ? "info" : "editor")),
+      node.classList.contains("es-tabbar") ? "tabbar" : (node.getAttribute("data-steps") ?? node.getAttribute("data-transcript") ?? node.getAttribute("data-transcript-page") ?? (node.hasAttribute("data-recording-info") ? "info" : "editor")),
     );
 
   it("puts the tab bar first, the flow watcher (nothing drawn), then この録音について and the transcript (kind=rec), then the page editor", async () => {
@@ -235,10 +239,21 @@ describe("OpenPage: the tab bar, the flow watcher, the transcript, then the titl
     expect(frame.openPage).toHaveBeenCalledWith(OTHER);
   });
 
+  it("文字起こしのタブ（#310）: 題名だけのエディタ（本文なし）の下に TranscriptPage。普通のページには本文がある", async () => {
+    const host = await open("note", OTHER, [tab(PAGE, 1)], HOLDER);
+    expect(order(host)).toEqual(["tabbar", `${PAGE}:note`, "editor", `${PAGE}:${HOLDER}`]);
+    expect(editors.at(-1)!.bodyless).toBe(true);
+    await act(async () => root?.unmount());
+    container?.remove();
+    await open("note");
+    expect(editors.at(-1)!.bodyless).toBe(false);
+  });
+
   it("shows the editor for an ordinary page, without the transcript", async () => {
     const host = await open("note");
     expect(order(host)).toEqual(["tabbar", `${PAGE}:note`, "editor"]);
     expect(host.querySelector("[data-transcript]")).toBeNull();
+    expect(host.querySelector("[data-transcript-page]")).toBeNull();
     // 既にあるページ（このタブの「新しいページ」で作っていない）は、空でも捨てない
     expect(editors.at(-1)!.onLeftEmpty).toBeUndefined();
   });
