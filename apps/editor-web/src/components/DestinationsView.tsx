@@ -91,6 +91,7 @@ export function DestinationsView({ initial }: DestinationsViewProps) {
       busy={busy}
       faces={faces}
       sites={destinations.sites.map((site) => ({ id: site.id, handle: site.handle, host: site.urlShape.host, path: site.urlShape.path, mode: site.mode, published: site.published }))}
+      onOpenFace={(id) => router.push(id === "exp" ? "/destinations/experience" : `/destinations/${id}`)}
       onOpenSite={(id) => router.push(`/destinations/${id}`)}
       onNavigate={(href) => router.push(href)}
       draft={draft}

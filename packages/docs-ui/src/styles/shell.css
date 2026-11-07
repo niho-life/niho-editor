@@ -169,9 +169,9 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="dock"] .es-brandbar{box-sizing:border-box;width:var(--es-left-w,272px);background:var(--ed-canvas);border-right:1px solid var(--ed-line)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-dt{padding-left:112px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-setbar{position:absolute;left:0;bottom:0;z-index:47}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="dock"] .es-setbar{box-sizing:border-box;width:var(--es-left-w,272px);height:var(--es-header);display:flex;align-items:center;padding:0 10px;background:var(--ed-canvas);border-top:1px solid var(--ed-line);border-right:1px solid var(--ed-line)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-setbar{padding:0 0 12px 12px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-sb-me{width:auto;height:32px;padding:0 12px 0 10px;border-radius:999px;background:color-mix(in srgb,var(--ed-canvas) 92%,transparent);box-shadow:0 1px 2px rgba(28,28,26,.14),0 0 0 1px var(--ed-line-2)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="dock"] .es-setbar{box-sizing:border-box;width:var(--es-left-w,272px);height:var(--es-header);display:flex;align-items:center;gap:4px;padding:0 8px;background:var(--ed-canvas);border-top:1px solid var(--ed-line);border-right:1px solid var(--ed-line)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-setbar{display:flex;align-items:center;gap:4px;padding:0 0 12px 12px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-sb-account,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-sb-settings{width:auto;height:36px;border-radius:999px;background:color-mix(in srgb,var(--ed-canvas) 92%,transparent);box-shadow:0 1px 2px rgba(28,28,26,.14),0 0 0 1px var(--ed-line-2)}
 /* 一覧がドックの列でない（dock 無し・900px 未満）ときは、一覧の上下にアプリ名と設定の段の分を空ける */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root:not([data-wide="true"]) .es-sb{padding-top:var(--es-header);padding-bottom:var(--es-header)}
 /* 一覧が枠の左上にあるとき：上の 1 行が「アプリ名 …… 検索 ＋ しまう」。高さは枠のヘッダーと同じで、アプリ名は帯と同じ左 14px（一覧を動かしても左上で跳ねない）。
@@ -179,11 +179,16 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root:not([data-wide="true"]) .es-sb[data-brand]{padding-top:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb[data-brand]>.es-sb-top{min-height:0;height:var(--es-header);padding:0 8px 0 14px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb[data-brand]>.es-sb-top>.es-grip{margin-left:4px}
-/* 左下の「設定」（直リンク。今いるときは aria-current で面を付ける） */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:7px 8px;border-radius:10px;font-size:13.5px;color:var(--ed-ink-sub)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me b{font-weight:600}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me .es-ico{width:18px;height:18px;color:var(--ed-ink-mute)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me[aria-current="page"]{background:var(--ed-sand);color:var(--ed-ink)}
+/* 左下の本人と設定。本人は session の表示値で、認可には使わない。 */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account{display:flex;align-items:center;gap:8px;min-width:0;flex:1;text-align:left;padding:4px 6px;border-radius:10px;font-size:13px;color:var(--ed-ink-sub)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account>span:last-child{display:grid;min-width:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account b,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account b{font-weight:600}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account small{font-size:12px;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account .es-av{flex:none;width:26px;height:26px;font-size:12px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-settings{position:relative;display:flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;border-radius:10px;color:var(--ed-ink-sub)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-settings .es-ico{width:18px;height:18px;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account[aria-current="page"],:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-settings:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-settings[aria-current="page"]{background:var(--ed-sand);color:var(--ed-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-badge{margin-left:auto;font-style:normal;font-size:12px;background:var(--ed-accent-soft);color:var(--ed-accent-ink);border-radius:999px;padding:0 7px;font-weight:600}
 
 /* ===== このページの写真（サイドバーの下。page/PagePhotos.tsx。モック editor-photo-library-v1） ===== */
@@ -1083,7 +1088,7 @@
   /* アプリ名と設定は一覧の画面にだけ（全幅）。ほかのパネルはヘッダーの下の全画面（一覧は従来どおり一覧そのものが全画面） */
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-brandbar,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-setbar{display:none}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="list"] .es-brandbar{display:flex;width:100%;border-right:0}
-  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="list"] .es-setbar{display:block;width:100%;border-right:0}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="list"] .es-setbar{display:flex;width:100%;border-right:0}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-dt{padding-left:6px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="rail"] .es-mtb{display:none}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"] .es-pn{position:absolute;left:0;right:0;top:var(--es-header);bottom:0;z-index:46;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--ed-canvas)}

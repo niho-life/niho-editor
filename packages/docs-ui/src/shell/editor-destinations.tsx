@@ -32,6 +32,15 @@ export type EditorDestinationFace = {
   published: number;
 };
 
+export type EditorDestinationConnectionState = "connected" | "disconnected" | "error";
+
+/** API の available/reason を、一覧と設定で同じ接続表示にする。role は正常な未接続。 */
+export function editorDestinationConnection(face: Pick<EditorDestinationFace, "available" | "reason">): { state: EditorDestinationConnectionState; label: string } {
+  if (face.available) return { state: "connected", label: "接続済み" };
+  if (face.reason === "unavailable") return { state: "error", label: "接続を確認できません" };
+  return { state: "disconnected", label: "未接続" };
+}
+
 /** 接続した本人のサイト。 */
 export type EditorDestinationSite = {
   /** 接続の id（画面の行を開くのに使う）。 */
@@ -69,6 +78,7 @@ export type EditorDestinationsPageProps = {
   busy: boolean;
   faces: EditorDestinationFace[];
   sites: EditorDestinationSite[];
+  onOpenFace: (id: EditorDestinationFace["id"]) => void;
   onOpenSite: (id: string) => void;
   /** 「発信先を追加」の下書き（null のときはボタンだけ）。 */
   draft: EditorAddSiteDraft | null;
@@ -135,7 +145,7 @@ export const EDITOR_DESTINATIONS_TEXT = {
   states: { published: "公開中", updated: "更新あり", limited: "限定公開", stopped: "公開をやめた" },
   notConnected: "未接続",
   noRole: "この発信先に出す役割がありません",
-  unavailable: "いまは公開できません（発信先の条件を読めません）",
+  unavailable: "接続を確認できません",
   addTitle: "発信先を追加",
   addHint: "自分のサイト · WordPress · Ghost",
   pushLater: "WordPress・Ghost への送信は、まだ動きません（受け取り方として保存するだけです）",
@@ -197,31 +207,22 @@ export function EditorDestinationsPage(props: EditorDestinationsPageProps) {
       <ShellSection>
         <ul className="es-dl">
           {faces.map((face) =>
-            card(
-              face.id,
-              face.id,
-              <>
-                <b>{face.label}</b>
-                {face.host !== null && (
-                  <code>
-                    {face.host}/{face.path}
-                  </code>
-                )}
-                <div className="es-dcard-m">
-                  <span>{face.who}</span>
-                  {face.available ? <span className="es-tag-ok">✓ {face.role}</span> : <span className="es-tag-no">{EDITOR_DESTINATIONS_TEXT.notConnected}</span>}
-                  <span>公開中 {face.published}</span>
-                </div>
-              </>,
-              face.available && face.host !== null ? (
-                <a className="es-btn es-btn--quiet es-btn--sm" href={`https://${face.host}`} target="_blank" rel="noopener noreferrer">
-                  {face.host}
-                  <Icon name="ext" />
-                </a>
-              ) : (
-                <span className="es-tag-no">{face.reason === "role" ? EDITOR_DESTINATIONS_TEXT.noRole : EDITOR_DESTINATIONS_TEXT.unavailable}</span>
-              ),
-            ),
+            (() => {
+              const connection = editorDestinationConnection(face);
+              return card(
+                face.id,
+                face.id,
+                <>
+                  <b>{face.label}</b>
+                  <div className="es-dcard-m">
+                    <span className={connection.state === "connected" ? "es-tag-ok" : "es-tag-no"}>{connection.label}</span>
+                  </div>
+                </>,
+                <button type="button" className="es-btn es-btn--outline es-btn--sm" aria-label={`${face.label} の詳細`} {...busyProps} onClick={() => !busy && props.onOpenFace(face.id)}>
+                  詳細
+                </button>,
+              );
+            })()
           )}
           {sites.map((site) =>
             card(
@@ -229,13 +230,8 @@ export function EditorDestinationsPage(props: EditorDestinationsPageProps) {
               "site",
               <>
                 <b>{site.host}</b>
-                <code>
-                  {site.host}/{site.path}
-                </code>
                 <div className="es-dcard-m">
-                  <span>{EDITOR_DESTINATIONS_TEXT.modes[site.mode]}</span>
                   <span className="es-tag-ok">✓ 接続済み</span>
-                  <span>公開中 {site.published}</span>
                 </div>
               </>,
               <button type="button" className="es-btn es-btn--outline es-btn--sm" aria-label={`${site.host} の設定`} {...busyProps} onClick={() => !busy && props.onOpenSite(site.id)}>

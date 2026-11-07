@@ -5,6 +5,7 @@ import { ShellToggle, linkTo } from "./settings-parts";
 import { ShellSheet } from "./sheet";
 import type { EditorSettingsTermDraft } from "./terms-editor";
 import type { ShellMenuItem } from "./types";
+import { editorDestinationConnection, type EditorDestinationFace } from "./editor-destinations";
 
 /**
  * editor.niho.life の設定（オーナー決定 2026-11-05。モック docs/mockups/editor-settings-refine-v1.html）。
@@ -334,8 +335,13 @@ export type EditorSettingsHubProps = {
   storageUsage: EditorSettingsStorageUsage | null;
   storageUsageNote: string | null;
   audio: EditorSettingsAudioFacts;
-  /** 「アカウント」の群の先頭の行に出す本人（名前が空なら「役割とつながり」とだけ出す）。initial はアバターの 1 文字。 */
-  account: { name: string; initial: string };
+  /** 「アカウント」の群の先頭の行に出す、session 由来の本人。 */
+  account: { name: string; caption: string; initial: string };
+  /** 現在の発信先。face の role は正常な未接続、unavailable だけが確認失敗。 */
+  destinations: {
+    faces: Array<Pick<EditorDestinationFace, "id" | "label" | "available" | "reason">>;
+    sites: Array<{ id: string; label: string }>;
+  };
   /** いちばん下の「ログアウト」。 */
   onLogout: () => void;
   onNavigate: (href: string) => void;
@@ -355,6 +361,7 @@ export function EditorSettingsHub(props: EditorSettingsHubProps) {
   const shown = glossary.slice(0, 4).map((entry) => entry.term);
   const ratio = usage && usage.limitUsd !== null && usage.limitUsd > 0 ? Math.min(1, usage.costUsd / usage.limitUsd) : null;
   const who = props.account.name.trim();
+  const caption = props.account.caption.trim();
   return (
     <div className="es-page es-page--set">
       <h1>設定</h1>
@@ -362,7 +369,7 @@ export function EditorSettingsHub(props: EditorSettingsHubProps) {
         {props.status}
       </p>
 
-      {/* 左下の「設定」から来る人のための入り口（発信先・役割とつながり・ログアウトは左下のメニューをやめてここへ。オーナー決定 2026-11-06） */}
+      {/* session の本人情報を先頭に置く。認可には使わない。 */}
       <Group id="es-s-account" title="アカウント">
         <div className="es-grp">
           <a className="es-row es-row--link es-row--me" {...linkTo(EDITOR_SETTINGS_HREF.account, onNavigate)}>
@@ -370,16 +377,9 @@ export function EditorSettingsHub(props: EditorSettingsHubProps) {
               {props.account.initial}
             </span>
             <span className="es-row-k">
-              <b>{who || "役割とつながり"}</b>
-              {who && <small>役割とつながり</small>}
+              <b>{who || "名前を取得できません"}</b>
+              {caption && <small>{caption}</small>}
             </span>
-            <span className="es-row-e">
-              <Icon name="chev" />
-            </span>
-          </a>
-          <a className="es-row es-row--link" {...linkTo(EDITOR_SETTINGS_HREF.destinations, onNavigate)}>
-            <span className="es-row-k">発信先</span>
-            <span className="es-row-v" />
             <span className="es-row-e">
               <Icon name="chev" />
             </span>
@@ -395,6 +395,33 @@ export function EditorSettingsHub(props: EditorSettingsHubProps) {
               </span>
             </a>
           )}
+        </div>
+      </Group>
+
+      <Group id="es-s-destinations" title="発信先">
+        <div className="es-grp">
+          {props.destinations.faces.map((face) => {
+            const connection = editorDestinationConnection(face);
+            return (
+              <a key={face.id} className="es-row es-row--link" {...linkTo(`/destinations/${face.id === "exp" ? "experience" : face.id}`, onNavigate)}>
+                <span className="es-row-k">{face.label}</span>
+                <span className={connection.state === "error" ? "es-row-v es-danger" : "es-row-v"}>{connection.label}</span>
+                <span className="es-row-e"><Icon name="chev" /></span>
+              </a>
+            );
+          })}
+          {props.destinations.sites.map((site) => (
+            <a key={site.id} className="es-row es-row--link" {...linkTo(`/destinations/${encodeURIComponent(site.id)}`, onNavigate)}>
+              <span className="es-row-k">{site.label}</span>
+              <span className="es-row-v">接続済み</span>
+              <span className="es-row-e"><Icon name="chev" /></span>
+            </a>
+          ))}
+          <a className="es-row es-row--link" {...linkTo(EDITOR_SETTINGS_HREF.destinations, onNavigate)}>
+            <span className="es-row-k">発信先を追加・管理</span>
+            <span className="es-row-v" />
+            <span className="es-row-e"><Icon name="chev" /></span>
+          </a>
         </div>
       </Group>
 

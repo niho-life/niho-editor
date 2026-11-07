@@ -153,15 +153,21 @@ describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
     expect(onPick).toHaveBeenCalledWith("recording");
   });
 
-  it("左下の「設定」（枠の settings）はメニューを出さず、押すとすぐ onOpen（設定の一覧へ）", () => {
+  it("左下で本人と設定を分け、本人は /account、歯車は設定の callback を呼ぶ", () => {
     const onSettings = vi.fn();
+    const onAccount = vi.fn();
     const host = mount(
-      <EditorShell sidebar={<Sidebar />} header={null} sidebarOpen railOpen={false} settings={{ onOpen: onSettings }}>
+      <EditorShell sidebar={<Sidebar />} header={null} sidebarOpen railOpen={false} settings={{ account: { name: "合成の名前", caption: "synthetic@example.invalid", initial: "合", onOpen: onAccount }, onOpen: onSettings }}>
         x
       </EditorShell>,
     );
-    const settings = host.querySelector<HTMLButtonElement>(".es-setbar .es-sb-me")!;
-    expect(settings.textContent).toBe("設定");
+    const account = host.querySelector<HTMLButtonElement>(".es-setbar .es-sb-account")!;
+    expect(account.textContent).toContain("合成の名前");
+    expect(account.textContent).toContain("synthetic@example.invalid");
+    act(() => account.click());
+    expect(onAccount).toHaveBeenCalledTimes(1);
+    const settings = host.querySelector<HTMLButtonElement>(".es-setbar .es-sb-settings")!;
+    expect(settings.getAttribute("aria-label")).toBe("設定");
     expect(settings.hasAttribute("aria-haspopup")).toBe(false);
     act(() => settings.click());
     expect(onSettings).toHaveBeenCalledTimes(1);

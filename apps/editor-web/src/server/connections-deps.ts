@@ -3,9 +3,11 @@ import { countLivePublishedByHandle } from "@niho/editor-store";
 import { getStorage } from "../storage/runtime";
 import { storageAssetBytes } from "../publish/export-assets";
 import { pgDraftFingerprints, pgPublishStore } from "../publish/pg-store";
-import { wirePublishPorts } from "../publish/ports";
+import { roleReaderOf, wirePublishPorts } from "../publish/ports";
 import type { ConnectionsApiDeps } from "./connections-api";
 import { getAuthProvider } from "../auth";
+import { NihoExperienceApiClient } from "../auth/niho-experience-api";
+import { publishConfig } from "../publish/config";
 import { getPool } from "./db";
 
 /**
@@ -15,9 +17,16 @@ import { getPool } from "./db";
  */
 export const connectionsDeps: ConnectionsApiDeps = {
   auth: () => getAuthProvider(),
-  ports: (session) => {
+  ports: (session, request) => {
     const pool = getPool();
-    return pool ? wirePublishPorts(pgPublishStore(pool), session, { drafts: pgDraftFingerprints(pool) }) : null;
+    const auth = getAuthProvider();
+    return pool ? wirePublishPorts(pgPublishStore(pool), session, {
+      drafts: pgDraftFingerprints(pool),
+      roles: roleReaderOf(publishConfig(process.env), session, async () => {
+        const result = await new NihoExperienceApiClient(auth).roles(session, request);
+        return result.destinations.includes("exp") && result.roles.includes("writer") ? ["writer"] : [];
+      }),
+    }) : null;
   },
   counts: () => {
     const pool = getPool();

@@ -47,7 +47,7 @@ const BASE64URL_RE = /^[A-Za-z0-9_-]{1,1024}$/;
 const NAME_BASE64URL_RE = new RegExp(`^[A-Za-z0-9_-]{1,${Math.ceil((MAX_DISPLAY_NAME_CHARS * 4 * 4) / 3)}}$`);
 
 type Env = Readonly<Record<string, string | undefined>>;
-type Pending = { state: string; verifier: string; returnTo: string; expiresAt: number };
+type Pending = { state: string; verifier: string; returnTo: string; expiresAt: number; accountHash?: string };
 type CallbackFields = { code: string; state: string };
 type FirebaseTokens = { idToken: string; refreshToken: string; expiresInSeconds: number };
 type ConnectionPayload = {
@@ -184,7 +184,8 @@ function parsePending(raw: string | null): Pending | null {
   }
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  if (!exactKeys(record, ["state", "verifier", "returnTo", "expiresAt"])
+  if (!exactKeys(record, ["state", "verifier", "returnTo", "expiresAt", ...(record.accountHash === undefined ? [] : ["accountHash"])])
+    || (record.accountHash !== undefined && (typeof record.accountHash !== "string" || !/^[a-f0-9]{64}$/.test(record.accountHash)))
     || typeof record.state !== "string" || !STATE_RE.test(record.state)
     || typeof record.verifier !== "string" || !VERIFIER_RE.test(record.verifier)
     || typeof record.returnTo !== "string" || safeReturnTo(record.returnTo) !== record.returnTo
@@ -201,6 +202,11 @@ function sameValue(left: string, right: string): boolean {
   const a = Buffer.from(left, "utf8");
   const b = Buffer.from(right, "utf8");
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Bind a profile refresh to the existing actor without putting its internal ID in the login form or URL. */
+function accountBinding(state: string, actorId: string): string {
+  return createHash("sha256").update("editor-account-v1\0").update(state).update("\0").update(actorId).digest("hex");
 }
 
 function isUrlEncoded(value: string | null): boolean {
@@ -578,8 +584,14 @@ export function createNihoExperienceAuthProvider(deps: NihoExperienceAuthDeps = 
       const state = randomValue();
       const verifier = randomValue();
       if (!STATE_RE.test(state) || !VERIFIER_RE.test(verifier)) return unavailableResponse(returnTo);
+      let accountHash: string | undefined;
+      if (new URL(request.url).searchParams.get("sameAccount") === "1") {
+        const current = await this.getSession(request);
+        if (!current) return unavailableResponse(returnTo);
+        accountHash = accountBinding(state, current.userId);
+      }
       const challenge = createHash("sha256").update(verifier, "ascii").digest("base64url");
-      const pending = encodePending({ state, verifier, returnTo: safeReturnTo(returnTo), expiresAt: now() + LOGIN_TTL_SECONDS * 1000 });
+      const pending = encodePending({ state, verifier, returnTo: safeReturnTo(returnTo), expiresAt: now() + LOGIN_TTL_SECONDS * 1000, ...(accountHash ? { accountHash } : {}) });
       const response = autoFormResponse({
         target: `${nihoOrigin}${CONNECT_START_PATH}`,
         formAction: nihoOrigin,
@@ -638,6 +650,11 @@ export function createNihoExperienceAuthProvider(deps: NihoExperienceAuthDeps = 
       const oldRefreshToken = cookieValue(cookieHeader, EXPERIENCE_EDITOR_REFRESH_COOKIE);
       try {
         const result = await exchangeCustomCode(fields.code, pending.verifier);
+        if (pending.accountHash && !sameValue(pending.accountHash, accountBinding(pending.state, result.session.actorId))) {
+          // Keep the previous session and its drafts. Revoke only the unused new connection.
+          await callNiho(REVOKE_PATH, { body: { clientId: CLIENT_ID, refreshToken: result.payload.refreshToken } }).catch(() => logFailure("revoke_mismatched"));
+          return redirectTo("/account?identity=mismatch", [clearCookie(EXPERIENCE_EDITOR_PENDING_COOKIE)]);
+        }
         if (oldRefreshToken && TOKEN_RE.test(oldRefreshToken)) {
           await callNiho(REVOKE_PATH, { body: { clientId: CLIENT_ID, refreshToken: oldRefreshToken } }).catch(() => logFailure("revoke_previous"));
         }

@@ -2,6 +2,32 @@ import { Icon } from "./icons";
 import { ShellDestPill, ShellInvite, ShellRole, ShellSection, ShellSettingsPage, ShellTable } from "./settings-parts";
 import type { ShellDest } from "./types";
 
+export type EditorAccountPageProps = {
+  account: { name: string; caption: string; initial: string };
+  onNavigate: (href: string) => void;
+  refreshIdentity?: boolean;
+  identityMismatch?: boolean;
+};
+
+/** editor の本人情報。session の表示値だけを出し、この名前を認可には使わない。 */
+export function EditorAccountPage({ account, onNavigate, refreshIdentity, identityMismatch }: EditorAccountPageProps) {
+  return (
+    <ShellSettingsPage title="アカウント" up={{ label: "設定", href: "/settings", onNavigate }}>
+      {identityMismatch ? <p role="alert">NIHO で選んだアカウントが現在の原稿のアカウントと異なるため、接続を変更しませんでした。</p> : null}
+      <ShellSection title="本人情報">
+        <div className="es-acct">
+          <span className="es-av es-av--lg" aria-hidden="true">{account.initial}</span>
+          <div>
+            <b>{account.name}</b>
+            {account.caption ? <code>{account.caption}</code> : null}
+          </div>
+        </div>
+        {refreshIdentity ? <a className="es-btn es-btn--outline es-btn--sm" href="/auth/login/start?next=%2Faccount&sameAccount=1">NIHO で本人情報を更新</a> : null}
+      </ShellSection>
+    </ShellSettingsPage>
+  );
+}
+
 export type AccountRole = {
   id: string;
   name: string;

@@ -340,10 +340,13 @@ describe("EditorFrame", () => {
     await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent?.includes("録音から"))!.click());
     expect(nav.push).toHaveBeenLastCalledWith("/p/new?from=recording");
 
-    // 左下は「設定」の直リンク（メニューは無い。本人の名前は設定の一覧の「アカウント」に出る）
-    expect(container!.querySelector(".es-sb-me")?.textContent).toBe("設定");
-    expect(container!.querySelector(".es-sb-me")?.hasAttribute("aria-haspopup")).toBe(false);
-    await click(".es-sb-me");
+    // 左下は本人と設定を常時分離して出す
+    expect(container!.querySelector(".es-sb-account")?.textContent).toContain("開発ユーザー");
+    expect(container!.querySelector(".es-sb-account")?.textContent).toContain("stub");
+    await click(".es-sb-account");
+    expect(nav.push).toHaveBeenLastCalledWith("/account");
+    expect(container!.querySelector(".es-sb-settings")?.hasAttribute("aria-haspopup")).toBe(false);
+    await click(".es-sb-settings");
     expect(container!.querySelector('[role="menu"]')).toBeNull();
     expect(nav.push).toHaveBeenLastCalledWith("/settings");
 

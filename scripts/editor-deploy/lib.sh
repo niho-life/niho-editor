@@ -21,6 +21,16 @@ is_https_audience() {
   [[ "$1" =~ ^https://[a-z0-9-]+(\.[a-z0-9-]+)+(/[A-Za-z0-9._~%:/-]*)?$ ]]
 }
 
+# Deployment replaces the complete environment; never silently disable an article
+# destination because an older deploy.env omitted its configuration.
+require_explicit_article_settings() {
+  local flag
+  for flag in EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED EDITOR_ARTICLE_AUTHORITY_API_ENABLED; do
+    grep -Eq "^[[:space:]]*(export[[:space:]]+)?${flag}=" "$DEPLOY_ENV" \
+      || die "$flag must be explicitly true or false in deploy.env (deployment replaces the runtime settings)"
+  done
+}
+
 load_article_deploy_settings() {
   EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED="${EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED:-false}"
   EDITOR_ARTICLE_AUTHORITY_API_ENABLED="${EDITOR_ARTICLE_AUTHORITY_API_ENABLED:-false}"

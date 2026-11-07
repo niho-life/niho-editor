@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { StoreUnavailable } from "@/components/Notice";
 import { SettingsHubView } from "@/components/settings/SettingsHubView";
 import { settingsFacts } from "@/settings/facts";
 import { settingsPageData } from "@/settings/page-data";
 import { frameMe } from "@/server/frame";
 import { requireSession } from "@/server/session";
+import { connectionsDeps } from "@/server/connections-deps";
+import { destinationsFor } from "@/server/connections-api";
 
 export const dynamic = "force-dynamic";
 
@@ -21,14 +24,18 @@ export default async function SettingsPage() {
   const data = await settingsPageData("/settings");
   if (!data) return <StoreUnavailable />;
   const { audio } = settingsFacts().transcription;
-  // 「アカウント」の群の本人の行（左の枠の frameMe と同じ名前・1 文字）
-  const { name, initial } = frameMe(await requireSession("/settings"));
+  const [session, requestHeaders] = await Promise.all([requireSession("/settings"), headers()]);
+  const wiring = connectionsDeps.ports(session, { headers: requestHeaders });
+  const counts = connectionsDeps.counts();
+  if (!wiring || !counts) return <StoreUnavailable />;
+  const destinations = await destinationsFor(wiring, session.userId, counts);
   return (
     <SettingsHubView
       key={data.userId}
       initial={data.settings}
       audio={{ maxBytes: audio.maxBytes, maxDurationSec: audio.maxDurationSec, retentionDays: audio.retentionDays }}
-      account={{ name, initial }}
+      account={frameMe(session)}
+      destinations={destinations}
     />
   );
 }

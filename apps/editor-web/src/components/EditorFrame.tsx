@@ -71,8 +71,9 @@ const SIDE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** 設定系のページ（ヘッダーの題名と、左下の「設定」の現在地）。 */
 const SETTINGS_ROUTES = [
+  { path: "/destinations/experience", title: "NIHO Experience" },
   { path: "/destinations", title: "発信先" },
-  { path: "/account", title: "役割とつながり" },
+  { path: "/account", title: "アカウント" },
   { path: "/settings", title: "設定" },
 ] as const;
 
@@ -1203,7 +1204,11 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           pageOpen={pageShown}
           photosOpen={photosShown}
           // 左下の「設定」の直リンク。押すとすぐ設定の一覧（メニューは無い。オーナー決定 2026-11-06）
-          settings={{ current: settings !== undefined, onOpen: () => router.push("/settings") }}
+          settings={{
+            current: pathname === "/settings" || pathname.startsWith("/settings/"),
+            account: { ...initial.me, current: pathname === "/account", onOpen: () => router.push("/account") },
+            onOpen: () => router.push("/settings"),
+          }}
           toolbar={editorBar && narrow ? <ShellMobileToolbar {...editorBar} compact /> : undefined}
           rail={
             railSummary ? (

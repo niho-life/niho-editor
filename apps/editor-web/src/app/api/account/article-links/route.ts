@@ -11,7 +11,6 @@ export function GET(request: Request): Promise<Response> {
     const session = await auth.getSession(request);
     if (!session) return errorResponse("unauthorized");
     const client = new NihoExperienceApiClient(auth);
-    const [roles, links] = await Promise.all([client.roles(session, request), client.links(session, request)]);
-    return jsonResponse(200, { roles, links });
+    return jsonResponse(200, await client.connectionState(session, request));
   });
 }

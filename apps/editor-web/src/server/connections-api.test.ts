@@ -197,6 +197,21 @@ describe("GET /api/destinations", () => {
     expect((await list({ ...deps, ports: () => null })).status).toBe(503);
   });
 
+  it("passes the current request headers to the publish wiring", async () => {
+    const { deps, wiring } = world();
+    let seen: string | null = null;
+    const current = request("GET", "/api/destinations", undefined, { "x-synthetic-request": "current" });
+    const response = await listDestinations(current, {
+      ...deps,
+      ports: (_session, sessionRequest) => {
+        seen = sessionRequest.headers.get("x-synthetic-request");
+        return wiring;
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(seen).toBe("current");
+  });
+
   it("lists the faces the roles allow, with the reason for the ones they do not", async () => {
     const { deps } = world();
     const body = (await (await list(deps)).json()) as { destinations: DestinationsDto };
@@ -213,6 +228,27 @@ describe("GET /api/destinations", () => {
     faces.remove("exp");
     const body = (await (await list(deps)).json()) as { destinations: DestinationsDto };
     expect(body.destinations.faces[0]).toMatchObject({ handle: "exp", available: false, reason: "unavailable", host: null });
+  });
+
+  it("keeps personal sites available and marks only the face unknown when current roles cannot be read", async () => {
+    const { deps, wiring } = world();
+    await connect(deps);
+    const failedRoles: PublishWiring = {
+      ...wiring,
+      publish: { ...wiring.publish, roles: { read: async () => { throw new Error("synthetic upstream failure"); } } },
+    };
+    const response = await list({ ...deps, ports: () => failedRoles });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { destinations: DestinationsDto };
+    expect(body.destinations.faces).toMatchObject([{ handle: "exp", available: false, reason: "unavailable" }]);
+    expect(body.destinations.sites.map((site) => site.handle)).toEqual([HANDLE]);
+  });
+
+  it("treats a revoked writer role as a normal disconnected face", async () => {
+    const { deps, roles } = world();
+    roles.set(ACTOR, []);
+    const body = (await (await list(deps)).json()) as { destinations: DestinationsDto };
+    expect(body.destinations.faces).toMatchObject([{ handle: "exp", available: false, reason: "role" }]);
   });
 
   it("counts the pages published on each destination, and never lists a removed connection", async () => {

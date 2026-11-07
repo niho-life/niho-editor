@@ -16,7 +16,7 @@ import {
   type PublishedOnConnection,
   type UrlShape,
 } from "@niho/editor-publish";
-import type { AuthProvider, Session } from "../auth/types";
+import type { AuthProvider, Session, SessionRequest } from "../auth/types";
 import { DESTINATION_MESSAGES } from "../publish/messages";
 import type { PublishWiring } from "../publish/ports";
 import type { ExportAssetReader } from "../publish/export-assets";
@@ -49,7 +49,7 @@ export type LivePublishedCounter = (owner: string, handles: readonly string[]) =
 export type ConnectionsApiDeps = {
   auth: () => AuthProvider;
   /** 本人ごとの公開のポート（src/publish/ports.ts）。DB が使えないときは null（503）。 */
-  ports: (session: Session) => PublishWiring | null;
+  ports: (session: Session, request: SessionRequest) => PublishWiring | null;
   /** 本人の公開中のページの数。DB が使えないときは null（503）。 */
   counts: () => LivePublishedCounter | null;
   /** 書き出しの写真の読み出し（保存先）。使えないときは null（書き出しは 503）。要求ごとに 1 つ作る（予算を数えるため）。 */
@@ -164,7 +164,21 @@ function issuedKeyDto(key: { id: string; plaintext: string; masked: string; crea
 
 /** 役割と宣言から、NIHO の面の行を作る。役割の無い面の宣言は読まない。 */
 async function faceRows(wiring: PublishWiring, actorId: string, counts: Map<string, number>): Promise<FaceDestinationDto[]> {
-  const roles = await wiring.publish.roles.read(actorId);
+  let roles: readonly string[];
+  try {
+    roles = await wiring.publish.roles.read(actorId);
+  } catch {
+    // 現在の役割を確認できないことは「役割なし」ではない。本人のサイト一覧はこの失敗と独立して返す。
+    return PUBLISHABLE_FACE_DESTS.map((handle) => ({
+      handle,
+      label: FACE_LABELS[handle],
+      host: null,
+      path: null,
+      available: false,
+      reason: "unavailable",
+      published: counts.get(handle) ?? 0,
+    }));
+  }
   const rows: FaceDestinationDto[] = [];
   for (const handle of PUBLISHABLE_FACE_DESTS) {
     const allowed = roleAllows(roles, handle);
@@ -224,7 +238,7 @@ async function ready(request: Request, deps: ConnectionsApiDeps, mutating: boole
   const session = await deps.auth().getSession(request);
   if (!session) return { ok: false, response: errorResponse("unauthorized") };
   if (mutating && !isSameOriginRequest(request, deps.env)) return { ok: false, response: errorResponse("forbidden") };
-  const wiring = deps.ports(session);
+  const wiring = deps.ports(session, request);
   const counts = deps.counts();
   if (!wiring || !counts) return { ok: false, response: errorResponse("unavailable") };
   return { ok: true, wiring, actorId: session.userId, counts };
@@ -374,7 +388,7 @@ export function exportDestination(request: Request, id: string, deps: Connection
   return guarded("GET /api/destinations/[id]/export", async () => {
     const session = await deps.auth().getSession(request);
     if (!session) return errorResponse("unauthorized");
-    const wiring = deps.ports(session);
+    const wiring = deps.ports(session, request);
     if (!wiring) return errorResponse("unavailable");
     const assets = deps.exportAssets();
     if (!assets) return connectionError("storage_unavailable");

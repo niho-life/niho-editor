@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { StoreUnavailable } from "@/components/Notice";
 import { DestinationsView } from "@/components/DestinationsView";
 import { connectionsDeps } from "@/server/connections-deps";
@@ -15,7 +16,7 @@ export const metadata: Metadata = { title: "発信先" };
  */
 export default async function DestinationsPage() {
   const session = await requireSession("/destinations");
-  const wiring = connectionsDeps.ports(session);
+  const wiring = connectionsDeps.ports(session, { headers: await headers() });
   const counts = connectionsDeps.counts();
   if (!wiring || !counts) return <StoreUnavailable />;
   const destinations = await destinationsFor(wiring, session.userId, counts);

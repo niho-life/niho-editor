@@ -37,6 +37,21 @@ const streamed = (chunks: readonly Uint8Array[], contentType = "application/json
 };
 
 describe("NihoExperienceApiClient", () => {
+  it("treats an uninvited account as disconnected without requiring provider-link availability", async () => {
+    const { value, fetchImpl } = client(() => json({ version: 1, roles: [], destinations: [] }));
+    await expect(value.connectionState(SESSION, REQUEST)).resolves.toEqual({ roles: { version: 1, roles: [], destinations: [] }, links: [] });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a verified destination connection separate from an optional provider-link outage", async () => {
+    const { value } = client((url) => url.pathname.endsWith("/roles")
+      ? json({ version: 1, roles: ["writer"], destinations: ["exp"] })
+      : json({ error: "unavailable" }, 503));
+    await expect(value.connectionState(SESSION, REQUEST)).resolves.toEqual({ roles: { version: 1, roles: ["writer"], destinations: ["exp"] }, links: [], linksUnavailable: true });
+    const failedRoles = client(() => json({ error: "unavailable" }, 503));
+    await expect(failedRoles.value.connectionState(SESSION, REQUEST)).rejects.toThrow();
+  });
+
   it("uses only the fixed role and article-link paths with their purpose-bound server token", async () => {
     const seen: string[] = [];
     const { value, articleApiToken } = client((url, init) => {
