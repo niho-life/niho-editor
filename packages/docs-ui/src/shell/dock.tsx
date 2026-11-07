@@ -73,11 +73,14 @@ export const dockColumn = (side: ShellDockSide) => (side === "left" ? 1 : 7);
 /**
  * ドックの中のパネルの縦の位置（枠の高さに対する calc）。左のドックは上にアプリ名の段・下に設定の段があるので、その間。
  * 右のドックは枠の全高。
+ * `head` は左のドックの一番上の一覧（アプリ名を自分の上の 1 行の左に出す）。アプリ名の段も使うので、上端は 0 で、その段の分だけ高い。
  */
-export function panelTop(side: ShellDockSide, start: number): string {
+export function panelTop(side: ShellDockSide, start: number, head = false): string {
+  if (side === "left" && head) return "0px";
   return side === "left" ? `calc(var(--es-header) + (100% - 2 * var(--es-header)) * ${start})` : `${start * 100}%`;
 }
-export function panelHeight(side: ShellDockSide, share: number): string {
+export function panelHeight(side: ShellDockSide, share: number, head = false): string {
+  if (side === "left" && head) return `calc(var(--es-header) + (100% - 2 * var(--es-header)) * ${share})`;
   return side === "left" ? `calc((100% - 2 * var(--es-header)) * ${share})` : `${share * 100}%`;
 }
 

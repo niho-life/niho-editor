@@ -347,12 +347,15 @@ describe("EditorFrame", () => {
     expect(container!.querySelector('[role="menu"]')).toBeNull();
     expect(nav.push).toHaveBeenLastCalledWith("/settings");
 
-    // 左上はアプリ名（枠の左上端。一覧の中・ヘッダーには無い）。デスクトップ: 一覧をしまうと右上に「一覧を出す」が出て、押すと戻る
-    expect(container!.querySelector('.es-brandbar [aria-label="Editor"]')).not.toBeNull();
-    expect(container!.querySelector('.es-sb-top [aria-label="Editor"]')).toBeNull();
+    // 左上はアプリ名。一覧が左上にあるあいだは一覧の上の 1 行の左（「Editor …… 検索 ＋ しまう」。枠の帯・ヘッダーには無い）。
+    // デスクトップ: 一覧をしまうと右上に「一覧を出す」が出て、押すと戻る。しまったあいだのアプリ名は枠の帯
+    expect(container!.querySelector('.es-sb-top [aria-label="Editor"]')).not.toBeNull();
+    expect(container!.querySelector(".es-brandbar")).toBeNull();
     expect(container!.querySelector('.es-dt [aria-label="Editor"]')).toBeNull();
     await click('button[aria-label="一覧をしまう"]');
     expect(shell().sidebar).toBe("closed");
+    expect(container!.querySelector('.es-brandbar [aria-label="Editor"]')).not.toBeNull();
+    expect(container!.querySelectorAll('[aria-label="Editor"]')).toHaveLength(1);
     expect(container!.querySelector('.es-dt .es-tg button[aria-label="一覧を出す"]')).not.toBeNull();
     await click('button[aria-label="一覧を出す"]');
     expect(shell().sidebar).toBe("open");
