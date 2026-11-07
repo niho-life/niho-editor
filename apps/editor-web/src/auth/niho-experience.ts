@@ -653,7 +653,7 @@ export function createNihoExperienceAuthProvider(deps: NihoExperienceAuthDeps = 
         if (pending.accountHash && !sameValue(pending.accountHash, accountBinding(pending.state, result.session.actorId))) {
           // Keep the previous session and its drafts. Revoke only the unused new connection.
           await callNiho(REVOKE_PATH, { body: { clientId: CLIENT_ID, refreshToken: result.payload.refreshToken } }).catch(() => logFailure("revoke_mismatched"));
-          return redirectTo("/account?identity=mismatch", [clearCookie(EXPERIENCE_EDITOR_PENDING_COOKIE)]);
+          return redirectTo("/settings?identity=mismatch", [clearCookie(EXPERIENCE_EDITOR_PENDING_COOKIE)]);
         }
         if (oldRefreshToken && TOKEN_RE.test(oldRefreshToken)) {
           await callNiho(REVOKE_PATH, { body: { clientId: CLIENT_ID, refreshToken: oldRefreshToken } }).catch(() => logFailure("revoke_previous"));

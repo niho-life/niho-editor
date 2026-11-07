@@ -8,9 +8,9 @@ NIHO用の接続はEditor専用cookieからserver-onlyで取得する。同じ�
 
 既存client IDの `niho-experience-editor` とcallbackは本人認証の互換のために維持する。名前にExperienceが含まれていても、記事公開の許可を意味しない。ページの作成・同期・文字起こし・本人サイト公開はExperienceのwriter権限を必要としない。
 
-本人情報と発信先は分ける。左下と設定には現在sessionの本人名を表示し、`/account` は本人情報だけを扱う。Experienceの接続状態・記事招待・承諾・辞退は表示しない。
+本人情報は設定ページの先頭に表示し、左下は歯車＋「設定」の入口とする。独立したアカウント画面は持たず、旧 `/account` は設定へ転送する。Experienceの接続状態・記事招待・承諾・辞退は表示しない。
 
-表示名を持たない旧sessionは、本人情報の更新から同じNIHOアカウントへ接続し直せる。`sameAccount=1` の開始時に現在actorを確認し、短命のpending cookieへstateとactorのhashを結ぶ。callbackで別actorになった場合は新しい未使用接続だけを失効させ、元のsessionと原稿の所有者を維持する。表示名は確認後のNIHO exchangeから読み、認可には用いない。
+表示名を取得できないNIHO sessionにだけ、設定内の「名前を再取得」から同じNIHOアカウントへ接続し直せる。`sameAccount=1` の開始時に現在actorを確認し、短命のpending cookieへstateとactorのhashを結ぶ。callbackで別actorになった場合は新しい未使用接続だけを失効させ、元のsessionと原稿の所有者を維持し、設定に理由を表示する。配備前に始めた再取得も旧 `/account` から設定へ戻す。表示名は確認後のNIHO exchangeから読み、認可には用いない。
 
 ## 閉じる記事専用の経路
 

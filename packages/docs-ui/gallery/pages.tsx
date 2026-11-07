@@ -85,7 +85,7 @@ function SettingsFrame({ title, sidebar: forcedSidebar, pendingInvites = 0, over
       header={<ShellHeader plain title={title} showListButton={!sidebarOpen} onToggleList={() => setSidebarOpen(true)} />}
       sidebarOpen={sidebarOpen}
       railOpen={false}
-      settings={{ ...settings, account: { name: ME.name, caption: ME.email, initial: ME.initial, onOpen: () => navigate("account") } }}
+      settings={settings}
       overlay={overlay}
     >
       {children}

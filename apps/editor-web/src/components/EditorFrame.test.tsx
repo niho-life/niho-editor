@@ -350,11 +350,9 @@ describe("EditorFrame", () => {
     await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent?.includes("録音から"))!.click());
     expect(nav.push).toHaveBeenLastCalledWith("/p/new?from=recording");
 
-    // 左下は本人と設定を常時分離して出す
-    expect(container!.querySelector(".es-sb-account")?.textContent).toContain("開発ユーザー");
-    expect(container!.querySelector(".es-sb-account")?.textContent).toContain("stub");
-    await click(".es-sb-account");
-    expect(nav.push).toHaveBeenLastCalledWith("/account");
+    // 左下の歯車＋「設定」から一覧へ直接進む
+    expect(container!.querySelector(".es-sb-account")).toBeNull();
+    expect(container!.querySelector(".es-sb-settings")?.textContent).toBe("設定");
     expect(container!.querySelector(".es-sb-settings")?.hasAttribute("aria-haspopup")).toBe(false);
     await click(".es-sb-settings");
     expect(container!.querySelector('[role="menu"]')).toBeNull();
@@ -1769,7 +1767,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       await rerender(null);
       expect(railButton()).toBeNull();
       nav.search = "";
-      nav.pathname = "/account";
+      nav.pathname = "/settings";
       await rerender(null);
       expect(railButton()).toBeNull();
       // 開けなかったページ（404。一覧に行があってもエディタが無い）

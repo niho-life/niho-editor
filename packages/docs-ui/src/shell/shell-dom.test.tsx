@@ -165,25 +165,38 @@ describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
     expect(onPick).toHaveBeenCalledWith("recording");
   });
 
-  it("左下で本人と設定を分け、本人は /account、歯車は設定の callback を呼ぶ", () => {
+  it("左下の歯車＋「設定」が、設定の callback を直接呼ぶ", () => {
     const onSettings = vi.fn();
-    const onAccount = vi.fn();
     const host = mount(
-      <EditorShell sidebar={<Sidebar />} header={null} sidebarOpen railOpen={false} settings={{ account: { name: "合成の名前", caption: "synthetic@example.invalid", initial: "合", onOpen: onAccount }, onOpen: onSettings }}>
+      <EditorShell sidebar={<Sidebar />} header={null} sidebarOpen railOpen={false} settings={{ onOpen: onSettings }}>
         x
       </EditorShell>,
     );
-    const account = host.querySelector<HTMLButtonElement>(".es-setbar .es-sb-account")!;
-    expect(account.textContent).toContain("合成の名前");
-    expect(account.textContent).toContain("synthetic@example.invalid");
-    act(() => account.click());
-    expect(onAccount).toHaveBeenCalledTimes(1);
+    expect(host.querySelectorAll(".es-setbar button")).toHaveLength(1);
     const settings = host.querySelector<HTMLButtonElement>(".es-setbar .es-sb-settings")!;
-    expect(settings.getAttribute("aria-label")).toBe("設定");
+    expect(settings.textContent).toBe("設定");
+    expect(settings.querySelector("svg")).not.toBeNull();
+    expect(settings.hasAttribute("aria-label")).toBe(false);
+    expect(settings.hasAttribute("aria-describedby")).toBe(false);
     expect(settings.hasAttribute("aria-haspopup")).toBe(false);
     act(() => settings.click());
     expect(onSettings).toHaveBeenCalledTimes(1);
     expect(host.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("招待バッジは表示文字を名前に保ち、説明を補足する", () => {
+    const host = mount(
+      <EditorShell sidebar={<Sidebar />} header={null} sidebarOpen railOpen={false} settings={{ badge: 1, onOpen: vi.fn() }}>
+        x
+      </EditorShell>,
+    );
+    const settings = host.querySelector<HTMLButtonElement>(".es-setbar .es-sb-settings")!;
+    const description = host.querySelector<HTMLElement>(".es-setbar .es-vh")!;
+
+    expect(settings.textContent).toBe("設定1");
+    expect(settings.hasAttribute("aria-label")).toBe(false);
+    expect(settings.getAttribute("aria-describedby")).toBe(description.id);
+    expect(description.textContent).toBe("未処理の招待 1 件");
   });
 
   it("ヘッダーの「…」も Esc で閉じる", () => {

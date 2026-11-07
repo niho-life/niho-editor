@@ -59,8 +59,10 @@ describe("SettingsHubView（/settings）", () => {
 
   it("puts the account and each destination in separate groups, and ログアウト at the bottom", async () => {
     await open();
-    const me = document.querySelector<HTMLAnchorElement>("a.es-row--me")!;
-    expect(me.getAttribute("href")).toBe("/account");
+    const me = document.querySelector(".es-row--me")!;
+    expect(me.tagName).toBe("DIV");
+    expect(document.querySelector('a[href="/account"]')).toBeNull();
+    expect(link("名前を再取得")).toBeUndefined();
     expect(me.textContent).toContain("合成の名前");
     expect(me.textContent).toContain("synthetic@example.invalid");
     expect(link("NIHO Experience")).toBeUndefined();
@@ -69,6 +71,12 @@ describe("SettingsHubView（/settings）", () => {
     expect(push).toHaveBeenCalledWith("/destinations");
     await click("ログアウト");
     expect(logout).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows name recovery and identity mismatch in settings when supplied by the session page", async () => {
+    await mount(<SettingsHubView initial={dto()} audio={AUDIO} account={{ name: "名前を取得できません", caption: "", initial: "?" }} destinations={DESTINATIONS} refreshIdentity identityMismatch />);
+    expect(link("名前を再取得")?.getAttribute("href")).toBe("/auth/login/start?next=%2Fsettings&sameAccount=1");
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("接続を変更しませんでした");
   });
 
   it("shows the public author introduction under アカウント and links to its page", async () => {

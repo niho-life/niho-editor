@@ -1,4 +1,4 @@
-import { useRef, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useId, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { ShellBrand } from "./brand";
 import { SHELL_PANELS, clampDockWidth, dockPanels, panelShares, type ShellDockSide, type ShellPanelId } from "./dock-layout";
 import { ShellDockExtras, panelHeight, panelTop, useBoxHeight, useDockPeekDismiss, type EditorShellDock } from "./dock";
@@ -14,8 +14,6 @@ export type ShellSettingsLink = {
   badge?: number;
   /** 設定の画面を開いているとき（aria-current="page"）。 */
   current?: boolean;
-  /** session 由来の本人。押すとアカウントへ進む。 */
-  account?: { name: string; caption: string; initial: string; current?: boolean; onOpen: () => void };
   onOpen: () => void;
 };
 
@@ -68,25 +66,16 @@ function dockColumns(dock: EditorShellDock): string {
 }
 
 function SettingsBar({ settings }: { settings: ShellSettingsLink }) {
+  const badgeDescriptionId = useId();
+  const badge = settings.badge && settings.badge > 0 ? settings.badge : undefined;
   return (
     <div className="es-setbar">
-      {settings.account ? (
-        <button type="button" className="es-sb-account" aria-current={settings.account.current ? "page" : undefined} onClick={settings.account.onOpen}>
-          <span className="es-av" aria-hidden="true">{settings.account.initial}</span>
-          <span>
-            <b>{settings.account.name}</b>
-            {settings.account.caption ? <small>{settings.account.caption}</small> : null}
-          </span>
-        </button>
-      ) : null}
-      <button type="button" className="es-sb-settings" aria-label={settings.badge && settings.badge > 0 ? `設定、未処理の招待 ${settings.badge} 件` : "設定"} aria-current={settings.current ? "page" : undefined} onClick={settings.onOpen}>
+      <button type="button" className="es-sb-settings" aria-describedby={badge ? badgeDescriptionId : undefined} aria-current={settings.current ? "page" : undefined} onClick={settings.onOpen}>
         <Icon name="gear" />
-        {settings.badge && settings.badge > 0 ? (
-          <em className="es-badge" aria-label={`未処理の招待 ${settings.badge} 件`}>
-            {settings.badge}
-          </em>
-        ) : null}
+        <b>設定</b>
+        {badge ? <em className="es-badge">{badge}</em> : null}
       </button>
+      {badge ? <span id={badgeDescriptionId} className="es-vh">未処理の招待 {badge} 件</span> : null}
     </div>
   );
 }

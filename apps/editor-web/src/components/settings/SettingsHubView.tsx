@@ -13,7 +13,7 @@ import type { DestinationsDto } from "@/server/connections-api";
  * 設定の一覧（`/settings`。オーナー決定 2026-11-05）。変えられる物だけを行にし、行から詳細のページへ進む。
  * 提案の言語と「Web を検索する」はその場で保存する。AI とメディアの使用量はここで各 API を読む（読めなければその一言を出す）。
  */
-export function SettingsHubView({ initial, audio, account, destinations }: { initial: SettingsDto; audio: EditorSettingsAudioFacts; account: { name: string; caption: string; initial: string }; destinations: DestinationsDto }) {
+export function SettingsHubView({ initial, audio, account, destinations, refreshIdentity, identityMismatch }: { initial: SettingsDto; audio: EditorSettingsAudioFacts; account: { name: string; caption: string; initial: string }; destinations: DestinationsDto; refreshIdentity?: boolean; identityMismatch?: boolean }) {
   const router = useRouter();
   const { settings, status, busy, apply } = useSettingsState(initial);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
@@ -64,6 +64,8 @@ export function SettingsHubView({ initial, audio, account, destinations }: { ini
       storageUsageNote={storageUsageNote}
       audio={audio}
       account={account}
+      refreshIdentity={refreshIdentity}
+      identityMismatch={identityMismatch}
       destinations={{
         faces: [],
         sites: destinations.sites.map((site) => ({ id: site.id, label: site.urlShape.host })),

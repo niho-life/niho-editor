@@ -86,9 +86,8 @@ export const EDITOR_SETTINGS_HREF = {
   author: "/settings/author",
   terms: "/settings/terms",
   recipe: (id: string) => `/settings/recipes/${encodeURIComponent(id)}`,
-  /** 「アカウント」の群から入る 2 つ（URL は設定の下ではなく今のまま）。 */
+  /** 発信先の管理（URL は設定の下ではなく今のまま）。 */
   destinations: "/destinations",
-  account: "/account",
 } as const;
 
 export const EDITOR_SETTINGS_TEXT = {
@@ -337,6 +336,9 @@ export type EditorSettingsHubProps = {
   audio: EditorSettingsAudioFacts;
   /** 「アカウント」の群の先頭の行に出す、session 由来の本人。 */
   account: { name: string; caption: string; initial: string };
+  /** 名前を取得できない NIHO session にだけ、同じ本人での再接続を出す。 */
+  refreshIdentity?: boolean;
+  identityMismatch?: boolean;
   /** 現在の発信先。face の role は正常な未接続、unavailable だけが確認失敗。 */
   destinations: {
     faces: Array<Pick<EditorDestinationFace, "id" | "label" | "available" | "reason">>;
@@ -369,10 +371,11 @@ export function EditorSettingsHub(props: EditorSettingsHubProps) {
         {props.status}
       </p>
 
+      {props.identityMismatch ? <p role="alert">NIHO で選んだアカウントが現在の原稿のアカウントと異なるため、接続を変更しませんでした。</p> : null}
       {/* session の本人情報を先頭に置く。認可には使わない。 */}
       <Group id="es-s-account" title="アカウント">
         <div className="es-grp">
-          <a className="es-row es-row--link es-row--me" {...linkTo(EDITOR_SETTINGS_HREF.account, onNavigate)}>
+          <div className="es-row es-row--me">
             <span className="es-av" aria-hidden="true">
               {props.account.initial}
             </span>
@@ -380,10 +383,13 @@ export function EditorSettingsHub(props: EditorSettingsHubProps) {
               <b>{who || "名前を取得できません"}</b>
               {caption && <small>{caption}</small>}
             </span>
-            <span className="es-row-e">
-              <Icon name="chev" />
-            </span>
-          </a>
+          </div>
+          {props.refreshIdentity ? (
+            <a className="es-row es-row--link" href="/auth/login/start?next=%2Fsettings&sameAccount=1">
+              <span className="es-row-k">名前を再取得</span>
+              <span className="es-row-e"><Icon name="ext" /></span>
+            </a>
+          ) : null}
           {props.author && (
             <a className="es-row es-row--link" {...linkTo(EDITOR_SETTINGS_HREF.author, onNavigate)}>
               <span className="es-row-k">{EDITOR_SETTINGS_TEXT.author}</span>

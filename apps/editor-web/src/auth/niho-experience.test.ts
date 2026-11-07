@@ -101,13 +101,13 @@ describe("NIHO Experience editor auth", () => {
     const auth = provider(exchangeFetch("Synthetic Writer"), loginRandomValues());
     const started = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start?sameAccount=1`, {
       headers: { cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}` },
-    }), returnTo: "/account" });
+    }), returnTo: "/settings" });
     const pair = pendingCookie(started);
     const pending = JSON.parse(Buffer.from(pair.split("=", 2)[1]!, "base64url").toString("utf8"));
     expect(pending.accountHash).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(pending)).not.toContain(USER_ID);
     const response = await auth.completeLogin(formPost(EDITOR, pair));
-    expect(response.headers.get("location")).toBe("/account");
+    expect(response.headers.get("location")).toBe("/settings");
     const cookies = response.headers.getSetCookie();
     const name = cookiePair(cookies, EXPERIENCE_EDITOR_NAME_COOKIE);
     const session = await auth.getSession({ headers: new Headers({ cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}; ${name}` }) });
@@ -137,9 +137,9 @@ describe("NIHO Experience editor auth", () => {
       throw new Error("unexpected upstream request");
     }, loginRandomValues());
     const oldCookies = `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}; ${EXPERIENCE_EDITOR_REFRESH_COOKIE}=${oldRefresh}`;
-    const started = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start?sameAccount=1`, { headers: { cookie: oldCookies } }), returnTo: "/account" });
+    const started = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start?sameAccount=1`, { headers: { cookie: oldCookies } }), returnTo: "/settings" });
     const response = await auth.completeLogin(formPost(EDITOR, `${pendingCookie(started)}; ${oldCookies}`));
-    expect(response.headers.get("location")).toBe("/account?identity=mismatch");
+    expect(response.headers.get("location")).toBe("/settings?identity=mismatch");
     expect(response.headers.getSetCookie()).toEqual([expect.stringContaining(`${EXPERIENCE_EDITOR_PENDING_COOKIE}=;`)]);
     expect(revocations).toEqual([NIHO_REFRESH]);
     expect(revocations).not.toContain(oldRefresh);
@@ -149,7 +149,7 @@ describe("NIHO Experience editor auth", () => {
     const auth = provider(async () => json({}, 401), loginRandomValues());
     const response = await auth.beginLogin({ request: new Request(`${EDITOR}/auth/login/start?sameAccount=1`, {
       headers: { cookie: `${EXPERIENCE_EDITOR_ID_TOKEN_COOKIE}=${ID_TOKEN}` },
-    }), returnTo: "/account" });
+    }), returnTo: "/settings" });
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toContain("error=unavailable");
     expect(response.headers.getSetCookie()).toEqual([expect.stringContaining(`${EXPERIENCE_EDITOR_PENDING_COOKIE}=;`)]);

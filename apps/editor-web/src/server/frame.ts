@@ -1,6 +1,6 @@
 import type { Session } from "../auth/types";
 
-/** 本人（枠の左下と設定・アカウント）。名前が無ければ取得不能と明示する。 */
+/** 設定に出す本人。名前が無ければ取得不能と明示する。 */
 export function frameMe(session: Session): { name: string; caption: string; initial: string } {
   const profileName = session.profile?.name.trim();
   const name = profileName || "名前を取得できません";

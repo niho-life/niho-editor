@@ -2,7 +2,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   EDITOR_SETTINGS_TEXT,
-  EditorAccountPage,
   EditorSettingsAboutPage,
   EditorSettingsAuthorPage,
   EditorSettingsHub,
@@ -171,7 +170,9 @@ describe("EditorSettingsHub（/settings）", () => {
   it("puts session 本人 first and destinations in their own group, and ログアウト last", () => {
     const markup = hub();
     const account = markup.slice(markup.indexOf('id="es-s-account"'), markup.indexOf('id="es-s-ai"'));
-    expect(account).toMatch(/<a class="es-row es-row--link es-row--me" href="\/account">/);
+    expect(account).toContain('<div class="es-row es-row--me">');
+    expect(markup).not.toContain('href="/account"');
+    expect(markup).not.toContain("名前を再取得");
     expect(account).toContain('<span class="es-av" aria-hidden="true">合</span>');
     expect(account).toContain("<b>合成の名前</b><small>synthetic@example.invalid</small>");
     const destinations = markup.slice(markup.indexOf('id="es-s-destinations"'), markup.indexOf('id="es-s-ai"'));
@@ -284,12 +285,16 @@ describe("EditorSettingsHub（/settings）", () => {
   });
 });
 
-describe("EditorAccountPage（/account）", () => {
-  it("shows only the session account name and caption, with settings as its parent", () => {
-    const markup = renderToStaticMarkup(<EditorAccountPage account={{ name: "合成の名前", caption: "synthetic@example.invalid", initial: "合" }} onNavigate={noop} />);
-    expect(markup).toMatch(/<a class="es-back" href="\/settings">[\s\S]*?設定<\/a><h1>アカウント<\/h1>/);
-    expect(textOf(markup)).toContain("合成の名前 synthetic@example.invalid");
-    expect(textOf(markup)).not.toContain("記事ライター");
+describe("設定内の名前の再取得", () => {
+  it("returns to settings through a same-account login when recovery is available", () => {
+    const markup = hub({ account: { name: "名前を取得できません", caption: "", initial: "?" }, refreshIdentity: true });
+    expect(markup).toMatch(/href="\/auth\/login\/start\?next=%2Fsettings&amp;sameAccount=1"[\s\S]*?名前を再取得/);
+    expect(markup).not.toContain('href="/account"');
+    expect(hub({ account: { name: "名前を取得できません", caption: "", initial: "?" } })).not.toContain("名前を再取得");
+  });
+
+  it("keeps the identity mismatch explanation on settings", () => {
+    expect(hub({ identityMismatch: true })).toMatch(/role="alert">NIHO で選んだアカウントが現在の原稿のアカウントと異なるため、接続を変更しませんでした。/);
   });
 });
 

@@ -109,8 +109,10 @@ describe("EditorShell", () => {
     );
     expect([...withSettings.matchAll(/class="es-sb-settings/g)]).toHaveLength(1);
     const foot = withSettings.slice(withSettings.indexOf('class="es-setbar"'));
-    expect(foot).toMatch(/^class="es-setbar"><button type="button" class="es-sb-settings" aria-label="設定、未処理の招待 1 件" aria-current="page"><svg/);
-    expect(foot).toContain('aria-label="未処理の招待 1 件"');
+    expect(foot).toMatch(/^class="es-setbar"><button type="button" class="es-sb-settings" aria-describedby="[^"]+" aria-current="page"><svg/);
+    expect(foot).toContain('<em class="es-badge">1</em>');
+    expect(foot).toContain('class="es-vh">未処理の招待 1 件</span>');
+    expect(foot).toContain("<b>設定</b>");
     expect(foot).not.toContain("aria-haspopup");
     // 設定の帯は本文（main）のあと（Tab の順も本文の後）
     expect(withSettings.indexOf('class="es-setbar"')).toBeGreaterThan(withSettings.indexOf("</main>"));
