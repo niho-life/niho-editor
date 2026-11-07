@@ -24,7 +24,7 @@ const KEY = "0b6c9a4e-3f0a-4c5e-9d1e-2a7b8c9d0e1f";
 const SHA = "e".repeat(64);
 const LIMITS = { maxBytes: 2147483648, maxDurationSec: 21600, retentionDays: 30, extensions: ["m4a", "mp3"], contentTypes: ["audio/mp4", "audio/mpeg"] };
 const TICKET: AudioUploadTicket = { url: "https://storage.example.test/upload?session=synthetic", method: "PUT", headers: { "Content-Type": "audio/mp4" }, expiresAt: "2030-01-08T00:00:00.000Z", maxBytes: 3 };
-const RECORDING = { revision: 1, source: "audio", segments: [], audio: { status: "uploading", bytes: 3, contentType: "audio/mp4", expiresAt: "2030-01-31T00:00:00.000Z" } };
+const RECORDING = { revision: 1, source: "audio", audio: { status: "uploading", bytes: 3, contentType: "audio/mp4", expiresAt: "2030-01-31T00:00:00.000Z" } };
 const PAGE = { id: ID, kind: "rec", title: "合成", lang: "ja", createdAt: "2030-01-01T00:00:00.000Z", updatedAt: "2030-01-01T00:00:00.000Z" };
 
 function respond(status: number, body: unknown) {
@@ -41,15 +41,15 @@ describe("audio upload client", () => {
   });
 
   it("starts an upload with the JSON body and the Idempotency-Key, and returns the ticket", async () => {
-    const fetchMock = respond(201, { page: PAGE, recording: RECORDING, speakers: [], upload: TICKET });
+    const fetchMock = respond(201, { page: PAGE, recording: RECORDING, upload: TICKET });
     const started = await startAudioUpload({ name: "合成.m4a", contentType: "audio/mp4", sizeBytes: 3, sha256: SHA, lang: "en", durationSec: 1.5 }, { idempotencyKey: KEY, fetch: fetchMock as unknown as typeof fetch });
-    expect(started).toEqual({ status: 201, page: PAGE, recording: RECORDING, speakers: [], upload: TICKET });
+    expect(started).toEqual({ status: 201, page: PAGE, recording: RECORDING, upload: TICKET });
     const [path, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(path).toBe("/api/recordings/audio/start");
     expect(init).toMatchObject({ method: "POST", credentials: "same-origin", cache: "no-store", headers: { "content-type": "application/json", "idempotency-key": KEY } });
     expect(JSON.parse(init.body as string)).toEqual({ name: "合成.m4a", contentType: "audio/mp4", sizeBytes: 3, sha256: SHA, lang: "en", durationSec: 1.5 });
 
-    const replay = respond(200, { page: PAGE, recording: { ...RECORDING, audio: { ...RECORDING.audio, status: "uploaded" } }, speakers: [], upload: null });
+    const replay = respond(200, { page: PAGE, recording: { ...RECORDING, audio: { ...RECORDING.audio, status: "uploaded" } }, upload: null });
     const done = await startAudioUpload({ name: "合成.m4a", contentType: "audio/mp4", sizeBytes: 3, sha256: SHA }, { fetch: replay as unknown as typeof fetch });
     expect(done.status).toBe(200);
     expect(done.upload).toBeNull();
@@ -87,7 +87,7 @@ describe("audio upload client", () => {
   });
 
   it("completes the upload for the page and reports missing or size_mismatch", async () => {
-    const fetchMock = respond(200, { recording: { ...RECORDING, audio: { ...RECORDING.audio, status: "uploaded" } }, speakers: [] });
+    const fetchMock = respond(200, { recording: { ...RECORDING, audio: { ...RECORDING.audio, status: "uploaded" } } });
     const done = await completeAudioUpload(ID, fetchMock as unknown as typeof fetch);
     expect(done.recording.audio?.status).toBe("uploaded");
     expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${ID}/recording/audio/complete`, { method: "POST", credentials: "same-origin", cache: "no-store" });
@@ -163,9 +163,9 @@ function api(routes: { limits?: () => Response | Promise<Response>; start?: () =
     const path = String(resource);
     calls.push({ path, init });
     if (path === "/api/recordings/audio/limits") return routes.limits ? routes.limits() : json(200, FULL_LIMITS);
-    if (path === "/api/recordings/audio/start") return routes.start ? routes.start() : json(201, { page: PAGE, recording: RECORDING, speakers: [], upload: TICKET });
+    if (path === "/api/recordings/audio/start") return routes.start ? routes.start() : json(201, { page: PAGE, recording: RECORDING, upload: TICKET });
     if (path === `/api/pages/${ID}/recording/audio/complete`) {
-      return routes.complete ? routes.complete() : json(200, { recording: { ...RECORDING, audio: { ...RECORDING.audio, status: "uploaded" } }, speakers: [] });
+      return routes.complete ? routes.complete() : json(200, { recording: { ...RECORDING, audio: { ...RECORDING.audio, status: "uploaded" } } });
     }
     throw new Error(`unexpected ${path}`);
   });
@@ -275,7 +275,7 @@ describe("uploadAudioFile", () => {
   });
 
   it("skips the PUT when the start answers that it is already uploaded (upload: null), and uses the given key", async () => {
-    const replay = { page: PAGE, recording: { ...RECORDING, audio: { ...RECORDING.audio, status: "uploaded" } }, speakers: [], upload: null };
+    const replay = { page: PAGE, recording: { ...RECORDING, audio: { ...RECORDING.audio, status: "uploaded" } }, upload: null };
     const { fetchMock, calls, paths } = api({ start: () => json(200, replay) });
     await uploadAudioFile({ file: audioFile(), idempotencyKey: KEY, fetch: fetchMock, createXhr: okXhr });
     expect(FakeXhr.created).toHaveLength(0);

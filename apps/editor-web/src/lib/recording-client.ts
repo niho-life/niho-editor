@@ -1,8 +1,7 @@
 /**
  * ブラウザから録音の API（`/api/recordings/import-vtt`・`/api/pages/{id}/recording`）を呼ぶ（同じ origin。cookie・token は扱わない）。
- * 文字起こしのタブの本文は lib/transcript-client.ts（#310）。
- * 契約は src/server/recordings-api.ts。書き込みは `baseRevision`（直前の応答の revision）を付け、別の画面が先に直していたら
- * RecordingConflictError（何も書かれていない。`snapshot` が最新）を投げる。
+ * 文字起こしのタブの本文（段落の編集・話者・版）は lib/transcript-client.ts（#310）。ここは録音そのもの（音声・長さ・タブの一覧）。
+ * 契約は src/server/recordings-api.ts。
  */
 import type { Recording } from "@niho/editor-store";
 import type { AudioPartView } from "./audio-upload-client";
@@ -16,7 +15,7 @@ const REQUEST_TIMEOUT_MS = 60_000;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** 話者の一覧の 1 行（段落の数つき）。name が null の話者は、表示で「話者N」と呼ぶ。 */
+/** 話者の一覧の 1 行（段落の数つき。文字起こしのタブの応答。lib/transcript-client.ts）。name が null の話者は、表示で「話者N」と呼ぶ。 */
 export type RecordingSpeaker = { speaker: number; name: string | null; count: number };
 /** この録音から作った文字起こしのタブ（#310。本文は lib/transcript-client.ts で読む）。 */
 export type TranscriptTabView = {
@@ -34,11 +33,10 @@ export type TranscriptTabView = {
 
 /**
  * 録音の読み取りの結果。`audios`（音声の列）と `transcripts`（文字起こしのタブ）は GET のときだけ入る
- * （書き換えの応答には入らないので、画面は前の値を残す）。
+ * （取り込みの応答には入らないので、画面は前の値を残す）。
  */
 export type RecordingSnapshot = {
   recording: Recording;
-  speakers: RecordingSpeaker[];
   audios?: AudioPartView[];
   transcripts?: TranscriptTabView[];
   /** いま使えるエンジン（流れの「文字起こし 作成 ▾」の候補。「もう一度」が同じエンジンで書き直せるか）。 */
@@ -64,14 +62,6 @@ export class RecordingRequestError extends Error {
   }
 }
 
-/** 別の画面が先に直していた（409）。何も書かれていない。`snapshot` は今の録音。 */
-export class RecordingConflictError extends RecordingRequestError {
-  override readonly name: string = "RecordingConflictError";
-  constructor(readonly snapshot: RecordingSnapshot) {
-    super(409, "conflict");
-  }
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -80,27 +70,12 @@ function isNullableNumber(value: unknown): value is number | null {
   return value === null || (typeof value === "number" && Number.isFinite(value));
 }
 
-function isSpeakerNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
-}
-
 function isRecording(value: unknown): value is Recording {
   if (!isRecord(value)) return false;
-  const { revision, segments, speakerNames, source, language } = value;
+  const { revision, source, language } = value;
   if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1) return false;
   if ((source !== "vtt" && source !== "audio") || (language !== "ja" && language !== "en")) return false;
-  if (!isNullableNumber(value.durationSec)) return false;
-  if (!Array.isArray(segments) || !isRecord(speakerNames) || !Object.values(speakerNames).every((name) => typeof name === "string")) return false;
-  return segments.every(
-    (segment) => isRecord(segment) && isNullableNumber(segment.start) && isNullableNumber(segment.end) && typeof segment.text === "string" && (segment.speaker === null || isSpeakerNumber(segment.speaker)),
-  );
-}
-
-function isSpeakers(value: unknown): value is RecordingSpeaker[] {
-  return (
-    Array.isArray(value) &&
-    value.every((item) => isRecord(item) && isSpeakerNumber(item.speaker) && (item.name === null || typeof item.name === "string") && typeof item.count === "number")
-  );
+  return isNullableNumber(value.durationSec);
 }
 
 function isAudioPart(value: unknown): value is AudioPartView {
@@ -122,8 +97,8 @@ function isTranscriptTab(value: unknown): value is TranscriptTabView {
 }
 
 function snapshotOf(data: unknown): RecordingSnapshot | null {
-  if (!isRecord(data) || !isRecording(data.recording) || !isSpeakers(data.speakers)) return null;
-  const snapshot: RecordingSnapshot = { recording: data.recording, speakers: data.speakers };
+  if (!isRecord(data) || !isRecording(data.recording)) return null;
+  const snapshot: RecordingSnapshot = { recording: data.recording };
   if (Array.isArray(data.audios)) snapshot.audios = data.audios.filter(isAudioPart);
   if (Array.isArray(data.transcripts)) snapshot.transcripts = data.transcripts.filter(isTranscriptTab);
   if (Array.isArray(data.engines)) snapshot.engines = data.engines.filter((engine): engine is string => typeof engine === "string");
@@ -174,9 +149,7 @@ export async function requestJson(path: string, method: "GET" | "POST" | "PATCH"
 async function request(path: string, method: "GET" | "POST" | "PATCH" | "DELETE", body?: unknown, retryNetwork = false): Promise<unknown> {
   const { status, data } = await requestJson(path, method, body, retryNetwork);
   if (status === 409) {
-    const snapshot = snapshotOf(data);
-    if (snapshot) throw new RecordingConflictError(snapshot);
-    // 競合の形でない 409（始められない）は、短い code を reason にして返す
+    // 始められない 409 は、短い code を reason にして返す
     const reason = isRecord(data) ? [data.reason, data.error].find((value) => typeof value === "string") : undefined;
     throw new RecordingRequestError(409, typeof reason === "string" ? reason : null);
   }
@@ -208,29 +181,6 @@ export async function importVtt(input: { name: string; vtt: string; lang?: "ja" 
 /** 録音を読む。録音の無いページ・ほかの人のページは 404（RecordingRequestError）。 */
 export async function getRecording(pageId: string): Promise<RecordingSnapshot> {
   return snapshotOrThrow(await request(recordingPath(pageId), "GET"));
-}
-
-/** 段落の文章を直す（1 回に 200 件まで）。`baseRevision` は直前の応答の revision。 */
-export async function editSegments(pageId: string, baseRevision: number, edits: readonly SegmentEditRequest[]): Promise<RecordingSnapshot> {
-  return snapshotOrThrow(await request(recordingPath(pageId), "PATCH", { baseRevision, edits }));
-}
-
-/** 話者の名前を変える（null は名前を外し、表示は「話者N」に戻る）。 */
-export async function renameSpeaker(pageId: string, baseRevision: number, speaker: number, name: string | null): Promise<RecordingSnapshot> {
-  return snapshotOrThrow(await request(recordingPath(pageId), "PATCH", { baseRevision, renameSpeaker: { speaker, name } }));
-}
-
-/** 話者 from を into にまとめる（from の段落が into になり、元には戻せない）。 */
-export async function mergeSpeakers(pageId: string, baseRevision: number, from: number, into: number): Promise<RecordingSnapshot> {
-  return snapshotOrThrow(await request(recordingPath(pageId), "PATCH", { baseRevision, mergeSpeakers: { from, into } }));
-}
-
-/**
- * あとの音声の文字起こし（.vtt）を、この録音ページに足す（#36 段 3b-3）。時刻は server が前の音声の長さだけずらす。
- * 4 MiB を超える .vtt は送る前に断る（VTT_FILE_MAX_BYTES）。
- */
-export async function appendVtt(pageId: string, baseRevision: number, input: { name: string; vtt: string }): Promise<RecordingSnapshot> {
-  return snapshotOrThrow(await request(recordingPath(pageId), "PATCH", { baseRevision, appendVtt: input }));
 }
 
 /** 失敗が起きた操作（同じ reason でも、何についての失敗かで文言が替わる）。 */

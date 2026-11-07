@@ -11,10 +11,8 @@ import {
   InvalidRecordingError,
   createRecordingPage,
   getRecording,
-  updateRecording,
   type Connectable,
   type CreateRecordingInput,
-  type RecordingData,
   type RecordingSegment,
 } from "../src/recordings.ts";
 import { duplicatePage } from "../src/duplicate.ts";
@@ -76,40 +74,11 @@ async function insertPage(pool: PgPool, seed: { owner?: string; kind?: string; d
 
 /** store を通さずに録音の行を入れる。 */
 async function insertRecording(pool: PgPool, pageId: string, owner: string = OWNER): Promise<void> {
-  await pool.query(
-    `INSERT INTO page_recordings (page_id, owner, source, language, segments, speaker_names)
-     VALUES ($1, $2, 'vtt', 'ja', $3::jsonb, $4::jsonb)`,
-    [pageId, owner, JSON.stringify([segment("他の行", 1, 0, 1)]), JSON.stringify({ "1": "他の話し手" })],
-  );
+  await pool.query(`INSERT INTO page_recordings (page_id, owner, source, language) VALUES ($1, $2, 'vtt', 'ja')`, [pageId, owner]);
 }
 
 async function rowOf(pool: PgPool, pageId: string): Promise<Record<string, unknown> | undefined> {
   return (await pool.query("SELECT * FROM page_recordings WHERE page_id = $1", [pageId])).rows[0];
-}
-
-const rename = (speaker: number, name: string | null) => (data: RecordingData): RecordingData => {
-  const speakerNames = { ...data.speakerNames };
-  if (name === null) delete speakerNames[String(speaker)];
-  else speakerNames[String(speaker)] = name;
-  return { segments: data.segments, speakerNames };
-};
-
-const editText = (index: number, text: string) => (data: RecordingData): RecordingData => ({
-  segments: data.segments.map((item, at) => (at === index ? { ...item, text } : item)),
-  speakerNames: data.speakerNames,
-});
-
-/**
- * 段落を正本（page_recordings）に持つ録音（#310 より前の形。migration が残した行と同じ）。取り込みは段落を文字起こしのタブに入れるので、
- * 正本の書き換え（updateRecording）を試すテストはここで段落を正本に置く。
- */
-async function seeded(pool: PgPool, owner = OWNER, extra: Partial<CreateRecordingInput> = {}) {
-  const created = await createRecordingPage(pool, owner, input(extra));
-  const seed = input(extra);
-  await pool.query("UPDATE page_recordings SET segments = $3::jsonb, speaker_names = $4::jsonb WHERE owner = $1 AND page_id = $2", [owner, created.page.id, JSON.stringify(seed.segments), JSON.stringify(seed.speakerNames ?? {})]);
-  const recording = await getRecording(pool, owner, created.page.id);
-  assert.ok(recording);
-  return { ...created, recording };
 }
 
 describe("0007 on a database that has 0001 to 0006", { skip: databaseUrl === undefined }, () => {
@@ -192,8 +161,7 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
     assert.equal(recording.durationSec, 7.5);
     assert.equal(recording.sourceName, "合成の会議.vtt");
     assert.equal(recording.sourceSha256, SHA);
-    assert.deepEqual(recording.segments, [], "the recording row holds no transcript (the tab does)");
-    assert.deepEqual(recording.speakerNames, {});
+    assert.equal("segments" in recording || "speakerNames" in recording, false, "the recording row holds no transcript (the tab does)");
     assert.equal(recording.createdAt, created.page.createdAt);
     assert.deepEqual(await getRecording(pool, OWNER, created.page.id), recording, "read back from a new query");
 
@@ -254,125 +222,21 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
   it("answers null to another owner's page, an unknown or malformed id, a page in the trash, and a page without a recording", async () => {
     const theirs = await insertPage(pool, { owner: OTHER });
     await insertRecording(pool, theirs, OTHER);
-    const trashed = (await seeded(pool)).page.id;
+    const trashed = (await createRecordingPage(pool, OWNER, input())).page.id;
     await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [trashed]);
     const plain = await insertPage(pool, { kind: "note" });
-    const rowsBefore = (await pool.query("SELECT page_id, revision, segments, speaker_names FROM page_recordings ORDER BY page_id")).rows;
 
     for (const id of [theirs, trashed, plain, randomUUID(), "00000000-0000-0000-0000-00000000000g", "not-a-uuid"]) {
       assert.equal(await getRecording(pool, OWNER, id), null, id);
-      assert.equal(await updateRecording(pool, OWNER, id, 1, rename(1, "書き換え")), null, id);
     }
-    assert.deepEqual((await pool.query("SELECT page_id, revision, segments, speaker_names FROM page_recordings ORDER BY page_id")).rows, rowsBefore, "nothing changed");
-    assert.equal((await getRecording(pool, OTHER, theirs))?.speakerNames["1"], "他の話し手", "the owner still reads it");
-  });
-
-  it("saves with the current revision and moves it on; an old revision is a conflict that returns the latest and changes nothing", async () => {
-    const { page, recording } = await seeded(pool);
-    const first = await updateRecording(pool, OWNER, page.id, 1, editText(0, "おはようございます。直した"));
-    assert.equal(first?.status, "ok");
-    assert.ok(first?.status === "ok");
-    assert.equal(first.recording.revision, 2);
-    assert.equal(first.recording.segments[0]?.text, "おはようございます。直した");
-    assert.ok(Date.parse(first.recording.updatedAt) >= Date.parse(recording.updatedAt));
-    assert.equal(first.recording.createdAt, recording.createdAt);
-
-    const before = await rowOf(pool, page.id);
-    let called = false;
-    const stale = await updateRecording(pool, OWNER, page.id, 1, (data) => {
-      called = true;
-      return editText(1, "上書き")(data);
-    });
-    assert.equal(stale?.status, "conflict");
-    assert.ok(stale?.status === "conflict");
-    assert.deepEqual(stale.recording, first.recording, "the latest recording comes back");
-    assert.equal(called, false, "the change is not applied to the newer data");
-    assert.deepEqual(await rowOf(pool, page.id), before, "nothing was written");
-
-    const ahead = await updateRecording(pool, OWNER, page.id, 99, rename(1, "先の版"));
-    assert.equal(ahead?.status, "conflict");
-
-    const second = await updateRecording(pool, OWNER, page.id, 2, rename(2, "記録役"));
-    assert.ok(second?.status === "ok");
-    assert.equal(second.recording.revision, 3);
-    assert.deepEqual(second.recording.speakerNames, { "1": "司会役", "2": "記録役" });
-    assert.equal(second.recording.segments[0]?.text, "おはようございます。直した", "the earlier edit is kept");
-  });
-
-  it("writes a new length only when the change returns one（音声・字幕を足して長くなるとき）", async () => {
-    const { page } = await seeded(pool);
-    // 長さを返さない書き換え（文章・話者）は今の長さのまま
-    const edited = await updateRecording(pool, OWNER, page.id, 1, editText(0, "直した"));
-    assert.ok(edited?.status === "ok");
-    assert.equal(edited.recording.durationSec, 7.5);
-
-    // 足す書き換えは、新しい長さ（ずらす量 ＋ 足す側の長さ）を返す
-    const appended = await updateRecording(pool, OWNER, page.id, 2, (data) => ({
-      segments: [...data.segments, segment("続きです", 1, (data.durationSec ?? 0) + 0, (data.durationSec ?? 0) + 2)],
-      speakerNames: data.speakerNames,
-      durationSec: (data.durationSec ?? 0) + 2,
-    }));
-    assert.ok(appended?.status === "ok");
-    assert.equal(appended.recording.durationSec, 9.5);
-    assert.equal(appended.recording.segments.at(-1)?.start, 7.5);
-    assert.equal((await getRecording(pool, OWNER, page.id))?.durationSec, 9.5);
-
-    // null は「長さが分からない」（0007 の CHECK は null を許す）
-    const cleared = await updateRecording(pool, OWNER, page.id, 3, (data) => ({ segments: data.segments, speakerNames: data.speakerNames, durationSec: null }));
-    assert.ok(cleared?.status === "ok");
-    assert.equal(cleared.recording.durationSec, null);
-  });
-
-  it("lets only one of two concurrent writes with the same revision through", async () => {
-    const { page } = await seeded(pool);
-    const results = await Promise.all([
-      updateRecording(pool, OWNER, page.id, 1, editText(0, "画面 A の文")),
-      updateRecording(pool, OWNER, page.id, 1, editText(0, "画面 B の文")),
-    ]);
-    const statuses = results.map((result) => result?.status).sort();
-    assert.deepEqual(statuses, ["conflict", "ok"]);
-    const winner = results.find((result) => result?.status === "ok");
-    const loser = results.find((result) => result?.status === "conflict");
-    assert.ok(winner?.status === "ok" && loser?.status === "conflict");
-    assert.deepEqual(loser.recording, winner.recording, "the loser gets the winner's text back");
-    const stored = await getRecording(pool, OWNER, page.id);
-    assert.equal(stored?.revision, 2);
-    assert.equal(stored?.segments[0]?.text, winner.recording.segments[0]?.text);
-  });
-
-  it("writes nothing when the change is refused or has the wrong shape", async () => {
-    const { page } = await seeded(pool);
-    const before = await rowOf(pool, page.id);
-    const refused = await updateRecording(pool, OWNER, page.id, 1, () => ({ rejected: "name" }));
-    assert.deepEqual(refused, { status: "rejected", reason: "name" });
-    assert.deepEqual(await rowOf(pool, page.id), before);
-
-    const bad: Array<[string, (data: RecordingData) => RecordingData]> = [
-      ["text", editText(0, "a\u0000b")],
-      ["text", editText(0, "あ".repeat(5001))],
-      ["speaker_names", rename(3, "いない話者")],
-      ["name", rename(1, " 前後に空白 ")],
-      ["segments", (data) => ({ segments: Array.from({ length: 20_001 }, () => data.segments[0]!), speakerNames: data.speakerNames })],
-      ["speaker", (data) => ({ segments: [{ ...data.segments[0]!, speaker: 0 }], speakerNames: {} })],
-      ["time", (data) => ({ segments: [{ ...data.segments[0]!, start: 2, end: 1 }], speakerNames: {} })],
-    ];
-    for (const [problem, mutate] of bad) {
-      await assert.rejects(
-        () => updateRecording(pool, OWNER, page.id, 1, mutate),
-        (error: unknown) => error instanceof InvalidRecordingError && error.problem === problem,
-        problem,
-      );
-      assert.deepEqual(await rowOf(pool, page.id), before, `${problem}: nothing was written`);
-    }
-    // 断った後も同じ revision でそのまま書ける（lock・transaction が残っていない）
-    assert.equal((await updateRecording(pool, OWNER, page.id, 1, rename(2, "あとから")))?.status, "ok");
+    assert.equal((await getRecording(pool, OTHER, theirs))?.language, "ja", "the owner still reads it");
   });
 
   it("keeps the table's invariants when the code is bypassed", async () => {
     const page = await insertPage(pool);
     const theirs = await insertPage(pool, { owner: OTHER });
     const insert = (values: Record<string, unknown>) => {
-      const row = { page_id: page, owner: OWNER, source: "vtt", language: "ja", segments: "[]", speaker_names: "{}", ...values };
+      const row = { page_id: page, owner: OWNER, source: "vtt", language: "ja", ...values };
       const columns = Object.keys(row);
       return pool.query(
         `INSERT INTO page_recordings (${columns.join(", ")}) VALUES (${columns.map((_, index) => `$${index + 1}`).join(", ")})`,
@@ -392,10 +256,6 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
       { source_name: "n".repeat(201) },
       { source_sha256: "A".repeat(64) },
       { source_sha256: "0".repeat(63) },
-      { segments: "{}" },
-      { segments: "\"text\"" },
-      { segments: JSON.stringify(Array.from({ length: 20_001 }, () => 0)) },
-      { speaker_names: "[]" },
       { revision: 0 },
       { created_at: new Date(Date.now() + 60_000) },
     ]) {
@@ -410,8 +270,20 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
     await assert.rejects(() => pool.query("UPDATE page_recordings SET updated_at = created_at - interval '1 second' WHERE page_id = $1", [page]), { code: "23514" });
   });
 
+  it("has no paragraph columns: the transcript lives in page_transcripts (#310)", async () => {
+    const columnsOf = async (table: string) =>
+      (await pool.query<{ column_name: string }>("SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1", [table])).rows.map((row) => row.column_name);
+    const columns = await columnsOf("page_recordings");
+    assert.ok(columns.includes("revision") && columns.includes("source_sha256") && columns.includes("audio_status"));
+    assert.deepEqual(columns.filter((name) => name === "segments" || name === "speaker_names"), []);
+    const runColumns = await columnsOf("transcription_runs");
+    assert.deepEqual(runColumns.filter((name) => ["candidate", "candidate_revision", "replace"].includes(name)), []);
+    assert.ok(runColumns.includes("target_tab"));
+    assert.deepEqual((await pool.query("SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND tablename LIKE 'page_recording_candidate%'")).rows, []);
+  });
+
   it("removes the recording when the page itself is deleted, and keeps it while the page is in the trash", async () => {
-    const { page } = await seeded(pool);
+    const { page } = await createRecordingPage(pool, OWNER, input());
     await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [page.id]);
     assert.ok(await rowOf(pool, page.id), "the trash keeps the recording");
     await pool.query("UPDATE pages SET deleted_at = NULL WHERE id = $1", [page.id]);
@@ -420,32 +292,8 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
     assert.equal(await rowOf(pool, page.id), undefined);
   });
 
-  it("moves the page's update time on when the transcript is edited, but not on a conflict", async () => {
-    const { page, recording } = await seeded(pool);
-    const store = new EditorStore(pool);
-    const before = await store.getPage(OWNER, page.id);
-    assert.ok(before);
-    const edited = await updateRecording(pool, OWNER, page.id, recording.revision, (data) => ({
-      segments: data.segments.map((item, index) => (index === 0 ? { ...item, text: "直した" } : item)),
-      speakerNames: data.speakerNames,
-    }));
-    assert.equal(edited?.status, "ok");
-    const after = await store.getPage(OWNER, page.id);
-    assert.ok(after && Date.parse(after.updatedAt) > Date.parse(before.updatedAt), "pages.updated_at moved on");
-
-    const stale = await updateRecording(pool, OWNER, page.id, recording.revision, (data) => data);
-    assert.equal(stale?.status, "conflict");
-    assert.equal((await store.getPage(OWNER, page.id))?.updatedAt, after.updatedAt, "a conflict changes nothing");
-  });
-
-  it("copies the transcript with a recording page when it is duplicated, as an independent recording", async () => {
-    const { page, recording } = await seeded(pool);
-    const edited = await updateRecording(pool, OWNER, page.id, recording.revision, (data) => ({
-      segments: data.segments,
-      speakerNames: { ...data.speakerNames, "2": "聞き手" },
-    }));
-    assert.equal(edited?.status, "ok");
-
+  it("copies the recording row with a recording page when it is duplicated (the paragraphs stay with the transcript tab), as an independent recording", async () => {
+    const { page, transcript } = await createRecordingPage(pool, OWNER, input());
     const copy = await duplicatePage(pool, OWNER, page.id);
     assert.ok(copy);
     assert.notEqual(copy.id, page.id);
@@ -455,20 +303,13 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
     const copied = await getRecording(pool, OWNER, copy.id);
     assert.ok(copied);
     assert.equal(copied.revision, 1, "the copy starts again at revision 1");
-    assert.deepEqual(copied.segments, input().segments);
-    assert.deepEqual(copied.speakerNames, { "1": "司会役", "2": "聞き手" });
     assert.equal(copied.sourceSha256, SHA);
+    assert.equal(copied.sourceName, "合成の会議.vtt");
     assert.equal(copied.createdAt, copy.createdAt);
-
-    // 別の録音になる: コピーを直しても元は変わらない
-    const changed = await updateRecording(pool, OWNER, copy.id, 1, (data) => ({
-      segments: data.segments.map((item, index) => (index === 0 ? { ...item, text: "コピーだけ直した" } : item)),
-      speakerNames: data.speakerNames,
-    }));
-    assert.equal(changed?.status, "ok");
-    const original = await getRecording(pool, OWNER, page.id);
-    assert.equal(original?.revision, 2);
-    assert.equal(original?.segments[0]?.text, "おはようございます");
+    assert.equal("segments" in copied, false);
+    // 文字起こしのタブは複製されない（録音のコピーは段落を持たない。タブを複製するのは文字起こしのタブ）
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM page_transcripts WHERE recording_page_id = $1", [page.id])).rows[0].n, 1);
+    assert.equal((await getTranscript(pool, OWNER, transcript))?.segments.length, 3);
 
     // 録音のないページの複製は録音を作らない。別の owner は複製できず、何も作られない
     const plain = await insertPage(pool, { kind: "note" });

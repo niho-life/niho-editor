@@ -47,7 +47,6 @@ function claimOf(
       owner: "synthetic-owner",
       pageId: "1f2e3d4c-5b6a-4978-8695-a4b3c2d1e0f9",
       diarize: extra.diarize ?? true,
-      replace: false,
       terms: ["合成語"],
       tab: extra.tab ?? null,
     },

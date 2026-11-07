@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { recordingDataProblem, type Transcript, type TranscriptVersion, type TranscriptionRunView } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
+import { VTT_IMPORT_MAX_BYTES } from "../recording/vtt-import";
+import { RECORDING_PATCH_BODY_MAX_BYTES } from "./recordings-api";
 import {
   TRANSCRIPT_RESTORE_BODY_MAX_BYTES,
   getTranscriptRoute,
@@ -211,6 +213,142 @@ describe("PATCH /api/pages/{tab}/transcript", () => {
     const body = await appended.json();
     expect(body.transcript.segments.at(-1)).toEqual({ start: 9, end: 12, text: "続きです", speaker: 1 });
     expect(body.transcript.durationSec).toBe(12);
+  });
+});
+
+describe("PATCH /api/pages/{tab}/transcript: the request body", () => {
+  it("answers 400 body to a request without exactly one well-formed operation, before touching the store", async () => {
+    const target = row();
+    const { store, calls } = memoryStore([target]);
+    const edits = [{ index: 0, text: "x" }];
+    for (const body of [
+      "{",
+      [],
+      { edits },
+      { baseRevision: 0, edits },
+      { baseRevision: 1.5, edits },
+      { baseRevision: "1", edits },
+      { baseRevision: 1, edits, renameSpeaker: { speaker: 1, name: "x" } },
+      { baseRevision: 1, edits, extra: 1 },
+      { baseRevision: 1, edits: "x" },
+      { baseRevision: 1, edits: Array.from({ length: 201 }, (_, index) => ({ index, text: "x" })) },
+      { baseRevision: 1, edits: [{ index: 0 }] },
+      { baseRevision: 1, edits: [{ index: "0", text: "x" }] },
+      { baseRevision: 1, edits: [{ index: 0, text: "x", speaker: 2 }] },
+      { baseRevision: 1, renameSpeaker: { speaker: 1 } },
+      { baseRevision: 1, renameSpeaker: { speaker: "1", name: "x" } },
+      { baseRevision: 1, renameSpeaker: { speaker: 1, name: 2 } },
+      { baseRevision: 1, renameSpeaker: [1, "x"] },
+      { baseRevision: 1, mergeSpeakers: { from: 1 } },
+      { baseRevision: 1, mergeSpeakers: { from: 1, into: "2" } },
+    ]) {
+      const response = await patch(target.id, body, deps("user-a", store));
+      expect(response.status, JSON.stringify(body)).toBe(400);
+      expect(await response.text()).toBe('{"error":"bad_request","reason":"body"}');
+    }
+    expect((await patch(target.id, "baseRevision=1", deps("user-a", store), { "content-type": "text/plain" })).status).toBe(400);
+    expect(calls).toEqual([]);
+  });
+
+  it("answers 400 with the reason the change was refused, and writes nothing", async () => {
+    const target = row();
+    const { store } = memoryStore([target]);
+    const d = deps("user-a", store);
+    for (const [body, reason] of [
+      [{ baseRevision: 1, edits: [{ index: 2, text: "x" }] }, "index"],
+      [{ baseRevision: 1, edits: [{ index: -1, text: "x" }] }, "index"],
+      [{ baseRevision: 1, edits: [{ index: 0, text: "x" }, { index: 0, text: "y" }] }, "index"],
+      [{ baseRevision: 1, edits: [{ index: 0, text: "あ".repeat(5001) }] }, "text"],
+      [{ baseRevision: 1, edits: [{ index: 0, text: "a\u0000b" }] }, "text"],
+      [{ baseRevision: 1, renameSpeaker: { speaker: 9, name: "x" } }, "speaker"],
+      [{ baseRevision: 1, renameSpeaker: { speaker: 2, name: "司会役" } }, "name"],
+      [{ baseRevision: 1, renameSpeaker: { speaker: 1, name: "話者2" } }, "name"],
+      [{ baseRevision: 1, renameSpeaker: { speaker: 1, name: "長".repeat(61) } }, "name"],
+      [{ baseRevision: 1, mergeSpeakers: { from: 1, into: 1 } }, "merge"],
+      [{ baseRevision: 1, mergeSpeakers: { from: 1, into: 3 } }, "speaker"],
+    ] as const) {
+      const response = await patch(target.id, body, d);
+      expect(response.status, reason).toBe(400);
+      expect(await response.text(), reason).toBe(JSON.stringify({ error: "bad_request", reason }));
+    }
+    expect(target.transcript).toEqual(transcriptOf());
+    expect(target.versions).toEqual([]);
+  });
+
+  it("normalises line breaks of an edited paragraph", async () => {
+    const target = row();
+    const { store } = memoryStore([target]);
+    const edited = await (await patch(target.id, { baseRevision: 1, edits: [{ index: 0, text: "はじめます。\r\n直しました" }] }, deps("user-a", store))).json();
+    expect(edited.transcript.segments[0]).toEqual({ start: 0, end: 4, text: "はじめます。\n直しました", speaker: 1 });
+  });
+});
+
+describe("PATCH /api/pages/{tab}/transcript: appending a .vtt (#36 段 3b-3)", () => {
+  const SECOND_VTT = ["WEBVTT", "", "00:00:00.000 --> 00:00:02.000", "<v 司会役>続きです", "", "00:00:02.000 --> 00:00:05.000", "<v 新しい人>はい", "", ""].join("\n");
+
+  it("shifts the added paragraphs by the length so far, keeps a speaker of the same name, and shifts again by the new length next time", async () => {
+    const target = row();
+    const { store } = memoryStore([target]);
+    const d = deps("user-a", store);
+    const first = await (await patch(target.id, { baseRevision: 1, appendVtt: { name: "2.vtt", vtt: SECOND_VTT } }, d)).json();
+    expect(first.transcript.revision).toBe(2);
+    expect(first.transcript.segments.slice(2).map((item: { start: number; end: number; text: string; speaker: number }) => [item.start, item.end, item.text, item.speaker])).toEqual([
+      [9, 11, "続きです", 1],
+      [11, 14, "はい", 3],
+    ]);
+    expect(first.transcript.speakerNames).toEqual({ "1": "司会役", "3": "新しい人" });
+    expect(first.transcript.durationSec).toBe(14);
+    const second = await (await patch(target.id, { baseRevision: 2, appendVtt: { name: "3.vtt", vtt: SECOND_VTT } }, d)).json();
+    expect(second.transcript.segments.at(-1).start).toBe(16);
+    expect(second.transcript.durationSec).toBe(19);
+  });
+
+  it("answers 400 for a .vtt it cannot read, one without speech, or a malformed request, and writes nothing", async () => {
+    const target = row();
+    const { store } = memoryStore([target]);
+    const d = deps("user-a", store);
+    const reasons: [unknown, string][] = [
+      [{ baseRevision: 1, appendVtt: { name: "x.vtt", vtt: "これは字幕ではありません" } }, "vtt_invalid"],
+      [{ baseRevision: 1, appendVtt: { name: "x.vtt", vtt: "WEBVTT\n" } }, "vtt_empty"],
+      [{ baseRevision: 1, appendVtt: { name: "x\u0000.vtt", vtt: SECOND_VTT } }, "name"],
+      [{ baseRevision: 1, appendVtt: { name: "x.vtt", vtt: SECOND_VTT, lang: "ja" } }, "body"],
+      [{ baseRevision: 1, appendVtt: { name: "x.vtt" } }, "body"],
+      [{ baseRevision: 1, appendVtt: { name: 7, vtt: SECOND_VTT } }, "name"],
+      [{ baseRevision: 1, appendVtt: { name: "x.vtt", vtt: SECOND_VTT }, edits: [{ index: 0, text: "x" }] }, "body"],
+    ];
+    for (const [body, reason] of reasons) {
+      const response = await patch(target.id, body, d);
+      expect(response.status, JSON.stringify(body)).toBe(400);
+      expect(await response.json()).toEqual({ error: "bad_request", reason });
+    }
+    expect(target.transcript.revision).toBe(1);
+  });
+
+  it("answers 409 with the latest when the tab was changed first, 404 for another owner's tab", async () => {
+    const target = row();
+    const { store } = memoryStore([target]);
+    const append = { appendVtt: { name: "2.vtt", vtt: SECOND_VTT } };
+    await patch(target.id, { baseRevision: 1, edits: [{ index: 0, text: "先に直した" }] }, deps("user-a", store));
+    const conflict = await patch(target.id, { baseRevision: 1, ...append }, deps("user-a", store));
+    expect(conflict.status).toBe(409);
+    const body = await conflict.json();
+    expect(body.error).toBe("conflict");
+    expect(body.transcript.segments).toHaveLength(2);
+    expect((await patch(target.id, { baseRevision: 2, ...append }, deps("user-b", store))).status).toBe(404);
+  });
+
+  it("answers 413 to a body above the limit, while a .vtt near the limit goes in; a .vtt above its own limit is 400 vtt_too_large", async () => {
+    const target = row();
+    const { store } = memoryStore([target]);
+    const d = deps("user-a", store);
+    const big = `WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n${"あ".repeat(1000)}\n`;
+    expect((await patch(target.id, { baseRevision: 1, appendVtt: { name: "2.vtt", vtt: big } }, d)).status).toBe(200);
+    const overBody = JSON.stringify({ baseRevision: 2, appendVtt: { name: "2.vtt", vtt: "x" } }).padEnd(RECORDING_PATCH_BODY_MAX_BYTES + 1, " ");
+    expect((await patch(target.id, overBody, d)).status).toBe(413);
+    const tooLarge = `WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n${"あ".repeat(VTT_IMPORT_MAX_BYTES / 3 + 10)}\n`;
+    const response = await patch(target.id, { baseRevision: 2, appendVtt: { name: "2.vtt", vtt: tooLarge } }, d);
+    expect(response.status).toBe(400);
+    expect((await response.json()).reason).toBe("vtt_too_large");
   });
 });
 

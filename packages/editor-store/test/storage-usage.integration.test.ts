@@ -60,8 +60,8 @@ describe("cloud media usage on PostgreSQL", { skip: databaseUrl === undefined },
     };
     const recording = async (owner: string, pageId: string, assetId: string, status: "uploaded" | "uploading", expires: string | null) => {
       await pool.query(
-        `INSERT INTO page_recordings (page_id, owner, source, language, segments, audio_asset, audio_status, audio_expires_at)
-         VALUES ($1, $2, 'audio', 'ja', '[]'::jsonb, $3, $4, $5)`,
+        `INSERT INTO page_recordings (page_id, owner, source, language, audio_asset, audio_status, audio_expires_at)
+         VALUES ($1, $2, 'audio', 'ja', $3, $4, $5)`,
         [pageId, owner, assetId, status, expires],
       );
     };

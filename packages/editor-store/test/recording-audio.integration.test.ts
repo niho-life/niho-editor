@@ -15,7 +15,8 @@ import {
   startAudioRecording,
   type StartAudioRecordingInput,
 } from "../src/recording-audio.ts";
-import { InvalidRecordingError, createRecordingPage, getRecording, updateRecording, type Connectable } from "../src/recordings.ts";
+import { InvalidRecordingError, createRecordingPage, getRecording, type Connectable } from "../src/recordings.ts";
+import { createTranscriptTab, ensureRecordingFolder, getTranscript, updateTranscript } from "../src/transcripts.ts";
 import { EditorStore } from "../src/store.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -73,8 +74,13 @@ async function insertPage(pool: PgPool, owner: string = OWNER, kind = "rec"): Pr
   return result.rows[0]!.id;
 }
 
-/** store を通さずに VTT の録音の行を入れる（0007 の列だけ）。 */
+/** store を通さずに VTT の録音の行を入れる（今の列。段落は文字起こしのタブが持つので録音の行には無い。#310）。 */
 async function insertVttRecording(pool: PgPool, pageId: string, owner: string = OWNER): Promise<void> {
+  await pool.query(`INSERT INTO page_recordings (page_id, owner, source, language, engine) VALUES ($1, $2, 'vtt', 'ja', 'vtt-import')`, [pageId, owner]);
+}
+
+/** 0007 の列だけの VTT の録音の行（0008 を当てる前の DB。段落は録音の行にあった）。 */
+async function insertLegacyVttRecording(pool: PgPool, pageId: string, owner: string = OWNER): Promise<void> {
   await pool.query(
     `INSERT INTO page_recordings (page_id, owner, source, language, engine, segments, speaker_names)
      VALUES ($1, $2, 'vtt', 'ja', 'vtt-import', $3::jsonb, $4::jsonb)`,
@@ -125,7 +131,7 @@ describe("0008 on a database that has 0001 to 0007", { skip: databaseUrl === und
     try {
       assert.deepEqual((await applyMigrations(client, dirUrl)).applied, earlier);
       const page = await insertPage(pool);
-      await insertVttRecording(pool, page);
+      await insertLegacyVttRecording(pool, page);
       const before = await recordingRow(pool, page);
       assert.ok(before);
 
@@ -147,7 +153,7 @@ describe("0008 on a database that has 0001 to 0007", { skip: databaseUrl === und
       assert.ok(recording);
       assert.equal(recording.audio, null);
       assert.equal(recording.source, "vtt");
-      assert.deepEqual(recording.speakerNames, { "1": "合成の話し手" });
+      assert.equal(recording.language, "ja");
       assert.equal(await audioInfo(pool, OWNER, page), null, "a VTT recording has no audio");
     } finally {
       client.release();
@@ -210,7 +216,7 @@ describe("recording audio on PostgreSQL", { skip: databaseUrl === undefined }, (
     assert.equal(recording.engine, null);
     assert.equal(recording.durationSec, 12.5);
     assert.equal(recording.sourceName, "合成の打ち合わせ.m4a");
-    assert.deepEqual(recording.segments, []);
+    assert.equal("segments" in recording, false, "the recording row holds no paragraphs");
     assert.deepEqual(recording.audio, {
       status: "uploading",
       bytes: 4096,
@@ -401,14 +407,22 @@ describe("recording audio on PostgreSQL", { skip: databaseUrl === undefined }, (
     await assert.rejects(() => audioInfo(pool, "", theirs.page.id), TypeError);
   });
 
-  it("keeps the audio when the transcript is edited", async () => {
+  it("keeps the audio and the recording row as they are when a transcript tab of the recording is edited", async () => {
     const { page } = (await startAudioRecording(pool, OWNER, startInput())) as { page: { id: string } };
     const before = await getRecording(pool, OWNER, page.id);
-    const edited = await updateRecording(pool, OWNER, page.id, 1, (data) => data);
-    assert.equal(edited?.status, "ok");
+    const client = await pool.connect();
+    let tab: string;
+    try {
+      await client.query("BEGIN");
+      tab = (await createTranscriptTab(client, OWNER, (await ensureRecordingFolder(client, OWNER, page.id))!, { engine: "fake", language: "ja" })).tab;
+      await client.query("COMMIT");
+    } finally {
+      client.release();
+    }
+    const edited = await updateTranscript(pool, OWNER, tab, 1, (data) => ({ ...data, segments: [{ start: 0, end: 1, text: "合成の発言", speaker: null }] }));
     assert.ok(edited?.status === "ok");
-    assert.deepEqual(edited.recording.audio, before?.audio);
-    assert.equal(edited.recording.revision, 2);
+    assert.equal((await getTranscript(pool, OWNER, tab))?.segments.length, 1);
+    assert.deepEqual(await getRecording(pool, OWNER, page.id), before, "the audio and the recording row do not move");
   });
 
   it("keeps the audio invariants when the code is bypassed", async () => {
@@ -425,7 +439,7 @@ describe("recording audio on PostgreSQL", { skip: databaseUrl === undefined }, (
       [theirAsset, OTHER, theirPage, `audio/${theirAsset}`, DECLARED_SHA],
     );
     const insert = (values: Record<string, unknown>) => {
-      const row = { page_id: page, owner: OWNER, source: "audio", language: "ja", segments: "[]", speaker_names: "{}", audio_status: "uploading", audio_asset: assetId, ...values };
+      const row = { page_id: page, owner: OWNER, source: "audio", language: "ja", audio_status: "uploading", audio_asset: assetId, ...values };
       const columns = Object.keys(row);
       return pool.query(
         `INSERT INTO page_recordings (${columns.join(", ")}) VALUES (${columns.map((_, index) => `$${index + 1}`).join(", ")})`,
@@ -486,8 +500,8 @@ describe("recording audio on PostgreSQL", { skip: databaseUrl === undefined }, (
   it("allows a recording from audio that has no audio (the audio expired, or the page is a copy)", async () => {
     const page = await insertPage(pool);
     await pool.query(
-      `INSERT INTO page_recordings (page_id, owner, source, language, segments, speaker_names, audio_status)
-       VALUES ($1, $2, 'audio', 'ja', '[]', '{}', 'none')`,
+      `INSERT INTO page_recordings (page_id, owner, source, language, audio_status)
+       VALUES ($1, $2, 'audio', 'ja', 'none')`,
       [page, OWNER],
     );
     const recording = await getRecording(pool, OWNER, page);
@@ -495,13 +509,8 @@ describe("recording audio on PostgreSQL", { skip: databaseUrl === undefined }, (
     assert.equal(recording?.audio, null);
   });
 
-  it("duplicates an audio recording page with its transcript but without its audio, and a VTT recording page with audio: null", async () => {
+  it("duplicates an audio recording page without its audio, and a VTT recording page with audio: null", async () => {
     const started = (await startAudioRecording(pool, OWNER, startInput())) as { page: { id: string; page: string | null } };
-    // 段 2b の文字起こしの代わりに、段落と話者名を直接入れる
-    await pool.query(
-      `UPDATE page_recordings SET segments = $2::jsonb, speaker_names = $3::jsonb WHERE page_id = $1`,
-      [started.page.id, JSON.stringify([{ start: 0, end: 1.5, text: "合成の発言", speaker: 1 }]), JSON.stringify({ "1": "合成の話し手" })],
-    );
     const assets = await count(pool, "assets", OWNER);
     const copy = await duplicatePage(pool, OWNER, started.page.id);
     assert.ok(copy);
@@ -509,12 +518,11 @@ describe("recording audio on PostgreSQL", { skip: databaseUrl === undefined }, (
     // 録音ページのタブの複製は同じ入れ物の新しいタブ: 題名はページの名前のまま、タブの名前が「のコピー」（#307 #308）
     assert.deepEqual([copy.title, copy.page, copy.tabName], ["合成の打ち合わせ", started.page.page, "1のコピー"]);
     const copiedAudioRecording = await getRecording(pool, OWNER, copy.id);
-    assert.ok(copiedAudioRecording, "the recording page is copied with its transcript (it is not left without a recording)");
+    assert.ok(copiedAudioRecording, "the recording page is copied (it is not left without a recording)");
     assert.equal(copiedAudioRecording.source, "audio");
     assert.equal(copiedAudioRecording.audio, null, "the audio is not copied (the asset belongs to one page)");
     assert.equal(copiedAudioRecording.revision, 1);
-    assert.deepEqual(copiedAudioRecording.segments, [{ start: 0, end: 1.5, text: "合成の発言", speaker: 1 }]);
-    assert.deepEqual(copiedAudioRecording.speakerNames, { "1": "合成の話し手" });
+    assert.equal("segments" in copiedAudioRecording, false);
     assert.equal(await audioInfo(pool, OWNER, copy.id), null);
     assert.equal(await count(pool, "assets", OWNER), assets, "no asset is copied");
     assert.equal((await getRecording(pool, OWNER, started.page.id))?.audio?.status, "uploading", "the original keeps its audio");
@@ -526,7 +534,7 @@ describe("recording audio on PostgreSQL", { skip: databaseUrl === undefined }, (
     const copied = await getRecording(pool, OWNER, vttCopy.id);
     assert.ok(copied);
     assert.equal(copied.audio, null);
-    assert.deepEqual(copied.speakerNames, { "1": "合成の話し手" });
+    assert.equal(copied.engine, "vtt-import");
     const row = await recordingRow(pool, vttCopy.id);
     assert.equal(row?.audio_status, "none");
     assert.equal(row?.audio_upload_key, null);

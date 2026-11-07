@@ -43,11 +43,10 @@ export type AudioStartResponse = {
   status: 200 | 201;
   page: { id: string; kind: "rec"; title: string; lang: "ja" | "en"; createdAt: string; updatedAt: string };
   recording: Record<string, unknown> & { audio: { status: "uploading" | "uploaded"; bytes: number; contentType: string; expiresAt: string | null } | null };
-  speakers: unknown[];
   upload: AudioUploadTicket | null;
 };
 
-export type AudioCompleteResponse = { recording: AudioStartResponse["recording"]; speakers: unknown[] };
+export type AudioCompleteResponse = { recording: AudioStartResponse["recording"] };
 
 /** 音声 1 本（#36 段 3b-4。応答の形。保存先の場所・資産の id は入らない）。 */
 export type AudioPartView = {
@@ -162,7 +161,6 @@ export async function startAudioUpload(
     status: response.status as 200 | 201,
     page: data.page as AudioStartResponse["page"],
     recording: data.recording as AudioStartResponse["recording"],
-    speakers: Array.isArray(data.speakers) ? data.speakers : [],
     upload: data.upload as AudioUploadTicket | null,
   };
 }
@@ -262,7 +260,7 @@ export async function completeAudioUpload(pageId: string, fetchImpl: FetchLike =
   if (!response.ok) throw await failure(response);
   const data = await readJson(response);
   if (!isPlainObject(data) || !isPlainObject(data.recording)) throw new AudioUploadError(500);
-  return { recording: data.recording as AudioCompleteResponse["recording"], speakers: Array.isArray(data.speakers) ? data.speakers : [] };
+  return { recording: data.recording as AudioCompleteResponse["recording"] };
 }
 
 // ---- 画面から呼ぶ一続きの流れ（#36 段 3b-1） ----
@@ -438,7 +436,7 @@ export type UploadAudioFileInput = {
   createXhr?: () => XhrLike;
 };
 
-export type UploadAudioFileResult = { page: AudioStartResponse["page"]; recording: AudioStartResponse["recording"]; speakers: unknown[] };
+export type UploadAudioFileResult = { page: AudioStartResponse["page"]; recording: AudioStartResponse["recording"] };
 
 /** API の失敗（AudioUploadError）を理由にする。 */
 function failureOfApi(error: AudioUploadError): AudioUploadFailure {
@@ -556,7 +554,7 @@ export async function uploadAudioFile(input: UploadAudioFileInput): Promise<Uplo
     start: (request, options) => startAudioUpload(request, options),
     complete: (first, fetchImpl) => completeAudioUpload(first.page.id, fetchImpl),
   });
-  return { page: started.page, recording: completed.recording, speakers: completed.speakers };
+  return { page: started.page, recording: completed.recording };
 }
 
 export type UploadAudioPartInput = UploadAudioFileInput & { pageId: string };

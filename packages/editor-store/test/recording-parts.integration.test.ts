@@ -14,7 +14,7 @@ import {
   type StartAudioPartInput,
   type StartAudioRecordingInput,
 } from "../src/recording-audio.ts";
-import { InvalidRecordingError, createRecordingPage, getRecording, updateRecording } from "../src/recordings.ts";
+import { InvalidRecordingError, createRecordingPage, getRecording } from "../src/recordings.ts";
 import { claimRun, enqueueTranscription, finishRun, type EnqueueTranscriptionInput } from "../src/transcription-runs.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;

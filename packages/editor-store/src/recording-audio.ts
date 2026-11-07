@@ -149,14 +149,14 @@ const INSERT_ASSET_SQL = `
 INSERT INTO assets (id, owner, page_id, kind, bucket_path, bytes, sha256, content_type)
 VALUES ($3, $2, $1, 'audio', $4, $5, $6, $7)`;
 
-// 録音の作成時刻・期限はページと同じ行から取る（JS の Date を経由しない）。段落は空（文字起こしは段 2b）。
+// 録音の作成時刻・期限はページと同じ行から取る（JS の Date を経由しない）。
 // 期限は日数 × 24 時間（days の interval は session の時間帯の夏時間で 1 時間ずれるので使わない）。
 // $1 page id / $2 owner / $3 language / $4 duration / $5 source name / $6 asset id / $7 upload key / $8 request hash / $9 保持の日数
 const INSERT_AUDIO_RECORDING_SQL = `
 INSERT INTO page_recordings AS r
-  (page_id, owner, source, language, engine, duration_sec, audio_duration_sec, source_name, source_sha256, segments, speaker_names,
+  (page_id, owner, source, language, engine, duration_sec, audio_duration_sec, source_name, source_sha256,
    audio_asset, audio_status, audio_expires_at, audio_upload_key, audio_request_hash, created_at, updated_at)
-SELECT p.id, p.owner, 'audio', $3::text, NULL, $4::numeric, $4::numeric, $5::text, NULL, '[]'::jsonb, '{}'::jsonb,
+SELECT p.id, p.owner, 'audio', $3::text, NULL, $4::numeric, $4::numeric, $5::text, NULL,
        $6::uuid, 'uploading', p.created_at + make_interval(hours => $9::int * 24), $7::uuid, $8::text, p.created_at, p.created_at
   FROM pages AS p
  WHERE p.id = $1 AND p.owner = $2
@@ -204,7 +204,7 @@ async function findByKey(db: Pick<PoolClient, "query">, owner: OwnerId, key: str
 }
 
 /**
- * 音声の録音を始める: pages（kind = 'rec'・本文は空）・assets（kind = 'audio'）・page_recordings（source = 'audio'・段落は空・
+ * 音声の録音を始める: pages（kind = 'rec'・本文は空）・assets（kind = 'audio'）・page_recordings（source = 'audio'・
  * 状態 uploading・期限 = 作成の時刻 + retentionDays 日）を 1 つの transaction で入れる（途中で失敗したらどれも残らない）。
  * 冪等: 同じ owner・同じ uploadKey の録音が既にあれば、要求の内容（requestHash）が同じなら何も書かずにそれを返し（existing）、
  * 違えば conflict。同じキーの要求が並んでも、入るのは 1 つだけ（UNIQUE で止まった側は先に入った方を引いて返す）。

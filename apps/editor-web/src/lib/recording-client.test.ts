@@ -1,15 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  CONFLICT_MESSAGE,
-  RecordingConflictError,
-  RecordingRequestError,
-  editSegments,
-  getRecording,
-  importVtt,
-  mergeSpeakers,
-  recordingErrorMessage,
-  renameSpeaker,
-} from "./recording-client";
+import { CONFLICT_MESSAGE, RecordingRequestError, getRecording, importVtt, recordingErrorMessage } from "./recording-client";
 
 const ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
 
@@ -22,22 +12,13 @@ function recording(revision: number, overrides: Record<string, unknown> = {}) {
     durationSec: 62.5,
     sourceName: "dinner.vtt",
     sourceSha256: "a".repeat(64),
-    segments: [
-      { start: 0, end: 4.2, text: "最初の段落", speaker: 1 },
-      { start: 4.2, end: 9, text: "次の段落", speaker: 2 },
-    ],
-    speakerNames: { "1": "Takuya" },
     audio: null,
     createdAt: "2026-10-30T00:00:00.000Z",
     updatedAt: "2026-10-30T00:00:00.000Z",
     ...overrides,
   };
 }
-const SPEAKERS = [
-  { speaker: 1, name: "Takuya", count: 1 },
-  { speaker: 2, name: null, count: 1 },
-];
-const snapshot = (revision: number) => ({ recording: recording(revision), speakers: SPEAKERS });
+const snapshot = (revision: number) => ({ recording: recording(revision) });
 const TAB = "11111111-1111-4111-8111-111111111111";
 /** 文字起こしのタブの 1 行（#310。GET の `transcripts`）。 */
 const transcriptTab = (overrides: Record<string, unknown> = {}) => ({
@@ -63,7 +44,7 @@ describe("recording client: requests", () => {
     expect(imported.page).toEqual({ id: ID, title: "dinner", lang: "ja" });
     expect(imported.transcript).toBe(TAB);
     expect(imported.recording.revision).toBe(1);
-    expect(imported.speakers).toEqual(SPEAKERS);
+    expect(imported.recording).not.toHaveProperty("segments");
     expect(fetchMock.mock.calls[0]![0]).toBe("/api/recordings/import-vtt");
     expect(lastInit(fetchMock)).toMatchObject({ method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" } });
     expect(JSON.parse(lastInit(fetchMock).body as string)).toEqual({ name: "dinner.vtt", vtt: "WEBVTT\n" });
@@ -75,7 +56,7 @@ describe("recording client: requests", () => {
     const fetchMock = mockFetch(200, snapshot(3));
     const loaded = await getRecording(ID);
     expect(loaded.recording.revision).toBe(3);
-    expect(loaded.recording.segments[0]).toEqual({ start: 0, end: 4.2, text: "最初の段落", speaker: 1 });
+    expect(loaded.recording.durationSec).toBe(62.5);
     expect(fetchMock.mock.calls[0]![0]).toBe(`/api/pages/${ID}/recording`);
     expect(lastInit(fetchMock)).toMatchObject({ method: "GET", credentials: "same-origin", cache: "no-store" });
     expect(lastInit(fetchMock).body).toBeUndefined();
@@ -95,39 +76,18 @@ describe("recording client: requests", () => {
     mockFetch(200, snapshot(3));
     expect((await getRecording(ID)).transcripts).toBeUndefined();
   });
-
-  it("editSegments / renameSpeaker / mergeSpeakers patch with baseRevision and exactly one operation", async () => {
-    const fetchMock = mockFetch(200, snapshot(4));
-    expect((await editSegments(ID, 3, [{ index: 1, text: "直した" }])).recording.revision).toBe(4);
-    expect(lastInit(fetchMock).method).toBe("PATCH");
-    expect(JSON.parse(lastInit(fetchMock).body as string)).toEqual({ baseRevision: 3, edits: [{ index: 1, text: "直した" }] });
-    await renameSpeaker(ID, 4, 2, "Mika");
-    expect(JSON.parse(lastInit(fetchMock).body as string)).toEqual({ baseRevision: 4, renameSpeaker: { speaker: 2, name: "Mika" } });
-    await renameSpeaker(ID, 5, 2, null);
-    expect(JSON.parse(lastInit(fetchMock).body as string)).toEqual({ baseRevision: 5, renameSpeaker: { speaker: 2, name: null } });
-    await mergeSpeakers(ID, 6, 2, 1);
-    expect(JSON.parse(lastInit(fetchMock).body as string)).toEqual({ baseRevision: 6, mergeSpeakers: { from: 2, into: 1 } });
-    expect(fetchMock.mock.calls.at(-1)![0]).toBe(`/api/pages/${ID}/recording`);
-  });
-
 });
 
 describe("recording client: failures", () => {
-  it("409 with the latest recording becomes a RecordingConflictError carrying the snapshot", async () => {
-    mockFetch(409, { error: "conflict", ...snapshot(7) });
-    const error = await editSegments(ID, 6, [{ index: 0, text: "x" }]).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(RecordingConflictError);
+  it("a 409 becomes a plain failure carrying the short reason (a transcription that cannot start)", async () => {
+    mockFetch(409, { error: "existing" });
+    const error = await getRecording(ID).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(RecordingRequestError);
-    expect((error as RecordingConflictError).status).toBe(409);
-    expect((error as RecordingConflictError).snapshot.recording.revision).toBe(7);
-    expect((error as RecordingConflictError).snapshot.speakers).toEqual(SPEAKERS);
-  });
-
-  it("a 409 that is not in the conflict shape is a plain failure", async () => {
-    mockFetch(409, { error: "something" });
-    const error = await renameSpeaker(ID, 1, 1, "x").catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(RecordingRequestError);
-    expect(error).not.toBeInstanceOf(RecordingConflictError);
+    expect(error).toMatchObject({ status: 409, reason: "existing" });
+    mockFetch(409, { reason: "tab_missing", error: "conflict" });
+    expect(await getRecording(ID).catch((caught: unknown) => caught)).toMatchObject({ status: 409, reason: "tab_missing" });
+    mockFetch(409, {});
+    expect(await getRecording(ID).catch((caught: unknown) => caught)).toMatchObject({ status: 409, reason: null });
   });
 
   it("keeps the status and the 400 reason", async () => {
@@ -146,13 +106,15 @@ describe("recording client: failures", () => {
   });
 
   it("a response in the wrong shape is a server failure, not data", async () => {
-    mockFetch(200, { recording: { revision: 0, segments: [] }, speakers: [] });
+    mockFetch(200, { recording: { revision: 0 } });
     expect(await getRecording(ID).catch((caught: unknown) => caught)).toMatchObject({ status: 500 });
     mockFetch(200, { page: { id: "not-a-uuid", title: "x", lang: "ja" }, transcript: TAB, ...snapshot(1) });
     expect(await importVtt({ name: "a.vtt", vtt: "x" }).catch((caught: unknown) => caught)).toMatchObject({ status: 500 });
     mockFetch(200, { page: { id: ID, title: "x", lang: "ja" }, ...snapshot(1) });
     expect(await importVtt({ name: "a.vtt", vtt: "x" }).catch((caught: unknown) => caught)).toMatchObject({ status: 500 });
-    mockFetch(200, { recording: recording(1, { segments: [{ start: 0, end: 1, text: 3, speaker: 1 }] }), speakers: SPEAKERS });
+    mockFetch(200, { recording: recording(1, { durationSec: "long" }) });
+    expect(await getRecording(ID).catch((caught: unknown) => caught)).toMatchObject({ status: 500 });
+    mockFetch(200, { recording: recording(1, { source: "mic" }) });
     expect(await getRecording(ID).catch((caught: unknown) => caught)).toMatchObject({ status: 500 });
   });
 });

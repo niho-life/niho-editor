@@ -35,13 +35,10 @@ const created = {
     durationSec: 4,
     sourceName: "dinner.vtt",
     sourceSha256: null,
-    segments: [{ start: 0, end: 4, text: "こんにちは", speaker: 1 }],
-    speakerNames: { "1": "Takuya" },
     audio: null,
     createdAt: "2026-10-30T00:00:00.000Z",
     updatedAt: "2026-10-30T00:00:00.000Z",
   },
-  speakers: [{ speaker: 1, name: "Takuya", count: 1 }],
 };
 
 let root: Root | null = null;
@@ -62,7 +59,7 @@ const LIMITS = {
   contentTypes: ["audio/mp4", "audio/x-m4a", "audio/m4a", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/wave", "audio/aac", "audio/ogg", "audio/flac", "audio/x-flac", "audio/webm"],
 };
 const audioPage = { id: PAGE_ID, kind: "rec", title: "合成の会議", lang: "ja", createdAt: "2030-01-01T00:00:00.000Z", updatedAt: "2030-01-01T00:00:00.000Z" };
-const audioRecording = (status: "uploading" | "uploaded") => ({ ...created.recording, source: "audio", segments: [], speakerNames: {}, audio: { status, bytes: 3, contentType: "audio/mp4", expiresAt: "2030-01-31T03:00:00.000Z" } });
+const audioRecording = (status: "uploading" | "uploaded") => ({ ...created.recording, source: "audio", audio: { status, bytes: 3, contentType: "audio/mp4", expiresAt: "2030-01-31T03:00:00.000Z" } });
 
 const audioPart = (partIndex: number, status: "uploading" | "uploaded" = "uploading") => ({
   partIndex,
@@ -83,9 +80,9 @@ function audioApi(routes: { limits?: Route; start?: Route; complete?: Route; par
     void init;
     if (path === "/api/recordings/audio/limits") return routes.limits ? routes.limits() : respond(200, LIMITS);
     if (path === "/api/recordings/audio/start") {
-      return routes.start ? routes.start() : respond(201, { page: audioPage, recording: audioRecording("uploading"), speakers: [], upload: { url: TICKET_URL, method: "PUT", headers: { "Content-Type": "audio/mp4" }, expiresAt: "2030-01-08T00:00:00.000Z", maxBytes: 3 } });
+      return routes.start ? routes.start() : respond(201, { page: audioPage, recording: audioRecording("uploading"), upload: { url: TICKET_URL, method: "PUT", headers: { "Content-Type": "audio/mp4" }, expiresAt: "2030-01-08T00:00:00.000Z", maxBytes: 3 } });
     }
-    if (path === `/api/pages/${PAGE_ID}/recording/audio/complete`) return routes.complete ? routes.complete() : respond(200, { recording: audioRecording("uploaded"), speakers: [] });
+    if (path === `/api/pages/${PAGE_ID}/recording/audio/complete`) return routes.complete ? routes.complete() : respond(200, { recording: audioRecording("uploaded") });
     // 2 本目以降の音声（#36 段 3b-4）
     if (path === `/api/pages/${PAGE_ID}/recording/audio/parts`) {
       return routes.parts

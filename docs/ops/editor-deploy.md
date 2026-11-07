@@ -87,6 +87,10 @@ migration は expand → contract（列の削除は配備の 1 つ後）。適�
 migrate ジョブはサービスの入れ替えより先に走るので、古い revision は知らないキーを持つ段階を読み落とす（`isRecipeStep` が段階ごと捨てる）。
 キーを読むコードの配備と、キーを書き込む migration の配備は分ける（#277 の `chunked` は先に配備し、`20261106225704_recipes_chunked_default` はそのあと）。
 
+**文字起こしの案・録音の正本の段落を落とす migration（`20261107101731_drop_recording_candidates`。#310 の contract）は、文字起こしのタブを読み書きするコード（#327）が動いている revision に載ってから、別の配備で流す。**
+流すと候補の表・`transcription_runs` の `candidate`／`candidate_revision`／`replace`・`page_recordings` の `segments`／`speaker_names` が消え、#327 より前の revision は動かなくなる（この配備のあとは、#327 より前の revision に戻せない）。
+migrate ジョブは次のときに止まる（`SQLSTATE 55000`。ログに出るのは件数だけ）: ① `target_tab` の無い queued・running の run が残っている（終わるのを待つ）、② 生きている録音に、どの文字起こしのタブにも写されていない段落が残っている（タブへ写してから配備し直す）。止まってもサービスの入れ替えより前なので、動いている revision はそのまま。
+
 **新しい migration の名前は自分で決めない。** `npm -C packages/editor-store run new-migration -- <名前>` が
 `YYYYMMDDHHMMSS_<名前>.sql` を作る（雛形つき）。連番（`0001`〜）を人が選ぶと並行作業で同じ番号を取り合うため
 （実際に #90 と #93 が 0008、#100 と #93 が 0009 で衝突した）。適用は辞書順で、`"0" < "2"` なので
@@ -135,7 +139,7 @@ migrate ジョブはサービスの入れ替えより先に走るので、古い
 
 ## 9. 戻し方
 
-- 配備を戻す: 前の revision へ全トラフィックを戻す（`gcloud run services update-traffic niho-editor --to-revisions <revision>=100`）。DB は expand → contract なので旧版と互換。戻したあとの次のデプロイでは、`deploy.sh` が毎回 `update-traffic --to-latest` で最新の revision へ traffic を向け直す（Cloud Run は割り当てを引き継ぐため、これが無いと smoke が古い revision に通る）。
+- 配備を戻す: 前の revision へ全トラフィックを戻す（`gcloud run services update-traffic niho-editor --to-revisions <revision>=100`）。DB は expand → contract なので旧版と互換（ただし `drop_recording_candidates` を流したあとは、#327 より前の revision とは互換でない。§4）。戻したあとの次のデプロイでは、`deploy.sh` が毎回 `update-traffic --to-latest` で最新の revision へ traffic を向け直す（Cloud Run は割り当てを引き継ぐため、これが無いと smoke が古い revision に通る）。
 - サービスを止める: 独自ドメインのマッピングを消せば `run.app` の URL だけが残る。サービスごと止めるなら `gcloud run services delete niho-editor`（DB とバケットは残る）。
 
 ## 10. AI（#38）

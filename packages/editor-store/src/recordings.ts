@@ -4,11 +4,12 @@ import type { OwnerId, PageLang, Queryable } from "./types.ts";
 import { createTranscriptTab, ensureRecordingFolder } from "./transcripts.ts";
 
 /**
- * 録音ページの文字起こし（#36 段 1）。録音ページ（kind = 'rec'）に page_recordings の 1 行（migrations/0007_page_recordings.sql）。
- * 読み書きは全て本人の・ゴミ箱でないページだけ。別の人のページ・削除済み・存在しない・UUID として不正な id・録音の無いページは
+ * 録音ページ（#36 段 1）。録音ページ（kind = 'rec'）に page_recordings の 1 行（migrations/0007_page_recordings.sql）。
+ * 録音の行は音声・原本の名前・長さなどの録音そのものを持つ。文字起こしの段落・話者名は持たない（#310。「文字起こし」ページのタブ＝
+ * page_transcripts が持つ。transcripts.ts）。
+ * 読み取りは全て本人の・ゴミ箱でないページだけ。別の人のページ・削除済み・存在しない・UUID として不正な id・録音の無いページは
  * どれも null（呼び出し側は同じ 404 にする）。
- * 書き込みは revision を見る: 呼び出し側が読んだ revision と今の revision が違えば書かずに最新を返す（別の画面で先に直された）。
- * 段落・話者の操作そのもの（純粋な関数）は呼び出し側が持ち、ここは形の検査と保存だけをする。
+ * 段落・話者の操作そのもの（純粋な関数）は呼び出し側が持ち、ここは形の検査（recordingDataProblem）だけをする。
  * 音声から作る録音（source = 'audio'。#36 段 2a）は recording-audio.ts の startAudioRecording で作る（音声の資産と一緒に入れる）。
  */
 
@@ -47,7 +48,7 @@ export type RecordingAudioStatus = (typeof RECORDING_AUDIO_STATUSES)[number];
 export type RecordingAudio = { status: RecordingAudioStatus; bytes: number; contentType: string; expiresAt: string | null };
 
 /**
- * 書き換えられる部分。speakerNames のキーは話者番号の 10 進の文字列（"1"）で、segments に出てくる話者だけ。
+ * 文字起こしのタブの本文（書き換えられる部分）。speakerNames のキーは話者番号の 10 進の文字列（"1"）で、segments に出てくる話者だけ。
  * durationSec は録音の長さ（秒）。**書き換えでは省略できる**（省くと今の長さのまま）。音声・字幕を足して録音が長くなるとき
  * （editor-web の appendTranscript）だけ、新しい長さを入れて返す。
  */
@@ -61,8 +62,6 @@ export type Recording = {
   durationSec: number | null;
   sourceName: string | null;
   sourceSha256: string | null;
-  segments: RecordingSegment[];
-  speakerNames: Record<string, string>;
   /** 音声（#36 段 2a）。音声の無い録音（VTT の取り込み）は null。 */
   audio: RecordingAudio | null;
   createdAt: string;
@@ -85,13 +84,8 @@ export type CreateRecordingInput = {
 /** 作った録音ページ（本文は空）。 */
 export type RecordingPage = { id: string; kind: "rec"; title: string; lang: PageLang; page: string | null; createdAt: string; updatedAt: string };
 
-/** 録音の書き換え（純粋な関数）。新しい RecordingData か、断るときは `{ rejected: 理由 }` を返す。 */
+/** 文字起こしのタブの本文の書き換え（純粋な関数）。新しい RecordingData か、断るときは `{ rejected: 理由 }` を返す。 */
 export type RecordingMutation<R extends string = string> = (data: RecordingData) => RecordingData | { rejected: R };
-
-export type UpdateRecordingResult<R extends string = string> =
-  | { status: "ok"; recording: Recording }
-  | { status: "conflict"; recording: Recording }
-  | { status: "rejected"; reason: R };
 
 /** トランザクションに使う 1 本の接続を借りられるもの（pg の Pool）。 */
 export type Connectable = { connect: () => Promise<Pick<PoolClient, "query" | "release">> };
@@ -256,8 +250,6 @@ export type RecordingRow = {
   duration_sec: number | null;
   source_name: string | null;
   source_sha256: string | null;
-  segments: RecordingSegment[];
-  speaker_names: Record<string, string>;
   audio_status: "none" | RecordingAudioStatus;
   audio_bytes: string | null;
   audio_content_type: string | null;
@@ -269,7 +261,7 @@ export type RecordingRow = {
 // numeric は pg が文字列で返すので、float8 にして number で受ける。bigint（assets.bytes）は文字列で受けて数にする。
 // 音声の大きさと種類は assets の行から引く（UPDATE・INSERT の RETURNING でも使えるよう、join ではなく副問い合わせ）。
 export const RECORDING_COLUMNS = `r.revision, r.source, r.language, r.engine, r.duration_sec::float8 AS duration_sec, r.source_name,
-       r.source_sha256, r.segments, r.speaker_names, r.audio_status, r.audio_expires_at,
+       r.source_sha256, r.audio_status, r.audio_expires_at,
        (SELECT a.bytes::text FROM assets AS a WHERE a.owner = r.owner AND a.id = r.audio_asset) AS audio_bytes,
        (SELECT a.content_type FROM assets AS a WHERE a.owner = r.owner AND a.id = r.audio_asset) AS audio_content_type,
        r.created_at, r.updated_at`;
@@ -285,7 +277,6 @@ function toAudio(row: RecordingRow): RecordingAudio | null {
 }
 
 export function toRecording(row: RecordingRow): Recording {
-  const data = copyData({ segments: row.segments, speakerNames: row.speaker_names });
   return {
     revision: row.revision,
     source: row.source,
@@ -294,8 +285,6 @@ export function toRecording(row: RecordingRow): Recording {
     durationSec: row.duration_sec,
     sourceName: row.source_name,
     sourceSha256: row.source_sha256,
-    segments: data.segments,
-    speakerNames: data.speakerNames,
     audio: toAudio(row),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
@@ -308,9 +297,6 @@ SELECT ${RECORDING_COLUMNS}
   FROM page_recordings AS r
   JOIN pages AS p ON p.owner = r.owner AND p.id = r.page_id
  WHERE r.owner = $1 AND r.page_id = $2 AND p.deleted_at IS NULL`;
-
-const LOCK_SQL = `${GET_SQL}
-   FOR UPDATE OF r`;
 
 // 録音ページ＝入れ物（kind='page'。#307）＋ 1 つ目のタブ（kind='rec'）。返すのはタブの行（/p/<id> も録音もタブの id）
 export const INSERT_HOLDER_SQL = `
@@ -328,24 +314,13 @@ const SET_LAST_TAB_SQL = "UPDATE pages SET last_tab = $3 WHERE owner = $1 AND id
 // 録音の作成時刻はページと同じにする（同じ transaction で入れたページの行から取る。JS の Date を経由しない）
 const INSERT_RECORDING_SQL = `
 INSERT INTO page_recordings AS r
-  (page_id, owner, source, language, engine, duration_sec, source_name, source_sha256, segments, speaker_names, created_at, updated_at)
-SELECT p.id, p.owner, $3::text, $4::text, $5::text, $6::numeric, $7::text, $8::text, $9::jsonb, $10::jsonb, p.created_at, p.created_at
+  (page_id, owner, source, language, engine, duration_sec, source_name, source_sha256, created_at, updated_at)
+SELECT p.id, p.owner, $3::text, $4::text, $5::text, $6::numeric, $7::text, $8::text, p.created_at, p.created_at
   FROM pages AS p
  WHERE p.id = $1 AND p.owner = $2
 RETURNING ${RECORDING_COLUMNS}`;
 
-// 長さ（$5）は、書き換えが新しい長さを返したときだけ値が変わる（返さなければ呼び出し側が今の値をそのまま渡す）
-const UPDATE_SQL = `
-UPDATE page_recordings AS r
-   SET segments = $3::jsonb,
-       speaker_names = $4::jsonb,
-       duration_sec = $5::numeric,
-       revision = r.revision + 1,
-       updated_at = GREATEST(clock_timestamp(), r.updated_at)
- WHERE r.owner = $1 AND r.page_id = $2
-RETURNING ${RECORDING_COLUMNS}`;
-
-// 録音を直したらページの更新時刻も進める（サイドバーの更新順に反映する）。pages.revision は #33 のページ本文の保存の番号なので触らない。
+// 文字起こし（タブ）を直したらページの更新時刻も進める（サイドバーの更新順に反映する）。pages.revision は #33 のページ本文の保存の番号なので触らない。
 export const TOUCH_PAGE_SQL = `
 UPDATE pages
    SET updated_at = GREATEST(clock_timestamp(), updated_at)
@@ -396,8 +371,6 @@ export async function createRecordingPage(
         input.durationSec ?? null,
         input.sourceName ?? null,
         input.sourceSha256 ?? null,
-        "[]",
-        "{}",
       ]);
       const recording = recordingResult.rows[0];
       if (!recording) throw new Error("editor-store: insert returned no recording");
@@ -444,68 +417,5 @@ export async function getRecording(db: Queryable, owner: OwnerId, pageId: string
   } catch (error) {
     if (isInvalidTextRepresentation(error)) return null;
     throw error;
-  }
-}
-
-/**
- * 録音を書き換える。行を FOR UPDATE で押さえてから revision を比べるので、同じ revision の書き込みが並んでも通るのは 1 つだけ。
- * - ページ（録音）が無い: null
- * - baseRevision が今の revision と違う: `{ status: "conflict", recording: 最新 }`（何も書かない）
- * - mutate が断った: `{ status: "rejected", reason }`（何も書かない）
- * - それ以外: 保存して revision を 1 進め、`{ status: "ok", recording }`
- * mutate の結果が保存の形に合わなければ InvalidRecordingError（何も書かない）。
- */
-export async function updateRecording<R extends string>(
-  pool: Connectable,
-  owner: OwnerId,
-  pageId: string,
-  baseRevision: number,
-  mutate: RecordingMutation<R>,
-): Promise<UpdateRecordingResult<R> | null> {
-  assertOwner(owner);
-  if (!Number.isSafeInteger(baseRevision) || baseRevision < 1) throw new TypeError("editor-store: baseRevision must be a positive integer");
-  if (!isPageId(pageId)) return null;
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    try {
-      const locked = await client.query<RecordingRow>(LOCK_SQL, [owner, pageId]);
-      const row = locked.rows[0];
-      if (!row) {
-        await rollback(client);
-        return null;
-      }
-      const current = toRecording(row);
-      if (current.revision !== baseRevision) {
-        await rollback(client);
-        return { status: "conflict", recording: current };
-      }
-      const next = mutate(copyData(current));
-      if ("rejected" in next) {
-        await rollback(client);
-        return { status: "rejected", reason: next.rejected };
-      }
-      assertData(next);
-      const clean = copyData(next);
-      const updated = await client.query<RecordingRow>(UPDATE_SQL, [
-        owner,
-        pageId,
-        JSON.stringify(clean.segments),
-        JSON.stringify(clean.speakerNames),
-        // 長さを返さない書き換え（段落の文章・話者の操作）は、今の長さのまま
-        clean.durationSec === undefined ? current.durationSec : clean.durationSec,
-      ]);
-      const saved = updated.rows[0];
-      if (!saved) throw new Error("editor-store: update returned no recording");
-      await client.query(TOUCH_PAGE_SQL, [owner, pageId]);
-      await client.query("COMMIT");
-      return { status: "ok", recording: toRecording(saved) };
-    } catch (error) {
-      await rollback(client);
-      throw error;
-    }
-  } finally {
-    client.release();
   }
 }

@@ -387,8 +387,6 @@ describe("GET /api/pages/{id}/recording with the transcription", () => {
     durationSec: null,
     sourceName: "合成.m4a",
     sourceSha256: null,
-    segments: [],
-    speakerNames: {},
     audio: { status: "uploaded", bytes: 3, contentType: "audio/mp4", expiresAt: null },
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
@@ -409,7 +407,6 @@ describe("GET /api/pages/{id}/recording with the transcription", () => {
       throw new Error("not used");
     },
     getRecording: async (owner) => (owner === "user-a" ? recording : null),
-    updateRecording: async () => null,
     latestTranscription: async () => (latest ? ({ ...latest, internal: "x" } as TranscriptionRunView) : null),
   });
   const get = (store: RecordingsStore, userId = "user-a") =>
@@ -418,7 +415,7 @@ describe("GET /api/pages/{id}/recording with the transcription", () => {
   it("adds the latest run (only the documented fields), or null", async () => {
     const withRun = await (await get(recordingsStore(run))).json();
     // 音声の列・文字起こしのタブ（#310）・使えるエンジン（#36 段 3b-4）も同じ応答に入る
-    expect(Object.keys(withRun).sort()).toEqual(["audios", "defaultEngine", "engines", "recording", "speakers", "transcription", "transcripts"]);
+    expect(Object.keys(withRun).sort()).toEqual(["audios", "defaultEngine", "engines", "recording", "transcription", "transcripts"]);
     expect(withRun.defaultEngine).toBeNull();
     expect(withRun.transcription).toEqual(run);
     expect((await (await get(recordingsStore(null))).json()).transcription).toBeNull();

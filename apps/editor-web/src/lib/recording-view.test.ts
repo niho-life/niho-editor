@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { Recording } from "@niho/editor-store";
+import type { Recording, RecordingData } from "@niho/editor-store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   NO_SPEAKER_LABEL,
@@ -22,16 +22,22 @@ function recording(overrides: Partial<Recording> = {}): Recording {
     durationSec: 3725,
     sourceName: null,
     sourceSha256: null,
+    audio: null,
+    createdAt: "2026-10-30T00:00:00.000Z",
+    updatedAt: "2026-10-30T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+/** 文字起こしのタブの本文（#310）。 */
+function transcript(): Pick<RecordingData, "segments" | "speakerNames"> {
+  return {
     segments: [
       { start: 0, end: 4, text: "一つ目", speaker: 1 },
       { start: 75.9, end: 80, text: "二つ目", speaker: 2 },
       { start: null, end: null, text: "三つ目", speaker: null },
     ],
     speakerNames: { "1": "Takuya" },
-    audio: null,
-    createdAt: "2026-10-30T00:00:00.000Z",
-    updatedAt: "2026-10-30T00:00:00.000Z",
-    ...overrides,
   };
 }
 
@@ -63,7 +69,7 @@ describe("recording view", () => {
   });
 
   it("builds the segments: id is the position, the name comes from the table, a draft replaces the text", () => {
-    const segments = shellSegments(recording(), { 1: "直した文章" });
+    const segments = shellSegments(transcript(), { 1: "直した文章" });
     expect(segments).toEqual([
       { id: "0", who: "Takuya", tone: "a", time: "00:00", text: "一つ目" },
       { id: "1", who: "話者2", tone: "b", time: "01:15", text: "直した文章" },
@@ -72,9 +78,9 @@ describe("recording view", () => {
   });
 
   it("marks only the paragraph being played as current (#36 段 3b-2)", () => {
-    expect(shellSegments(recording(), {}, "1").map((segment) => segment.current)).toEqual([undefined, true, undefined]);
-    expect(shellSegments(recording(), {}, null).some((segment) => "current" in segment)).toBe(false);
-    expect(shellSegments(recording(), {}, "9").some((segment) => "current" in segment)).toBe(false);
+    expect(shellSegments(transcript(), {}, "1").map((segment) => segment.current)).toEqual([undefined, true, undefined]);
+    expect(shellSegments(transcript(), {}, null).some((segment) => "current" in segment)).toBe(false);
+    expect(shellSegments(transcript(), {}, "9").some((segment) => "current" in segment)).toBe(false);
   });
 
   it("builds the speakers: only those with paragraphs, id is the number, unnamed ones start the input empty", () => {

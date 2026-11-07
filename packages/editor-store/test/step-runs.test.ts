@@ -819,12 +819,16 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.equal(input?.background, "");
     assert.deepEqual(input?.fields, { entities: [], terms: [] });
     assert.deepEqual(input?.refs, []);
-    // 文字起こしの段落があれば、本文の代わりに「[分:秒] 話者: 文」の段落
+    // 文字起こしのタブ（#310。page_transcripts）に段落があれば、本文の代わりに「[分:秒] 話者: 文」の段落
+    const tab = (await pool.query<{ id: string }>(
+      "INSERT INTO pages (owner, kind, title, parent, made_from) VALUES ($1, 'note', '文字起こし', $2, $3::jsonb) RETURNING id",
+      [OWNER, folder, JSON.stringify({ kind: "transcript", recording: rec, engine: "fake" })],
+    )).rows[0]!.id;
     await pool.query(
-      "INSERT INTO page_recordings (page_id, owner, source, language, engine, segments, speaker_names) VALUES ($1, $2, 'vtt', 'ja', 'fake', $3::jsonb, $4::jsonb)",
-      [rec, OWNER, JSON.stringify([{ start: 65, end: 70, text: "おはようございます", speaker: 1 }, { start: null, end: null, text: "話者なし", speaker: null }]), JSON.stringify({ "1": "合成の話し手" })],
+      "INSERT INTO page_transcripts (page_id, owner, recording_page_id, engine, language, segments, speaker_names) VALUES ($1, $2, $3, 'fake', 'ja', $4::jsonb, $5::jsonb)",
+      [tab, OWNER, rec, JSON.stringify([{ start: 65, end: 70, text: "おはようございます", speaker: 1 }, { start: null, end: null, text: "話者なし", speaker: null }]), JSON.stringify({ "1": "合成の話し手" })],
     );
-    const withSegments = await readStepInput(pool, { owner: OWNER, parentId: folder, inputTabId: rec, previousPageId: null });
+    const withSegments = await readStepInput(pool, { owner: OWNER, parentId: folder, inputTabId: tab, previousPageId: null });
     assert.deepEqual(withSegments?.parentBlocks, [...paragraph("[1:05] 合成の話し手: おはようございます"), ...paragraph("話者なし")]);
   });
 

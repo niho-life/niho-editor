@@ -11,11 +11,11 @@ import {
   isStorableText,
   recordingDataProblem,
   recordingTextBytes,
-  updateRecording,
   type Connectable,
   type RecordingData,
   type RecordingSegment,
 } from "../src/recordings.ts";
+import { updateTranscript } from "../src/transcripts.ts";
 import type { Queryable } from "../src/types.ts";
 
 const PAGE_ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
@@ -84,6 +84,31 @@ describe("recording_candidate_history migration", () => {
     assert.match(sql, /AFTER UPDATE OF engine, language, segments, speaker_names, duration_sec ON page_recordings/);
     assert.match(sql, /ADD COLUMN candidate_revision integer/);
     assert.match(sql, /transcription_runs_candidate_revision_pair/);
+  });
+});
+
+describe("drop_recording_candidates migration (#310 の contract)", () => {
+  it("stops while an old run without a target tab is live or a live recording keeps paragraphs no tab holds, then drops the candidates and the old paragraphs", async () => {
+    const file = (await readMigrations()).find((candidate) => candidate.name.endsWith("_drop_recording_candidates.sql"));
+    assert.ok(file);
+    const sql = withoutComments(file.sql);
+    // 止める条件（どちらも migration を中断する）
+    assert.match(sql, /target_tab IS NULL AND status IN \('queued', 'running'\)/);
+    assert.match(sql, /RAISE EXCEPTION 'drop_recording_candidates: % transcription run/);
+    assert.match(sql, /NOT EXISTS \(SELECT 1 FROM page_transcripts AS t WHERE t\.owner = r\.owner AND t\.recording_page_id = r\.page_id\)/);
+    assert.match(sql, /p\.deleted_at IS NULL/);
+    assert.match(sql, /RAISE EXCEPTION 'drop_recording_candidates: % recording/);
+    // 落とすもの
+    for (const table of ["page_recording_candidate_operations", "page_recording_candidate_versions", "page_recording_candidates"]) {
+      assert.match(sql, new RegExp(`DROP TABLE ${table};`), table);
+    }
+    assert.match(sql, /DROP TRIGGER page_recordings_sync_adopted_candidate ON page_recordings;/);
+    assert.match(sql, /DROP COLUMN candidate_revision,\s+DROP COLUMN candidate,\s+DROP COLUMN replace/);
+    assert.match(sql, /DROP COLUMN segments,\s+DROP COLUMN speaker_names/);
+    // 残すもの: タブの出力先と、録音の revision
+    assert.doesNotMatch(sql, /DROP COLUMN (target_tab|base_revision|revision)\b/);
+    // 順序: 条件を見てから落とす
+    assert.ok(sql.indexOf("RAISE EXCEPTION") < sql.indexOf("DROP TRIGGER"));
   });
 });
 
@@ -173,15 +198,15 @@ describe("recordings without a database", () => {
   it("treats ids that are not UUIDs as missing without querying", async () => {
     for (const id of ["", "not-a-uuid", "123", `${PAGE_ID}' OR '1'='1`]) {
       assert.equal(await getRecording(untouchable, "synthetic-owner", id), null);
-      assert.equal(await updateRecording(untouchable, "synthetic-owner", id, 1, (data) => data), null);
+      assert.equal(await updateTranscript(untouchable, "synthetic-owner", id, 1, (data) => data), null);
     }
   });
 
   it("refuses an empty owner, a bad base revision, and data of the wrong shape before touching the database", async () => {
     await assert.rejects(() => getRecording(untouchable, "", PAGE_ID), TypeError);
-    await assert.rejects(() => updateRecording(untouchable, "", PAGE_ID, 1, (data) => data), TypeError);
+    await assert.rejects(() => updateTranscript(untouchable, "", PAGE_ID, 1, (data) => data), TypeError);
     for (const revision of [0, -1, 1.5, Number.NaN]) {
-      await assert.rejects(() => updateRecording(untouchable, "synthetic-owner", PAGE_ID, revision, (data) => data), TypeError);
+      await assert.rejects(() => updateTranscript(untouchable, "synthetic-owner", PAGE_ID, revision, (data) => data), TypeError);
     }
     await assert.rejects(
       () => createRecordingPage(untouchable, "", { lang: "ja", source: "vtt", segments: [] }),
@@ -215,9 +240,10 @@ describe("recordings without a database", () => {
     const owner = "synthetic-owner'; DROP TABLE pages; --";
     const text = "合成の段落'); DELETE FROM page_recordings; --";
     const now = new Date(0);
+    // 録音の行と文字起こしのタブの行のどちらにも読める形（fake はどの問い合わせにも同じ行を返す）
     const row = {
       revision: 1, source: "vtt", language: "ja", engine: null, duration_sec: 1, source_name: null, source_sha256: null,
-      segments: [segment(text, 1)], speaker_names: {}, created_at: now, updated_at: now,
+      recording_page_id: PAGE_ID, segments: [segment(text, 1)], speaker_names: {}, created_at: now, updated_at: now,
     };
     const calls: string[] = [];
     let released = 0;
@@ -239,9 +265,9 @@ describe("recordings without a database", () => {
     };
     await createRecordingPage(fake, owner, { title: text, lang: "ja", source: "vtt", segments: [segment(text, 1)], speakerNames: { "1": "合成'名" } });
     await getRecording(fake, owner, PAGE_ID);
-    await updateRecording(fake, owner, PAGE_ID, 1, (data) => ({ ...data, speakerNames: { "1": "合成'名" } }));
-    await updateRecording(fake, owner, PAGE_ID, 2, (data) => data);
-    await updateRecording(fake, owner, PAGE_ID, 1, () => ({ rejected: "name" }));
+    await updateTranscript(fake, owner, PAGE_ID, 1, (data) => ({ ...data, speakerNames: { "1": "合成'名" } }));
+    await updateTranscript(fake, owner, PAGE_ID, 2, (data) => data);
+    await updateTranscript(fake, owner, PAGE_ID, 1, () => ({ rejected: "name" }));
     assert.ok(calls.length >= 10);
     for (const sql of calls) assert.ok(!sql.includes(owner) && !sql.includes(PAGE_ID) && !sql.includes(text) && !sql.includes("合成'名"), sql);
     assert.equal(released, 4, "every borrowed connection is released");

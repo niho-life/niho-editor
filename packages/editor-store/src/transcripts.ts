@@ -376,21 +376,14 @@ SELECT t.segments, t.speaker_names
  ORDER BY (t.page_id = $2) DESC, (jsonb_array_length(t.segments) > 0) DESC, p.updated_at DESC, p.id DESC
  LIMIT 1`;
 
-const LEGACY_TEXT_SQL = `
-SELECT r.segments, r.speaker_names
-  FROM page_recordings AS r
-  JOIN pages AS p ON p.owner = r.owner AND p.id = r.page_id
- WHERE r.owner = $1 AND r.page_id = $2 AND p.deleted_at IS NULL`;
-
 /**
  * 読むための文字起こしの本文（AI チャットの read_page・search_transcript）: 文字起こしのタブならその本文、録音のタブなら
- * その録音の段落のある最新の文字起こしのタブ、どちらも無ければ正本（#310 より前の録音）。本人の・ゴミ箱でないものだけ。無ければ null。
+ * その録音の段落のある最新の文字起こしのタブ。本人の・ゴミ箱でないものだけ。文字起こしのタブが無ければ null。
  */
 export async function readTranscriptText(db: Queryable, owner: OwnerId, pageId: string): Promise<TranscriptText | null> {
   assertOwner(owner);
   if (!isPageId(pageId)) return null;
-  const row = (await db.query<{ segments: RecordingSegment[]; speaker_names: Record<string, string> }>(TEXT_SQL, [owner, pageId])).rows[0]
-    ?? (await db.query<{ segments: RecordingSegment[]; speaker_names: Record<string, string> }>(LEGACY_TEXT_SQL, [owner, pageId])).rows[0];
+  const row = (await db.query<{ segments: RecordingSegment[]; speaker_names: Record<string, string> }>(TEXT_SQL, [owner, pageId])).rows[0];
   if (!row) return null;
   const data = copyData({ segments: row.segments, speakerNames: row.speaker_names });
   return { segments: data.segments, speakerNames: data.speakerNames };

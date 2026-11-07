@@ -52,10 +52,10 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name",
       [schema],
     );
-    // page_shares は共有リンク（0004）、ai_usage は AI の使用量（0005）、step_runs・step_attempts は手順の実行（0006。ページの表とは別）、page_recordings は録音の文字起こし（0007）、
+    // page_shares は共有リンク（0004）、ai_usage は AI の使用量（0005）、step_runs・step_attempts は手順の実行（0006。ページの表とは別）、page_recordings は録音（0007。段落は持たない。#310）、
     // transcription_runs は文字起こしの実行（0012）、editor_settings はアカウントの設定（0013）、ai_conversations・ai_messages・ai_message_changes は AI チャット、ai_usage_device は CLI の使用量（0022・0025）
-    // page_recording_audios は 2 本目以降の音声・page_recording_candidates は文字起こしの案（#36 段 3b-4）、candidate_versions/operations は候補履歴（#236）、recipes は手順（#37）
-    // page_transcripts・page_transcript_versions は文字起こしのタブの本文と版（#310。案の表は contract まで残る）
+    // page_recording_audios は 2 本目以降の音声（#36 段 3b-4）、recipes は手順（#37）
+    // page_transcripts・page_transcript_versions は文字起こしのタブの本文と版（#310。文字起こしの案の表は contract で落とした）
     // publications（作り直し）・publication_versions・publication_redirects・site_connections・site_connection_keys・preview_tokens は公開（0009）
     const documented = [
       "pages",
@@ -75,9 +75,6 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "transcription_runs",
       "editor_settings",
       "page_recording_audios",
-      "page_recording_candidates",
-      "page_recording_candidate_versions",
-      "page_recording_candidate_operations",
       "page_transcripts",
       "page_transcript_versions",
       "native_audio_cache_namespaces",
