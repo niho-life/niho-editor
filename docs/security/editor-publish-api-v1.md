@@ -2,7 +2,7 @@
 
 この仕様の機械可読な型・検証・負例は [`packages/editor-publish-contract`](../../packages/editor-publish-contract/) が正本です。ここでは v1 の外部 observable behavior と、サーバーが守る義務を定めます。API の実装、DB、鍵の保管、認可の最終判断は公開 contract に含めません（[publication-gates.md](publication-gates.md)）。設計の正本は [editor-niho-life-design.md](../architecture/editor-niho-life-design.md) §8・§9、Issue は #40 です。
 
-発信先の面（NIHO Experience、NIHO、本人のサイト）は、同じ 3 本の読み取り API だけで公開版を描画します。Webhook は持たず、発信先が一定間隔で一覧を読みます。
+2026-11-07更新（#332）：現行runtimeで利用できるのは本人サイトの接続だけです。旧運営面（`exp` / `niho`）の資格・公開読取・プレビュー発行は閉じています。以下の面のwire型と旧契約は保存データの互換のために残し、有効な公開能力を意味しません。本人サイトは同じ3本の読み取りAPIで公開版を描画します。Webhookは持たず、発信先が一定間隔で一覧を読みます。
 
 ## 用語
 

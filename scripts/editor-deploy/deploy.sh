@@ -11,7 +11,6 @@
 # Public CI never runs this: the production origin is this script, run by the owner (docs/ops/editor-deploy.md §7).
 # shellcheck source=scripts/editor-deploy/lib.sh
 source "$(dirname "$0")/lib.sh"
-require_explicit_article_settings
 load_deploy_env
 cd "$REPO_ROOT" || exit 1
 

@@ -19,7 +19,7 @@ export function tabLabel(tab: Pick<PageSummary, "tabName" | "tabPos">): string {
 export type SidebarPublication = PagePublicationSummary;
 
 /** 2 行目の発信先の名前（モック v6 の DEST と同じ）。本人のサイトは「自分のサイト」。 */
-const DEST_NAMES: Readonly<Record<ShellDest, string>> = { exp: "NIHO Experience", niho: "NIHO", site: "自分のサイト" };
+const DEST_NAMES: Readonly<Record<ShellDest, string>> = { exp: "", niho: "", site: "自分のサイト" };
 
 /** 検索の結果の行。サーバーが並べた順（更新順）のまま、当たった所の一文を 2 行目に添える。入れ子にしない。タブなら「ページ名 › タブ名」（#308）。 */
 export function searchRows(hits: readonly SearchHit[], now: number): ShellListItem[] {
@@ -118,9 +118,9 @@ const rowsOf = (unit: Unit): PageSummary[] => [unit.page, ...unit.tabs];
  */
 function subOf(unit: Unit): ShellListItem["sub"] {
   const rows = rowsOf(unit);
-  const live = rows.find((row) => row.publication && !row.publication.stopped)?.publication;
+  const live = rows.find((row) => row.publication?.dest === "site" && !row.publication.stopped)?.publication;
   if (live) return { text: DEST_NAMES[live.dest], dest: live.dest };
-  if (rows.some((row) => row.publication?.stopped)) return { text: "公開をやめた" };
+  if (rows.some((row) => row.publication?.dest === "site" && row.publication.stopped)) return { text: "公開をやめた" };
   const status = rows.find((row) => row.stepStatus !== null && STEP_SAY[row.stepStatus] !== undefined)?.stepStatus;
   return status ? { text: STEP_SAY[status]! } : undefined;
 }

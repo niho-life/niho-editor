@@ -29,7 +29,6 @@ import {
   EXTRA_KEYS,
   destOf,
   handleOfTarget,
-  roleAllows,
   storageBlockOf,
   type AssetRecord,
   type DraftPage,
@@ -355,21 +354,21 @@ export class PublishService {
   private async prepare(mode: Mode, input: PlaceInput): Promise<PublishResult> {
     const { actorId, pageId } = input;
     if (!validIds(actorId, pageId)) return NOT_FOUND;
-    const storageBlock = storageBlockOf(await this.ports.storage.read(actorId));
-    if (storageBlock !== null) return { ok: false, reason: "storage_not_cloud", detail: storageBlock };
     const handle = handleOfTarget(input.target);
     const dest = handle === null ? null : destOf(handle);
     if (handle === null || dest === null) return forbidden("target");
+    // Operated faces are retired. Reject their legacy wire identifiers before reading any runtime role,
+    // declaration, facts, author, storage, or connection dependency.
+    if (isFaceDest(dest)) return forbidden("role");
+    const storageBlock = storageBlockOf(await this.ports.storage.read(actorId));
+    if (storageBlock !== null) return { ok: false, reason: "storage_not_cloud", detail: storageBlock };
     const settings = (typeof input.settings === "object" && input.settings !== null ? input.settings : {}) as Partial<Record<keyof PublishSettings, unknown>>;
     const range = settings.range;
     if (typeof range !== "string" || !(RANGES as readonly string[]).includes(range)) return forbidden("range");
     const extras = extrasOf(settings.extras);
     if (extras === null) return forbidden("extras");
 
-    if (isFaceDest(dest)) {
-      const roles = await this.ports.roles.read(actorId);
-      if (!roleAllows(roles, dest)) return forbidden("role");
-    } else if (!(await this.ports.connections.has(actorId, handle))) {
+    if (!(await this.ports.connections.has(actorId, handle))) {
       return forbidden("connection");
     }
 

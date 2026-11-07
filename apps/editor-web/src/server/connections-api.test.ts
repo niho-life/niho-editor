@@ -212,43 +212,26 @@ describe("GET /api/destinations", () => {
     expect(seen).toBe("current");
   });
 
-  it("lists the faces the roles allow, with the reason for the ones they do not", async () => {
+  it("never lists legacy operated faces, while keeping personal-site modes", async () => {
     const { deps } = world();
     const body = (await (await list(deps)).json()) as { destinations: DestinationsDto };
-    expect(body.destinations.faces.map((face) => [face.handle, face.available, face.reason])).toEqual([
-      ["exp", true, null],
-    ]);
-    expect(body.destinations.faces[0]).toMatchObject({ label: "NIHO Experience", host: "exp.example.com", path: "guides", published: 0 });
+    expect(body.destinations.faces).toEqual([]);
     expect(body.destinations.sites).toEqual([]);
     expect(body.destinations.modes).toEqual(["api", "wordpress", "ghost"]);
   });
 
-  it("says いまは公開できません for a face whose declaration cannot be read", async () => {
-    const { deps, faces } = world();
-    faces.remove("exp");
-    const body = (await (await list(deps)).json()) as { destinations: DestinationsDto };
-    expect(body.destinations.faces[0]).toMatchObject({ handle: "exp", available: false, reason: "unavailable", host: null });
-  });
-
-  it("keeps personal sites available and marks only the face unknown when current roles cannot be read", async () => {
+  it("keeps personal sites available without reading legacy roles or declarations", async () => {
     const { deps, wiring } = world();
     await connect(deps);
-    const failedRoles: PublishWiring = {
+    const closedFaces: PublishWiring = {
       ...wiring,
       publish: { ...wiring.publish, roles: { read: async () => { throw new Error("synthetic upstream failure"); } } },
     };
-    const response = await list({ ...deps, ports: () => failedRoles });
+    const response = await list({ ...deps, ports: () => closedFaces });
     expect(response.status).toBe(200);
     const body = (await response.json()) as { destinations: DestinationsDto };
-    expect(body.destinations.faces).toMatchObject([{ handle: "exp", available: false, reason: "unavailable" }]);
+    expect(body.destinations.faces).toEqual([]);
     expect(body.destinations.sites.map((site) => site.handle)).toEqual([HANDLE]);
-  });
-
-  it("treats a revoked writer role as a normal disconnected face", async () => {
-    const { deps, roles } = world();
-    roles.set(ACTOR, []);
-    const body = (await (await list(deps)).json()) as { destinations: DestinationsDto };
-    expect(body.destinations.faces).toMatchObject([{ handle: "exp", available: false, reason: "role" }]);
   });
 
   it("counts the pages published on each destination, and never lists a removed connection", async () => {
@@ -263,51 +246,18 @@ describe("GET /api/destinations", () => {
     expect(after.destinations.sites).toEqual([]);
   });
 
-  it("counts only the owner's own pages: another account's publication on a shared face never shows up", async () => {
+  it("refuses new Experience publication even when legacy role and declaration data remain", async () => {
     const { deps, publisher } = world();
-    // 別のアカウントが、全員で共有する面（exp）へ 1 ページ公開する
-    const other = await publisher.publish({
-      actorId: OTHER,
-      pageId: OTHER_PAGE_ID,
-      target: { dest: "exp" },
-      settings: { range: "live", extras: { app: false, news: false, xp: false }, category: null, related: [] },
-      slug: "another-account-walk",
-    });
-    if (!other.ok) throw new Error(JSON.stringify(other));
-
-    // 1 件も公開していない本人には 0 件しか見えない
-    const mine = (await (await list(deps)).json()) as { destinations: DestinationsDto };
-    expect(mine.destinations.faces.map((face) => [face.handle, face.published])).toEqual([
-      ["exp", 0],
-    ]);
-
-    // 本人が公開すると、自分の 1 件だけが数に入る（別のアカウントの 1 件は足されない）
-    const own = await publisher.publish({
+    const result = await publisher.publish({
       actorId: ACTOR,
       pageId: PAGE_ID,
       target: { dest: "exp" },
       settings: { range: "live", extras: { app: false, news: false, xp: false }, category: null, related: [] },
-      slug: "my-walk",
+      slug: "coastal-walk",
     });
-    if (!own.ok) throw new Error(JSON.stringify(own));
-    const after = (await (await list(deps)).json()) as { destinations: DestinationsDto };
-    expect(after.destinations.faces.find((face) => face.handle === "exp")?.published).toBe(1);
-  });
-
-  it("counts 0 for a face the roles do not allow, even when someone else published there", async () => {
-    const { deps, publisher } = world();
-    const other = await publisher.publish({
-      actorId: OTHER,
-      pageId: OTHER_PAGE_ID,
-      target: { dest: "exp" },
-      settings: { range: "live", extras: { app: false, news: false, xp: false }, category: null, related: [] },
-      slug: "another-account-walk",
-    });
-    if (!other.ok) throw new Error(JSON.stringify(other));
-    const body = (await (await list({ ...deps, auth: () => authAs("synthetic-owner-c") })).json()) as { destinations: DestinationsDto };
-    expect(body.destinations.faces.map((face) => [face.handle, face.reason, face.published])).toEqual([
-      ["exp", "role", 0],
-    ]);
+    expect(result).toMatchObject({ ok: false, reason: "forbidden_destination" });
+    const body = (await (await list(deps)).json()) as { destinations: DestinationsDto };
+    expect(body.destinations.faces).toEqual([]);
   });
 
   it("answers 503 when the counts cannot be read", async () => {

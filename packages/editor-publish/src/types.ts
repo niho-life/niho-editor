@@ -112,14 +112,14 @@ export function destOf(handle: string): Dest | null {
   return destOfHandle(handle);
 }
 
-/** Roles read from NIHO that open each face (design §10). Owners' sites need a connection instead. */
+/** Legacy face-role vocabulary retained for stored/wire compatibility. No face is currently publishable. */
 export const FACE_ROLES = {
   exp: "writer",
 } as const;
 
-/** Faces offered for a new publication. `niho` remains a wire identifier for old records only. */
-export const PUBLISHABLE_FACE_DESTS = ["exp"] as const satisfies readonly FaceDest[];
+/** Faces offered for a new publication. Face identifiers remain valid for old records only. */
+export const PUBLISHABLE_FACE_DESTS = [] as const satisfies readonly FaceDest[];
 
-export function roleAllows(roles: readonly string[], dest: FaceDest): boolean {
-  return dest === "exp" && roles.includes(FACE_ROLES.exp);
+export function roleAllows(_roles: readonly string[], _dest: FaceDest): boolean {
+  return false;
 }

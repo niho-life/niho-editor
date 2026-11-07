@@ -1621,15 +1621,14 @@ describe("public API v1 (production build, PostgreSQL)", () => {
     assert.equal(gone.movedTo, undefined);
   });
 
-  it("serves a face with EDITOR_FACE_CREDENTIALS, unlisted only with include=unlisted", async () => {
-    const plain = await read("/v1/exp/published.json", expToken);
-    assert.equal(plain.status, 200);
-    assert.deepEqual((await plain.json()).items.map((item) => item.id), [ids.exp]);
-    const withUnlisted = await read("/v1/exp/published.json?include=unlisted", expToken);
-    assert.deepEqual((await withUnlisted.json()).items.map((item) => item.id), [ids.exp, ids.unlisted]);
-    assert.equal((await read(`/v1/exp/published/${ids.unlisted}.json`, expToken)).status, 200);
+  it("rejects retained Experience publications with legacy face credentials", async () => {
+    for (const path of ["/v1/exp/published.json", "/v1/exp/published.json?include=unlisted", `/v1/exp/published/${ids.exp}.json`, `/v1/exp/published/${ids.unlisted}.json`]) {
+      const denied = await read(path, expToken);
+      assert.equal(denied.status, 401);
+      assert.equal((await denied.json()).error.code, "unauthenticated");
+      assert.equal((await read(path, key)).status, 404);
+    }
     assert.equal((await read("/v1/e2e-site/published.json?include=unlisted", key)).status, 400);
-    assert.equal((await read("/v1/exp/published.json", `st_${randomBytes(24).toString("base64url")}`)).status, 401);
   });
 
   it("reads a preview token the owner issued (stub session) with the connection's key: the current draft, no-store; expired is 404", async () => {
@@ -1682,13 +1681,12 @@ describe("public API v1 (production build, PostgreSQL)", () => {
       assert.equal(response.status, 201, `${pageId} on ${handle}`);
       return (await response.json()).token;
     };
-    // stub の既定の役割（writer,kamakura）で NIHO Experience へ出せる。公開中の面のプレビューは、その公開の URL と token の著者
-    const face = await read(`/v1/preview/${await issue(ids.exp, "exp", "walks")}.json`, expToken);
-    assert.equal(face.status, 200);
-    const faceDraft = await face.json();
-    assert.equal(faceDraft.preview.dest, "exp");
-    assert.equal(faceDraft.canonicalUrl, "https://exp.example.com/guides/e2e-exp");
-    assert.deepEqual(faceDraft.author, { name: "開発ユーザー", handle: null, url: null });
+    // Experience preview issuance stays closed even for retained pages and the stub writer.
+    const refusedFace = await fetch(`${dev.base}/api/pages/${ids.exp}/preview-token`, {
+      method: "POST", headers: { origin: dev.base, "content-type": "application/json" },
+      body: JSON.stringify({ handle: "exp", category: "walks" }),
+    });
+    assert.equal(refusedFace.status, 404);
 
     // 公開したことの無い、写真のある下書き: 本人のサイトの URL と、写真の置き場の URL
     const photoPreview = await read(`/v1/preview/${await issue(ids.photo, "e2e-site")}.json`, key);
@@ -1723,6 +1721,9 @@ describe("editor-web e2e (stub, next dev): 公開のシート (#39)", () => {
     { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "Getting there" }] },
     { type: "paragraph", content: [{ type: "text", text: "Meet at the station at 7:00." }] },
   ];
+  const SITE_HANDLE = `e2e-publish-${suffix}`;
+  const SITE_HOST = `publish-${suffix}.example.invalid`;
+  let connectionId;
   const NONE = { app: false, news: false, xp: false };
 
   const write = (method, path, body, headers = {}) =>
@@ -1752,37 +1753,44 @@ describe("editor-web e2e (stub, next dev): 公開のシート (#39)", () => {
   before(async () => {
     dev = await startDev("stub", 200);
     base = dev.base;
+    const connected = await write("POST", "/api/destinations", { handle: SITE_HANDLE, mode: "api", siteUrl: `https://${SITE_HOST}`, urlShape: { host: SITE_HOST, path: "notes" } });
+    assert.equal(connected.status, 201);
+    connectionId = (await connected.json()).site.id;
   });
 
   after(async () => {
-    if (createdIds.length > 0) {
-      // 公開の行はページの削除を止める（ON DELETE RESTRICT）ので先に消す。公開版と転送はページと一緒に消える
-      await pool.query("DELETE FROM publications WHERE page_id = ANY($1::uuid[])", [createdIds]);
-      await pool.query("DELETE FROM pages WHERE id = ANY($1::uuid[])", [createdIds]);
+    try {
+      if (createdIds.length > 0) {
+        await pool.query("DELETE FROM publications WHERE page_id = ANY($1::uuid[])", [createdIds]);
+        await pool.query("DELETE FROM pages WHERE id = ANY($1::uuid[])", [createdIds]);
+      }
+      // Connection and key rows are immutable history; retire them through the normal API.
+      if (connectionId) assert.equal((await write("POST", `/api/destinations/${connectionId}/disconnect`)).status, 200);
+    } finally {
+      await pool.end();
+      await dev?.stop();
     }
-    await pool.end();
-    await dev?.stop();
   });
 
   it("publishes, shows updated after an edit, publishes the update, stops, and publishes again at the same URL", async () => {
     const title = `Morning walk e2e ${suffix}`;
     const slug = `morning-walk-e2e-${suffix}`;
-    const url = `https://experience.niho.life/guides/${slug}`;
+    const url = `https://${SITE_HOST}/notes/${slug}`;
     const page = await createPage(title, READY);
 
     const first = await sheetOf(page.id);
     assert.equal(first.status, "private");
-    assert.deepEqual(first.destinations.map((entry) => [entry.handle, entry.available]), [["exp", true]]);
-    const plan = await sheetOf(page.id, "?handle=exp&range=live&extras=");
+    assert.deepEqual(first.destinations.map((entry) => [entry.handle, entry.available]), [[SITE_HANDLE, true]]);
+    const plan = await sheetOf(page.id, `?handle=${SITE_HANDLE}&range=live&extras=`);
     assert.equal(plan.primary, "publish");
     assert.equal(plan.url, url);
     assert.deepEqual(plan.slug, { value: slug, editable: true, error: null });
 
-    const published = await write("POST", `/api/pages/${page.id}/publish`, { handle: "exp", range: "live", extras: NONE });
+    const published = await write("POST", `/api/pages/${page.id}/publish`, { handle: SITE_HANDLE, range: "live", extras: NONE });
     assert.equal(published.status, 200);
     assert.deepEqual(await published.json(), { published: { status: "published", operation: "publish", url, version: 1, notices: [] } });
     assert.equal((await sheetOf(page.id)).status, "published");
-    assert.deepEqual((await listRow(page.id)).publication, { dest: "exp", handle: "exp", range: "live", stopped: false });
+    assert.deepEqual((await listRow(page.id)).publication, { dest: "site", handle: SITE_HANDLE, range: "live", stopped: false });
 
     // 本文を直すと「更新あり」→ 更新を公開（同じ URL、版が進む）
     const edited = await write("PATCH", `/api/pages/${page.id}`, {
@@ -1793,12 +1801,12 @@ describe("editor-web e2e (stub, next dev): 公開のシート (#39)", () => {
     const updated = await sheetOf(page.id);
     assert.equal(updated.status, "updated");
     assert.equal(updated.primary, "update");
-    const update = await write("POST", `/api/pages/${page.id}/publish`, { handle: "exp", range: "live", extras: NONE });
+    const update = await write("POST", `/api/pages/${page.id}/publish`, { handle: SITE_HANDLE, range: "live", extras: NONE });
     assert.equal(update.status, 200);
     assert.deepEqual((await update.json()).published, { status: "published", operation: "update", url, version: 2, notices: [] });
     assert.equal((await sheetOf(page.id)).status, "published");
 
-    // 公開をやめる（Experience の面は URL を一覧へ転送）。もう一度呼んでも同じ
+    // 本人サイトで公開をやめる。もう一度呼んでも同じ
     for (let round = 0; round < 2; round += 1) {
       const stopped = await write("POST", `/api/pages/${page.id}/publish/stop`);
       assert.equal(stopped.status, 200);
@@ -1808,29 +1816,27 @@ describe("editor-web e2e (stub, next dev): 公開のシート (#39)", () => {
     assert.equal(afterStop.status, "stopped");
     assert.equal(afterStop.canStop, false);
     assert.equal(afterStop.primary, "publish");
-    assert.deepEqual((await listRow(page.id)).publication, { dest: "exp", handle: "exp", range: "live", stopped: true });
+    assert.deepEqual((await listRow(page.id)).publication, { dest: "site", handle: SITE_HANDLE, range: "live", stopped: true });
     const redirects = () => pool.query("SELECT from_handle, from_slug, to_handle, to_slug FROM publication_redirects WHERE page_id = $1", [page.id]);
-    assert.deepEqual((await redirects()).rows, [{ from_handle: "exp", from_slug: slug, to_handle: null, to_slug: null }], "the old URL goes to the list");
+    assert.deepEqual((await redirects()).rows, [], "personal sites manage their own redirects");
 
     // 再公開は同じ URL
-    const again = await write("POST", `/api/pages/${page.id}/publish`, { handle: "exp", range: "live", extras: NONE });
+    const again = await write("POST", `/api/pages/${page.id}/publish`, { handle: SITE_HANDLE, range: "live", extras: NONE });
     assert.equal(again.status, 200);
     assert.deepEqual((await again.json()).published, { status: "published", operation: "publish", url, version: 3, notices: [] });
-    assert.deepEqual((await listRow(page.id)).publication, { dest: "exp", handle: "exp", range: "live", stopped: false });
+    assert.deepEqual((await listRow(page.id)).publication, { dest: "site", handle: SITE_HANDLE, range: "live", stopped: false });
     assert.deepEqual((await redirects()).rows, [], "the URL is live again");
   });
 
-  it("refuses a body that misses the destination's conditions with 409 not_ready, and writes nothing", async () => {
-    const page = await createPage(`No headings e2e ${suffix}`, [{ type: "paragraph", content: [{ type: "text", text: "Only a paragraph." }] }]);
+  it("does not offer or publish Experience and leaves stored data untouched", async () => {
+    const page = await createPage(`Retired destination e2e ${suffix}`, READY);
     const plan = await sheetOf(page.id, "?handle=exp&range=live&extras=");
-    assert.deepEqual(plan.problems.map((problem) => problem.id), ["headings"]);
+    assert.deepEqual(plan.destinations.map((entry) => entry.handle), [SITE_HANDLE]);
+    assert.equal(plan.selection, null);
     assert.equal(plan.primary, null);
     const refused = await write("POST", `/api/pages/${page.id}/publish`, { handle: "exp", range: "live", extras: NONE });
-    assert.equal(refused.status, 409);
-    const body = await refused.json();
-    assert.equal(body.error, "not_ready");
-    assert.deepEqual(body.problems.map((problem) => problem.id), ["headings"]);
-    assert.equal(body.message, "公開の前に直すところがあります");
+    assert.equal(refused.status, 403);
+    assert.equal((await refused.json()).error, "forbidden_destination");
     assert.equal((await listRow(page.id)).publication, null);
     assert.equal((await pool.query("SELECT count(*)::int AS n FROM publication_versions WHERE page_id = $1", [page.id])).rows[0].n, 0);
   });
@@ -1843,7 +1849,7 @@ describe("editor-web e2e (stub, next dev): 公開のシート (#39)", () => {
     const snapshot = async (response) => ({ status: response.status, body: await response.text() });
     for (const [label, call] of [
       ["GET", (id) => fetch(`${base}/api/pages/${id}/publish`)],
-      ["POST publish", (id) => write("POST", `/api/pages/${id}/publish`, { handle: "exp", range: "live", extras: NONE })],
+      ["POST publish", (id) => write("POST", `/api/pages/${id}/publish`, { handle: SITE_HANDLE, range: "live", extras: NONE })],
       ["POST stop", (id) => write("POST", `/api/pages/${id}/publish/stop`)],
     ]) {
       const theirs = await snapshot(await call(otherId));
@@ -1854,7 +1860,7 @@ describe("editor-web e2e (stub, next dev): 公開のシート (#39)", () => {
 
     const mine = await createPage(`Cross origin e2e ${suffix}`, READY);
     for (const [path, body] of [
-      [`/api/pages/${mine.id}/publish`, { handle: "exp", range: "live", extras: NONE }],
+      [`/api/pages/${mine.id}/publish`, { handle: SITE_HANDLE, range: "live", extras: NONE }],
       [`/api/pages/${mine.id}/publish/stop`, undefined],
     ]) {
       const response = await write("POST", path, body, { origin: "https://evil.example" });

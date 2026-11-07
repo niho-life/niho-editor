@@ -113,32 +113,30 @@ describe("DestinationsView", () => {
     expect(push).toHaveBeenCalledWith("/settings");
   });
 
-  it("shows Experience and connected sites without the retired NIHO face, and opens a site's settings", async () => {
+  it("hides every legacy face and opens a personal site's settings", async () => {
     const text = (await mount(dto({ sites: [site] }))).textContent ?? "";
-    expect(text).toContain("NIHO Experience");
+    expect(text).not.toContain("NIHO Experience");
     expect(text).toContain("接続済み");
     expect(text).not.toContain("旅行者向け · 英語");
     expect(text).not.toContain("鎌倉の人向け");
     expect(text).not.toContain(EDITOR_DESTINATIONS_TEXT.noRole);
     expect(text).toContain("mika-sato.example");
     expect(text).not.toContain("mika-sato.example/posts");
-    await click("NIHO Experience の詳細");
-    expect(push).toHaveBeenCalledWith("/destinations/experience");
     await click("mika-sato.example の設定");
     expect(push).toHaveBeenCalledWith(`/destinations/${SITE_ID}`);
   });
 
-  it("shows role absence as normal disconnected and role lookup failure as a separate error", async () => {
+  it("ignores legacy face DTO rows regardless of their old availability reason", async () => {
     const disconnected = dto({ faces: [{ handle: "exp", label: "NIHO Experience", host: null, path: null, available: false, reason: "role", published: 0 }] });
-    expect((await mount(disconnected)).textContent).toContain("未接続");
+    expect((await mount(disconnected)).textContent).not.toContain("NIHO Experience");
     await act(async () => root?.unmount());
     container?.remove();
     root = null;
     container = null;
     const failed = dto({ faces: [{ handle: "exp", label: "NIHO Experience", host: null, path: null, available: false, reason: "unavailable", published: 0 }] });
     const text = (await mount(failed)).textContent ?? "";
-    expect(text).toContain("接続を確認できません");
-    expect(text).not.toContain("未接続");
+    expect(text).not.toContain("NIHO Experience");
+    expect(text).not.toContain("接続を確認できません");
   });
 
   it("adds a site, sends the URL shape from the site URL, and shows the new key once", async () => {

@@ -1,6 +1,6 @@
 # editor.niho.life：詳細設計
 
-2026-11-03更新：運営する記事公開先はExperienceに絞る。「鎌倉の人」の役割と `niho.life/article` は撤廃し、NIHO Adminで承認された現在writerだけがExperienceへ公開できる。住民/ホスト/住所から公開許可を推測しない。個人ページの作成と既存の本人サイト接続は維持する。旧wire識別子が互換のため残っても、新規公開を許可する能力・画面の選択肢には使わない。NIHOアプリのカードはExperience記事への導線で、別の本文公開面ではない。
+2026-11-07更新（#332）：Experienceの記事はExperienceの `/write` で書き、正本をExperience DBに置く。editorからExperienceへの公開・公開API読取・プレビュー・記事連携を凍結する。editorは個人ページと接続済みの本人サイトへの公開を維持し、保存済みのページ・公開版・履歴は削除しない。旧 `exp` / `niho` 識別子は保存データの互換のためにだけ残し、公開能力や画面の選択肢には使わない。
 
 [editor-niho-life.md](editor-niho-life.md)（方針）を画面と契約に落としたもの。Epic は niho-editor [#30](https://github.com/niho-life/niho-editor/issues/30)、niho-experience [#251](https://github.com/niho-life/niho-experience/issues/251)、niho-app [#19477](https://github.com/niho-coliving/niho-app/issues/19477)（役割・接続・カード）。子 Issue は各 Epic の一覧にある。
 
@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | 考える人 | 長いメモ。あとで AI に整えてもらい、記事にするかもしれない | AI は呼んだときだけ。変更は差分で見て選べる。元に戻せる |
 | 録音から作る人 | ホストとの会話、会議。文字起こしから記事や議事録を作る | 録音と文字起こしはページの一部。手順の進み具合が常に見える。各段階を手で直せる |
-| ライター | 旅行者向けの英語記事。写真の許諾や関連する体験など条件が多い | 条件は発信先を選んだ瞬間に出る。足りないものから直せる。公開後に何が起きるかが一言で分かる |
-| ホスト | 自分の体験の話を書く。ライターに書いてもらう | ホストの画面から同じアカウントで入れる。記事連携の招待と取消が分かる |
+| ライター | 個人ページや本人サイト向けの記事を書く | Experienceの記事編集・公開・体験連携はExperienceの `/write` で行う |
+| ホスト | 自分の体験の話を個人ページにまとめる | editorではExperienceの記事招待・承諾・辞退を扱わない |
 | 個人で書く人 | 自分だけのページや個人サイトの記事を書く | NIHOの公開権限がなくてもページを作り、本人サイトへ接続できる |
 
 原則：最小の入口（新しいページ一つ）、既定で安全（自分だけ）、可逆（版・履歴・公開をやめる）、状態が常に見える（右上の状態、保存の表示、手順の帯）、説明より構造、キーボードと IME を壊さない、スマホでは読む・少し直す・公開を止めるができれば十分。
@@ -27,7 +27,7 @@
 | `/destinations`、`/destinations/{id}` | 発信先の一覧と、本人のサイトの接続 |
 | `/account` | 役割とつながり |
 | `/settings`、`/settings/about`、`/settings/author`、`/settings/terms`、`/settings/recipes/{id}` | 設定の一覧（AI・手順・データ）と、あなたについて・公開用の著者紹介・固有名詞・手順の詳細（§2.2） |
-| `/auth/login`、`/auth/callback`、`/editor/auth/callback` | Google/PhotoとNIHO Experience editorを分けたアカウント接続 |
+| `/auth/login`、`/auth/callback`、`/editor/auth/callback` | Google/PhotoとNIHO本人認証を分けたアカウント接続（既存client IDは互換のため維持） |
 | `/s/{token}` | リンクで共有（読み取り専用、ログイン不要） |
 
 ### 2.1 保存先（正本はサーバーだけ）
@@ -39,7 +39,7 @@
 - **以前の案は採らない**：`DocsStorageMode` の `LOCAL`／`CLOSING`、クラウド ↔ この Mac の切り替え、`desktop-vault` の三方向併合。旧 NIHO docs のその仕組みは、Mac アプリの殻への置き換え（§13）とともに退役させる。旧版のデータは editor に移さず、この切り替えでは既存の `~/Documents/NIHO docs` を自動削除しない。旧 Web の停止日と旧 URL の扱いは [editor-migration-map.md](editor-migration-map.md) §4 で決める。
 - **容量の表示**：設定の一覧の「データ › メディア容量」（内訳と数えるものは ⓘ の中）に、アップロード済みページ画像と保持期限内の録音音声の容量・内訳を出す（Issue #50）。ゴミ箱内も完全削除まで含める。ページ本文・版履歴はDB保存のため対象外、NIHO Photoライブラリは独立した容量管理のため対象外。アカウントの容量上限は未設定とし、保存を容量で拒否しない（オーナー決定 2026-11-01）。
 
-`editor.niho.life` は全ページ `noindex, nofollow`。公開 API は `api.editor.niho.life`（§9）。入口は、NIHO アプリのアカウント設定の「書く」（体験への導線と並ぶ）、niho-experience のホストの画面と公開サイトのフッター「For writers」、そしてブックマーク。製品名は NIHO editor。
+`editor.niho.life` は全ページ `noindex, nofollow`。公開 API は `api.editor.niho.life`（§9）。入口はNIHOアカウントからの導線とブックマーク。Experienceの記事作成導線はExperienceの `/write` へ向ける。製品名は NIHO editor。
 
 ### 2.2 設定（3 層。オーナー決定 2026-11-05）
 
@@ -260,11 +260,11 @@ Cursor や Claude の分割ビューのように、パネルをある程度好�
 
 ### 8.1 公開のシート
 
-1. **発信先**：writerが出せるNIHO Experience、接続した本人のサイト、「発信先を追加」。出せない発信先は理由を一言（接続する ›）。選ぶと下の項目がその発信先のものに変わる。
+1. **発信先**：接続した本人のサイト、「発信先を追加」。出せない発信先は理由を一言（接続する ›）。選ぶと下の項目がその発信先のものに変わる。
 2. **記事の情報**（発信先を選ぶ前でも出る）：リード（160 字まで。残りは数字だけ）、カバー画像（本文の画像から選ぶ。無ければ選べない）、言語、英語版（状態と「英語案を作る」。決まりは ⓘ のシート）。
-3. **範囲**：公開／限定公開（NIHO が運営する面だけ）。
-4. **あわせて**：発信先が宣言した項目だけを出す。Experienceは「NIHOアプリに載せる」を著者が明示して選ぶ（既定OFF）。ニュースレターや体験ページ掲載の新機能は追加しない。
-5. **公開の前に**：発信先の条件で足りないもの。「直す」でその欄へ（題名・本文はシートを閉じて本文へ、リード・カバー・言語・カテゴリ・関連はシートの中の欄へ）。全部そろうまで公開ボタンは押せない。
+3. **範囲**：本人サイトの公開。旧運営面の限定公開は選択肢に出さない。
+4. **あわせて**：現行の本人サイトには追加掲載の操作を出さない。ExperienceのNIHOアプリ掲載操作はeditorでは扱わない。
+5. **公開の前に**：発信先の条件で足りないもの。「直す」でその欄へ（題名・本文はシートを閉じて本文へ、リード・カバー・言語はシートの中の欄へ）。全部そろうまで公開ボタンは押せない。
 6. **URL**：`{host}/{path}/{slug}`。slug は題名から作り、初回の公開まで変えられる。公開後は固定。
 7. ボタン：公開する／更新を公開／保存（設定だけ変えたとき）。公開中は「公開をやめる」。
 
@@ -272,15 +272,14 @@ Cursor や Claude の分割ビューのように、パネルをある程度好�
 
 | 発信先 | 条件 |
 | --- | --- |
-| NIHO Experience | 英語、カテゴリ、本文に見出し 1 つ以上、未確認の印（CONFIRM）なし、関連する体験が掲載中、題名 110 字以内（Experience の `Article.headline` の上限）、写真（本文の写真とカバー）に代替テキスト（alt）。カバー写真・リードは任意（設定したときだけ掲載許諾・長さを確かめる） |
 | 本人のサイト | なし |
 
 ### 8.2 公開したあと
 
 - 公開版は不変のスナップショット（本文 AST、Markdown、写真の参照、著者、著者紹介（設定 › 公開用の著者紹介の肩書・紹介文。あれば）、カテゴリ、関連、公開日時）。直したら「更新あり」になり、「更新を公開」で入れ替わる。
 - カバーには掲載許諾とは別に「SNS や検索結果に出る共有画像にも使う許諾」を付けられる（掲載許諾があるときだけ）。両方あるときだけ公開版が `coverShareable` を持ち、発信先はカバーを OG 画像などの共有画像に使ってよい（[公開 API v1](../security/editor-publish-api-v1.md)）。
-- 「公開をやめる」は確認のうえで行い、ページは自分だけに戻る。発信先からは消え、URL は一覧へ転送（NIHO が運営する面）。再公開は同じ URL。
-- 現行の運営記事公開先はExperienceだけ。Experience内のURL・公開停止後の動きはExperienceの契約に従う。本人のサイトから・へ移す場合の転送は約束しない（本人のサイトの作業）。
+- 「公開をやめる」は確認のうえで行い、ページは自分だけに戻る。発信先からは消え、URLの扱いは本人サイトの契約に従う。再公開は同じ URL。
+- 運営記事公開先は置かない。本人サイト間の移動の転送は約束しない（本人のサイトの作業）。旧Experienceの保存データは削除せず、発信先・状態・記事情報のUIには出さない。
 - 公開の予約は v1 では持たない。
 
 ### 8.3 発信先での見え方
@@ -292,7 +291,7 @@ Cursor や Claude の分割ビューのように、パネルをある程度好�
 - `GET /v1/{handle}/published.json`：公開中の一覧（id、slug、dest、lang、title、lead、cover、category、author、publishedAt、updatedAt、canonicalUrl、extras）。
 - `GET /v1/{handle}/published/{id}.json`：公開版の本文（blocks、markdown、assets、related）。
 - `GET /v1/preview/{token}.json`：プレビュー用。短命、本人の操作でだけ発行。
-- 認証：本人のサイトは接続ごとの鍵（Bearer）。NIHO が運営する面はサービス間の認証。鍵は設定で再発行・失効できる。
+- 認証：本人のサイトは接続ごとの鍵（Bearer）。鍵は設定で再発行・失効できる。旧運営面の資格は受け付けず、旧Experienceの公開版とプレビューtokenも読めない。Experience向けtoken発行と内部publication authorityも閉じる。
 - `ETag` と `If-None-Match`。一覧は更新順。公開をやめたものは一覧から消え、単体は 410。
 - Webhook（公開・更新・停止の通知）は v1 では持たず、発信先は一覧を一定間隔で読む。必要になったら足す。
 - 写真は editor の資産置き場から配信する URL。本人のサイトは取り込むときに複製する。
@@ -300,10 +299,10 @@ Cursor や Claude の分割ビューのように、パネルをある程度好�
 
 ## 10. 役割と権限
 
-- Editorはアカウント確認と公開操作のたびに、NIHOから現在writer許可を読む。役割をEditorへ複製しない。
-- 出せる発信先：承認されたライター → NIHO Experience。本人のサイト → 解除していない本人接続があれば利用できる。
-- 記事連携：招待・承諾・辞退・取消は NIHO の API。editor は「役割とつながり」で表示と承諾・辞退をするだけ。関連する体験の候補は、本人の体験と承諾済みの連携先の公開中の体験。
-- 発信先の面は、公開版を受け取るときに自分で再確認する（体験が掲載中か、連携が有効か）。editor の表示を信用しない。
+- NIHO本人認証と個人ページの機能を維持する。Experienceのwriter許可は公開能力に使わず、専用roles APIを呼ばない。
+- 本人サイトへは、解除していない本人接続があれば公開できる。
+- Experienceのカテゴリ、関連体験の候補・検証、記事連携の招待・承諾・辞退はeditorでは扱わない。該当APIを閉じ、Experience/NIHOへの記事専用通信を止める。
+- Experience記事の執筆と関連体験の操作はExperienceの `/write` で行う。editorへの全面移管は将来の別判断。
 
 ## 11. スマホとアクセシビリティ
 
@@ -350,7 +349,7 @@ Cursor や Claude の分割ビューのように、パネルをある程度好�
 - **旧 NIHO docs の画面は退役**：`DocsApp` 一式（レール・フォルダ画面・工程設計・AI と作る・設定）と、#109 で旗の裏に入れた `EditorScreen`・`vault-pages`・`vault-recordings`。残すのは native 層（`src-tauri` の録音・sidecar・AI の crate・鍵）と純粋ロジック（`docs-core` の工程・テンプレート・プロファイル・文字起こし。サーバーの手順の実装がこれを使う）。`desktop-vault`（三方向併合）と `DocsStorageMode` は退役。
 - bundle identifier `life.niho.docs`・deep link `niho-docs`・配布物の名前 `NIHO-docs-<版>-<sha>`・tag `docs-v*` は変えない（#65）。
 - 公開境界は [publication-gates.md](../security/publication-gates.md) のまま：クライアントと契約は公開、API・DB・鍵・認可は非公開。
-- 認証は Editor アプリを入口にし、NIHO の公開確認画面 `/connect/niho-editor` から writer連携専用の `niho-experience-editor` client を使う（niho-app 側）。Experience は連携先として編集権限だけを判定する。Mac の殻も `editor.niho.life` の同じ origin を読む。
+- 認証はEditorを入口にし、NIHOの確認画面 `/connect/niho-editor` と既存の `niho-experience-editor` clientを互換のため維持する。これは本人認証にだけ使い、Experienceの記事公開・連携APIを呼ばない。Mac の殻も `editor.niho.life` の同じ origin を読む。
 - CI は標準の GitHub-hosted runner。secret なし。
 
 ## 14. 進め方
@@ -359,8 +358,8 @@ Cursor や Claude の分割ビューのように、パネルをある程度好�
 | --- | --- | --- |
 | 1 | Web の骨格（ログイン、サイドバー、ページ、自動保存、版、書き出し） | 自分だけのページを書く。思考メモ |
 | 2 | AI の提案、録音と文字起こし、手順 | 録音から記事の下書きまで |
-| 3 | 公開（NIHO Experience）、公開 API、プレビュー | experience の `/editor` を editor に置き換える |
-| 4 | Experience記事へのNIHOアプリのカード、本人サイト接続 | 別のNIHO本文公開面を作らない |
+| 3 | 本人サイトへの公開・公開API・プレビューを維持。Experience接続は凍結（#332） | Experienceの記事はExperienceの `/write` とDBで扱う |
+| 4 | 本人サイト接続 | Experience記事のNIHOアプリカードはExperience側で扱う |
 | 5 | **モデル**：手順（recipes）の表、AI の会話の表、`parent` を全ページで使う（フォルダ＝子を持てるページ。深さはフォルダ › ページ › 録音のサブページまで） | T1。以降の土台 |
 | 6 | **旧 NIHO docs の機能を Web に**：フォルダの木（T2）、録音の完成＝ブラウザ録音・再生・複数音声・VTT（T3）、工程設計と実行＝テンプレート・プロファイル・guide・固有名詞・お手本、step の実行 → サブページ（T4）、AI チャットによる文書編集＝会話・提案の差分・採用（T5） | ブラウザ・PWA・Mac で同じ工程設計と AI |
 | 7 | **Mac の殻**（T7）：editor.niho.life を読む、端末の力（録音・端末内の文字起こし・CLI の AI）を bridge で出して結果は同じ API に書く、旧画面の退役、配布 | Mac で同じページ・同じ画面・端末内の文字起こし |

@@ -226,11 +226,9 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
   const createdRef = useRef<string | null>(null);
   const titleRef = useRef("");
   const query = useSearchParams();
-  const experience = query.get("experience");
   // `?in=<フォルダ>`: そのフォルダの中に作る（「新しいページ ▾」の「『◯◯』の中に」・フォルダの画面の「新しいページ」）
   const inside = query.get("in");
   const createIn = inside !== null && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(inside) ? inside.toLowerCase() : null;
-  const handoff = query.get("destination") === "exp" && query.get("lang") === "en" && (experience === null || /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(experience));
   // この下書きのエディタがまだ画面にあるか。保存（POST）が終わる前に「録音から」へ移った・別の下書きへ戻ったときは、
   // URL が `/p/new` のままでも、その URL を作ったページの ID へ替えない（pathname だけでは別の画面と区別できない）
   const aliveRef = useRef(true);
@@ -275,7 +273,7 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
         />
       )}
       <PageEditor
-        page={{ id: null, title: "", blocks: [], revision: null, ...(handoff ? { lang: "en" as const } : {}) }}
+        page={{ id: null, title: "", blocks: [], revision: null }}
         createOnOpen
         createIn={createIn}
         // 作ったばかりのページは共有していない
@@ -295,7 +293,7 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
           if (aliveRef.current) setCreated({ id, parent: createIn });
           // 保存が終わる前に別の画面へ移っていたら、その画面の URL は替えない
           if (!aliveRef.current || window.location.pathname !== "/p/new") return;
-          window.history.replaceState(null, "", `/p/${id}${handoff ? `?destination=exp&lang=en${experience ? `&experience=${encodeURIComponent(experience)}` : ""}` : ""}`);
+          window.history.replaceState(null, "", `/p/${id}`);
           rememberLastPage(id);
         }}
         onSaved={() => {

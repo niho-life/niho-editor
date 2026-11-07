@@ -309,7 +309,7 @@ function PublishForm(props: PublishFormProps) {
             )}
           </div>
         )}
-        {chosen && (
+        {chosen && chosen.id !== "site" && (
           <div className="es-sh-sec">
             <h3 id={extraId}>あわせて</h3>
             <div role="group" aria-labelledby={extraId}>

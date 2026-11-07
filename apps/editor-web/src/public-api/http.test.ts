@@ -31,7 +31,7 @@ function request(path: string, init: RequestInit & { credential?: string } = {})
 
 describe("servePublicApi", () => {
   it("passes path, query and headers through and returns the contract's headers unchanged", async () => {
-    const response = await servePublicApi(request(listPath("exp", "?include=unlisted&limit=2"), { credential: fixture.keys.exp }), deps);
+    const response = await servePublicApi(request(listPath(SITE_A, "?limit=2"), { credential: fixture.keys.siteA }), deps);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("application/json; charset=utf-8");
     expect(response.headers.get("x-robots-tag")).toBe("noindex");
@@ -40,10 +40,10 @@ describe("servePublicApi", () => {
     const etag = response.headers.get("etag");
     expect(etag).toMatch(/^"[0-9a-f]{64}"$/);
     const body = (await response.json()) as { items: { id: string }[] };
-    expect(body.items.map((item) => item.id)).toContain(fixture.ids.expUnlisted);
+    expect(body.items.map((item) => item.id)).toContain(fixture.ids.siteLive);
 
     const again = await servePublicApi(
-      request(listPath("exp", "?include=unlisted&limit=2"), { credential: fixture.keys.exp, headers: { "if-none-match": etag ?? "" } }),
+      request(listPath(SITE_A, "?limit=2"), { credential: fixture.keys.siteA, headers: { "if-none-match": etag ?? "" } }),
       deps,
     );
     expect(again.status).toBe(304);

@@ -23,8 +23,8 @@ import { PUBLISH_MESSAGES, slugMessage } from "@/publish/messages";
  *
  * - 選ぶ（発信先・範囲・あわせて・URL）たびにシートのデータを読み直す（URL は打ち終わるのを少し待つ）。
  * - シートを開く前と、公開・更新を送る前に、エディタの保存待ちを送り終える（最後の入力を公開版に入れる）。保存できなければ送らない。
- * - 「直す」: 題名・本文はシートを閉じてその欄へフォーカスを移す。リード・カバー画像・言語・カテゴリ・関連する体験は、
- *   シートを閉じずにシート内の欄へ移す（記事の情報は `fields` としてシートの中に出す）。
+ * - 「直す」: 題名・本文はシートを閉じてその欄へフォーカスを移す。リード・カバー画像・言語は、シートを閉じずに
+ *   シート内の欄へ移す（記事の情報は `fields` としてシートの中に出す）。
  * - 「発信先を追加」「接続する」は発信先の設定（`/destinations`。#41）へ移る。
  * - 本人のサイトの行は docs-ui では発信先の種類ごとに 1 つなので、公開しているサイト（無ければ最初に接続したサイト）だけを出す。
  */
@@ -33,11 +33,9 @@ import { PUBLISH_MESSAGES, slugMessage } from "@/publish/messages";
 export type PublishFixField = "title" | "body";
 
 /** 「直す」でシートを閉じずに移る、シートの中の欄。 */
-type SheetFixField = "category" | "related" | "cover" | "lead" | "lang";
+type SheetFixField = "cover" | "lead" | "lang";
 
 const SHEET_FIELD_SELECTOR: Readonly<Record<SheetFixField, string>> = {
-  category: '[data-publish-field="category"]',
-  related: '[data-publish-field="related"]',
   cover: "[data-page-cover]",
   lead: "[data-page-lead]",
   lang: "[data-page-lang]",
@@ -47,8 +45,8 @@ function sheetField(field: SheetFixField): HTMLElement | null {
   return document.querySelector<HTMLElement>(`[role="dialog"] ${SHEET_FIELD_SELECTOR[field]}`);
 }
 
-const WHO: Readonly<Record<ShellDest, string>> = { exp: "旅行者向け · 英語", niho: "鎌倉の人向け", site: "本人のサイト" };
-const ROLE: Readonly<Record<ShellDest, string>> = { exp: "ライター", niho: "NIHO アカウント", site: "接続済み" };
+const SITE_WHO = "本人のサイト";
+const SITE_ROLE = "接続済み";
 const NO_EXTRAS: PublishExtras = { app: false, news: false, xp: false };
 /** URL の欄は打ち終わるのを待ってから読み直す。 */
 export const SLUG_CHECK_DELAY_MS = 300;
@@ -56,14 +54,6 @@ export const SLUG_CHECK_DELAY_MS = 300;
 export const SAVED_REFRESH_DELAY_MS = 1500;
 
 const bare = (url: string | null | undefined) => (url ?? "").replace(/^https:\/\//, "");
-
-function handoffSelection(): PublishSelection | null {
-  if (typeof window === "undefined") return null;
-  const query = new URLSearchParams(window.location.search);
-  const experience = query.get("experience");
-  if (query.get("destination") !== "exp" || query.get("lang") !== "en" || (experience !== null && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(experience))) return null;
-  return { handle: "exp", range: "live", extras: NO_EXTRAS, slug: null, category: null, related: experience ? [experience] : [] };
-}
 
 function hostOf(url: string): string {
   try {
@@ -76,39 +66,39 @@ function hostOf(url: string): string {
 /** 一覧の 2 行目に重ねる公開の状態。 */
 export function sidebarPublicationOf(sheet: PublishSheetDto): SidebarPublication | null {
   const publication = sheet.publication;
-  return publication ? { dest: publication.dest, handle: publication.handle, range: publication.range, stopped: publication.stopped } : null;
+  return publication?.dest === "site" ? { dest: publication.dest, handle: publication.handle, range: publication.range, stopped: publication.stopped } : null;
 }
 
 /** ヘッダーの状態の丸と公開ボタンが読む形。 */
 export function shellPublicationOf(sheet: PublishSheetDto | null): ShellPublication | null {
   const publication = sheet?.publication;
-  if (!sheet || !publication) return null;
+  if (!sheet || !publication || publication.dest !== "site") return null;
   return { dest: publication.dest, range: publication.stopped ? "stopped" : publication.range, updated: sheet.status === "updated", url: bare(publication.url) };
 }
 
-/** 発信先の行。役割で出せない面は出さない。宣言の読めない発信先は「いまは公開できません」で押せない行。 */
+/** 本人サイトの発信先行。接続を読めない発信先は「いまは公開できません」で押せない。 */
 export function destOptionsOf(sheet: PublishSheetDto | null): { options: PublishDestOption[]; site: string | null } {
   const list = sheet?.destinations ?? [];
   const optionOf = (entry: PublishSheetDto["destinations"][number]): PublishDestOption => ({
-    id: entry.dest,
+    id: "site",
     label: entry.label,
-    who: WHO[entry.dest],
+    who: SITE_WHO,
     url: bare(entry.url),
-    role: ROLE[entry.dest],
+    role: SITE_ROLE,
     connected: entry.available,
     ...(entry.available ? {} : { note: PUBLISH_MESSAGES.unavailable }),
   });
-  const options = list.filter((entry) => entry.dest === "exp" && entry.reason !== "role").map(optionOf);
+  const options: PublishDestOption[] = [];
   const sites = list.filter((entry) => entry.dest === "site");
   const site = sites.find((entry) => entry.handle === sheet?.publication?.handle) ?? sites[0];
-  options.push(site ? optionOf(site) : { id: "site", label: "自分のサイト", who: WHO.site, url: "", role: ROLE.site, connected: false });
+  options.push(site ? optionOf(site) : { id: "site", label: "自分のサイト", who: SITE_WHO, url: "", role: SITE_ROLE, connected: false });
   return { options, site: site?.handle ?? null };
 }
 
 /** 主ボタンの文言（省略は docs-ui の既定: 公開する／更新を公開／保存）。 */
 export function actionOf(sheet: PublishSheetDto | null): string | undefined {
   if (!sheet) return undefined;
-  const live = sheet.publication !== null && !sheet.publication.stopped;
+  const live = sheet.publication?.dest === "site" && !sheet.publication.stopped;
   if (live && sheet.changesDestination) return "発信先を変える";
   if (sheet.primary === "publish") return "公開する";
   if (sheet.primary === "update") return "更新を公開";
@@ -118,10 +108,8 @@ export function actionOf(sheet: PublishSheetDto | null): string | undefined {
 
 function stopDetailOf(sheet: PublishSheetDto | null): string {
   const publication = sheet?.publication;
-  if (!publication) return "";
-  return publication.dest === "site"
-    ? `${publication.label} の公開 API から消え、ページは自分だけに戻ります。URL の転送はサイトの側で行ってください。もう一度公開すると同じ URL になります。`
-    : `${publication.label} から消え、URL は ${publication.label} の一覧へ転送されます。ページは自分だけに戻り、もう一度公開すると同じ URL になります。`;
+  if (publication?.dest !== "site") return "";
+  return `${publication.label} の公開 API から消え、ページは自分だけに戻ります。URL の転送はサイトの側で行ってください。もう一度公開すると同じ URL になります。`;
 }
 
 /** 「直す」: 開いているページの題名か本文へフォーカスを移す。 */
@@ -144,20 +132,6 @@ type State = {
   loading: boolean;
   busy: boolean;
   error: string | null;
-};
-
-type ExperienceOptionsState = {
-  categories: { slug: string; labelEn: string; labelJa: string }[];
-  candidates: { slug: string; title: string; providerName: string }[];
-  unavailable: boolean;
-  loaded: boolean;
-  query: string;
-  nextCursor: string | null;
-  loadingMore: boolean;
-};
-
-const EMPTY_EXPERIENCE_OPTIONS: ExperienceOptionsState = {
-  categories: [], candidates: [], unavailable: false, loaded: false, query: "", nextCursor: null, loadingMore: false,
 };
 
 const initialState = (pageId: string | null): State => ({
@@ -200,9 +174,6 @@ export function usePagePublish(input: {
 }): PagePublishUi {
   const { pageId, isArticle } = input;
   const [state, setState] = useState<State>(() => initialState(pageId));
-  const [experienceOptions, setExperienceOptions] = useState<ExperienceOptionsState>(EMPTY_EXPERIENCE_OPTIONS);
-  const experienceOptionsRequested = useRef(false);
-  const experienceOptionsSequence = useRef(0);
   const pendingSheetFix = useRef<SheetFixField | null>(null);
   const current = state.pageId === pageId ? state : initialState(pageId);
   if (state.pageId !== pageId) setState(current);
@@ -212,39 +183,6 @@ export function usePagePublish(input: {
     events.current = input;
   });
   useEffect(() => {
-    if (current.view.kind !== "publish" || current.selection?.handle !== "exp" || experienceOptionsRequested.current) return;
-    experienceOptionsRequested.current = true;
-    const mine = ++experienceOptionsSequence.current;
-    void fetch("/api/account/experience-options", { cache: "no-store", credentials: "same-origin" }).then(async (response) => {
-      if (!response.ok) throw new Error();
-      const value = await response.json() as Pick<ExperienceOptionsState, "categories" | "candidates" | "nextCursor">;
-      if (mine === experienceOptionsSequence.current) setExperienceOptions({ ...value, unavailable: false, loaded: true, query: "", loadingMore: false });
-    }).catch(() => {
-      if (mine === experienceOptionsSequence.current) setExperienceOptions({ ...EMPTY_EXPERIENCE_OPTIONS, unavailable: true, loaded: true });
-    });
-  }, [current.selection?.handle, current.view.kind]);
-
-  const loadExperienceOptions = useCallback((query: string, cursor: string | null = null) => {
-    const mine = ++experienceOptionsSequence.current;
-    setExperienceOptions((before) => ({ ...before, query, unavailable: false, loadingMore: true }));
-    const search = new URLSearchParams();
-    if (query) search.set("q", query);
-    if (cursor) search.set("cursor", cursor);
-    const suffix = search.size === 0 ? "" : `?${search.toString()}`;
-    void fetch(`/api/account/experience-options${suffix}`, { cache: "no-store", credentials: "same-origin" }).then(async (response) => {
-      if (!response.ok) throw new Error();
-      const value = await response.json() as Pick<ExperienceOptionsState, "categories" | "candidates" | "nextCursor">;
-      if (mine !== experienceOptionsSequence.current) return;
-      setExperienceOptions((before) => ({
-        ...value,
-        candidates: cursor ? [...before.candidates, ...value.candidates.filter((item) => !before.candidates.some((existing) => existing.slug === item.slug))] : value.candidates,
-        unavailable: false, loaded: true, query, loadingMore: false,
-      }));
-    }).catch(() => {
-      if (mine === experienceOptionsSequence.current) setExperienceOptions((before) => ({ ...before, unavailable: true, loaded: true, loadingMore: false }));
-    });
-  }, []);
-  useEffect(() => {
     const field = pendingSheetFix.current;
     if (current.view.kind !== "publish" || field === null) return;
     const target = sheetField(field);
@@ -252,7 +190,7 @@ export function usePagePublish(input: {
     pendingSheetFix.current = null;
     target.focus();
     target.scrollIntoView?.({ block: "nearest" });
-  }, [current.view.kind, experienceOptions, input.fields]);
+  }, [current.view.kind, input.fields]);
   const seq = useRef(0);
   // ページを替えるたびに進める。保存を待っているあいだにページを替えたら、前のページの読み込みを始めない
   const pageEpoch = useRef(0);
@@ -317,13 +255,7 @@ export function usePagePublish(input: {
         // 保存を待つあいだに別のページへ移った: 前のページの読み込みを始めない（始めると seq が進み、移った先の応答が捨てられる）
         if (epoch !== pageEpoch.current) return null;
         if (!saved) patch(pageId, { error: PUBLISH_MESSAGES.unsaved });
-        // まず現在の保存状態をサーバーから読む。Experience からの手渡しは
-        // まだ一度も公開していないページの初期選択に限る。
-        return load(pageId, null).then((sheet) => {
-          if (!sheet) return null;
-          const handoff = sheet.publication === null ? handoffSelection() : null;
-          return handoff === null ? sheet : load(pageId, handoff);
-        });
+        return load(pageId, null);
       })
       .then((sheet) => {
         if (sheet) patch(pageId, { selection: sheet.selection });
@@ -377,8 +309,7 @@ export function usePagePublish(input: {
     const same = sheet?.publication?.handle === handle ? sheet.publication : null;
     // 本人のサイトは限定公開を持たない（範囲の欄も出ない）
     const range: PublishRange = dest === "site" ? "live" : (same?.range ?? selection?.range ?? "live");
-    // あわせて載せる先（アプリ・ニュース・体験ページ）は発信先ごと。別の発信先へは持ち越さない（持ち越すと、その発信先に無い
-    // 項目が入ったままになり、チェックも外せず公開できない）。同じ発信先を選び直したときだけ、選んでいたものを残す
+    // 旧wireの追加設定は別の発信先へ持ち越さない。同じ本人サイトを選び直したときだけ保存済みの値を残す。
     const extras = same?.extras ?? (selection?.handle === handle ? selection.extras : NO_EXTRAS);
     change({ handle, range, extras, slug: null, category: same && selection?.handle === handle ? selection.category : null, related: same && selection?.handle === handle ? selection.related : [] });
   };
@@ -432,7 +363,7 @@ export function usePagePublish(input: {
     const inSheet: SheetFixField | null =
       problem.id === "title" || problem.id === "step-title"
         ? null
-        : problem.fix === "category" || problem.fix === "related" || problem.fix === "cover" || problem.fix === "lead" || problem.fix === "lang"
+        : problem.fix === "cover" || problem.fix === "lead" || problem.fix === "lang"
           ? problem.fix
           : null;
     if (inSheet !== null) {
@@ -460,10 +391,9 @@ export function usePagePublish(input: {
     events.current.onNavigate("/destinations");
   };
 
-  const selectedDest: ShellDest | undefined =
-    selection === null ? undefined : selection.handle === "exp" || selection.handle === "niho" ? selection.handle : selection.handle === site ? "site" : undefined;
+  const selectedDest: ShellDest | undefined = selection?.handle === site ? "site" : undefined;
   const selectionError = sheet?.storageBlock ? PUBLISH_MESSAGES.storageNotCloud : sheet?.selectionError === "range" ? PUBLISH_MESSAGES.rangeNotOffered : sheet?.selectionError === "extras" ? PUBLISH_MESSAGES.extrasNotOffered : null;
-  const live = sheet?.publication && !sheet.publication.stopped ? sheet.publication : null;
+  const live = sheet?.publication?.dest === "site" && !sheet.publication.stopped ? sheet.publication : null;
 
   let overlay: ReactNode = null;
   if (view.kind === "done") {
@@ -512,15 +442,6 @@ export function usePagePublish(input: {
       submitDisabled: loading || busy || !sheet || sheet.primary === null,
       fields: input.fields,
       error: error ?? selectionError ?? loadError,
-      experience: selection?.handle === "exp" ? {
-        ...experienceOptions,
-        category: selection.category,
-        related: selection.related,
-        onCategory: (category) => change({ ...selection, category }),
-        onRelated: (slug) => change({ ...selection, related: selection.related.includes(slug) ? selection.related.filter((item) => item !== slug) : [...selection.related, slug] }),
-        onQuery: (query) => loadExperienceOptions(query),
-        onMore: () => experienceOptions.nextCursor && loadExperienceOptions(experienceOptions.query, experienceOptions.nextCursor),
-      } : undefined,
       slug:
         sheet?.slugPrefix && sheet.selection
           ? {

@@ -71,7 +71,7 @@ migrate ジョブには `DATABASE_URL`（migrate ロール）と `EDITOR_APP_DAT
 
 ## 4. 毎回の配備
 
-`deploy.env` は `EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED` と `EDITOR_ARTICLE_AUTHORITY_API_ENABLED` をそれぞれ明示する。配備は環境変数を全量で置き換えるため、どちらかが未記載なら build・配備の前に止める。既存の発信先を維持するときは、接続先・audience・許可する実行 ID・固定 Secret 参照も揃えて残す。意図して無効化するときだけ `false` を指定する。
+Experience公開は撤去済み（#332）。旧 `EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED` と `EDITOR_ARTICLE_AUTHORITY_API_ENABLED` は削除するか `false` にする。`true` などは配備前に拒否する。配備は環境変数とSecret参照を全量置換し、旧Experience origin・audience・宣言・面資格をruntimeへ渡さない。本人サイトの写真配信には `EDITOR_ASSET_ORIGIN` を明示する。
 
 ```sh
 scripts/editor-deploy/deploy.sh            # 現在の HEAD を配備する（clean な worktree で）
@@ -508,33 +508,12 @@ editor を動かしているのと同じ GCP プロジェクトで行う（別�
 
 ownerが`set-private-jobs-keyring.sh`へkeyringを安全な標準入力で投入できるのは、専用identity、固定command/args、DB URLだけのSecret設定、5分cleanupの稼働を確認した後。鍵の値はこのrepo・deploy.env・ログ・チャットへ記録せず、owner helperが出すSecretの固定数値版参照だけをignored `deploy.env`へ設定する。Google Docs用queue/sweepはNIHOのgatewayが公式配備されるまで作成・有効化せず、両方のmodeは`off`のまま保つ。
 
-## 記事のExperience連携（2026-11-03）
+## Experience記事連携の撤去（2026-11-07、#332）
 
-追加APIのsourceは[役割・記事連携契約](../architecture/editor-role-integration.md)を参照する。NIHO追加APIを先行配備し、EditorとExperienceのGoogle ID tokenのaudience・runtimeサービスアカウントを照合するまで、新しい2つのauthority flagは`false`を維持する。固定値はignored `deploy.env`、資格の検証情報はSecret Managerに置く。
+Experienceの記事はExperienceの `/write` で書き、正本をExperience DBに置く。editorは本人サイト接続と個人ページを維持し、Experience公開・公開APIの面資格・プレビュー発行・記事authority・カテゴリと関連体験・招待操作を閉じる。NIHO本人認証の設定と既存client IDは維持する。
 
-`EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED=true`には、`EDITOR_AUTH_MODE=niho`、固定`EDITOR_EXPERIENCE_ORIGIN`・`EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_AUDIENCE`、`EDITOR_FACE_CREDENTIALS_SECRET_REF=secret-name:固定数値版`が必要。公式配備はExperienceの固定公開条件pathを`EDITOR_DESTINATION_DECLARATIONS.exp`へ渡し、`EDITOR_ASSET_ORIGIN`（未指定なら画面origin）も渡す。カバー写真・リードは任意である。
+旧authority flagは未設定または `false` だけを認める。旧origin・audience・allowlist・`EDITOR_FACE_CREDENTIALS_SECRET_REF` はruntimeへ渡さず、公式配備の全量置換で外れる。Experience staging向けの資格発行helperは撤去し、新しい資格は発行しない。既存Secretの削除や権限変更は今回行わない。旧値が残る環境でも、アプリ側の拒否が適用される。
 
-`EDITOR_ARTICLE_AUTHORITY_API_ENABLED=true`には、固定`EDITOR_ARTICLE_AUTHORITY_AUDIENCE`と`EDITOR_ARTICLE_AUTHORITY_SERVICE_ACCOUNT_EMAILS`の許可リストが必要。カンマを含む許可リストはgcloudの`^|^`形式で単一の設定値として渡し、区切り文字を含む入力は配備前に拒否する。
+本人サイトの公開写真を使う場合は `EDITOR_ASSET_ORIGIN` にexact HTTPS originを設定する。写真配信は本人サイトの有効な公開版だけを根拠にし、旧Experienceの公開版からは配信しない。
 
-公開APIの面の資格は、生tokenを配る側とSHA-256・audience・期限の検証情報を持つEditor側を分ける。ownerが標準のSecret Manager手順で検証情報を登録し、Web runtime IDにそのSecretだけの読取権限を付けてから、固定版の参照を`EDITOR_FACE_CREDENTIALS_SECRET_REF`へ入れる。private-job cleanup IDにはこのSecretを付けない。AIセッションはtoken値・秘密値を作成・取得・表示しない。
-
-有効化前に、現在writerの有無、別用途token拒否、別サービス/audience拒否、カテゴリ停止、招待取消・OWNER変更・体験停止、公開停止後の写真404、依存障害時の拒否を合成データで確認する。公開元の切替はExperience側の独立した操作で、既存記事を削除しない。問題時はauthority flagをOFFへ戻して固定SHAを再配備し、本文・公開版・履歴を保持する。
-
-### Experience staging向け公開API資格
-
-stagingのExperienceサイトがEditorの公開APIを読む面資格は、owner専用helperが1組の資格を発行する。Editorには`audience=exp`・SHA-256・作成から90日の期限だけを保存し、raw tokenはExperience stagingの`experience-stg-editor-api-token` Secretに保存する。EditorのWeb runtime IDとExperience staging runtime IDだけへ、それぞれのSecretの`secretAccessor`を付ける。private-job cleanup identityには付与しない。
-
-```sh
-scripts/editor-deploy/prepare-experience-publish-credentials.sh
-```
-
-helperは引数を受け取らず、Editor projectを`deploy.env`から読み、Experience staging project IDを非表示入力で確認する。実行前に両projectのSecret・version metadata・service account・直接IAMを検査し、Editorのverifier Secretに有効版が1つある場合は、その固定版のJSON配列を検証して新しいExperience資格を追加する。既存の項目は保持する。有効版が複数ある、設定済みの固定版が一致しない、既存payloadが不正、Experience token Secretに有効版がある場合は、Secret作成やIAM変更より前に停止する。Secretの値は画面・ファイル・ログへ出さず、stdoutには次の2つのnumeric version参照だけを出す。ownerは参照だけを担当者へ渡し、raw tokenをチャットや設定ファイルへ貼らない。
-
-```text
-EDITOR_FACE_CREDENTIALS_SECRET_REF=niho-editor-face-credentials:<version>
-GUIDE_EDITOR_API_TOKEN_REF=experience-stg-editor-api-token:<version>
-```
-
-この準備は資格を保存するだけで、Editor authority flag、Experience article authority flag、`EXPERIENCE_GUIDE_PUBLIC_SOURCE`を有効にしない。現在のcategoryが作成され、NIHO追加APIとEditor/Experienceのaudience・service accountが一致した後、staging固定SHAの別配備変更で有効化する。90日より前にownerが両側を同時にローテーションする。
-
-helperのSecret Manager追加が途中で失敗した場合は、出力された値を探さず、2つのSecretのversion metadataだけをownerが確認する。helperは失敗時に自身が作成したと把握できる新versionを無効化する。コマンドが応答を失った場合などversion番号を受け取れなかったときは、metadataをownerが確認し、片側だけに有効版が残っていれば無効化してから再実行する。既存のEditor verifier版は残し、rotationはこのhelperの再実行で行わず、ownerが両サービスを同時に更新する。
+保存済みページ・公開版・履歴は削除しない。Experienceへの全面移管は将来の別判断とし、再開用のflagは用意しない。NIHOログイン、本人サイト公開・プレビュー・公開APIの受入を維持し、閉鎖したExperienceの入口が旧設定や資格でも本文を返さないことを確認する。
