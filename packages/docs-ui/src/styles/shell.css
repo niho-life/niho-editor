@@ -89,7 +89,12 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-info{width:22px;height:22px;border-radius:50%;display:inline-grid;place-items:center;color:var(--ed-ink-mute);flex:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-info:hover{background:var(--ed-sand-2);color:var(--ed-ink-sub)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-info .es-ico{width:14px;height:14px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas{min-width:0;min-height:0;overflow:auto;padding:32px 48px 120px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas{--es-canvas-top:32px;min-width:0;min-height:0;overflow:auto;padding:32px 48px 120px}
+/* 上の余白も sticky の背景に含め、本文がタブの上へ透けて流れないようにする。 */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas:has(.es-tabbar){padding-top:0}
+/* ウィンドウボタンの下へ枠全体を下げる。枠の座標も移るので、ドックのドラッグ位置は同じ基準のまま。 */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-window-controls="true"]{top:32px;height:calc(100% - 32px)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-window-controls="true"]::before{content:"";position:absolute;top:-32px;left:0;right:0;height:32px;background:var(--ed-canvas)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas-in{max-width:680px;margin:auto}
 /* 本文の文字（PageEditor の本文の包み .be に .es-body を付ける）。枠の基準の 14px を継がず、本文の token を読む。中の見出し・箇条書きは本文に対する em のまま。
    見出しは本文の行間（1.9）を継がず詰める（見直し 2026-11-07）。editor.css（既存の画面の CSS）は es- を読まない決まりなので、ここに置く */
@@ -125,7 +130,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow.es-di--drop-before::before{top:-1px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow.es-di--drop-after::after{bottom:-1px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-list{flex:1;min-height:0;overflow:auto;padding:2px 8px 10px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;width:100%;padding:10px 10px;border-radius:10px;position:relative;text-align:left}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di{display:grid;grid-template-columns:minmax(0,1fr);gap:2px 8px;width:100%;padding:10px 10px;border-radius:10px;position:relative;text-align:left}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di--one{padding:12px 10px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di:hover{background:var(--ed-sand-2)}
 /* 今の行は網掛けせず、題名を太くするだけ（オーナー決定 2026-11-06、#308。モック editor-folder-pages-v1 の .row.on） */
@@ -134,7 +139,6 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-t--untitled{color:var(--ed-ink-mute)}
 /* タブの数の印（2 つ以上のときだけ。#308） */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-n{display:inline-block;margin-left:6px;padding:0 6px;min-width:18px;height:18px;line-height:18px;border-radius:9px;font-size:12px;font-style:normal;font-weight:600;text-align:center;vertical-align:1px;color:var(--ed-ink-mute);background:var(--ed-sand-2)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-when{grid-column:2;grid-row:1;font-size:12px;color:var(--ed-ink-mute);white-space:nowrap}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-sub{grid-column:1/-1;font-size:12.5px;color:var(--ed-ink-mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* 進行中の回るマーク（サイドバーの行と、送っている間のボタン）。状態の言葉は横の文字が持つので、マークは支援技術から隠す */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-busy{display:inline-block;vertical-align:-1px;width:9px;height:9px;border-radius:50%;border:1.5px solid var(--ed-line-3);border-top-color:currentColor;animation:es-turn .9s linear infinite;flex:none}
@@ -148,10 +152,6 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-grouphd:hover{background:var(--ed-sand-2)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-list ul ul{margin-left:14px;padding-left:8px;border-left:1px solid var(--ed-line-2)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow{display:flex;align-items:flex-start;gap:2px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ditw{flex:0 0 auto;width:18px;align-self:stretch;display:flex;align-items:center;justify-content:center;border-radius:6px;font-size:12px;color:var(--ed-ink-mute)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ditw:hover{background:var(--ed-sand-2)}
-/* 中身の無いフォルダの開閉（押せない。幅だけ取る。モック editor-folders-v1 の .tw.none） */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ditw--none{visibility:hidden}
 /* 題名の前のアイコン（フォルダ・録音・工程のサブページの ✦）。意味は題名と 2 行目の文字が持つ */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-t .es-di-ki{width:16px;height:16px;margin-right:6px;vertical-align:-3px;color:var(--ed-ink-sub)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-t--spark .es-di-ki{width:13px;height:13px;vertical-align:-2px;color:var(--ed-ink-mute)}
@@ -253,7 +253,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-loc--body{display:none}
 /* タブの帯（#308。モック editor-folder-pages-v1 の .tabbar）: ページ名の上、本文の列（.es-canvas-in。最大 680px・中央）と同じ幅の薄い罫線。右端に ＋。
    タブが 2 つ以上なら左に名前（tablist）。本文を送っても上に残る（sticky。背景は本文と同じ） */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tabbar{position:sticky;top:0;z-index:5;display:flex;align-items:flex-end;gap:2px;min-height:38px;max-width:680px;margin:0 auto 10px;padding-top:6px;border-bottom:1px solid var(--ed-line-2);background:var(--ed-canvas)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tabbar{position:sticky;top:0;z-index:5;display:flex;align-items:flex-end;gap:2px;min-height:38px;max-width:680px;margin:0 auto 10px;padding-top:calc(6px + var(--es-canvas-top,32px));border-bottom:1px solid var(--ed-line-2);background:var(--ed-canvas)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tabbar-tabs{display:flex;align-items:flex-end;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab-w{display:flex;align-items:flex-end;flex:none;position:relative}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tab{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 12px;margin-bottom:-1px;border-bottom:2px solid transparent;border-radius:8px 8px 0 0;font-size:13.5px;font-weight:600;color:var(--ed-ink-mute);white-space:nowrap;max-width:46vw;overflow:hidden;text-overflow:ellipsis}
@@ -1112,7 +1112,7 @@
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sheet--rail{height:calc(100% - 24px);background:var(--ed-canvas)}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sheet--rail>.es-sh-hd{padding-bottom:12px;border-bottom:1px solid var(--ed-line)}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sheet--rail>.es-rail{position:static;flex:1;border-left:0}
-  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas{padding:24px 18px 80px}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas{--es-canvas-top:24px;padding:24px 18px 80px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt{font-size:30px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt.es-ja{font-size:24px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-seg{grid-template-columns:minmax(0,1fr)}

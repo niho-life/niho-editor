@@ -11,7 +11,7 @@ export type ShellSidebarProps = {
   items: ShellListItem[];
   currentId?: string;
   onSelect?: (id: string) => void;
-  /** フォルダの行の開閉を押した（開いているかは呼ぶ側が持ち、閉じているフォルダの中の行は渡さない）。 */
+  /** 中身のあるフォルダのアイコン・名前を押した（開閉の状態は呼ぶ側が持つ）。空フォルダは onSelect で開く。 */
   onToggleFolder?: (id: string) => void;
   /** 上の 1 行の右端の「一覧をしまう」。 */
   onCollapse?: () => void;
@@ -198,32 +198,20 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
             }
             onDragEnd={drag ? () => drag.onEnd() : undefined}
           >
-            {item.folder && onToggleFolder && item.empty === true && (
-              // 中身の無いフォルダ: 開閉は押せない。幅だけ取って、中身のあるフォルダと題名の位置を揃える
-              <span className="es-ditw es-ditw--none" aria-hidden="true">
-                ▾
-              </span>
-            )}
-            {item.folder && onToggleFolder && item.empty !== true && (
-              <button
-                type="button"
-                className="es-ditw"
-                aria-label={`${item.title || "無題"} の中`}
-                aria-expanded={item.open ?? false}
-                onClick={() => onToggleFolder(item.id)}
-              >
-                <span aria-hidden="true">{item.open ? "▾" : "▸"}</span>
-              </button>
-            )}
             <button
               type="button"
               className={`es-di${on ? " es-di--on" : ""}${item.sub || item.busy || onSide ? "" : " es-di--one"}`}
               aria-current={on ? "page" : undefined}
-              onClick={(event) => (event.altKey && sideOpen ? sideOpen(sideIdOf(item)) : onSelect?.(openId))}
+              aria-expanded={item.folder && onToggleFolder && item.empty !== true ? (item.open ?? false) : undefined}
+              onClick={(event) => {
+                if (item.folder && onToggleFolder && item.empty !== true) onToggleFolder(item.id);
+                else if (event.altKey && sideOpen) sideOpen(sideIdOf(item));
+                else onSelect?.(openId);
+              }}
               onKeyDown={
                 rowActions
                   ? (event) => {
-                      if (event.key === "Enter" && event.altKey && sideOpen) {
+                      if (event.key === "Enter" && event.altKey && sideOpen && !item.folder) {
                         event.preventDefault();
                         sideOpen(sideIdOf(item));
                       } else if (rowActions.menu && (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))) {
@@ -246,7 +234,6 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
                   </em>
                 )}
               </span>
-              <span className="es-when">{item.when}</span>
               {(item.sub || item.busy || onSide) && (
                 <span className="es-di-sub">
                   {/* 手順が動いている行の回るマーク。状態の言葉は sub の文字が持つので、マークは支援技術から隠す */}
@@ -289,8 +276,8 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
  * アプリ名は、一覧が枠の左上にあるとき（EditorShell が ShellListBrandContext に true を入れる）だけこの行の左に出し、高さは枠のヘッダーにそろえる。
  * それ以外（一覧が右のドック・枠の外）は枠が画面の左上端に出す。「設定」はいつも枠が左下に出す（パネルの配置に関係なく。#311）。
  * 絞り込み（すべて／公開中／録音）は持たない。`onDrop` を渡すと、行をドラッグしてフォルダへ入れる・並べ替える。
- * 1行は題名と時刻。2行目は公開先・録音・作成中のときだけ。行の「…」は「削除」だけ（`onDeleteRow`）。
- * 一覧は 1 本の木（フォルダ＝`kind = 'folder'` の入れ物。空でも開閉の場所を取る）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
+ * 1行は題名だけ。2行目は公開先・録音・作成中のときだけ。行の「…」は「削除」だけ（`onDeleteRow`）。
+ * 一覧は 1 本の木（フォルダ＝`kind = 'folder'` の入れ物。空ならフォルダ画面を開く）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
  */
 export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, onDrop, canDrop, listEnd, recent, side, onDeleteRow, panel }: ShellSidebarProps) {
   const withBrand = useContext(ShellListBrandContext);
