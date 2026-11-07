@@ -63,7 +63,6 @@ export type EditorShellDock = {
   onDropSide?: () => void;
 };
 
-const SIDE_NAME: Record<ShellDockSide, string> = { left: "左", right: "右" };
 /** 細い列のアイコン。 */
 const STRIP_ICON: Record<ShellPanelId, ShellIconName> = { list: "list", ai: "spark", page: "info", photos: "img" };
 
@@ -301,7 +300,7 @@ const idsOf = (docks: ShellDocks, shown: Shown): Record<ShellDockSide, ShellPane
 };
 
 /**
- * ドラッグ中の落とし先（ページ用の型のときの「ここで開く」「右に並べる」と、パネルを掴んだときの「落とすと入る形」）。
+ * ドラッグ中の落とし先。ページの領域と、パネルを落とすと入る形を、文字の無い枠で示す。
  * 枠（.es-root）の dragover を見て、独自の型のときだけ出す。パネルは近づけた場所に形を先に出し、そこへ落とすと移す。
  */
 function ShellDockDnd({ host, dock, shown }: DndProps) {
@@ -414,37 +413,28 @@ function ShellDockDnd({ host, dock, shown }: DndProps) {
     // drop は枠の listener（上の onDrop）が受ける
   });
   const hasSide = Boolean(dock.side) && fit.side > 0;
+  // ページは右のドック（AI などのレール）の上へも落とせる。既存の本文上の
+  // 境目を保ち、右の「並べる」領域だけをドックの端まで広げる。
+  const mainDropWidth = hasSide ? fit.main : fit.main * 0.6;
+  const sideDropWidth = (hasSide ? fit.side : fit.main * 0.4) + fit.right;
   const ids = idsOf(dock.docks, shown);
   const dragged = panelOf(kind);
   const rect = ghost && dragged ? panelGhostRect(dragged, ghost.at, fit, ghost.height, dock.widths, ids) : null;
-  const others = ghost && dragged ? ids[ghost.at.side].filter((id) => id !== dragged).length : 0;
   return (
     <>
       {kind?.what === "row" && (
-        <div className="es-dzs" aria-hidden="true" style={{ gridColumn: "3 / 6" }}>
-          <div className={`es-dz${hot === "main" ? " es-dz--hot" : ""}`} data-zone="main" style={{ flex: hasSide ? `${fit.main} 1 0` : "3 1 0" }} {...zone("main")}>
-            ここで開く
-            <small>メインを替える</small>
-          </div>
-          <div className={`es-dz${hot === "side" ? " es-dz--hot" : ""}`} data-zone="side" style={{ flex: hasSide ? `${fit.side} 1 0` : "2 1 0" }} {...zone("side")}>
-            {hasSide ? "右のページを替える" : "右に並べる"}
-            {!hasSide && <small>メインはそのまま</small>}
-          </div>
+        <div className="es-dzs" aria-hidden="true" style={{ gridColumn: "3 / 8" }}>
+          <div className={`es-dz${hot === "main" ? " es-dz--hot" : ""}`} data-zone="main" style={{ flex: `${mainDropWidth} 1 0` }} {...zone("main")} />
+          <div className={`es-dz${hot === "side" ? " es-dz--hot" : ""}`} data-zone="side" style={{ flex: `${sideDropWidth} 1 0` }} {...zone("side")} />
         </div>
       )}
       {kind?.what === "band" && (
         <div className="es-dzs" aria-hidden="true" style={{ gridColumn: "3 / 4" }}>
-          <div className={`es-dz${hot === "main" ? " es-dz--hot" : ""}`} data-zone="main" {...zone("main")}>
-            メインに置く
-            <small>いまのメインは右へ移ります</small>
-          </div>
+          <div className={`es-dz${hot === "main" ? " es-dz--hot" : ""}`} data-zone="main" {...zone("main")} />
         </div>
       )}
       {rect && ghost && dragged && (
-        <div className="es-ghost" aria-hidden="true" style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }}>
-          {`${SIDE_NAME[ghost.at.side]}のドック`}
-          <small>{others > 0 ? `「${SHELL_PANEL_NAME[dragged]}」を${ghost.at.at === "top" ? "上" : "下"}に置く` : `「${SHELL_PANEL_NAME[dragged]}」を入れる`}</small>
-        </div>
+        <div className="es-ghost" aria-hidden="true" style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }} />
       )}
     </>
   );

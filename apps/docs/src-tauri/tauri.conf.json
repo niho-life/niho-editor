@@ -25,7 +25,7 @@
         "fullscreen": false,
         "backgroundColor": "#FCFCFB",
         "theme": "Light",
-        "dragDropEnabled": true,
+        "dragDropEnabled": false,
         "visible": false
       }
     ],

@@ -1054,11 +1054,9 @@
 /* ドラッグ中の落とし先（ページ用の型のときだけ）。入る所は枠を実線にして色だけに頼らない */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-layout="dock"][data-wide="true"] .es-dzs{grid-row:1/-1;z-index:35;display:flex;gap:10px;padding:10px;min-width:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dz{min-width:0;padding:8px;border:2px dashed var(--ed-line-3);border-radius:14px;display:grid;place-content:center;gap:4px;text-align:center;background:color-mix(in srgb,var(--ed-canvas) 88%,transparent);font-size:15px;font-weight:700;color:var(--ed-ink-sub)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dz small{display:block;font-size:12px;font-weight:400;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dz--hot{border-style:solid;border-color:var(--ed-accent-ink);background:color-mix(in srgb,var(--ed-accent-soft) 94%,transparent);color:var(--ed-accent-ink)}
 /* パネルを掴んだとき、近づけた場所に先に出す「落とすと入る形」 */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ghost{position:absolute;z-index:36;display:grid;place-content:center;gap:2px;text-align:center;border:2px solid var(--ed-accent-ink);border-radius:12px;background:color-mix(in srgb,var(--ed-accent-soft) 85%,transparent);font-size:14px;font-weight:700;color:var(--ed-accent-ink);pointer-events:none}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ghost small{font-size:12px;font-weight:400;color:var(--ed-ink-sub)}
 /* 「AIと作る」の会話メニューの下の区切り */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-sep{border:0;border-top:1px solid var(--ed-line);margin:4px 2px}
 /* 「写真」のパネル（PagePhotos の panel）: 折りたたみ無しでパネルいっぱい */
