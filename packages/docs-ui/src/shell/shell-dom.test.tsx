@@ -176,11 +176,27 @@ describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
     const settings = host.querySelector<HTMLButtonElement>(".es-setbar .es-sb-settings")!;
     expect(settings.textContent).toBe("設定");
     expect(settings.querySelector("svg")).not.toBeNull();
-    expect(settings.getAttribute("aria-label")).toBe("設定");
+    expect(settings.hasAttribute("aria-label")).toBe(false);
+    expect(settings.hasAttribute("aria-describedby")).toBe(false);
     expect(settings.hasAttribute("aria-haspopup")).toBe(false);
     act(() => settings.click());
     expect(onSettings).toHaveBeenCalledTimes(1);
     expect(host.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("招待バッジは表示文字を名前に保ち、説明を補足する", () => {
+    const host = mount(
+      <EditorShell sidebar={<Sidebar />} header={null} sidebarOpen railOpen={false} settings={{ badge: 1, onOpen: vi.fn() }}>
+        x
+      </EditorShell>,
+    );
+    const settings = host.querySelector<HTMLButtonElement>(".es-setbar .es-sb-settings")!;
+    const description = host.querySelector<HTMLElement>(".es-setbar .es-vh")!;
+
+    expect(settings.textContent).toBe("設定1");
+    expect(settings.hasAttribute("aria-label")).toBe(false);
+    expect(settings.getAttribute("aria-describedby")).toBe(description.id);
+    expect(description.textContent).toBe("未処理の招待 1 件");
   });
 
   it("ヘッダーの「…」も Esc で閉じる", () => {

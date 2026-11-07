@@ -184,7 +184,7 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.match(html, /aria-label="新しいページ（⌘N）"/);
     assert.doesNotMatch(html, /es-sb-acts/, "the two-row search / new-page block is gone");
     assert.doesNotMatch(html, /class="es-sb-account"/);
-    assert.match(html, /class="es-sb-settings" aria-label="設定"[\s\S]*?<b>設定<\/b>/, "settings has an icon and visible label");
+    assert.match(html, /class="es-sb-settings"[\s\S]*?<b>設定<\/b>/, "settings has an icon and visible label");
     for (const path of ["/p/new", "/p/new?from=recording", "/destinations", "/settings"]) {
       const screen = await fetch(`${base}${path}`);
       assert.equal(screen.status, 200, path);
