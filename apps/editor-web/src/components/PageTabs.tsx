@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { PageKind, PageSummary, StepStatus } from "@niho/editor-store";
 import { TabBar, type PageTabMoveTarget } from "niho-docs-ui/page/TabBar";
 import { ShellSheet } from "niho-docs-ui/shell";
+import { unmarkTabCreatedPage } from "@/lib/left-empty-pages";
 import { createTabRequest, deletePageRequest, duplicatePageRequest, moveTabRequest, renameTabRequest } from "@/lib/page-actions-client";
 import { tabLabel } from "@/lib/sidebar-items";
 import { PAGE_MENU_TEXT, failureText } from "@/lib/use-page-menu";
@@ -83,6 +84,8 @@ export function PageTabs({ page, tabs, saveNow }: { page: Pick<PageSummary, "id"
   const add = () =>
     run(async () => {
       const created = await createTabRequest(id);
+      // タブを足したページは、何も足していない新しいページではない（何も書かないまま次のタブへ移っても、元のページを捨てない）
+      unmarkTabCreatedPage(id);
       frame.pageCreated(created.id, page.title, "note", page.parent, created.page ?? holder);
       router.push(`/p/${created.id}`);
     }, PAGE_TABS_TEXT.addFailed);

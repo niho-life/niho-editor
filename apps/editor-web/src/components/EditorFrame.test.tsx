@@ -2740,6 +2740,8 @@ describe("EditorFrame: 左の一覧のドラッグで入れ子・並べ替え", 
 describe("EditorFrame: 「写真」のパネルと、何も足していない新しいページ", () => {
   const A = "00000000-0000-4000-8000-0000000000a1";
   const NEW = "00000000-0000-4000-8000-0000000000b2";
+  const SECOND_TAB = "00000000-0000-4000-8000-0000000000b3";
+  const NEW_HOLDER = "00000000-0000-4000-8000-0000000000b4";
   const PHOTO = "00000000-0000-4000-8000-0000000000c3";
   const OTHER_PHOTO = "00000000-0000-4000-8000-0000000000c4";
   const UPDATED = "2026-10-31T02:00:00.000Z";
@@ -2763,6 +2765,8 @@ describe("EditorFrame: 「写真」のパネルと、何も足していない新
         calls.push({ url, method, body: init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null, keepalive: init.keepalive === true });
         const ok = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
         if (url === "/api/pages" && method === "POST") return ok(201, { page: { id: NEW, revision: 1 } });
+        // タブを足す（新しいタブの id と、入れ物の id）
+        if (/\/api\/pages\/[^/]+\/tabs$/.test(url) && method === "POST") return ok(201, { page: { id: SECOND_TAB, page: NEW_HOLDER } });
         if (/\/api\/pages\/[^/]+$/.test(url) && method === "PATCH") return ok(200, { page: { id: url.split("/").at(-1), revision: ++revision } });
         if (url.endsWith("/images") && method === "GET") {
           return ok(200, { images: photos.map((assetId) => ({ assetId, bytes: 2048, contentType: "image/png", alt: null, credit: null, consent: false, createdAt: UPDATED })) });
@@ -2884,6 +2888,68 @@ describe("EditorFrame: 「写真」のパネルと、何も足していない新
     await tick();
     expect(sends().filter((call) => call.url.endsWith("/discard"))).toEqual([{ url: `/api/pages/${NEW}/discard`, method: "POST", body: null, keepalive: false }]);
     expect(rows()).toEqual([]);
+  });
+
+  it("shows the tab bar on a page made the moment it opens (＋ is held while it is made), and adding a tab keeps the blank page", async () => {
+    // 作る間（POST が返るまで）は ＋ を押せない。帯の場所は先に取ってある
+    let release: () => void = () => undefined;
+    const made = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server();
+    const send = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/pages" && init?.method === "POST") await made;
+      return send(url, init);
+    }));
+    nav.pathname = "/p/new";
+    window.history.replaceState(null, "", "/p/new");
+    await mount({}, <NewPage />);
+    const add = () => container!.querySelector<HTMLButtonElement>(".es-tabbar .es-tab-add");
+    expect(add()).not.toBeNull();
+    expect(add()!.disabled).toBe(true);
+    await act(async () => release());
+    nav.pathname = window.location.pathname;
+    await rerender(<NewPage />);
+    await tick();
+    // 作ったあと: 帯の ＋ が押せる（再読み込みして /p/{id} を開き直さなくても、タブを足せる）
+    expect(window.location.pathname).toBe(`/p/${NEW}`);
+    expect(add()!.disabled).toBe(false);
+    await act(async () => add()!.click());
+    await tick();
+    expect(sends().filter((call) => call.url === `/api/pages/${NEW}/tabs`)).toHaveLength(1);
+    expect(nav.push).toHaveBeenCalledWith(`/p/${SECOND_TAB}`);
+    // タブを足したページは、何も足していない新しいページではない: 印が外れ、次のタブへ移っても捨てない
+    expect(window.sessionStorage.getItem(TAB_CREATED_PAGES_KEY)).toBeNull();
+    nav.pathname = `/p/${SECOND_TAB}`;
+    await rerender(<p>次のタブ</p>);
+    await tick();
+    expect(sends().filter((call) => call.url.endsWith("/discard"))).toEqual([]);
+  });
+
+  it("a page made inside a folder (/p/new?in=) keeps that folder for the tab bar, so the tab added from it lands in the same folder", async () => {
+    const FOLDER = "00000000-0000-4000-8000-0000000000f5";
+    server();
+    nav.pathname = "/p/new";
+    nav.search = `in=${FOLDER}`;
+    window.history.replaceState(null, "", `/p/new?in=${FOLDER}`);
+    await mount({ pages: [{ ...page(FOLDER, "鎌倉の取材"), kind: "folder" as const }] }, <NewPage />);
+    // 作ったあとの URL の置換で ?in= は消える（useSearchParams も空になる）
+    nav.pathname = window.location.pathname;
+    nav.search = "";
+    await rerender(<NewPage />);
+    await tick();
+    expect(window.location.pathname).toBe(`/p/${NEW}`);
+    await act(async () => container!.querySelector<HTMLButtonElement>(".es-tabbar .es-tab-add")!.click());
+    await tick();
+    // 足したタブの行も、フォルダの中（深さ 1）に出る。ルート（深さ 0）には出ない
+    const depths = [...container!.querySelectorAll(".es-sb-list li")].map((li) => {
+      let depth = 0;
+      for (let at = li.parentElement; at && !at.classList.contains("es-sb-list"); at = at.parentElement) if (at.tagName === "UL") depth++;
+      return [li.querySelector(".es-di-t")?.textContent, depth - 1] as const;
+    });
+    expect(depths.filter(([title]) => title === "無題").every(([, depth]) => depth === 1)).toBe(true);
+    expect(depths.some(([title]) => title === "無題")).toBe(true);
   });
 
   it("on pagehide (close, reload) does not discard: it only leaves the page as a candidate, and the row stays", async () => {
