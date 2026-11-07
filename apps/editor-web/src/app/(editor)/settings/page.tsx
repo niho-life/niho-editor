@@ -18,13 +18,13 @@ export const metadata: Metadata = { title: "設定" };
  * 変えられる物だけを行にし、詳細は /settings/about・/settings/terms・/settings/recipes/{id} に分ける。
  * 最初の値はここで読む（画面を開いたときに空から始めない）。AI とメディアの使用量は画面が各 API を読む。
  * 音声の上限と保持日数は「データ」の ⓘ に出す（エンジン名・時間切れは設定に出さない）。
- * 先頭は「アカウント」（役割とつながり・発信先）、いちばん下にログアウト（左下のメニューをやめた。オーナー決定 2026-11-06）。
+ * 先頭の「アカウント」に本人情報を統合し、名前を取得できない NIHO session にだけ再取得の入口を出す。
  */
-export default async function SettingsPage() {
+export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ identity?: string }> }) {
   const data = await settingsPageData("/settings");
   if (!data) return <StoreUnavailable />;
   const { audio } = settingsFacts().transcription;
-  const [session, requestHeaders] = await Promise.all([requireSession("/settings"), headers()]);
+  const [session, requestHeaders, query] = await Promise.all([requireSession("/settings"), headers(), searchParams]);
   const wiring = connectionsDeps.ports(session, { headers: requestHeaders });
   const counts = connectionsDeps.counts();
   if (!wiring || !counts) return <StoreUnavailable />;
@@ -35,6 +35,8 @@ export default async function SettingsPage() {
       initial={data.settings}
       audio={{ maxBytes: audio.maxBytes, maxDurationSec: audio.maxDurationSec, retentionDays: audio.retentionDays }}
       account={frameMe(session)}
+      refreshIdentity={session.mode === "niho" && !session.profile?.name.trim()}
+      identityMismatch={query.identity === "mismatch"}
       destinations={destinations}
     />
   );

@@ -163,7 +163,7 @@
 @media (hover:none){:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di-more{opacity:1}}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-psfolder select{width:100%;border:1px solid var(--ed-line-2);border-radius:10px;padding:6px 8px;background:var(--ed-white);font:inherit;font-size:13px;color:var(--ed-ink)}
 /* アプリ名はいつでも画面の左上端、「設定」はいつでも左下（パネルの配置に関係なく。#311）。左のドック（一覧の列）があればその幅で地と右の罫線を持ち、
- * 無ければアプリ名は中央のヘッダーの左に重なる（ヘッダーがその分だけ左を空ける）、設定は小さな丸いボタン。
+ * 無ければアプリ名は中央のヘッダーの左に重なる（ヘッダーがその分だけ左を空ける）、設定は小さな横長のボタン。
  * 一覧が枠の左上にあるときは、枠はこの帯を出さず、一覧が上の 1 行の左にアプリ名を出す（下の .es-sb[data-brand]） */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-brandbar{position:absolute;left:0;top:0;z-index:47;display:flex;align-items:center;height:var(--es-header);padding:0 12px 0 14px;pointer-events:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="dock"] .es-brandbar{box-sizing:border-box;width:var(--es-left-w,272px);background:var(--ed-canvas);border-right:1px solid var(--ed-line)}
@@ -171,7 +171,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-setbar{position:absolute;left:0;bottom:0;z-index:47}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="dock"] .es-setbar{box-sizing:border-box;width:var(--es-left-w,272px);height:var(--es-header);display:flex;align-items:center;gap:4px;padding:0 8px;background:var(--ed-canvas);border-top:1px solid var(--ed-line);border-right:1px solid var(--ed-line)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-setbar{display:flex;align-items:center;gap:4px;padding:0 0 12px 12px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-sb-account,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-sb-settings{width:auto;height:36px;border-radius:999px;background:color-mix(in srgb,var(--ed-canvas) 92%,transparent);box-shadow:0 1px 2px rgba(28,28,26,.14),0 0 0 1px var(--ed-line-2)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-left="none"] .es-sb-settings{height:36px;border-radius:999px;background:color-mix(in srgb,var(--ed-canvas) 92%,transparent);box-shadow:0 1px 2px rgba(28,28,26,.14),0 0 0 1px var(--ed-line-2)}
 /* 一覧がドックの列でない（dock 無し・900px 未満）ときは、一覧の上下にアプリ名と設定の段の分を空ける */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root:not([data-wide="true"]) .es-sb{padding-top:var(--es-header);padding-bottom:var(--es-header)}
 /* 一覧が枠の左上にあるとき：上の 1 行が「アプリ名 …… 検索 ＋ しまう」。高さは枠のヘッダーと同じで、アプリ名は帯と同じ左 14px（一覧を動かしても左上で跳ねない）。
@@ -179,16 +179,11 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root:not([data-wide="true"]) .es-sb[data-brand]{padding-top:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb[data-brand]>.es-sb-top{min-height:0;height:var(--es-header);padding:0 8px 0 14px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb[data-brand]>.es-sb-top>.es-grip{margin-left:4px}
-/* 左下の本人と設定。本人は session の表示値で、認可には使わない。 */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account{display:flex;align-items:center;gap:8px;min-width:0;flex:1;text-align:left;padding:4px 6px;border-radius:10px;font-size:13px;color:var(--ed-ink-sub)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account>span:last-child{display:grid;min-width:0}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account b,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account b{font-weight:600}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account small{font-size:12px;color:var(--ed-ink-mute)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account .es-av{flex:none;width:26px;height:26px;font-size:12px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-settings{position:relative;display:flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;border-radius:10px;color:var(--ed-ink-sub)}
+/* 左下は歯車＋「設定」。本人情報は設定ページにまとめる。 */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-settings{position:relative;display:flex;align-items:center;gap:8px;min-width:0;height:36px;padding:0 12px;border-radius:10px;font-size:13px;color:var(--ed-ink-sub)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-settings b{font-weight:600}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-settings .es-ico{width:18px;height:18px;color:var(--ed-ink-mute)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-account[aria-current="page"],:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-settings:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-settings[aria-current="page"]{background:var(--ed-sand);color:var(--ed-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-settings:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-settings[aria-current="page"]{background:var(--ed-sand);color:var(--ed-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-badge{margin-left:auto;font-style:normal;font-size:12px;background:var(--ed-accent-soft);color:var(--ed-accent-ink);border-radius:999px;padding:0 7px;font-weight:600}
 
 /* ===== このページの写真（サイドバーの下。page/PagePhotos.tsx。モック editor-photo-library-v1） ===== */
@@ -864,10 +859,10 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root button.es-row--add:hover{background:var(--ed-accent-soft)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--note{grid-template-columns:minmax(0,1fr) auto;min-height:40px;font-size:12.5px;color:var(--ed-ink-mute)}
 /* 「アカウント」の群の本人の行: [アバター] [名前／役割とつながり] [›] を 1 行に */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me{grid-template-columns:auto minmax(0,1fr) auto;gap:6px 12px;min-height:60px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me{grid-template-columns:auto minmax(0,1fr);gap:6px 12px;min-height:60px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me .es-row-k{display:block;color:var(--ed-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me .es-row-k b{display:block;font-size:14px;font-weight:600;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me .es-row-k small{display:block;font-size:12.5px;font-weight:500;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me .es-row-k small{display:block;overflow-wrap:anywhere;font-size:12.5px;font-weight:500;color:var(--ed-ink-mute)}
 /* 設定の一覧のいちばん下の「ログアウト」（薄い 1 行） */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-logout{display:inline-flex;align-items:center;gap:8px;margin-top:34px;padding:6px 10px 6px 6px;border-radius:8px;font-size:13px;font-weight:600;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-logout:hover{background:var(--ed-sand);color:var(--ed-ink)}
@@ -1180,9 +1175,8 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--lang .es-choice button{flex:1;padding:0 6px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--add{grid-template-columns:auto minmax(0,1fr)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--note{grid-template-columns:minmax(0,1fr) auto}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me{grid-template-columns:auto minmax(0,1fr) auto}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me{grid-template-columns:auto minmax(0,1fr)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me .es-row-k{grid-column:2}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--me .es-row-e{grid-column:3;grid-row:1}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row--split{grid-template-columns:minmax(0,1fr) auto;padding:0 8px 0 0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row-main{grid-template-columns:auto minmax(0,1fr) auto;padding-left:12px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-row-main .es-chev{display:none}

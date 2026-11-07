@@ -177,21 +177,34 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.match(response.headers.get("content-type") ?? "", /^text\/html/);
     const html = await response.text();
     assert.match(html, /aria-label="ページの一覧"/);
-    // 一覧上部は1行、左下は現在の本人と設定の独立した入口。
+    // 一覧上部は1行、左下は歯車＋「設定」の入口。
     assert.match(html, /class="es-sb-top"[^>]*><span class="es-brand" role="img" aria-label="Editor"/, "the app name sits at the left of the list's top row");
     assert.doesNotMatch(html, /class="es-brandbar"/, "no separate app-name band above the list");
     assert.match(html, /aria-label="検索（⌘K）"/);
     assert.match(html, /aria-label="新しいページ（⌘N）"/);
     assert.doesNotMatch(html, /es-sb-acts/, "the two-row search / new-page block is gone");
-    assert.match(html, /class="es-sb-account"[\s\S]*?<b>開発ユーザー<\/b>/, "the bottom-left identifies the current account");
-    assert.match(html, /class="es-sb-settings" aria-label="設定"/, "settings keeps a separate direct entry");
-    for (const path of ["/p/new", "/p/new?from=recording", "/destinations", "/account", "/settings"]) {
+    assert.doesNotMatch(html, /class="es-sb-account"/);
+    assert.match(html, /class="es-sb-settings" aria-label="設定"[\s\S]*?<b>設定<\/b>/, "settings has an icon and visible label");
+    for (const path of ["/p/new", "/p/new?from=recording", "/destinations", "/settings"]) {
       const screen = await fetch(`${base}${path}`);
       assert.equal(screen.status, 200, path);
       const text = await screen.text();
       assert.match(text, /aria-label="ページの一覧"/, path);
-      assert.match(text, /class="es-sb-account"[\s\S]*?<b>開発ユーザー<\/b>/, path);
-      if (path === "/settings") assert.match(text, /開発ユーザー/, "the settings hub shows the stub profile");
+      assert.match(text, /class="es-sb-settings"[\s\S]*?<b>設定<\/b>/, path);
+      if (path === "/settings") {
+        assert.equal(screen.url, `${base}/settings`);
+        assert.match(text, /開発ユーザー/, "the settings hub shows the stub profile");
+        assert.doesNotMatch(text, /href="\/account"/);
+        assert.doesNotMatch(text, /名前を再取得/);
+      }
+    }
+    const legacy = await fetch(`${base}/account`);
+    assert.equal(legacy.status, 200);
+    if (legacy.url === `${base}/settings`) {
+      assert.match(await legacy.text(), /開発ユーザー/);
+    } else {
+      // layout の応答が始まっている場合、Next は HTTP redirect の代わりに meta refresh を返す。
+      assert.match(await legacy.text(), /content="[01];url=\/settings"/);
     }
   });
 

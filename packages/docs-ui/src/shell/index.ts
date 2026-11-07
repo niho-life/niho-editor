@@ -137,7 +137,7 @@ export {
   type EditorSitePublished,
   editorDestinationConnection,
 } from "./editor-destinations";
-export { AccountPage, EditorAccountPage, type AccountLink, type AccountPageProps, type AccountRole, type EditorAccountPageProps } from "./account";
+export { AccountPage, type AccountLink, type AccountPageProps, type AccountRole } from "./account";
 export {
   EDITOR_SETTINGS_HREF,
   EDITOR_SETTINGS_TEXT,

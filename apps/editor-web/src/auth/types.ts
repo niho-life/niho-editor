@@ -9,7 +9,7 @@ export type Session = {
   /** NIHO管理sessionの期限。tokenやcookie値ではない安全なmetadata。 */
   readonly expiresAt?: string;
   readonly refreshRequired?: boolean;
-  /** 一覧の下の本人の行に出す名前（NIHO から読む。stub では合成の値）。 */
+  /** 設定の本人情報に出す名前（NIHO から読む。stub では合成の値）。 */
   readonly profile?: { readonly name: string; readonly email?: string };
 };
 
