@@ -276,7 +276,7 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
  * アプリ名は、一覧が枠の左上にあるとき（EditorShell が ShellListBrandContext に true を入れる）だけこの行の左に出し、高さは枠のヘッダーにそろえる。
  * それ以外（一覧が右のドック・枠の外）は枠が画面の左上端に出す。「設定」はいつも枠が左下に出す（パネルの配置に関係なく。#311）。
  * 絞り込み（すべて／公開中／録音）は持たない。`onDrop` を渡すと、行をドラッグしてフォルダへ入れる・並べ替える。
- * 1行は題名と時刻。2行目は公開先・録音・作成中のときだけ。行の「…」は「削除」だけ（`onDeleteRow`）。
+ * 1行は題名だけ。2行目は公開先・録音・作成中のときだけ。行の「…」は「削除」だけ（`onDeleteRow`）。
  * 一覧は 1 本の木（フォルダ＝`kind = 'folder'` の入れ物。空でも開閉の場所を取る）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
  */
 export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, onDrop, canDrop, listEnd, recent, side, onDeleteRow, panel }: ShellSidebarProps) {
