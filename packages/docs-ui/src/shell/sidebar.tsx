@@ -11,7 +11,7 @@ export type ShellSidebarProps = {
   items: ShellListItem[];
   currentId?: string;
   onSelect?: (id: string) => void;
-  /** フォルダのアイコン・名前を押した（開閉の状態は呼ぶ側が持ち、閉じている中の行は渡さない）。 */
+  /** 中身のあるフォルダのアイコン・名前を押した（開閉の状態は呼ぶ側が持つ）。空フォルダは onSelect で開く。 */
   onToggleFolder?: (id: string) => void;
   /** 上の 1 行の右端の「一覧をしまう」。 */
   onCollapse?: () => void;
@@ -202,9 +202,9 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
               type="button"
               className={`es-di${on ? " es-di--on" : ""}${item.sub || item.busy || onSide ? "" : " es-di--one"}`}
               aria-current={on ? "page" : undefined}
-              aria-expanded={item.folder && onToggleFolder ? item.empty !== true && (item.open ?? false) : undefined}
+              aria-expanded={item.folder && onToggleFolder && item.empty !== true ? (item.open ?? false) : undefined}
               onClick={(event) => {
-                if (item.folder && onToggleFolder) onToggleFolder(item.id);
+                if (item.folder && onToggleFolder && item.empty !== true) onToggleFolder(item.id);
                 else if (event.altKey && sideOpen) sideOpen(sideIdOf(item));
                 else onSelect?.(openId);
               }}
@@ -277,7 +277,7 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
  * それ以外（一覧が右のドック・枠の外）は枠が画面の左上端に出す。「設定」はいつも枠が左下に出す（パネルの配置に関係なく。#311）。
  * 絞り込み（すべて／公開中／録音）は持たない。`onDrop` を渡すと、行をドラッグしてフォルダへ入れる・並べ替える。
  * 1行は題名だけ。2行目は公開先・録音・作成中のときだけ。行の「…」は「削除」だけ（`onDeleteRow`）。
- * 一覧は 1 本の木（フォルダ＝`kind = 'folder'` の入れ物。空でも開閉の場所を取る）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
+ * 一覧は 1 本の木（フォルダ＝`kind = 'folder'` の入れ物。空ならフォルダ画面を開く）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
  */
 export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, onDrop, canDrop, listEnd, recent, side, onDeleteRow, panel }: ShellSidebarProps) {
   const withBrand = useContext(ShellListBrandContext);

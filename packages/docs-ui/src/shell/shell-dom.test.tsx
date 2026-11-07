@@ -53,7 +53,7 @@ const ME = { onOpen: () => undefined };
 const nameOf = (el: Element | null | undefined) => el?.getAttribute("aria-label") ?? el?.textContent?.trim() ?? "";
 
 describe("一覧のフォルダの行とアイコン（kind = 'folder'）", () => {
-  it("トグルとその空きを出さず、フォルダのアイコン・名前で開閉する。通常のページは選択する", () => {
+  it("トグルとその空きを出さず、フォルダのアイコン・名前で開閉する。空フォルダと通常のページは選択する", () => {
     const onToggle = vi.fn();
     const onSelect = vi.fn();
     const host = mount(
@@ -71,12 +71,18 @@ describe("一覧のフォルダの行とアイコン（kind = 'folder'）", () =
     );
     expect(host.querySelector(".es-ditw")).toBeNull();
     const rows = [...host.querySelectorAll<HTMLButtonElement>(".es-di")];
-    expect(rows.map((button) => button.getAttribute("aria-expanded"))).toEqual(["false", "true", null, null]);
+    expect(rows.map((button) => button.getAttribute("aria-expanded"))).toEqual([null, "true", null, null]);
     act(() => rows[1]!.querySelector<SVGElement>("svg")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     expect(onToggle).toHaveBeenCalledWith("f2");
     act(() => rows[1]!.querySelector(".es-di-t")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     expect(onToggle).toHaveBeenCalledTimes(2);
     expect(onSelect).not.toHaveBeenCalled();
+    act(() => rows[0]!.querySelector<SVGElement>("svg")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(onSelect).toHaveBeenLastCalledWith("f1");
+    act(() => rows[0]!.querySelector(".es-di-t")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(onSelect).toHaveBeenCalledTimes(2);
+    expect(onSelect).toHaveBeenLastCalledWith("f1");
+    expect(onToggle).toHaveBeenCalledTimes(2);
     act(() => rows[2]!.click());
     expect(onSelect).toHaveBeenCalledWith("r1");
     expect(host.querySelector(".es-when")).toBeNull();
