@@ -58,7 +58,7 @@ function memoryStore() {
     delete page.deleted;
     return page as Page;
   };
-  const add = (owner: string, input: CreatePageInput & { parent?: string | null } = {}): Page => {
+  const add = (owner: string, input: CreatePageInput & { parent?: string | null; madeFrom?: Page["madeFrom"] } = {}): Page => {
     const now = new Date().toISOString();
     const page: Page = {
       id: randomUUID(),
@@ -75,7 +75,7 @@ function memoryStore() {
       revision: 1,
       page: null,
       role: null,
-      madeFrom: null,
+      madeFrom: input.madeFrom ?? null,
       lastTab: null,
       tabName: null,
       createdAt: now,
@@ -1154,6 +1154,24 @@ describe("edit_page と読んだ版（#278）", () => {
     expect(ai.results[1]).toMatchObject({ isError: true });
     expect(ai.results[1]!.content).toContain("引用・囲み・表の中に画像や録音があり");
     expect(store.rows.get(photo.id)!.blocks).toEqual(photo.blocks);
+  });
+
+  it("文字起こしのタブ（#310）の本文は書けない: edit_page・write_page は断り、本文は変わらない（read_page は文字起こしを添える）", async () => {
+    const store = memoryStore();
+    const folder = store.add("user-a", { title: "取材", kind: "folder" });
+    const rec = store.add("user-a", { title: "合成の録音", kind: "rec", parent: folder.id });
+    const tab = store.add("user-a", { title: "文字起こし", blocks: [], parent: folder.id, madeFrom: { kind: "transcript", recording: rec.id, engine: "fake" } });
+    const ai = recordingBackend([
+      tool("t1", "edit_page", { page_id: tab.id, find: "x", replace: "y", base_revision: 1 }),
+      tool("t2", "write_page", { page_id: tab.id, markdown: "合成の本文", base_revision: 1 }),
+      turn({ text: "書けませんでした。" }),
+    ]);
+    const chats = { ...memoryConversations(store), recording: async () => ({ segments: [{ start: 0, end: 1, text: "合成の文字起こし", speaker: 1 }], speakerNames: {} }) };
+    await chat(tab.id, { text: "直して" }, deps("user-a", store, { ai, conversations: chats }));
+    expect(ai.results[0]).toMatchObject({ isError: true });
+    expect(ai.results[0]!.content).toContain("文字起こしのタブの本文は書けません");
+    expect(ai.results[1]).toMatchObject({ isError: true });
+    expect(store.rows.get(tab.id)!.blocks).toEqual([]);
   });
 
   it("古い base_revision の edit_page・write_page は失敗し、AI が read_page し直すと成功する", async () => {

@@ -157,7 +157,7 @@ recipes (owner, id)   -- 主キー。人ごとに 1 行ずつ
 - **VTT の取り込み**（`POST /api/recordings/import-vtt` → 201 `{ page, transcript, recording, speakers }`）: 録音のタブと、段落を入れた文字起こしのタブ（札「取り込んだ字幕」）をフォルダの中に作る。画面は `transcript` のタブを開く。
 - **移行**: 録音の正本（`page_recordings.segments`）と案（`page_recording_candidates`）を、フォルダの「文字起こし」ページのタブに写す（案の名前が札。採用中の案が正本を代表する。候補の版は `page_transcript_versions` へ）。フォルダの外の録音は題名のフォルダに包む。`page_recordings.segments`・候補の表は expand の間は残す（contract は後の migration）。移行前の録音の run（`target_tab` が null）は正本に書く。
 - **読み手**: 段階の入力（§3.5）・AI チャットの `read_page`／`search_transcript`（文字起こしのタブと、録音のタブはその最新のタブ。`editor-store` の `readTranscriptText`）・Google Docs の書き出し（録音の最新のタブ）・複製（タブの本文も写す）・空のページの片付け。
-- **画面**: 録音のタブ（`components/RecordingTranscript.tsx`）は再生・「文字起こしをはじめる」（既定のエンジン。別のエンジンは流れの ▾）・音声を足す・**文字起こしのタブの一覧**（押すと開く）。文字起こしのタブ（`components/TranscriptPage.tsx`。本文 `page_transcripts` を持つタブ。複製したタブも。`/p/{id}` が元の録音 `transcriptOf` を渡す）は元の録音の音声で再生、段落の編集・話者の名前・まとめる（`lib/transcript-client.ts`）、あとの .vtt を足す、版（直す前の本文に戻す）、このタブに書く実行の状態（失敗の「もう一度」は同じタブに同じエンジンで。サーバーで使えるエンジンのときだけ）。始めたら結果を書くタブを開く。
+- **画面**: 録音のタブ（`components/RecordingTranscript.tsx`）は再生・「文字起こしをはじめる」（既定のエンジン。別のエンジンは流れの ▾）・音声を足す・**文字起こしのタブの一覧**（押すと開く）。文字起こしのタブ（`components/TranscriptPage.tsx`。本文 `page_transcripts` を持つタブ。複製したタブも。`/p/{id}` が元の録音 `transcriptOf` を渡す）は**本文のエディタを出さず**（`PageEditor` の `bodyless`。題名＝ページの名前だけ。オーナー決定 2026-11-07）、題名の下で元の録音の音声で再生、段落の編集・話者の名前・まとめる（`lib/transcript-client.ts`）、あとの .vtt を足す、版（直す前の本文に戻す）、このタブに書く実行の状態（失敗の「もう一度」は同じタブに同じエンジンで。サーバーで使えるエンジンのときだけ）。始めたら結果を書くタブを開く。
 
 ## 4. 一覧の並びと「最近」と書き出し（`20261101013000_folder_order_fields_opens`）
 

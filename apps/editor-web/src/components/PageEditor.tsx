@@ -111,6 +111,11 @@ export type PageEditorProps = {
   createIn?: string | null;
   /** 題名の上の 1 行（狭い画面の場所。docs-ui の ShellLocation）。 */
   aboveTitle?: ReactNode;
+  /**
+   * 本文のエディタを出さない（題名と場所だけ。#310 の文字起こしのタブ: 本文は TranscriptPage が題名の下に出す。オーナー決定 2026-11-07）。
+   * 題名はページの名前として保存する。本文の保存・書式の帯・下書きは動かない。
+   */
+  bodyless?: boolean;
 } & PageEditorEvents;
 
 /** 何も足していないか（onLeftEmpty の判定）。空ならページの id と、まだ届いていない保存があるか。空でなければ null。 */
@@ -964,9 +969,10 @@ function EditorScreen(props: ScreenProps) {
       text,
       publicationFields,
       clearCover,
-      ai: { editor, bridge: aiBridge, title, kind: page.kind === undefined || page.kind === "folder" || page.kind === "page" ? "note" : page.kind, lang, diff: aiDiffBridge },
+      // bodyless（文字起こしのタブ）は本文を描かないので、本文に書く口（写真の「本文に入れる」など）を枠へ渡さない
+      ai: { editor: props.bodyless ? null : editor, bridge: aiBridge, title, kind: page.kind === undefined || page.kind === "folder" || page.kind === "page" ? "note" : page.kind, lang, diff: aiDiffBridge },
     }),
-    [attachPage, ready, pageId, status, flush, revision, reopenHere, shared, setShared, lang, changeLang, langNote, text, publicationFields, clearCover, editor, aiBridge, aiDiffBridge, title, page.kind],
+    [attachPage, ready, pageId, status, flush, revision, reopenHere, shared, setShared, lang, changeLang, langNote, text, publicationFields, clearCover, editor, aiBridge, aiDiffBridge, title, page.kind, props.bodyless],
   );
 
   const overwrite = () => {
@@ -1046,12 +1052,14 @@ function EditorScreen(props: ScreenProps) {
         </div>
       )}
       {/* be--flush: 旧 NIHO docs の「＋ ⋮⋮」用の左の余白を使わない（題名と本文の左端を揃える）。be--ai-plain: AI の文を灰色にしない（「…」の切り替え） */}
-      {/* .es-body: 本文の文字の大きさ（shell.css。見直し 2026-11-07） */}
-      <div className={aiGray ? "be be--flush es-body" : "be be--flush be--ai-plain es-body"}>
-        <EditorContent editor={editor} />
-        {/* ヘッダーに常設の書式の帯（ShellTools）を出すため、本文の操作を枠へ渡す（#37 T9） */}
-        <PageChrome editor={editor} onTools={registerTools} />
-      </div>
+      {/* .es-body: 本文の文字の大きさ（shell.css。見直し 2026-11-07）。bodyless（文字起こしのタブ）は本文を出さない */}
+      {!props.bodyless && (
+        <div className={aiGray ? "be be--flush es-body" : "be be--flush be--ai-plain es-body"}>
+          <EditorContent editor={editor} />
+          {/* ヘッダーに常設の書式の帯（ShellTools）を出すため、本文の操作を枠へ渡す（#37 T9） */}
+          <PageChrome editor={editor} onTools={registerTools} />
+        </div>
+      )}
     </div>
   );
 }

@@ -202,6 +202,22 @@ describe("niho-docs-ui on React 19", () => {
     expect(status()?.getAttribute("data-drafts")).toBe("none");
   });
 
+  it("bodyless（#310 の文字起こしのタブ）: 題名は出すが、本文のエディタと書式の帯は出さない", async () => {
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<PageEditor page={{ id: PAGE_ID, title: "文字起こし", blocks: [], revision: 1, updatedAt: UPDATED_AT }} bodyless />);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.querySelector<HTMLTextAreaElement>("textarea.page-title")?.value).toBe("文字起こし");
+    expect(container.querySelector(".be")).toBeNull();
+    expect(container.querySelector(".ProseMirror")).toBeNull();
+    expect(status()?.textContent).toBe("保存済み");
+  });
+
   it("caps the title at the server limit so an over-long title never enters autosave", async () => {
     container = document.createElement("div");
     document.body.append(container);
