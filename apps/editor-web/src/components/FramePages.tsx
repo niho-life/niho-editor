@@ -236,7 +236,8 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
   }, []);
   // 作ったページ（URL が `/p/{id}` になったあと）にもタブの帯を出す。`/p/{id}` を読み直した OpenPage にしか帯が無いと、
   // 新しいページを作った直後は「＋」でタブを足せない（再読み込みするまで帯が出ない）。タブは 1 つ（このページ）で、入れ物は足すときにサーバーが結ぶ
-  const [createdId, setCreatedId] = useState<string | null>(null);
+  // 親のフォルダは作った時点の値を持つ（作ったあとの URL の置換で `?in=` が消え、createIn が null になるため。帯がタブを足す行の親に使う）
+  const [created, setCreated] = useState<{ id: string; parent: string | null } | null>(null);
   // 帯が使う題名（タブを足した行・削除の確認に出す。書いている間は題名の変更で替わる）
   const [title, setTitle] = useState("");
   // 帯の「保存して待つ」（複製・削除の前に使う。OpenPage と同じ）
@@ -256,14 +257,14 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
   );
   return (
     <>
-      {createdId === null ? (
+      {created === null ? (
         // ページを作る間は ＋ を押せない。帯の場所は先に取っておく（作り終えて帯が出たとき、書いている本文が下へずれない）
         <TabBar tabs={[]} currentId="" onOpen={() => undefined} onAdd={() => undefined} busy />
       ) : (
         <PageTabs
-          key={`tabs-${createdId}`}
-          page={{ id: createdId, kind: "note", title, parent: createIn, page: null }}
-          tabs={[{ id: createdId, kind: "note", title, tabName: null, tabPos: 1, stepStatus: null }]}
+          key={`tabs-${created.id}`}
+          page={{ id: created.id, kind: "note", title, parent: created.parent, page: null }}
+          tabs={[{ id: created.id, kind: "note", title, tabName: null, tabPos: 1, stepStatus: null }]}
           saveNow={saveNow}
         />
       )}
@@ -285,7 +286,7 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
           props.onCreated(id);
           frame.pageCreated(id, titleRef.current, "note", createIn);
           // タブの帯を出す（画面にまだこのエディタがあるときだけ）
-          if (aliveRef.current) setCreatedId(id);
+          if (aliveRef.current) setCreated({ id, parent: createIn });
           // 保存が終わる前に別の画面へ移っていたら、その画面の URL は替えない
           if (!aliveRef.current || window.location.pathname !== "/p/new") return;
           window.history.replaceState(null, "", `/p/${id}${handoff ? `?destination=exp&lang=en${experience ? `&experience=${encodeURIComponent(experience)}` : ""}` : ""}`);

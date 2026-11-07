@@ -2901,6 +2901,31 @@ describe("EditorFrame: 「写真」のパネルと、何も足していない新
     expect(sends().filter((call) => call.url.endsWith("/discard"))).toEqual([]);
   });
 
+  it("a page made inside a folder (/p/new?in=) keeps that folder for the tab bar, so the tab added from it lands in the same folder", async () => {
+    const FOLDER = "00000000-0000-4000-8000-0000000000f5";
+    server();
+    nav.pathname = "/p/new";
+    nav.search = `in=${FOLDER}`;
+    window.history.replaceState(null, "", `/p/new?in=${FOLDER}`);
+    await mount({ pages: [{ ...page(FOLDER, "鎌倉の取材"), kind: "folder" as const }] }, <NewPage />);
+    // 作ったあとの URL の置換で ?in= は消える（useSearchParams も空になる）
+    nav.pathname = window.location.pathname;
+    nav.search = "";
+    await rerender(<NewPage />);
+    await tick();
+    expect(window.location.pathname).toBe(`/p/${NEW}`);
+    await act(async () => container!.querySelector<HTMLButtonElement>(".es-tabbar .es-tab-add")!.click());
+    await tick();
+    // 足したタブの行も、フォルダの中（深さ 1）に出る。ルート（深さ 0）には出ない
+    const depths = [...container!.querySelectorAll(".es-sb-list li")].map((li) => {
+      let depth = 0;
+      for (let at = li.parentElement; at && !at.classList.contains("es-sb-list"); at = at.parentElement) if (at.tagName === "UL") depth++;
+      return [li.querySelector(".es-di-t")?.textContent, depth - 1] as const;
+    });
+    expect(depths.filter(([title]) => title === "無題").every(([, depth]) => depth === 1)).toBe(true);
+    expect(depths.some(([title]) => title === "無題")).toBe(true);
+  });
+
   it("on pagehide (close, reload) does not discard: it only leaves the page as a candidate, and the row stays", async () => {
     server();
     nav.pathname = "/p/new";
