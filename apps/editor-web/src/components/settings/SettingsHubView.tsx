@@ -65,7 +65,7 @@ export function SettingsHubView({ initial, audio, account, destinations }: { ini
       audio={audio}
       account={account}
       destinations={{
-        faces: destinations.faces.filter((face) => face.handle === "exp").map((face) => ({ id: face.handle, label: face.label, available: face.available, reason: face.reason })),
+        faces: [],
         sites: destinations.sites.map((site) => ({ id: site.id, label: site.urlShape.host })),
       }}
       onLogout={logoutAndLeave}

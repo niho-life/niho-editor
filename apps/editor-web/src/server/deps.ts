@@ -53,13 +53,11 @@ import {
   updateTranscript,
 } from "@niho/editor-store";
 import { getAuthProvider, getPhotoAuthProvider } from "../auth";
-import { NihoExperienceApiClient } from "../auth/niho-experience-api";
-import { ExperienceArticleAuthorityClient, experienceFactsSource } from "./experience-article-authority-client";
 import type { AuthRoutesDeps } from "./auth-routes";
 import { getGoogleDocsCredential, getGoogleDocsGateway } from "../google-docs/runtime";
 import { publishConfig } from "../publish/config";
 import { pgDraftFingerprints, pgPublishStore } from "../publish/pg-store";
-import { assetUrlsOf, faceDeclarations, roleReaderOf, sessionAuthors, wirePublishPorts } from "../publish/ports";
+import { assetUrlsOf, NO_FACE_DECLARATIONS, sessionAuthors, wirePublishPorts } from "../publish/ports";
 import { getStorage } from "../storage/runtime";
 import { availableTranscriptionEngines, resolveTranscriptionEngines } from "../transcription/config";
 import { getTranscriptionRunner } from "../transcription/runtime";
@@ -68,7 +66,7 @@ import type { AudioStreamApiDeps } from "./audio-stream-api";
 import { getPool, getStore } from "./db";
 import type { GoogleDocsApiDeps } from "./google-docs-api";
 import type { ImageApiDeps } from "./images-api";
-import { faceCredentialsFromEnv } from "../public-api/source";
+import { NO_FACE_CREDENTIALS } from "../public-api/source";
 import type { PublicApiRouteDeps } from "../public-api/http";
 import { pgPreviewTokenStore, pgPublicApiSource } from "../public-api/pg-source";
 import { createFixedWindowLimiter, rateLimitFromEnv, type RateLimiter } from "../public-api/rate-limit";
@@ -159,10 +157,10 @@ export const transcriptDeps: TranscriptApiDeps = {
 
 /**
  * 公開 API v1（`/v1/*`。#40）の実行時の依存。データは Postgres（src/public-api/pg-source.ts。Pool は getStore と共有、DATABASE_URL が
- * 無ければ 503 temporarily_unavailable）。面の資格は `EDITOR_FACE_CREDENTIALS`（要求のたびに読み、値が変わらなければ読み直さない）。
+ * 無ければ 503 temporarily_unavailable）。運営面の資格は常に無効で、本人サイトの接続鍵だけを受け付ける。
  * rate limit は instance に 1 つ（`EDITOR_PUBLIC_API_RATE_LIMIT_PER_MINUTE`。最初の要求のときに読む）。
- * プレビューの写真の URL と面の宣言は公開のシート（#39）と同じ配線（`EDITOR_ASSET_ORIGIN`・`EDITOR_DESTINATION_DECLARATIONS`。
- * src/publish/config.ts）。著者は発行のときに token に結んだもの（previewTokenDeps）。
+ * プレビューの写真の URL は公開のシート（#39）と同じ配線（`EDITOR_ASSET_ORIGIN`）。著者は発行のときに token に結んだもの
+ * （previewTokenDeps）。
  */
 let publicApiLimiter: RateLimiter | null = null;
 export const publicApiDeps: PublicApiRouteDeps = {
@@ -170,15 +168,15 @@ export const publicApiDeps: PublicApiRouteDeps = {
     const pool = getPool();
     if (!pool) return null;
     const config = publishConfig(process.env);
-    return pgPublicApiSource(pool, { assetUrls: assetUrlsOf(config.assetOrigin), declarations: faceDeclarations(config.declarations) });
+    return pgPublicApiSource(pool, { assetUrls: assetUrlsOf(config.assetOrigin), declarations: NO_FACE_DECLARATIONS });
   },
-  faces: () => faceCredentialsFromEnv(process.env),
+  faces: () => NO_FACE_CREDENTIALS,
   limiter: () => (publicApiLimiter ??= createFixedWindowLimiter(rateLimitFromEnv(process.env))),
 };
 
 /**
  * プレビュー token の発行（`POST /api/pages/{id}/preview-token`。#40）の実行時の依存。保存先と接続は Postgres（DB が無ければ 503）。
- * NIHO の役割と著者は公開のシート（#39）と同じ（stub は `EDITOR_STUB_ROLES`、niho は役割の契約まで無し。著者は session の名前）。
+ * 著者は公開のシート（#39）と同じ session の名前。
  */
 export const previewTokenDeps: PreviewTokenApiDeps = {
   auth: () => getAuthProvider(),
@@ -186,36 +184,21 @@ export const previewTokenDeps: PreviewTokenApiDeps = {
     const pool = getPool();
     return pool ? pgPreviewTokenStore(pool) : null;
   },
-  roles: (session, request) => {
-    const auth = getAuthProvider();
-    return roleReaderOf(publishConfig(process.env), session, async () => {
-      const result = await new NihoExperienceApiClient(auth).roles(session, request);
-      return result.destinations.includes("exp") && result.roles.includes("writer") ? ["writer"] : [];
-    });
-  },
   authors: (session) => sessionAuthors(session),
   connections: () => {
     const pool = getPool();
     return pool ? connectionSource(pgPublishStore(pool)) : null;
   },
-  categoryActive: async (session, category) => session.mode !== "niho"
-    || (await new ExperienceArticleAuthorityClient().categories()).some((item) => item.slug === category),
 };
 
 /** 公開のシート（#39）の実行時の依存（DB の接続は要求のたびに遅延して決める。Pool は getStore と共有）。 */
 export const publishDeps: PublishApiDeps = {
   auth: () => getAuthProvider(),
-  ports: (session, request) => {
+  ports: (session) => {
     const pool = getPool();
-    const auth = getAuthProvider();
     return pool ? wirePublishPorts(pgPublishStore(pool), session, {
       drafts: pgDraftFingerprints(pool),
       finalStepNames: (owner, pageId) => finalStepPageNames(pool, owner, pageId),
-      roles: roleReaderOf(publishConfig(process.env), session, async () => {
-        const result = await new NihoExperienceApiClient(auth).roles(session, request);
-        return result.destinations.includes("exp") && result.roles.includes("writer") ? ["writer"] : [];
-      }),
-      ...(session.mode === "niho" ? { facts: experienceFactsSource(session.userId) } : {}),
       // 公開用の著者紹介は設定の行から（公開のときに公開版へ固定する）
       authorProfile: async (owner) => {
         const settings = await getEditorSettings(pool, owner);

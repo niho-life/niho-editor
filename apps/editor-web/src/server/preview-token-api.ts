@@ -9,7 +9,7 @@ import {
   isHttpsUrl,
   type Author,
 } from "@niho/editor-publish-contract";
-import { roleAllows, type AuthorSource, type Clock, type ConnectionSource, type RoleReader } from "@niho/editor-publish";
+import { type AuthorSource, type Clock, type ConnectionSource } from "@niho/editor-publish";
 import type { OwnerId } from "@niho/editor-store";
 import type { AuthProvider, Session } from "../auth/types";
 import { errorResponse, guarded, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
@@ -19,8 +19,8 @@ import { errorResponse, guarded, isSameOriginRequest, jsonResponse, notFoundResp
  * 201 `{ token, expiresAt, url }`（url は公開 API の `/v1/preview/{token}.json`）。token の平文はこの応答にだけ出し、保存はハッシュだけ。
  *
  * - 本人だけ（未認証 401）。更新系なので同じ origin の画面からだけ（違えば 403）。DB が無いと 503。
- * - ページは本人の・ゴミ箱でないもの。handle は、本人が役割で出せる面（`exp` / `niho`）か、本人の解除していない接続。
- *   どちらかが満たされなければ同じ 404（別の人のページ・接続の有無を推測させない）。handle の形が違えば 400。
+ * - ページは本人の・ゴミ箱でないもの。handle は本人の解除していない接続だけ。旧面handleはwireとして読めても常に404。
+ *   条件を満たさなければ同じ 404（別の人のページ・接続の有無を推測させない）。handle の形が違えば 400。
  * - 有効期限は発行から 15 分（契約の上限）。token は page と handle（と下の著者）に拘束し、下書きの版には拘束しない（自動保存のあとも読める）。
  * - 発行したときの本人の著者を token に結ぶ（公開 API の要求には session が無いため。migration 0009）。読めない・形が合わない
  *   （名前が無い・長すぎる・url が https でない）ときは著者なしで発行し、プレビューはいまの公開版の著者で組む（無ければ 404）。
@@ -47,14 +47,10 @@ export type PreviewTokenApiDeps = {
   auth: () => AuthProvider;
   /** DB が使えないときは null（503）。 */
   store: () => PreviewTokenStore | null;
-  /** 本人の NIHO の役割（要求のたびに読む。保存しない）。 */
-  roles: (session: Session, request: Request) => RoleReader;
   /** 本人の著者（公開と同じ。発行のときに読み、token に結ぶ）。 */
   authors: (session: Session) => AuthorSource;
   /** 本人の解除していない接続（DB が使えないときは null で 503）。 */
   connections: () => ConnectionSource | null;
-  /** Experience categories are checked from the destination for every token issuance. */
-  categoryActive?: (session: Session, category: string) => Promise<boolean>;
   clock?: Clock;
   /** 乱数（既定は node:crypto の randomBytes）。 */
   random?: (size: number) => Uint8Array;
@@ -74,7 +70,7 @@ const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]|\p{Cs}/u;
 
 const systemClock: Clock = { now: () => new Date().toISOString() };
 
-/** `{ handle }`（他の field は不可）。handle は面か、接続に使える形。 */
+/** `{ handle }`（他の field は不可）。旧面の形も閉鎖応答のために解析だけする。 */
 function parseHandle(value: unknown): { handle: string; category: string | null } | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
@@ -118,26 +114,18 @@ export function issuePreviewTokenRoute(request: Request, id: string, deps: Previ
     if (!body.ok) return body.response;
     const parsed = parseHandle(body.value);
     if (parsed === null) return errorResponse("bad_request");
-    const { handle, category } = parsed;
+    const { handle } = parsed;
     if (!UUID_PATTERN.test(id)) return notFoundResponse();
+    // Face preview is retired. Keep accepting the legacy wire shape, but never issue a token or call an upstream.
+    if (isFaceDest(handle)) return notFoundResponse();
     // owner は認証の層の本人だけ（要求の値からは決めない）
     let allowed: boolean;
     try {
-      allowed = isFaceDest(handle)
-        ? roleAllows(await deps.roles(session, request).read(session.userId), handle)
-        : await connections.has(session.userId, handle);
+      allowed = await connections.has(session.userId, handle);
     } catch {
       return errorResponse("unavailable");
     }
     if (!allowed) return notFoundResponse();
-    if (handle === "exp") {
-      if (!deps.categoryActive) return errorResponse("unavailable");
-      try {
-        if (!(await deps.categoryActive(session, category!))) return notFoundResponse();
-      } catch {
-        return errorResponse("unavailable");
-      }
-    }
     // 256 bit の乱数（base64url の 43 文字。契約の `pv_` の形）
     const token = `${PREVIEW_TOKEN_PREFIX}${Buffer.from((deps.random ?? randomBytes)(32)).toString("base64url")}`;
     const issuedAt = new Date((deps.clock ?? systemClock).now()).toISOString();

@@ -147,45 +147,17 @@ describe.skipIf(databaseUrl === undefined)("発信先の設定の route を Post
     if (!result.ok) throw new Error(JSON.stringify(result));
   }
 
-  it("公開中の件数は本人のページだけを数える（全員で共有する面に別のアカウントが公開していても足されない）", async () => {
-    // 別のアカウントが exp（全員で共有する面）へ 2 ページ公開する
-    for (let i = 0; i < 2; i += 1) {
-      const result = await publisher.publish({
-        actorId: OTHER,
-        pageId: await readyPage(OTHER),
-        target: { dest: "exp" },
-        settings: { range: "live", extras: { app: false, news: false, xp: false }, category: null, related: [] },
-      });
-      if (!result.ok) throw new Error(JSON.stringify(result));
-    }
-
-    // DB には exp の公開が 2 件ある（handle だけで数えると 2 件に見える）
-    const all = await pool.query<{ n: string }>("SELECT count(*)::text AS n FROM publications WHERE handle = 'exp' AND stopped_at IS NULL");
-    expect(Number(all.rows[0]?.n)).toBe(2);
-
-    // 1 件も公開していない本人には 0 件しか見えない
-    const mine = (await (await listDestinations(request("GET", "/api/destinations"), deps)).json()) as { destinations: { faces: { handle: string; published: number }[] } };
-    expect(mine.destinations.faces.map((face) => [face.handle, face.published])).toEqual([["exp", 0]]);
-
-    // 本人が 1 件公開すると、自分の 1 件だけが数に入る
-    const own = await publisher.publish({
+  it("roles and declarations cannot restore Experience publication or destination rows", async () => {
+    const result = await publisher.publish({
       actorId: ACTOR,
       pageId: await readyPage(),
       target: { dest: "exp" },
       settings: { range: "live", extras: { app: false, news: false, xp: false }, category: null, related: [] },
     });
-    if (!own.ok) throw new Error(JSON.stringify(own));
-    const after = (await (await listDestinations(request("GET", "/api/destinations"), deps)).json()) as { destinations: { faces: { handle: string; published: number }[] } };
-    expect(after.destinations.faces.find((face) => face.handle === "exp")?.published).toBe(1);
-
-    // 別のアカウントから見ても自分の 2 件だけ
-    const theirs = (await (await listDestinations(request("GET", "/api/destinations"), { ...deps, auth: () => authAs(OTHER) }).then((response) => response.json())) as { destinations: { faces: { handle: string; published: number }[] } });
-    expect(theirs.destinations.faces.find((face) => face.handle === "exp")?.published).toBe(2);
-
-    // 数える SQL そのものも owner ごとに分かれている
-    expect((await countLivePublishedByHandle(pool, ACTOR, ["exp", "niho"])).get("exp")).toBe(1);
-    expect((await countLivePublishedByHandle(pool, OTHER, ["exp", "niho"])).get("exp")).toBe(2);
-    expect((await countLivePublishedByHandle(pool, "synthetic-owner-c", ["exp"])).get("exp")).toBe(0);
+    expect(result).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
+    const body = (await (await listDestinations(request("GET", "/api/destinations"), deps)).json()) as { destinations: { faces: unknown[] } };
+    expect(body.destinations.faces).toEqual([]);
+    expect(Number((await pool.query<{ n: string }>("SELECT count(*)::text AS n FROM publications WHERE handle = 'exp'")).rows[0]?.n)).toBe(0);
   });
 
   it("鍵を再発行すると、公開 API は旧鍵を 401 にし、新しい鍵だけを通す", async () => {

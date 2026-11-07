@@ -35,6 +35,7 @@ const databaseUrl = process.env.TEST_DATABASE_URL;
 const ACTOR = "synthetic-publish-actor-a";
 const OTHER_ACTOR = "synthetic-publish-actor-b";
 const LEAD = "Start early, follow the shoreline, and stop for tea.";
+const PRIMARY_SITE_HANDLE = "synthetic-primary-site";
 
 /** packages/editor-publish/fixtures/destinations の exp・niho の写し（面の宣言）。 */
 const FACE_DECLARATIONS = {
@@ -126,6 +127,9 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
       client.release();
     }
     store = pgPublishStore(pool);
+    const seeded = await new ConnectionService({ store, clock, drafts: pgDraftFingerprints(pool), assetBytes: new MemoryAssetBytes() })
+      .createConnection({ actorId: ACTOR, handle: PRIMARY_SITE_HANDLE, mode: "api", siteUrl: "https://primary.example.net" });
+    if (!seeded.ok) throw new Error(seeded.reason);
   });
 
   afterAll(async () => {
@@ -189,7 +193,7 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
   }
 
   const NIHO: Target = { dest: "niho" };
-  const EXP: Target = { dest: "exp" };
+  const PRIMARY_SITE: Target = { dest: "site", handle: PRIMARY_SITE_HANDLE };
 
   async function versionsOf(pageId: string): Promise<Array<{ version: number; handle: string; title: string; updatedAt: string }>> {
     const result = await pool.query<{ version: number; handle: string; title: string; updated_at: string }>(
@@ -226,11 +230,11 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
     const { publisher } = services();
     const { pageId, slug } = await readyPage();
 
-    const first = await publisher.publish(input(pageId, EXP, SETTINGS.exp));
-    expect(first).toMatchObject({ ok: true, status: "published", version: 1, url: `https://exp.example.com/guides/${slug}` });
+    const first = await publisher.publish(input(pageId, PRIMARY_SITE, SETTINGS.site));
+    expect(first).toMatchObject({ ok: true, status: "published", version: 1, url: `https://primary.example.net/${slug}` });
     if (!first.ok) throw new Error(first.reason);
-    expect(await getPublication(pool, pageId)).toMatchObject({ dest: "exp", handle: "exp", slug, version: 1, stoppedAt: null });
-    expect((await listLivePublished(pool, "exp")).items.map((item) => item.publication.pageId)).toContain(pageId);
+    expect(await getPublication(pool, pageId)).toMatchObject({ dest: "site", handle: PRIMARY_SITE_HANDLE, slug, version: 1, stoppedAt: null });
+    expect((await listLivePublished(pool, PRIMARY_SITE_HANDLE)).items.map((item) => item.publication.pageId)).toContain(pageId);
     const v1 = (await getPublicationVersion(pool, pageId, 1))!.snapshot as { fingerprint: string; title: string };
     // 公開したばかりの下書きの fingerprint は公開版と同じ（DraftFingerprints の Postgres の実装）
     expect(await pgDraftFingerprints(pool).read(pageId)).toBe(v1.fingerprint);
@@ -238,10 +242,10 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
     // 下書きを直すと「更新あり」。公開版は直した内容に追従しない
     await pool.query("UPDATE pages SET title = $2 WHERE id = $1", [pageId, "A morning walk, revised"]);
     expect(deriveStatus({ range: "live", stoppedAt: null, fingerprint: v1.fingerprint }, (await pgDraftFingerprints(pool).read(pageId))!)).toBe("updated");
-    const live = await readPublishedForHandle(pool, "exp", pageId);
+    const live = await readPublishedForHandle(pool, PRIMARY_SITE_HANDLE, pageId);
     expect(live?.status === "live" && (live.snapshot as { title: string }).title).toBe(v1.title);
 
-    const updated = await publisher.update(input(pageId, EXP, SETTINGS.exp));
+    const updated = await publisher.update(input(pageId, PRIMARY_SITE, SETTINGS.site));
     expect(updated).toMatchObject({ ok: true, status: "published", version: 2, url: first.url });
     if (!updated.ok) throw new Error(updated.reason);
     expect(updated.publication.publishedAt).toBe(first.publication.publishedAt);
@@ -251,25 +255,25 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
     const stopped = await publisher.stop({ actorId: ACTOR, pageId });
     expect(stopped).toMatchObject({ ok: true, status: "stopped" });
     expect(await publisher.stop({ actorId: ACTOR, pageId })).toEqual(stopped);
-    expect(await redirectsOf(pageId)).toEqual([{ from_handle: "exp", from_slug: slug, to_handle: null, to_slug: null }]);
-    expect((await listLivePublished(pool, "exp")).items.map((item) => item.publication.pageId)).not.toContain(pageId);
-    expect(await readPublishedForHandle(pool, "exp", pageId)).toMatchObject({ status: "left", slug, version: 2, movedTo: null });
+    expect(await redirectsOf(pageId)).toEqual([]);
+    expect((await listLivePublished(pool, PRIMARY_SITE_HANDLE)).items.map((item) => item.publication.pageId)).not.toContain(pageId);
+    expect(await readPublishedForHandle(pool, PRIMARY_SITE_HANDLE, pageId)).toMatchObject({ status: "left", slug, version: 2, movedTo: null });
     // 公開をやめたページはゴミ箱へ入れられる。戻してから再公開する
     const editor = new EditorStore(pool);
     expect(await editor.deletePage(ACTOR, pageId)).toBe("deleted");
-    expect(await publisher.publish(input(pageId, EXP, SETTINGS.exp))).toEqual({ ok: false, reason: "not_found" });
+    expect(await publisher.publish(input(pageId, PRIMARY_SITE, SETTINGS.site))).toEqual({ ok: false, reason: "not_found" });
     expect(await editor.restoreFromTrash(ACTOR, pageId)).toBe(true);
 
-    const again = await publisher.publish(input(pageId, EXP, SETTINGS.exp));
+    const again = await publisher.publish(input(pageId, PRIMARY_SITE, SETTINGS.site));
     expect(again).toMatchObject({ ok: true, version: 3, url: first.url });
     expect(await redirectsOf(pageId)).toEqual([]);
-    expect(await readPublishedForHandle(pool, "exp", pageId)).toMatchObject({ status: "live", publication: { version: 3, stoppedAt: null } });
+    expect(await readPublishedForHandle(pool, PRIMARY_SITE_HANDLE, pageId)).toMatchObject({ status: "live", publication: { version: 3, stoppedAt: null } });
     expect(await editor.deletePage(ACTOR, pageId)).toBe("published");
     // 公開版は追記だけ（番号は使い回さない）
     expect((await versionsOf(pageId)).map((version) => version.version)).toEqual([1, 2, 3]);
   });
 
-  it("moves Experience ↔ a connected site, preserving URL and slug invariants", async () => {
+  it("moves between connected personal sites and still rejects Experience", async () => {
     const { publisher, connections } = services();
     const moving = await readyPage();
     const holder = await readyPage();
@@ -277,36 +281,20 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
     const connected = await connections.createConnection({ actorId: ACTOR, handle, mode: "api", siteUrl: "https://move.example.net" });
     if (!connected.ok) throw new Error(connected.reason);
     const site: Target = { dest: "site", handle };
-    expect((await publisher.publish(input(moving.pageId, EXP, SETTINGS.exp))).ok).toBe(true);
+    expect((await publisher.publish(input(moving.pageId, PRIMARY_SITE, SETTINGS.site))).ok).toBe(true);
     // 移し先の本人siteで、別のページが同じ slug を持っている
     expect((await publisher.publish(input(holder.pageId, site, SETTINGS.site, { slug: moving.slug }))).ok).toBe(true);
 
     const taken = await publisher.changeDestination(input(moving.pageId, site, SETTINGS.site, { slug: moving.slug }));
     expect(taken).toEqual({ ok: false, reason: "slug_taken", suggestion: `${moving.slug}-2` });
-    expect(await getPublication(pool, moving.pageId)).toMatchObject({ handle: "exp", stoppedAt: null });
+    expect(await getPublication(pool, moving.pageId)).toMatchObject({ handle: PRIMARY_SITE_HANDLE, stoppedAt: null });
 
     const moved = await publisher.changeDestination(input(moving.pageId, site, SETTINGS.site));
     expect(moved).toMatchObject({ ok: true, version: 2, url: `https://move.example.net/${moving.slug}-2` });
-    expect(await redirectsOf(moving.pageId)).toEqual([{ from_handle: "exp", from_slug: moving.slug, to_handle: null, to_slug: null }]);
-    expect(await readPublishedForHandle(pool, "exp", moving.pageId)).toEqual({
-      status: "left",
-      pageId: moving.pageId,
-      handle: "exp",
-      dest: "exp",
-      slug: moving.slug,
-      range: "live",
-      version: 1,
-      stoppedAt: moved.ok ? moved.publication.updatedAt : "",
-      movedTo: null,
-    });
-
-    // Experience の元 URL へ戻すと、一覧への転送は消える。site の旧 URL には転送を作らない。
-    const back = await publisher.changeDestination(input(moving.pageId, EXP, SETTINGS.exp, { slug: moving.slug }));
-    expect(back).toMatchObject({ ok: true, version: 3, url: `https://exp.example.com/guides/${moving.slug}` });
-    expect(await redirectsOf(moving.pageId)).toEqual([]);
-    // 公開中の Experience slug は、ほかのページは取れない
-    const other = await readyPage();
-    expect(await publisher.publish(input(other.pageId, EXP, SETTINGS.exp, { slug: moving.slug }))).toMatchObject({ ok: false, reason: "slug_taken" });
+    expect(await getPublication(pool, moving.pageId)).toMatchObject({ handle, dest: "site", stoppedAt: null });
+    const beforeRejectedMove = await dump();
+    expect(await publisher.changeDestination(input(moving.pageId, { dest: "exp" }, SETTINGS.exp))).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
+    expect(await dump()).toBe(beforeRejectedMove);
     // 公開後の slug は固定
     expect(await publisher.publish(input(holder.pageId, site, SETTINGS.site, { slug: "another-slug" }))).toEqual({ ok: false, reason: "slug_locked", slug: moving.slug });
   });
@@ -396,19 +384,19 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
       const { pageId } = await readyPage();
       const before = await dump();
       const broken = faulty((name) => name === "putPublication");
-      expect(await services(broken).publisher.publish(input(pageId, EXP, SETTINGS.exp))).toEqual({ ok: false, reason: "failed", retryable: true });
+      expect(await services(broken).publisher.publish(input(pageId, PRIMARY_SITE, SETTINGS.site))).toEqual({ ok: false, reason: "failed", retryable: true });
       expect(broken.calls.indexOf("addVersion")).toBeGreaterThan(-1);
       expect(broken.calls.indexOf("addVersion")).toBeLessThan(broken.calls.indexOf("putPublication"));
       expect(await dump()).toBe(before);
       expect(await latestPublicationVersion(pool, pageId)).toBe(0);
 
       // 公開中のページの更新でも、前の公開版・公開・下書きが残る
-      expect((await services().publisher.publish(input(pageId, EXP, SETTINGS.exp))).ok).toBe(true);
+      expect((await services().publisher.publish(input(pageId, PRIMARY_SITE, SETTINGS.site))).ok).toBe(true);
       await pool.query("UPDATE pages SET title = 'A revised title' WHERE id = $1", [pageId]);
       const published = await dump();
-      expect(await services(broken).publisher.update(input(pageId, EXP, SETTINGS.exp))).toEqual({ ok: false, reason: "failed", retryable: true });
+      expect(await services(broken).publisher.update(input(pageId, PRIMARY_SITE, SETTINGS.site))).toEqual({ ok: false, reason: "failed", retryable: true });
       expect(await dump()).toBe(published);
-      expect(await services().publisher.update(input(pageId, EXP, SETTINGS.exp))).toMatchObject({ ok: true, version: 2 });
+      expect(await services().publisher.update(input(pageId, PRIMARY_SITE, SETTINGS.site))).toMatchObject({ ok: true, version: 2 });
     });
 
     type Operation = { name: string; prepare: () => Promise<(store: ConnectionStore) => Promise<{ ok: boolean }>> };
@@ -418,23 +406,23 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
         name: "publish",
         prepare: async () => {
           const { pageId } = await readyPage();
-          return (over) => services(over).publisher.publish(input(pageId, EXP, SETTINGS.exp));
+          return (over) => services(over).publisher.publish(input(pageId, PRIMARY_SITE, SETTINGS.site));
         },
       },
       {
         name: "update",
         prepare: async () => {
           const { pageId } = await readyPage();
-          await services().publisher.publish(input(pageId, EXP, SETTINGS.exp));
+          await services().publisher.publish(input(pageId, PRIMARY_SITE, SETTINGS.site));
           await pool.query("UPDATE pages SET title = 'Updated in place' WHERE id = $1", [pageId]);
-          return (over) => services(over).publisher.update(input(pageId, EXP, SETTINGS.exp));
+          return (over) => services(over).publisher.update(input(pageId, PRIMARY_SITE, SETTINGS.site));
         },
       },
       {
         name: "stop",
         prepare: async () => {
           const { pageId } = await readyPage();
-          await services().publisher.publish(input(pageId, EXP, SETTINGS.exp));
+          await services().publisher.publish(input(pageId, PRIMARY_SITE, SETTINGS.site));
           return (over) => services(over).publisher.stop({ actorId: ACTOR, pageId });
         },
       },
@@ -445,7 +433,7 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
           const created = await services().connections.createConnection({ actorId: ACTOR, handle, mode: "api", siteUrl: "https://atomic-move.example.net" });
           if (!created.ok) throw new Error(created.reason);
           const { pageId } = await readyPage();
-          await services().publisher.publish(input(pageId, EXP, SETTINGS.exp));
+          await services().publisher.publish(input(pageId, PRIMARY_SITE, SETTINGS.site));
           return (over) => services(over).publisher.changeDestination(input(pageId, { dest: "site", handle }, SETTINGS.site));
         },
       },
@@ -528,17 +516,17 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
       const slug = `race-x${randomUUID().slice(0, 8)}`;
       const wait = barrier(2);
       const results: PublishResult[] = await Promise.all([
-        services(racing(wait)).publisher.publish(input(a.pageId, EXP, SETTINGS.exp, { slug })),
-        services(racing(wait)).publisher.publish(input(b.pageId, EXP, SETTINGS.exp, { slug })),
+        services(racing(wait)).publisher.publish(input(a.pageId, PRIMARY_SITE, SETTINGS.site, { slug })),
+        services(racing(wait)).publisher.publish(input(b.pageId, PRIMARY_SITE, SETTINGS.site, { slug })),
       ]);
       expect(results.filter((result) => result.ok)).toHaveLength(1);
       expect(results.filter((result) => !result.ok)).toEqual([{ ok: false, reason: "failed", retryable: true }]);
-      const rows = await pool.query<{ page_id: string }>("SELECT page_id FROM publications WHERE handle = 'exp' AND slug = $1", [slug]);
+      const rows = await pool.query<{ page_id: string }>("SELECT page_id FROM publications WHERE handle = $2 AND slug = $1", [slug, PRIMARY_SITE_HANDLE]);
       expect(rows.rows).toHaveLength(1);
       const loser = rows.rows[0]!.page_id === a.pageId ? b.pageId : a.pageId;
       expect(await latestPublicationVersion(pool, loser)).toBe(0);
       // やり直すと、使われている slug として断られる
-      expect(await services().publisher.publish(input(loser, EXP, SETTINGS.exp, { slug }))).toEqual({ ok: false, reason: "slug_taken", suggestion: `${slug}-2` });
+      expect(await services().publisher.publish(input(loser, PRIMARY_SITE, SETTINGS.site, { slug }))).toEqual({ ok: false, reason: "slug_taken", suggestion: `${slug}-2` });
     });
 
     it("two key rotations of one connection at once are serialized: the second revokes the first's new key, one key stays active", async () => {
@@ -580,8 +568,8 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
     it("two publishes of the same page at once are serialized: both succeed with consecutive versions", async () => {
       const { pageId, slug } = await readyPage();
       const results = await Promise.all([
-        services().publisher.publish(input(pageId, EXP, SETTINGS.exp)),
-        services().publisher.publish(input(pageId, EXP, SETTINGS.exp)),
+        services().publisher.publish(input(pageId, PRIMARY_SITE, SETTINGS.site)),
+        services().publisher.publish(input(pageId, PRIMARY_SITE, SETTINGS.site)),
       ]);
       expect(results.map((result) => result.ok)).toEqual([true, true]);
       expect((await versionsOf(pageId)).map((version) => version.version)).toEqual([1, 2]);

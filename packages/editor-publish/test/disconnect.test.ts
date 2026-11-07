@@ -72,7 +72,7 @@ describe("disconnect", () => {
     expect(await world.publish(PAGE_ID)).toEqual({ ok: false, reason: "forbidden_destination", detail: "connection" });
     expect(world.store.dump()).toBe(before);
     expect(await world.publisher.publish({ actorId: ACTOR, pageId: PAGE_ID, target: { dest: "exp" }, settings: SETTINGS.exp }))
-      .toMatchObject({ ok: true });
+      .toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
   });
 });
 
@@ -100,12 +100,12 @@ describe("listPublished", () => {
     expect(listed.items.every((item) => item.status === "stopped" && item.stoppedAt !== null)).toBe(true);
   });
 
-  it("a page that moved to another destination is no longer on the connection", async () => {
+  it("a page cannot move from the connection to a retired face", async () => {
     const world = await populated();
     const moved = await world.publisher.changeDestination({ actorId: ACTOR, pageId: PAGE_ID, target: { dest: "exp" }, settings: SETTINGS.exp });
-    expect(moved.ok).toBe(true);
+    expect(moved).toEqual({ ok: false, reason: "forbidden_destination", detail: "role" });
     const listed = await world.connections.listPublished({ actorId: ACTOR, connectionId: world.connectionId });
-    expect(listed.ok && listed.items.map((item) => item.pageId).sort()).toEqual([PAGE_2, PAGE_3].sort());
+    expect(listed.ok && listed.items.map((item) => item.pageId).sort()).toEqual([PAGE_ID, PAGE_2, PAGE_3].sort());
   });
 
   it("a page without a draft is never reported as updated", async () => {

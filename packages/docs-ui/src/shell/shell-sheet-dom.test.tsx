@@ -373,7 +373,7 @@ describe("公開のシート（選ぶ・直す・公開）", () => {
     expect(byText(host, '[role="radio"]', "公開")!.getAttribute("aria-checked")).toBe("false");
   });
 
-  it("あわせて: 押すと aria-checked が替わる。体験ページに載せるは NIHO Experience 以外では押せない", () => {
+  it("あわせて: 押すと aria-checked が替わり、本人サイトでは追加掲載を出さない", () => {
     const host = mount(<Opener />);
     click(byText(host, "button", "公開"));
     click(byText(host, '[role="radio"]', "NIHO Experience"));
@@ -385,10 +385,8 @@ describe("公開のシート（選ぶ・直す・公開）", () => {
     click(xp);
     expect(xp.getAttribute("aria-checked")).toBe("false");
     click(byText(host, '[role="radio"]', "自分のサイト"));
-    const xpOff = byText(host, '[role="checkbox"]', "体験ページに載せる")!;
-    expect(xpOff.getAttribute("aria-disabled")).toBe("true");
-    click(xpOff);
-    expect(xpOff.getAttribute("aria-checked")).toBe("false");
+    expect(byText(host, '[role="checkbox"]', "体験ページに載せる")).toBeFalsy();
+    expect(byText(host, '[role="checkbox"]', "NIHOアプリに載せる")).toBeFalsy();
   });
 
   it("足りないものがあれば公開は押せず、「直す」で onFix(id)", () => {

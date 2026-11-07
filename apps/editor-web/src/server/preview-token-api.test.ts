@@ -42,7 +42,7 @@ function auth(userId: string | null): AuthProvider {
 }
 
 function setup(
-  options: { user?: string | null; roles?: string[]; connections?: string[]; pages?: Page[]; db?: boolean; author?: () => Promise<Author> } = {},
+  options: { user?: string | null; connections?: string[]; pages?: Page[]; db?: boolean; author?: () => Promise<Author> } = {},
 ) {
   const pageId = randomUUID();
   const pages = options.pages ?? [{ id: pageId, owner: OWNER, deleted: false }];
@@ -51,7 +51,6 @@ function setup(
   const deps: PreviewTokenApiDeps = {
     auth: () => auth(options.user === undefined ? OWNER : options.user),
     store: () => (options.db === false ? null : saved.store),
-    roles: (session) => ({ read: async (actor) => (actor === OWNER && session.userId === OWNER ? options.roles ?? [] : []) }),
     authors: (session) => ({
       read: async (actor) => {
         if (actor !== session.userId) throw new Error("another actor");
@@ -59,7 +58,6 @@ function setup(
       },
     }),
     connections: () => (options.db === false ? null : { has: async (actor, handle) => actor === OWNER && connections.includes(handle) }),
-    categoryActive: async (_session, category) => category === "walks",
     clock: { now: () => NOW },
     env: {},
   };
@@ -114,20 +112,12 @@ describe("POST /api/pages/{id}/preview-token", () => {
     }
   });
 
-  it("issues for a face only when the owner's NIHO roles open it", async () => {
-    const writer = setup({ roles: ["writer"] });
-    expect((await issuePreviewTokenRoute(post(writer.pageId, { handle: "exp", category: "walks" }), writer.pageId, writer.deps)).status).toBe(201);
-    expect((await issuePreviewTokenRoute(post(writer.pageId, { handle: "niho" }), writer.pageId, writer.deps)).status).toBe(404);
-    const nobody = setup({ roles: [] });
-    expect((await issuePreviewTokenRoute(post(nobody.pageId, { handle: "exp", category: "walks" }), nobody.pageId, nobody.deps)).status).toBe(404);
-    expect(nobody.rows).toEqual([]);
-    const disabled = setup({ roles: ["writer"] });
-    expect((await issuePreviewTokenRoute(post(disabled.pageId, { handle: "exp", category: "disabled" }), disabled.pageId, disabled.deps)).status).toBe(404);
-    expect(disabled.rows).toEqual([]);
-    const outage = setup({ roles: ["writer"] });
-    outage.deps.categoryActive = async () => { throw new Error("upstream unavailable"); };
-    expect((await issuePreviewTokenRoute(post(outage.pageId, { handle: "exp", category: "walks" }), outage.pageId, outage.deps)).status).toBe(503);
-    expect(outage.rows).toEqual([]);
+  it("never issues a face preview token for legacy face payloads", async () => {
+    for (const body of [{ handle: "exp", category: "walks" }, { handle: "niho" }]) {
+      const closed = setup();
+      expect((await issuePreviewTokenRoute(post(closed.pageId, body), closed.pageId, closed.deps)).status).toBe(404);
+      expect(closed.rows).toEqual([]);
+    }
   });
 
   it("answers the same 404 for another person's page, a page in the trash, a missing or malformed id and a connection that is not the owner's", async () => {

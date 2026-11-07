@@ -23,17 +23,6 @@ export DEPLOY_ENV="$tmp/deploy.env"
 source "$dir/lib.sh"
 load_deploy_env
 
-# An older deploy.env must not silently remove a previously connected destination.
-check "example explicitly declares both article flags" "$(require_explicit_article_settings; printf ok)" ok
-for missing in EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED EDITOR_ARTICLE_AUTHORITY_API_ENABLED; do
-  grep -v "^${missing}=" "$dir/deploy.env.example" > "$tmp/implicit-article.env"
-  if (DEPLOY_ENV="$tmp/implicit-article.env" require_explicit_article_settings) 2>/dev/null; then
-    check "deployment rejects omitted $missing" accepted rejected
-  else
-    check "deployment rejects omitted $missing" rejected rejected
-  fi
-done
-
 # Stub: `secrets describe` succeeds when the secret exists, `secrets versions list` prints the state of the newest version.
 secret_exists=1
 newest_state=""
@@ -293,37 +282,38 @@ for bad in 'client,EDITOR_AUTH_MODE=stub' 'client id' 'client|x' 'client=x'; do
     "$(refused_lines 'EDITOR_AUTH_MODE=google' "GOOGLE_OAUTH_CLIENT_ID=$bad" "GOOGLE_ALLOWED_EMAILS=$google_list")" 1
 done
 
-# Article publishing must survive the deploy script's replacement of all environment variables.
-cp "$tmp/niho.env" "$tmp/article.env"
-cat >> "$tmp/article.env" <<'EOF'
-EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED=true
-EDITOR_EXPERIENCE_ORIGIN=https://experience.example.invalid
-EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_AUDIENCE=https://experience-runtime.example.invalid
-EDITOR_ARTICLE_AUTHORITY_API_ENABLED=true
-EDITOR_ARTICLE_AUTHORITY_AUDIENCE=https://editor-runtime.example.invalid
-EDITOR_ARTICLE_AUTHORITY_SERVICE_ACCOUNT_EMAILS=experience@sample-project.iam.gserviceaccount.com,niho@sample-project.iam.gserviceaccount.com
-EDITOR_FACE_CREDENTIALS_SECRET_REF=sample-editor-face-verifiers:4
-EDITOR_ASSET_ORIGIN=https://editor.example.com
-EOF
-article_env="$(DEPLOY_ENV="$tmp/article.env" load_deploy_env; service_env_vars 0 0 0)"
-case "$article_env" in '^|^'*'|EDITOR_ARTICLE_AUTHORITY_SERVICE_ACCOUNT_EMAILS=experience@sample-project.iam.gserviceaccount.com,niho@sample-project.iam.gserviceaccount.com')
-  check "article allowlist keeps commas within one gcloud value" ok ok ;;
-  *) check "article allowlist keeps commas within one gcloud value" missing ok ;;
-esac
-case "$article_env" in *'|EDITOR_DESTINATION_DECLARATIONS={"exp":"https://experience.example.invalid/api/public/guides/publication-requirements"}'*)
-  check "article declaration points to the configured destination" ok ok ;;
-  *) check "article declaration points to the configured destination" missing ok ;;
-esac
-check "article public API verifier uses the fixed Secret version"   "$(DEPLOY_ENV="$tmp/article.env" load_deploy_env; service_secrets 0 0 0 0)"   "DATABASE_URL=niho-editor-database-url:latest,EDITOR_FACE_CREDENTIALS=sample-editor-face-verifiers:4"
-for invalid in   'EDITOR_EXPERIENCE_ORIGIN=https://experience.example.invalid/path'   'EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_AUDIENCE=https://runtime.example.invalid|EDITOR_AUTH_MODE=stub'   'EDITOR_FACE_CREDENTIALS_SECRET_REF='   'EDITOR_FACE_CREDENTIALS_SECRET_REF=sample-editor-face-verifiers:latest'   'EDITOR_ARTICLE_AUTHORITY_SERVICE_ACCOUNT_EMAILS=person@example.com'   'EDITOR_ARTICLE_AUTHORITY_API_ENABLED=1'; do
-  cp "$tmp/article.env" "$tmp/article-invalid.env"
-  printf '%s\n' "$invalid" | while IFS='=' read -r key value; do printf "%s='%s'\n" "$key" "$value"; done >> "$tmp/article-invalid.env"
-  if (DEPLOY_ENV="$tmp/article-invalid.env" load_deploy_env) 2>/dev/null; then
-    check "article deployment rejects invalid ${invalid%%=*}" accepted rejected
-  else
-    check "article deployment rejects invalid ${invalid%%=*}" rejected rejected
-  fi
+# Retired Experience settings cannot be reenabled, even by an old deploy.env.
+for flag in EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED EDITOR_ARTICLE_AUTHORITY_API_ENABLED; do
+  for value in true 1; do
+    if (export "$flag=$value"; load_article_deploy_settings) 2>/dev/null; then
+      check "retired $flag=$value is refused" accepted rejected
+    else
+      check "retired $flag=$value is refused" rejected rejected
+    fi
+  done
 done
+check "omitted article settings are accepted" "$(load_article_deploy_settings; printf ok)" ok
+check "explicit false article settings are accepted" \
+  "$(EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED=false EDITOR_ARTICLE_AUTHORITY_API_ENABLED=false load_article_deploy_settings; printf ok)" ok
+check "legacy face Secret is never attached" \
+  "$(EDITOR_FACE_CREDENTIALS_SECRET_REF=sample-editor-face-verifiers:4 service_secrets 0 0 0 0)" \
+  "DATABASE_URL=niho-editor-database-url:latest"
+# Neither old origin/allowlist nor flags are emitted when constructing runtime settings.
+retired_env="$(EDITOR_EXPERIENCE_ARTICLE_AUTHORITY_ENABLED=true EDITOR_ARTICLE_AUTHORITY_API_ENABLED=true EDITOR_EXPERIENCE_ORIGIN=https://experience.example.invalid service_env_vars 0 0 0)"
+case "$retired_env" in *EDITOR_EXPERIENCE*|*EDITOR_ARTICLE_AUTHORITY*|*EDITOR_DESTINATION_DECLARATIONS*|*EDITOR_FACE_CREDENTIALS*)
+  check "retired configuration is never emitted" present absent ;;
+  *) check "retired configuration is never emitted" absent absent ;;
+esac
+site_asset_env="$(EDITOR_ASSET_ORIGIN=https://assets.example.invalid service_env_vars 0 0 0)"
+case "$site_asset_env" in *EDITOR_ASSET_ORIGIN=https://assets.example.invalid*)
+  check "owner site asset origin is retained" ok ok ;;
+  *) check "owner site asset origin is retained" missing ok ;;
+esac
+if (EDITOR_ASSET_ORIGIN='https://assets.example.invalid|EDITOR_AUTH_MODE=stub' load_article_deploy_settings) 2>/dev/null; then
+  check "asset origin cannot inject environment settings" accepted rejected
+else
+  check "asset origin cannot inject environment settings" rejected rejected
+fi
 
 # A version alias or delimiter must never silently rotate a private-job encryption key.
 check "private job keyring is absent by default" "${EDITOR_PRIVATE_JOBS_KEY_RING_SECRET_REF:-}" ""

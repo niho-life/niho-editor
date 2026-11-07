@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { PUBLISHABLE_FACE_DESTS, roleAllows } from "../src/types.js";
 
 describe("publication face roles", () => {
-  it("allows only a current writer to publish to Experience", () => {
-    expect(PUBLISHABLE_FACE_DESTS).toEqual(["exp"]);
-    expect(roleAllows(["writer"], "exp")).toBe(true);
+  it("offers no operating face even when legacy roles are present", () => {
+    expect(PUBLISHABLE_FACE_DESTS).toEqual([]);
+    expect(roleAllows(["writer"], "exp")).toBe(false);
     expect(roleAllows([], "exp")).toBe(false);
     expect(roleAllows(["resident", "experience_host"], "exp")).toBe(false);
   });

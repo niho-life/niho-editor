@@ -745,11 +745,6 @@ export function createNihoExperienceAuthProvider(deps: NihoExperienceAuthDeps = 
       return null;
     },
 
-    async articleApiToken(session: Session, request: SessionRequest, purpose: "roles" | "article-links"): Promise<string | null> {
-      if (purpose !== "roles" && purpose !== "article-links") return null;
-      return currentRestrictedApiToken(session, request);
-    },
-
     async docsApiToken(session: Session, request: SessionRequest): Promise<string | null> {
       return currentRestrictedApiToken(session, request);
     },

@@ -2,7 +2,6 @@ import "server-only";
 import {
   connectionSource,
   draftFingerprint,
-  PUBLISHABLE_FACE_DESTS,
   siteDeclarationSource,
   type AssetBytes,
   type AssetUrls,
@@ -19,23 +18,20 @@ import {
   type StorageModeReader,
 } from "@niho/editor-publish";
 import type { Session } from "../auth/types";
-import { publishConfig, type DeclarationPlan, type PublishConfig, type PublishEnv } from "./config";
-import { FetchedDeclarations, type FetchLike } from "./declarations";
-import { DEV_DECLARATIONS } from "./dev-declarations";
+import { publishConfig, type PublishEnv } from "./config";
 
 /**
  * 公開（#39）のポートの組み立て。store（Postgres）以外を、要求の本人（session）ごとに作る。
  * store は `pgPublishStore(pool)`（src/publish/pg-store.ts。src/server/deps.ts がつなぐ）。テストは MemoryPublishStore。
  *
- * - roles: stub の方式は `EDITOR_STUB_ROLES`（既定 writer）。niho の方式は要求ごとに用途専用APIから読む。
- * - declarations: 本人のサイトは接続の設定から（editor-publish の siteDeclarationSource）、面は config.ts の DeclarationPlan に従う。
+ * - roles: 運営面を閉鎖したため常に空。本人サイトは接続の所有で認可する。
+ * - declarations: 本人のサイトは接続の設定から（editor-publish の siteDeclarationSource）。
  * - authors: session の profile の名前（handle・url は null）。名前が無ければ公開を失敗にする。公開用の著者紹介（肩書・紹介文）は
  *   設定から読み（options.authorProfile）、公開版の authorProfile に固定する。読めなければ公開を失敗にする（黙って落とさない）。
- * - facts: 関連する体験が掲載中かは、まだ読めない（null＝不明＝満たさない）。
+ * - facts: 本人サイト向けの追加事実は無い。
  * - assetUrls: `EDITOR_ASSET_ORIGIN` から `${origin}/assets/${sha256}.${ext}`。未設定なら例外（写真のあるページの公開は失敗する）。
  *
- * 公開 API（#40）のプレビューも同じ部品を使う（src/server/deps.ts）: 写真の URL と面の宣言は publicApiDeps、
- * 役割と著者はプレビュー token の発行（previewTokenDeps。著者は発行のときに token に結ぶ）。
+ * 公開 API（#40）のプレビューも同じ写真 URL を使う。著者はプレビュー token 発行時に結ぶ。
  */
 
 export type PublishWiring = {
@@ -49,7 +45,6 @@ export type PublishWiring = {
 
 export type PublishWiringOptions = {
   readonly env?: PublishEnv;
-  readonly fetch?: FetchLike;
   readonly clock?: Clock;
   /** 「更新あり」の比較（ConnectionService の公開中の一覧）。省略すると store の transaction で読む。Postgres は pgDraftFingerprints。 */
   readonly drafts?: DraftFingerprints;
@@ -57,8 +52,6 @@ export type PublishWiringOptions = {
   readonly assetBytes?: AssetBytes;
   /** Historical final-stage titles for a page, used to reject an untouched generated title at publish time. */
   readonly finalStepNames?: (actorId: string, pageId: string) => Promise<readonly string[]>;
-  /** NIHO mode reads the current roles on every operation; never persisted or cached. */
-  readonly roles?: RoleReader;
   readonly facts?: FactsSource;
   /** 公開用の著者紹介（設定 › 公開用の著者紹介）。省略すると著者紹介なしで公開する。 */
   readonly authorProfile?: AuthorProfileReader;
@@ -69,7 +62,7 @@ export type AuthorProfileReader = (actorId: string) => Promise<{ readonly role: 
 
 export const systemClock: Clock = { now: () => new Date().toISOString() };
 
-/** 関連する体験が掲載中かは不明（NIHO の体験の API は #42 の後）。 */
+/** 本人サイトには運営面固有の追加事実を要求しない。 */
 export const UNKNOWN_FACTS: FactsSource = { read: async () => ({ relatedLive: null }) };
 
 /** 写真を読まない（公開のシートは書き出しを使わない。書き出しの route は src/publish/export-assets.ts を渡す）。 */
@@ -90,16 +83,7 @@ export class AssetOriginMissing extends Error {
   }
 }
 
-export function roleReaderOf(config: PublishConfig, session: Session, current?: () => Promise<readonly string[]>): RoleReader {
-  return {
-    async read(actorId) {
-      if (actorId !== session.userId) return [];
-      if (config.mode === "stub") return [...config.stubRoles];
-      if (config.mode === "niho" && current) return [...await current()];
-      return [];
-    },
-  };
-}
+export const NO_ROLES: RoleReader = Object.freeze({ read: async () => [] });
 
 /**
  * 保存先（設計 §2.1）。アカウントの設定で、保存しない。stub と niho の方式とも、NIHO から読む契約が出るまでは「未選択」（UNSET。
@@ -148,28 +132,8 @@ export function storeDraftFingerprints(store: ConnectionStore): DraftFingerprint
   };
 }
 
-const devFaces: DeclarationSource = {
-  async get(handle) {
-    return (PUBLISHABLE_FACE_DESTS as readonly string[]).includes(handle)
-      ? structuredClone(DEV_DECLARATIONS[handle as (typeof PUBLISHABLE_FACE_DESTS)[number]])
-      : null;
-  },
-};
-
-const noFaces: DeclarationSource = { get: async () => null };
-
-// 面の宣言は要求をまたいでメモリに置く（dev の再読み込みで増えないよう process に 1 つ。URL が変われば作り直す）
-const holder = globalThis as typeof globalThis & { __nihoEditorDeclarations?: { key: string; source: FetchedDeclarations } };
-
-export function faceDeclarations(plan: DeclarationPlan, fetch?: FetchLike): DeclarationSource {
-  if (plan.kind === "dev") return devFaces;
-  if (plan.kind === "none") return noFaces;
-  // テストが fetch を渡したときは、共有のメモリを使わない
-  if (fetch) return new FetchedDeclarations({ urls: plan.urls, fetch });
-  const key = JSON.stringify(plan.urls);
-  if (holder.__nihoEditorDeclarations?.key !== key) holder.__nihoEditorDeclarations = { key, source: new FetchedDeclarations({ urls: plan.urls }) };
-  return holder.__nihoEditorDeclarations.source;
-}
+/** Operating faces are retired. This source never performs upstream I/O. */
+export const NO_FACE_DECLARATIONS: DeclarationSource = Object.freeze({ get: async () => null });
 
 /** store 以外の PublishPorts・ConnectionPorts を組み立てる（実行時の配線は src/server/deps.ts の publishDeps）。 */
 export function wirePublishPorts(store: ConnectionStore, session: Session, options: PublishWiringOptions = {}): PublishWiring {
@@ -185,10 +149,10 @@ export function wirePublishPorts(store: ConnectionStore, session: Session, optio
   return {
     publish: {
       store,
-      roles: options.roles ?? roleReaderOf(config, session),
+      roles: NO_ROLES,
       storage: storageModeReaderOf(session),
       connections: connectionSource(store),
-      declarations: siteDeclarationSource(store, faceDeclarations(config.declarations, options.fetch)),
+      declarations: siteDeclarationSource(store, NO_FACE_DECLARATIONS),
       authors: sessionAuthors(session, options.authorProfile),
       facts,
       assetUrls: assetUrlsOf(config.assetOrigin),
