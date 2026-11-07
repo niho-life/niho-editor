@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { NIHO_SESSION_COOKIE } from "./niho";
-import { AuthTemporarilyUnavailable, type Session, type SessionRequest } from "./types";
+import { AuthTemporarilyUnavailable } from "./types";
 import {
   createNihoExperienceAuthProvider,
   EXPERIENCE_EDITOR_FIREBASE_REFRESH_COOKIE,

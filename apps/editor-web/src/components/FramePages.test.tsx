@@ -130,12 +130,12 @@ describe("NewPage: the creation redirect belongs to the draft that made the page
     expect(frame.pageCreated).toHaveBeenCalledWith("22222222-2222-4222-8222-222222222222", "", "note", null);
   });
 
-  it("keeps the safe Experience handoff through creation and starts the private page in English", async () => {
+  it("drops the retired Experience handoff and keeps the default page language", async () => {
     window.history.replaceState(null, "", "/p/new?destination=exp&lang=en&experience=morning-walk");
     await mount();
-    expect(editors.at(-1)?.page).toMatchObject({ lang: "en" });
+    expect(editors.at(-1)?.page).not.toHaveProperty("lang");
     await act(async () => editors.at(-1)!.onCreated!("55555555-5555-4555-8555-555555555555"));
-    expect(`${window.location.pathname}${window.location.search}`).toBe("/p/55555555-5555-4555-8555-555555555555?destination=exp&lang=en&experience=morning-walk");
+    expect(`${window.location.pathname}${window.location.search}`).toBe("/p/55555555-5555-4555-8555-555555555555");
   });
 });
 
