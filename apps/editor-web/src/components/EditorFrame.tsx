@@ -438,6 +438,7 @@ type FrameSheet = { kind: "move" | "capacity"; id: string };
  *   見える文字を添える）と、「…」（リンクで共有・書き出し・Google ドキュメント・[フォルダを書き出し]・履歴・複製・[移動…]・
  *   [フォルダの背景…]・ページの情報・削除。src/lib/use-page-menu.ts・use-page-share.ts・use-page-history.ts）。
  *   まだ作っていないページでは「…」を出さない。削除の確認・共有・履歴・移動・フォルダの背景は ShellSheet で overlay に出す。
+ *   ヘッダーの左の場所は、まだ作っていないページ（`/p/new`。録音からを含む）では、フォルダの中から開いたとき（`?in=`）だけ入れ先のフォルダ。
  * - ショートカット（設計 §11）: ⌘N 新しいページ、⌘K 検索、⌘⇧P 公開のシート（⌘S はページ、⌘/ は本文が持つ）。
  * - パネル（#311）: 一覧・AIと作る（./InfoPanel.tsx）・ページ（./PagePanel.tsx）・写真（PagePhotos）を左右のドックに置く。
  *   AI・ページ・写真は保存したページ（`/p/{id}`。フォルダ以外）だけで、まだ作っていないページ（`/p/new`）・録音から・設定系の画面では無い。
@@ -756,11 +757,18 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // 読み込んである一覧の行（フォルダの画面の中身・場所・AI の「読むもの」が使う）。依存は値そのもので書く（React Compiler の規則）
   const listPages = list.pages;
   // ヘッダーの場所（親のフォルダ › 親の録音）。上の段のページでは空。
+  // まだ作っていないページ（`/p/new`。録音からを含む）は、フォルダの中から開いたとき（`?in=`）だけ、その入れ先のフォルダを出す
+  // （どこに作られるかが見える。押すとそのフォルダへ戻れる）。上の段から開いたときは他のページと同じく空
   // frame の useMemo より前で計算する（React Compiler は、memo のあとに list.pages を外の関数へ渡す呼び出しがあると memo を保てない）
-  const location = locationOf(openedForFolder(list), currentId ?? null);
-  // 狭い画面のヘッダー左の「‹ 行き先」: 親（場所の末尾。親の録音か親のフォルダ）、新しいページならその入れ先のフォルダ、無ければ一覧（`/`）
   const newInside = pathname === "/p/new" ? searchParams.get("in") : null;
-  const backTo = location.length > 0 ? location[location.length - 1]! : (newInside ? listPages.find((page) => page.id === newInside) : undefined) ?? null;
+  const newFolder = newInside ? listPages.find((page) => page.id === newInside && page.kind === "folder") : undefined;
+  const location = currentId
+    ? locationOf(openedForFolder(list), currentId)
+    : newFolder
+      ? [{ id: newFolder.id, title: newFolder.title, icon: "folder" as const }]
+      : [];
+  // 狭い画面のヘッダー左の「‹ 行き先」: 場所の末尾（親の録音か親のフォルダ。新しいページならその入れ先のフォルダ）、無ければ一覧（`/`）
+  const backTo = location.length > 0 ? location[location.length - 1]! : null;
   const frame = useMemo<EditorFrameApi>(
     () => ({ narrow, ...api, pages: listPages, now, openPage: openFromLocation, flow }),
     [narrow, api, listPages, now, openFromLocation, flow],
@@ -1278,7 +1286,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           header={
             <ShellHeader
               title={title}
-              // 場所（パンくず）はデスクトップだけ。狭い画面は左の「‹ 行き先」が親を示す
+              // 場所（パンくず）はデスクトップだけ。狭い画面は左の「‹ 行き先」が親（新しいページは入れ先のフォルダ）を示す
               location={narrow ? undefined : location}
               onOpenLocation={openFromLocation}
               plain={settings !== undefined}
