@@ -33,6 +33,8 @@ jobs:
           persist-credentials: false
       - name: Test candidate DATA protocol with synthetic inputs
         run: python3 -m unittest discover -s scripts/editor-candidate -p '*_test.py'
+      - name: Test the Tauri updater manifest
+        run: node --test scripts/editor-candidate/updater-manifest.test.mjs
       - name: Check the build wrapper and the owner-side signing script
         run: shellcheck scripts/editor-candidate/*.sh
       - name: The owner-side signing script refuses a malformed candidate tag before touching the network

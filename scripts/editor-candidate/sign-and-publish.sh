@@ -12,11 +12,10 @@
 #   3. candidate.py recheck: manifest / receipt / file hash の照合（validate）に加え、tar を展開して inventory を作り直し、
 #      bundle identifier・版・codesign・dmg の中身を、この Mac の codesign / hdiutil で見る（CI の receipt を信用しない）。
 #   4. 公開鍵の組: 製品 source の tauri.conf.json の pubkey の SHA-256 が manifest の updaterPublicKeySha256 と同じ。
-#   5. 版: 更新フィード（製品 source の tauri.conf.json の plugins.updater.endpoints[0]。各 Mac が実際に見る URL）の今の版と、
-#      公開済みの docs-v* の tag より大きい（同じ tag・同じ source への上げ直しは通す）。
+#   5. 版: 製品 source が見る公開 Release の latest.json と、公開済みの docs-v* の tag より大きい。
 #   6. 更新の鍵（minisign）で .app.tar.gz に署名し、updater-key.mjs verify で 4 の公開鍵と確かめる。
-#   7. docs-v<版>-<sha12> の Release（target は製品 source の SHA）に NIHO-docs-<版>-<sha12>.dmg / .dmg.sha256 / .app.tar.gz /
-#      .app.tar.gz.sig と、候補の manifest・実行証明を上げる。tag と asset 名は niho-app の Release と同じ形（フィードの参照先の切り替えだけで済む）。
+#   7. Tauri 形式の latest.json を生成し、全 asset を draft Release に置いて検証後に公開・latest 切り替えを行う。
+#      NIHO-docs-<版>-<sha12>.dmg / .dmg.sha256 / .app.tar.gz / .app.tar.gz.sig と候補の manifest・実行証明も同梱する。
 #
 # 使い方:
 #   scripts/editor-candidate/sign-and-publish.sh <候補の tag> [--dry-run]
@@ -26,8 +25,7 @@
 #     GH                              gh の呼び方（既定 gh。ghN のようなラッパーでもよい）
 #     NIHO_DOCS_UPDATER_KEY           minisign の秘密鍵（既定 ~/.niho/docs-updater.key。権限 600）
 #     NIHO_DOCS_UPDATER_KEY_PASSWORD  鍵のパスワード（既定 空）
-#     NIHO_DOCS_FEED_URL              配布済みの版を読む更新フィード（既定は製品 source の tauri.conf.json の plugins.updater.endpoints[0]）
-#     NIHO_DOCS_SKIP_FEED=1           フィードが読めなくても止めない（版は公開済みの tag とだけ比べる）
+#     NIHO_DOCS_SKIP_FEED=1           初回移行時だけ、まだない公開 latest.json を版チェックから省く
 #
 # 前提: Apple Silicon の Mac（codesign・hdiutil）、python3、node 24、apps/docs の node_modules（tauri CLI。npm -C apps/docs ci）、
 #       gh が niho-life/niho-editor に書ける認証。鍵は読むだけで、画面・ログ・一時ファイルに出さない。
@@ -180,9 +178,10 @@ if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "$RELEASE_TAG" ]; then
   semver_gt "$VERSION" "${BASH_REMATCH[1]}" || die "版 ${VERSION} は公開済みの ${LATEST_TAG} 以下です（大きい版で候補を作り直してください）"
   PREVIOUS_TAG="$LATEST_TAG"
 fi
-FEED_URL="${NIHO_DOCS_FEED_URL:-$(read_updater_conf endpoint)}" || die "製品 source の tauri.conf.json に更新フィードの URL がありません"
-case "$FEED_URL" in https://*) ;; *) die "更新フィードの URL は https のはずです: ${FEED_URL}" ;; esac
-FEED_VERSION="$(curl -fsS --max-time 15 "${FEED_URL}?t=$(date +%s)" 2>/dev/null \
+FEED_URL="$(read_updater_conf endpoint)" || die "製品 source の tauri.conf.json に更新フィードの URL がありません"
+EXPECTED_FEED_URL="https://github.com/${REPO_SLUG}/releases/latest/download/latest.json"
+[ "$FEED_URL" = "$EXPECTED_FEED_URL" ] || die "更新フィードはこのリポジトリの latest.json を指す必要があります: ${EXPECTED_FEED_URL}"
+FEED_VERSION="$(curl -fsSL --max-time 30 "${FEED_URL}?t=$(date +%s)" 2>/dev/null \
   | node -e '
     let text = "";
     process.stdin.on("data", (chunk) => (text += chunk)).on("end", () => {
@@ -191,7 +190,7 @@ FEED_VERSION="$(curl -fsS --max-time 15 "${FEED_URL}?t=$(date +%s)" 2>/dev/null 
   ' || true)"
 if [ -n "$FEED_VERSION" ]; then
   if [ "$FEED_VERSION" = "$VERSION" ] && [ "$LATEST_TAG" = "$RELEASE_TAG" ]; then
-    log "更新フィードは既にこの版（${VERSION}）です。同じ Release の asset を上げ直します"
+    log "更新フィードはこのReleaseの版（${VERSION}）です。公開済みassetの一致を確認します"
   else
     semver_gt "$VERSION" "$FEED_VERSION" || die "版 ${VERSION} は配布済みの版（更新フィード ${FEED_VERSION}）以下です"
   fi
@@ -226,6 +225,9 @@ node "${DOCS_DIR}/scripts/updater-key.mjs" verify --file "$TARBALL" --sig "$SIG"
   || die "署名が製品 source の公開鍵と合いません（秘密鍵と tauri.conf.json の pubkey は同じ tauri signer generate の組にする）"
 shasum -a 256 "$DMG" | awk '{ print $1 }' >"${DMG}.sha256"
 DMG_SHA="$(cat "${DMG}.sha256")"
+node "${SCRIPT_DIR}/updater-manifest.mjs" create \
+  --version "$VERSION" --tag "$RELEASE_TAG" --asset-name "${ASSET_BASE}.app.tar.gz" \
+  --signature-file "$SIG" --output "${OUT}/latest.json" --notes "NIHO editor ${VERSION}"
 
 log "成果物:"
 for file in "$OUT"/*; do log "  $(basename "$file")"; done
@@ -256,20 +258,61 @@ cat >>"$NOTES" <<'EOF'
 
 入れ方は apps/docs/README.md「配布」。未公証なので、ブラウザで落とした dmg の初回だけ
 システム設定 →「プライバシーとセキュリティ」→「このまま開く」で許可が要ります。
-入れた後は更新フィードを見て、次の起動で自動更新します。
+更新フィードはこの Release の latest.json です。旧フィードを使う既存インストールは、最初の一度だけ dmg の手動入れ替えが要ります。
 EOF
 
-if EXISTING="$("$GH" release view "$RELEASE_TAG" --repo "$REPO_SLUG" --json targetCommitish --jq .targetCommitish 2>/dev/null)"; then
-  [ "$EXISTING" = "$SOURCE_SHA" ] || die "Release ${RELEASE_TAG} は別の commit（${EXISTING}）を指しています"
-  log "Release ${RELEASE_TAG} はあります — asset を上書きします"
+if EXISTING_JSON="$("$GH" release view "$RELEASE_TAG" --repo "$REPO_SLUG" --json targetCommitish,isDraft,assets 2>/dev/null)"; then
+  EXISTING_TARGET="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).targetCommitish)' "$EXISTING_JSON")"
+  [ "$EXISTING_TARGET" = "$SOURCE_SHA" ] || die "Release ${RELEASE_TAG} は別の commit（${EXISTING_TARGET}）を指しています"
+  EXISTING_DRAFT="$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).isDraft))' "$EXISTING_JSON")"
+  if [ "$EXISTING_DRAFT" = false ]; then
+    PUBLISHED_LATEST_TAG="$("$GH" api "repos/${REPO_SLUG}/releases/latest" --jq .tag_name)"
+    [ "$PUBLISHED_LATEST_TAG" = "$RELEASE_TAG" ] || die "Release ${RELEASE_TAG} は公開済みですが、現在の latest は ${PUBLISHED_LATEST_TAG} です。古い Release を再公開しません"
+    EXPECTED_RELEASE_ASSETS="$(find "$OUT" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort)"
+    ACTUAL_RELEASE_ASSETS="$(printf '%s' "$EXISTING_JSON" | node -e 'const release = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(release.assets.map((asset) => asset.name).sort().join("\n"))')"
+    [ "$ACTUAL_RELEASE_ASSETS" = "$EXPECTED_RELEASE_ASSETS" ] || die "公開済み Release の asset 一覧が今回の作成物と違います。上書きせずに止めました"
+    mkdir "${WORK}/published"
+    "$GH" release download "$RELEASE_TAG" --repo "$REPO_SLUG" --dir "${WORK}/published" \
+      --pattern "${ASSET_BASE}.app.tar.gz" --pattern "${ASSET_BASE}.app.tar.gz.sig" --pattern latest.json
+    cmp -s "$TARBALL" "${WORK}/published/${ASSET_BASE}.app.tar.gz" || die "公開済み updater archive が今回の候補と異なります"
+    node "${DOCS_DIR}/scripts/updater-key.mjs" verify --file "${WORK}/published/${ASSET_BASE}.app.tar.gz" \
+      --sig "${WORK}/published/${ASSET_BASE}.app.tar.gz.sig" --pubkey "$PUBKEY" \
+      || die "公開済み updater archive の署名が確かめられません"
+    node -e '
+      const fs = require("fs");
+      const feed = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      const signature = fs.readFileSync(process.argv[2], "utf8").trim();
+      const platform = feed.platforms?.["darwin-aarch64"];
+      const expectedUrl = "https://github.com/niho-life/niho-editor/releases/download/" + process.argv[4] + "/" + process.argv[5];
+      if (feed.version !== process.argv[3] || platform?.signature !== signature || platform?.url !== expectedUrl) process.exit(1);
+    ' "${WORK}/published/latest.json" "${WORK}/published/${ASSET_BASE}.app.tar.gz.sig" "$VERSION" "$RELEASE_TAG" "${ASSET_BASE}.app.tar.gz" \
+      || die "公開済み latest.json が Release の updater asset と一致しません"
+    log "Release ${RELEASE_TAG} は完全で、署名・候補・latest.json が一致しています。再公開は不要です"
+    exit 0
+  fi
+  log "未公開 draft Release ${RELEASE_TAG} を再利用します"
 else
-  log "Release ${RELEASE_TAG} を作ります"
+  log "draft Release ${RELEASE_TAG} を作ります"
   "$GH" release create "$RELEASE_TAG" --repo "$REPO_SLUG" --target "$SOURCE_SHA" \
-    --title "NIHO editor ${VERSION} (${SHORT_SHA})" --notes-file "$NOTES" --latest
+    --title "NIHO editor ${VERSION} (${SHORT_SHA})" --notes-file "$NOTES" --draft --latest=false
 fi
-log "asset を上げます"
+log "draft に asset を上げます"
 "$GH" release upload "$RELEASE_TAG" --repo "$REPO_SLUG" --clobber "$OUT"/*
+
+EXPECTED_RELEASE_ASSETS="$(find "$OUT" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort)"
+ACTUAL_RELEASE_ASSETS="$("$GH" release view "$RELEASE_TAG" --repo "$REPO_SLUG" --json assets \
+  | node -e 'const release = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(release.assets.map((asset) => asset.name).sort().join("\n"))')"
+[ "$ACTUAL_RELEASE_ASSETS" = "$EXPECTED_RELEASE_ASSETS" ] || die "draft Release の asset 一覧が作成物と一致しません。公開せずに止めました"
+
+log "asset を確認しました。Release を公開し、latest を切り替えます"
+"$GH" release edit "$RELEASE_TAG" --repo "$REPO_SLUG" --draft=false --latest
+PUBLISHED_LATEST_TAG="$("$GH" api "repos/${REPO_SLUG}/releases/latest" --jq .tag_name)"
+[ "$PUBLISHED_LATEST_TAG" = "$RELEASE_TAG" ] || die "latest Release が切り替わっていません: ${PUBLISHED_LATEST_TAG}"
+PUBLISHED_FEED="${WORK}/published-latest.json"
+curl -fsSL --max-time 60 "${FEED_URL}?t=$(date +%s)" -o "$PUBLISHED_FEED" \
+  || die "公開した updater feed を読み戻せません: ${FEED_URL}"
+cmp -s "${OUT}/latest.json" "$PUBLISHED_FEED" || die "公開した latest.json が作成物と一致しません"
 
 log ""
 log "done: $("$GH" release view "$RELEASE_TAG" --repo "$REPO_SLUG" --json url --jq .url)"
-log "更新フィード（${FEED_URL}）がこの版を返すのは、フィードの参照先がこのリポジトリの Release になってから（#286）。"
+log "updater feed verified: ${FEED_URL} -> ${VERSION}"

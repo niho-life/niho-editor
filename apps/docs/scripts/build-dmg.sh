@@ -24,10 +24,10 @@
 #
 # 自動更新の署名鍵（Tauri updater の minisign。tauri.conf.json の pubkey と組の秘密鍵）:
 #   TAURI_SIGNING_PRIVATE_KEY（中身かパス）・TAURI_SIGNING_PRIVATE_KEY_PASSWORD。無ければ ~/.niho/docs-updater.key。
-#   どちらも無ければ updater の成果物を作らずに dmg だけ作る（このビルドは配らない。publish-dmg.sh が止める）。
+#   どちらも無ければ updater の成果物を作らずに dmg だけ作る（ローカル確認用。このビルドは公式配布しない）。
 #   tauri build は updater の成果物を作るとき tauri.conf.json の公開鍵を読むので、公開鍵がプレースホルダーのままなら
 #   鍵があっても作らない。NIHO_DOCS_UPDATER_PUBKEY を渡すと、その公開鍵で .app を作り、署名もそれで確かめる
-#   （ci-docs-release.sh の dry-run が使い捨ての鍵の公開鍵を渡す。この .app は配らない）。
+#   （過去の private release 用の処理。この .app は配らない）。
 #
 # 署名と公証: Developer ID の署名と公証はまだしない（NIHO Desktop・NIHO camera と同じ。owner 2026-10-15）。.app は Tauri が
 # ad-hoc で署名する（tauri.conf.json の bundle.macOS.signingIdentity "-"。linker の署名だけだと codesign --verify が通らず、
@@ -70,7 +70,7 @@ node "${SCRIPTS_DIR}/docs-version.mjs" check
 VERSION="$(node "${SCRIPTS_DIR}/docs-version.mjs" current)"
 SHORT_SHA="$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD)"
 if ! git -C "$REPO_ROOT" diff --quiet || ! git -C "$REPO_ROOT" diff --cached --quiet; then
-  warn "未コミットの変更があります。この dmg は ${SHORT_SHA} の中身と一致しません（版の 5 ファイルの版の行＝docs-version.mjs apply の書き換えだけなら publish-dmg.sh は配る。それ以外は配らない）。"
+  warn "未コミットの変更があります。この dmg は commit ${SHORT_SHA} の中身と一致しません。公式配布の候補には使わないでください。"
 fi
 node "${SCRIPTS_DIR}/sidecar-lock.mjs" check
 
@@ -172,5 +172,5 @@ if $UPDATER_ARTIFACTS; then
 fi
 
 ok "できました: ${OUT_DMG}"
-echo "公開は ./apps/docs/scripts/publish-dmg.sh（GitHub Release docs-v${VERSION}-${SHORT_SHA}）。普段は main の merge で docs-release.yml が行う。"
+echo "これはローカル確認用のdmgです。公式公開は editor-mac-candidate.yml の候補と scripts/editor-candidate/sign-and-publish.sh を使ってください。"
 echo "未公証なので、ブラウザで落とした dmg の初回だけ システム設定 →「プライバシーとセキュリティ」→「このまま開く」で許可が要ります。"

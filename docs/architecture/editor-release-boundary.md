@@ -4,7 +4,7 @@
 
 ## 1. 原則
 
-1. **本番反映の起点はこのリポジトリ側。** Web の配備も Mac の署名・公開もここから始める。`niho-app` に残すのは NIHO の本人確認と API の契約だけ（§5）。
+1. **本番反映の起点はこのリポジトリ側。** Web の配備も Mac の署名・公開もここから始める。`niho-app` に残すのは NIHO の本人確認と API の契約（§5）、既存の `/developer` download導線だけ。
 2. **鍵と配備の権限を GitHub に置かない。** Secrets・Environments・OIDC のどれにも、更新の署名鍵・gcloud の権限・本番の接続情報を置かない。配備と署名はオーナーの手元で、オーナーの Mac にある鍵と gcloud ログインで行う。
 3. **承認・レビューのプロセスは入れない。** 必須レビューも CODEOWNERS の承認も置かない。マージできるのはオーナーのアカウント（write と admin はすべてオーナー）だけ。2 が承認の代わり: main に入った workflow が何をしても、持ち出せる鍵が無い。
 4. **公開 CI は無料のまま、本番を守る検査はすべて必須チェック。** GitHub-hosted runner・secret なし・合成データ。`merge_group` で走る job は必須チェックに入れる（走るのに必須でない job は、赤でもマージされるので意味が無い）。
@@ -17,7 +17,7 @@
 | 領域 | 公開 CI（このリポジトリ・無料・secret なし） | オーナーの手元 | `niho-app`（非公開） |
 | --- | --- | --- | --- |
 | Web `editor.niho.life` | 型検査・テスト・build・image の build（[editor-web-ci.yml](../../.github/workflows/editor-web-ci.yml)） | `scripts/editor-deploy/deploy.sh`（Cloud Build → migrate ジョブ → Cloud Run → smoke。[editor-deploy.md](../ops/editor-deploy.md) §4・§7） | 本人確認の API（connect / session / refresh）・記事の authority・Google Docs の gateway |
-| Mac アプリ NIHO editor | 鍵なしの候補 build・別 Mac での DATA 検証・prerelease と実行証明（[editor-mac-candidate.yml](../../.github/workflows/editor-mac-candidate.yml)。オーナーが `workflow_dispatch`。[editor-mac-candidate.md](../ops/editor-mac-candidate.md)） | 候補の検証・再確認・minisign 署名・このリポジトリの公開 Release へ公開（`scripts/editor-candidate/`。§4） | 更新フィード `/docs/updater/latest.json` と `/developer` の代理（移行期間だけ。§4） |
+| Mac アプリ NIHO editor | 鍵なしの候補 build・別 Mac での DATA 検証・prerelease と実行証明（[editor-mac-candidate.yml](../../.github/workflows/editor-mac-candidate.yml)。オーナーが `workflow_dispatch`。[editor-mac-candidate.md](../ops/editor-mac-candidate.md)） | 候補の検証・再確認・minisign 署名・draft Releaseへの成果物公開と検証（`scripts/editor-candidate/`。§4） | 認証 API・`/developer` の導線のみ。Mac updater feed と Editor 配布の Actions は使わない |
 | 共有の `packages/` | 単体テスト（Client packages CI） | — | 旧 Docs の退役まで、固定 SHA の SDK 取り込み（[docs-sdk.md](docs-sdk.md)） |
 
 ## 3. 守り（承認の代わりに何があるか）
@@ -68,20 +68,22 @@
   1. 候補 prerelease の asset を取得（dmg・.app.tar.gz・manifest・receipt・sigstore）
   2. 実行証明を確かめる（gh attestation verify）。manifest / receipt / file hash を照合（candidate.py validate）
   3. 候補の中身を手元で再確認（bundle identifier・版・codesign。中の binary は実行しない）
-  4. 配布済みの版より大きいことを確かめる（更新フィードの今の版・公開済みの docs-v* の tag）
+  4. 配布済みの版より大きいことを確かめる（公開 latest.json・公開済みの docs-v* の tag）
   5. ~/.niho/docs-updater.key で .app.tar.gz に minisign 署名 → updater-key.mjs verify で tauri.conf.json の公開鍵との組を確かめる
-  6. このリポジトリの公開 Release docs-v<版>-<sha12> に NIHO-docs-<版>-<sha12>.dmg / .sha256 / .app.tar.gz / .sig を上げる
-各 Mac: 更新フィード → 新しい版を取得 → 公開鍵で署名を確かめる → 終了時に差し替え
+  6. latest.json を含む全 asset を draft Release docs-v<版>-<sha12> に上げ、asset 一覧を検証してから公開
+  7. latest alias と updater feed を読み戻し、署名済み archive と manifest の一致を確かめる
+各 Mac: GitHub latest.json → 新しい版を取得 → 公開鍵で署名を確かめる → 終了時に差し替え
 ```
 
-- tag と asset 名はいまの `niho-app` の Release と同じにする。フィード側の変更が「参照先の切り替え」だけで済む。
+- 更新 feed は `https://github.com/niho-life/niho-editor/releases/latest/download/latest.json`。Tauri が読む `darwin-aarch64`・署名文字列・tag固定のarchive URLを同じ公開 Release に置く。Release はdraftで完成させてから公開し、公開途中のasset集合を updater に見せない。
+- 既存アプリには旧 `https://niho.life/docs/updater/latest.json` が焼き込まれている。配布先ごとに最初の1回だけ、新しい公開 Release のdmgを手動で入れ直す。以降はアプリの「更新して再起動」で直接更新できる。初回公開だけはまだdirect feedがないため、Studioで `NIHO_DOCS_SKIP_FEED=1` を明示する。次のリリースからfeedの版も必ず検査する。
+- 初回入れ替え用dmgはこのrepoの公開 Releaseから直接取得できる。`niho-app` のPR・Actions・`/docs/updater/latest.json` proxyはアプリ更新に使わない。NIHO `/developer` のdownload導線を更新する作業は別途必要だが、更新配布のたびの依存ではない。
 - 候補は ad-hoc 署名済み（`tauri.conf.json` の `signingIdentity: "-"`）。手元で codesign し直さない。手元の署名は minisign だけなので、Xcode は要らない。
-- 更新フィードは配布済みの Mac に `https://niho.life/docs/updater/latest.json` として焼き込まれている。移行期間は `niho-app` の Web がこの URL で、このリポジトリの公開 Release を代理で返す（参照先の切り替えは `niho-app` の PR 1 回。同じ PR で `niho-app` の `docs-release.yml` を消す）。旧版の Mac が移り終わったら、endpoint をこのリポジトリの Release の `latest.json` に向けて代理を不要にしてよい（任意・後で）。
 - Developer ID 署名と公証（2027 年予定）も、資格はオーナーの Mac に置き、同じスクリプトの中で行う。
 
 ## 5. `niho-app` との契約
 
-`niho-app` に残すのは次の API だけ。契約は版で固定し、editor 側の機能追加で `niho-app` の PR が要らないようにする。feature flag と callback URL は `niho-app` の env なので PR 不要。
+自動更新とアプリ公開はこのrepoで完結する。`niho-app` とのAPI契約は版で固定し、editor側の機能追加でPRが要らないようにする。既存の `/developer` download導線は残るが、更新feedには使わない。feature flag と callback URL は `niho-app` の env なのでPR不要。
 
 | 契約 | 何のため | editor 側の設定 |
 | --- | --- | --- |
@@ -97,9 +99,9 @@
 2. 必須チェックに `editor-store` / `editor-web` / `editor-deploy` / `editor-auth-acceptance` ほか `merge_group` で走る job を追加（設定。PR1 のマージ後）。
 3. 手元の署名・公開スクリプト（PR2）。[editor-mac-candidate.md](../ops/editor-mac-candidate.md) と [apps/docs/README.md](../../apps/docs/README.md)「配布」を新しい流れに。
 4. オーナーが候補 1 版を署名し、公開 Release に置く。
-5. `niho-app` の PR 1 回: フィードと `/developer` の参照先を切り替え、`docs-release.yml` を削除。
-6. 旧 `ci-docs-release.sh` / `publish-dmg.sh` の整理。
-7. 任意・後で: updater の endpoint をこのリポジトリの Release に向ける。Developer ID 署名と公証。
+5. 各Macで初回だけ公開Releaseのdmgを手動入れ替え。以降の更新は本repoの公開Release feedから取得する。
+6. `niho-app` の `/developer` download導線と旧 `docs-release.yml` は移行時に別途整理できるが、Editorの更新配布を止める依存にはしない。
+7. Developer ID 署名と公証。
 
 ## 7. やらないこと
 
