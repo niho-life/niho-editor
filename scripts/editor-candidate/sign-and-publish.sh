@@ -98,7 +98,8 @@ trap cleanup EXIT
 log "候補 ${TAG}"
 log "  版 ${VERSION} / 製品 source ${SOURCE_SHA} / run ${RUN_ID} attempt ${RUN_ATTEMPT}"
 
-git -C "$REPO_ROOT" fetch -q --no-tags origin main
+# An explicit destination updates the tracking ref used by the ancestry checks below.
+git -C "$REPO_ROOT" fetch -q --no-tags origin main:refs/remotes/origin/main
 git -C "$REPO_ROOT" merge-base --is-ancestor "$SOURCE_SHA" origin/main || die "製品 source ${SOURCE_SHA} は origin/main に含まれていません"
 
 "$GH" release view "$TAG" --repo "$REPO_SLUG" --json targetCommitish,isPrerelease,isDraft,assets >"${WORK}/candidate-release.json" \
