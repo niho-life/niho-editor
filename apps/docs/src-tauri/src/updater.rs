@@ -1,7 +1,6 @@
 //! 自動更新（S4 #18385。NIHO Desktop の「更新して再起動」#16415 と同じ作法）。
 //!
-//! - 起動時と、その後は 1 時間ごとに `plugins.updater.endpoints`（`https://niho.life/docs/updater/latest.json`。Web の
-//!   `apps/web/app/docs/updater/latest.json` が GitHub Release の `docs-v*` を代理で返す）を見て、新しい版があれば
+//! - 起動時と、その後は 1 時間ごとに `plugins.updater.endpoints`（このリポジトリの最新公開 Release にある `latest.json`）を見て、新しい版があれば
 //!   取得して署名（`plugins.updater.pubkey`）を確かめ、手元に持つ。取得したら確認をやめる（開いたままの窓でも、起動後に出た版を拾う）。
 //! - `.app` は動いている間は差し替えない。文字起こしは区切りごとに `.app` の中の `niho-speech` を起動するので、途中で差し替えると
 //!   古い版の窓が新しい版の sidecar を起動してしまう。差し替えるのは終わるとき（`RunEvent::Exit`。工程・文字起こしを止めた後）だけで、
@@ -338,12 +337,11 @@ mod tests {
   }
 
   #[test]
-  fn the_feed_is_the_docs_proxy_on_niho_life() {
-    // apps/web/app/docs/updater/latest.json と、apps/docs/scripts/ci-docs-release.sh の UPDATER_FEED_URL と同じ
+  fn the_feed_is_the_public_editor_release_manifest() {
     let conf: Value = serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
     assert_eq!(
       conf["plugins"]["updater"]["endpoints"],
-      json!(["https://niho.life/docs/updater/latest.json"])
+      json!(["https://github.com/niho-life/niho-editor/releases/latest/download/latest.json"])
     );
     assert!(conf["plugins"]["updater"]["pubkey"].is_string());
   }

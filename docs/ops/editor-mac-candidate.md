@@ -1,6 +1,6 @@
 # NIHO editorの署名前Mac配布候補
 
-公開製品のMac buildと、別のfresh MacによるDATA検証は、このrepo自身の標準GitHub-hosted runnerで行う。署名と公式公開はオーナーのMacで行い（`scripts/editor-candidate/sign-and-publish.sh`）、更新の署名鍵はGitHubに置かない（[editor-release-boundary.md](../architecture/editor-release-boundary.md)、オーナー決定 2026-11-06）。追跡: #273、#286、niho-coliving/niho-app#19890。
+公開製品のMac buildと、別のfresh MacによるDATA検証は、このrepo自身の標準GitHub-hosted runnerで行う。署名と公式公開はMac Studioで行い（`scripts/editor-candidate/sign-and-publish.sh`）、更新の署名鍵はGitHubに置かない（[editor-release-boundary.md](../architecture/editor-release-boundary.md)、オーナー決定 2026-11-06）。追跡: #273、#286、niho-coliving/niho-app#19890。
 
 ## 開始条件
 
@@ -34,11 +34,12 @@ scripts/editor-candidate/sign-and-publish.sh editor-candidate-v<VERSION>-<SOURCE
 1. tagから版・source・run/attemptを読み、Releaseのtarget（controller SHA）とともにorigin/mainに含まれることを確かめる。
 2. 5つのassetを取り、実行証明を`gh attestation verify`で確かめる（このrepoの`editor-mac-candidate.yml`が`refs/heads/main`のcontroller SHAで、GitHub-hosted runnerで作ったmanifest）。
 3. `candidate.py recheck`: manifest/receipt/file hashの照合に加え、tarを展開してinventoryを作り直し、bundle識別子・版・codesign・dmgの中身をこのMacのcodesign/hdiutilで見る。CIのreceiptを信用しない。候補内のbinaryは実行しない。
-4. 製品sourceの`tauri.conf.json`の公開鍵のSHA-256がmanifestと同じこと、版が更新フィードの今の版と公開済みの`docs-v*`より大きいことを確かめる。
+4. 製品sourceの`tauri.conf.json`の公開鍵のSHA-256がmanifestと同じこと、版が公開`latest.json`と公開済みの`docs-v*`より大きいことを確かめる（初回のdirect feed公開だけ`NIHO_DOCS_SKIP_FEED=1`を付ける）。
 5. `~/.niho/docs-updater.key`で`.app.tar.gz`にminisignの署名を付け、`updater-key.mjs verify`で公開鍵との組を確かめる。
-6. このrepoの公開Release `docs-v<VERSION>-<sha12>`（targetは製品source）に`NIHO-docs-<VERSION>-<sha12>.dmg` / `.dmg.sha256` / `.app.tar.gz` / `.app.tar.gz.sig`と候補のmanifest・実行証明を上げる。tagとasset名はniho-appのReleaseと同じ形。
+6. `latest.json`（Tauriの`darwin-aarch64` manifest）を生成し、全成果物を公開Release `docs-v<VERSION>-<sha12>`（targetは製品source）のdraftに上げる。asset一覧を確認したあとReleaseを公開してlatestを切り替え、feedをHTTPで読み戻して検証する。
+7. 旧endpoint (`niho.life/docs/updater/latest.json`) を使う各Macは、この初回リリースだけdmgを手動で入れ替える。以後はniho-editorの公開Release feedから更新する。niho-app PR/Actionsは不要。
 
-版・source・実行元・内容が一致しなければ、どの段でも止まって公開しない。`--dry-run`は5まで行い、Releaseを作らない。
+版・source・実行元・内容が一致しなければ、どの段でも止まって公開しない。Releaseはdraftでassetを揃えてから公開する。`--dry-run`は署名まで行い、Releaseを作らない。
 
 ## 成果物
 
@@ -53,4 +54,4 @@ scripts/editor-candidate/sign-and-publish.sh editor-candidate-v<VERSION>-<SOURCE
 
 ## 失敗と撤退
 
-設定不足・古い版・main外source・検査失敗は公開前に停止する。手元の採用で証明・hash・再確認が合わなくても停止し、privateでの自動full buildへ切り替えない。更新の署名鍵は作り直さない（配った版が更新を受け取れなくなる）。更新フィードの参照先をこのrepoの公開Releaseへ切り替えるのはniho-appのPR 1回（#286）。workflowの成功やprereleaseの存在だけで公式配布済みとは扱わない。
+設定不足・古い版・main外source・検査失敗は公開前に停止する。手元の採用で証明・hash・再確認が合わなくても停止し、privateでの自動full buildへ切り替えない。更新の署名鍵は作り直さない（配った版が更新を受け取れなくなる）。旧endpointを使う各Macの初回入れ替えは手動で行い、以後はこのrepoの公開Release feedから更新する。workflowの成功やprereleaseの存在だけで公式配布済みとは扱わない。

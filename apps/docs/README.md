@@ -10,7 +10,7 @@
 | `crates/local-ai/` | CLI 実行基盤 `niho-local-ai`（S1-B #18402。Claude Code・Codex CLI・Antigravity CLI（`agy`。Gemini）を、工程の実行ではツール無しで、「AIと作る」では案件フォルダの中だけを読み書きできる形で、文字起こしでは区切りの WAV を 1 つ読むだけの形で動かす） |
 | `sidecar/niho-speech/` | 文字起こし・録音の sidecar（S1-C #18403・録音 #18590。Swift・SpeechAnalyzer・AVAudioEngine） |
 | `sidecar/fake/` | 開発・テスト用の偽物（`claude`・`codex`・`agy`・`niho-speech`） |
-| `scripts/` | 配布（S4 #18385）: 版（`docs-version.mjs`）・sidecar の lock（`sidecar-lock.mjs`・`sidecar.lock.json`）・更新の署名の確認（`updater-key.mjs`）・dmg（`build-dmg.sh`）・Release（`publish-dmg.sh`）・CI の中身（`ci-docs-release.sh`） |
+| `scripts/` | 配布（S4 #18385）: 版（`docs-version.mjs`）・sidecar の lock（`sidecar-lock.mjs`・`sidecar.lock.json`）・更新の署名の確認（`updater-key.mjs`）・候補の検証と署名公開（`scripts/editor-candidate/`）。旧 `publish-dmg.sh` / `ci-docs-release.sh` は公式公開に使わない |
 | `fixtures/turn-events/` | イベントの共有の fixture（Rust と docs-core のテストが読む） |
 
 ## 開発
@@ -165,11 +165,11 @@ NIHO_DOCS_SHELL=dev    npm -C apps/docs run dev:fake    # 開発の editor（loc
 
 **公開 CI が署名前の候補を作り、オーナーが手元の Mac で検証・署名してこのリポジトリの公開 Release に上げ、各 Mac の NIHO editor が更新を取得する**（PR では版を上げない。鍵は GitHub に置かない。オーナー決定 2026-11-06・`docs/architecture/editor-release-boundary.md` §4。手順は `docs/ops/editor-mac-candidate.md`）。起動時と1時間ごとの確認で取得した後でも、「更新して再起動」を押した時点で最新公開版を再確認し、途中の版を順に入れずにその版へ更新する。最新版の確認・取得に失敗したら再起動せず、もう一度押して再試行できる。手元でビルドしない。署名（Developer ID）と公証はまだしない（NIHO Desktop・NIHO camera と同じ。owner 2026-10-15）。
 
-- 公開: 2 段。(1) オーナーが `editor-mac-candidate.yml` を main で `workflow_dispatch` し（製品 source の 40 桁 SHA と版）、公開 CI が鍵なしで候補を build・別の Mac で DATA 検証し、prerelease `editor-candidate-v<版>-<sha>-run-<run>-attempt-<n>` に dmg・`.app.tar.gz`・manifest・receipt・実行証明を置く。(2) オーナーが手元の Mac で `scripts/editor-candidate/sign-and-publish.sh <候補の tag>` を実行する。実行証明・manifest・hash を確かめ、tar と dmg の中身を手元で再確認し、`~/.niho/docs-updater.key` で署名して、このリポジトリの公開 Release `docs-v<版>-<sha12>` に `NIHO-docs-<版>-<sha12>.dmg`・`.dmg.sha256`・`.app.tar.gz`・`.app.tar.gz.sig` を上げる。ビルドの中身は `scripts/build-dmg.sh`（候補の build が呼ぶ）。旧 `ci-docs-release.sh` / `publish-dmg.sh`（niho-app の `docs-release.yml` が使っていた）は、niho-app 側の切り替えが済んだら整理する（#286）。
-- 版: PR では版を触らない。出荷対象（`src/`・`index.html`・`vite.config.ts`・`packages/docs-core/src/`・`packages/docs-ui/src/`・`src-tauri/`・`crates/local-ai/` の `src/` と `Cargo.toml`・`Cargo.*`・`package*.json`・`sidecar.lock.json`・sidecar を同梱する `scripts/stage-speech-sidecar.mjs`。テスト・文書・ほかの `scripts/` は外す）が最後の公開から変わっていれば、オーナーが次の版を決めて候補を作る（目安は `git ls-remote --tags origin 'refs/tags/docs-v*' | node apps/docs/scripts/docs-version.mjs next`。配布済みの版〔更新フィードの `version`〕より大きい strict semver。`sign-and-publish.sh` がどちらとも比べて止める）。main の 5 か所（`package.json`・`package-lock.json`・`tauri.conf.json`・`src-tauri/Cargo.toml`・`Cargo.lock`）の版は「床」で、普段は誰も触らない（公開した版は tag の名前に残る。作り直すときは tag の commit を checkout して `docs-version.mjs apply <版>`）。途中で落ちた公開の番号は使い回さない。`sign-and-publish.sh` は公開済みの最大以下の版を上げない（古い版を出してダウンロードの欄が戻るのを防ぐ）。数本の merge をまとめて 1 つの版にしてよい。サーバーが「この版以上なら」で機能を分ける作りは、PR の時点で番号が分からないので使わない（機能の有無で分ける）。
+- 公開: 2 段。(1) オーナーが `editor-mac-candidate.yml` を main で `workflow_dispatch` し（製品 source の 40 桁 SHA と版）、公開 CI が鍵なしで候補を build・別の Mac で DATA 検証し、prerelease `editor-candidate-v<版>-<sha>-run-<run>-attempt-<n>` に dmg・`.app.tar.gz`・manifest・receipt・実行証明を置く。(2) オーナーが Mac Studio で `scripts/editor-candidate/sign-and-publish.sh <候補の tag>` を実行する。実行証明・manifest・hash を確かめ、tar と dmg の中身を手元で再確認し、`~/.niho/docs-updater.key` で署名して、このリポジトリの公開 Release `docs-v<版>-<sha12>` に `NIHO-docs-<版>-<sha12>.dmg`・`.dmg.sha256`・`.app.tar.gz`・`.app.tar.gz.sig` を上げる。全assetをdraft Releaseに上げ、Tauri形式の`latest.json`も含めて検証してから公開し、latest feedを読み戻す。旧 `ci-docs-release.sh` / `publish-dmg.sh` は公式公開に使わない。
+- 版: PR では版を触らない。出荷対象（`src/`・`index.html`・`vite.config.ts`・`packages/docs-core/src/`・`packages/docs-ui/src/`・`src-tauri/`・`crates/local-ai/` の `src/` と `Cargo.toml`・`Cargo.*`・`package*.json`・`sidecar.lock.json`・sidecar を同梱する `scripts/stage-speech-sidecar.mjs`。テスト・文書・ほかの `scripts/` は外す）が最後の公開から変わっていれば、オーナーが次の版を決めて候補を作る（目安は `git ls-remote --tags origin 'refs/tags/docs-v*' | node apps/docs/scripts/docs-version.mjs next`。配布済みの版〔`latest.json`の`version`〕より大きい strict semver。初回移行時だけfeedがまだ無いため、Studioで`NIHO_DOCS_SKIP_FEED=1`を明示する（公開済みtagとの比較は省かない）。`sign-and-publish.sh` がどちらとも比べて止める）。main の 5 か所（`package.json`・`package-lock.json`・`tauri.conf.json`・`src-tauri/Cargo.toml`・`Cargo.lock`）の版は「床」で、普段は誰も触らない（公開した版は tag の名前に残る。作り直すときは tag の commit を checkout して `docs-version.mjs apply <版>`）。途中で落ちた公開の番号は使い回さない。`sign-and-publish.sh` は公開済みの最大以下の版を上げない（古い版を出してダウンロードの欄が戻るのを防ぐ）。数本の merge をまとめて 1 つの版にしてよい。サーバーが「この版以上なら」で機能を分ける作りは、PR の時点で番号が分からないので使わない（機能の有無で分ける）。
 - 公開前の前提: `release-requirements.json` に「main のコードが前提にするサーバーの設定」を並べ、候補を作る前にオーナーが `node apps/docs/scripts/release-requirements.mjs check` で本番へ問い合わせる（認証なしの GET）。`enforce: true` の項目が満たされない・確かめられないときは候補を作らない（main のコードは入ったまま、配るのだけ待つ）。`enforce: false` は警告だけ。今は「本番でログインを受け付ける」（`/api/auth/app-connections` が `404 app_connect_disabled` でない）の 1 件で、#18730 以降のアプリは閉じている間もログイン画面で塞がないので `enforce: false`。アプリを本番の設定に頼る作りにする PR（例: 閉じていてもログイン画面で塞ぐ）は、この表に項目を足すか `enforce` を true にする。
 - 文字起こし sidecar: `scripts/build-dmg.sh` が `npm run sidecar:build`（`swift build -c release`）の出力を `src-tauri/binaries/niho-speech-aarch64-apple-darwin` に置き、`.app` の `Contents/MacOS/niho-speech` に入れる。`sidecar.lock.json` に sidecar の版（`Sources/NihoSpeech/Tool.swift`）・`Package.swift` の `swift-tools-version`・署名 ID（`niho-speech`。SpeechAnalyzer の言語の予約は署名 ID ごとなので変えない）・ソース（`Package.swift`・`Sources/`）の指紋を固定する。ソースを変えたら `node apps/docs/scripts/sidecar-lock.mjs update`（lock は出荷対象なので、main に入ると公開される）。docs-ci が `sidecar-lock.mjs check` で照らし、macos-26 で release ビルドの版・arm64・macOS の dylib だけを確かめて `swift test` を回す。配る `.app` は `check-app`（版・署名 ID）まで通す。
-- 自動更新: `src-tauri/src/updater.rs`。起動時と、その後 1 時間ごと（取得するまで）に `plugins.updater.endpoints`（`https://niho.life/docs/updater/latest.json`。niho-app の Web の `apps/web/app/docs/updater/` が GitHub Release `docs-v*` を代理で読む。参照先はこのリポジトリの公開 Release に切り替える〔#286。それまでは niho-app の private Release〕）を見て、新しい版があれば取得して署名（`plugins.updater.pubkey`）を確かめ、手元に持つ。`.app` は動いている間は差し替えない（文字起こしは区切りごとに `.app` の中の `niho-speech` を起動するので、途中で差し替えると古い版が新しい版の sidecar を起動してしまう）。差し替えるのは終わるとき（`RunEvent::Exit`。工程・文字起こしを止めた後）だけで、別の NIHO docs が工程を実行している間は差し替えない。画面にはレールの下端（工程設計・設定の上。起動の失敗の画面ではその画面）に「新しい版 X があります」と「更新して再起動」を出す（押すと `restart_to_update` で開き直す。工程・会話・文字起こしが動いている間は `busy` が返り、画面が「止めて再起動」を確かめてから `force` で頼み直す。別の NIHO docs が工程を実行している間は `otherAppRunning` で、force でも開き直さない。30 秒たっても閉じなければ「閉じて開き直すと切り替わる」に変える。押さなければ、閉じたときに差し替えて次の起動で新しい版になる）。結果は診断ログ（`local-ai.log` の `auto_update.staged` / `auto_update.installed` / `auto_update.install_deferred` / `auto_update.failed`）。公開鍵がプレースホルダー（`REPLACE_WITH_DOCS_UPDATER_PUBKEY`）の間と開発ビルドでは、updater を初期化せず、画面にも出さない。
+- 自動更新: `src-tauri/src/updater.rs`。起動時と、その後 1 時間ごと（取得するまで）に `plugins.updater.endpoints`（`https://github.com/niho-life/niho-editor/releases/latest/download/latest.json`。このリポジトリの最新公開 ReleaseにあるTauri static manifestを直接読む）を見て、新しい版があれば取得して署名（`plugins.updater.pubkey`）を確かめ、手元に持つ。`.app` は動いている間は差し替えない（文字起こしは区切りごとに `.app` の中の `niho-speech` を起動するので、途中で差し替えると古い版が新しい版の sidecar を起動してしまう）。差し替えるのは終わるとき（`RunEvent::Exit`。工程・文字起こしを止めた後）だけで、別の NIHO docs が工程を実行している間は差し替えない。画面にはレールの下端（工程設計・設定の上。起動の失敗の画面ではその画面）に「新しい版 X があります」と「更新して再起動」を出す（押すと `restart_to_update` で開き直す。工程・会話・文字起こしが動いている間は `busy` が返り、画面が「止めて再起動」を確かめてから `force` で頼み直す。別の NIHO docs が工程を実行している間は `otherAppRunning` で、force でも開き直さない。30 秒たっても閉じなければ「閉じて開き直すと切り替わる」に変える。押さなければ、閉じたときに差し替えて次の起動で新しい版になる）。結果は診断ログ（`local-ai.log` の `auto_update.staged` / `auto_update.installed` / `auto_update.install_deferred` / `auto_update.failed`）。公開鍵がプレースホルダー（`REPLACE_WITH_DOCS_UPDATER_PUBKEY`）の間と開発ビルドでは、updater を初期化せず、画面にも出さない。
 - 未公証: `.app` は Tauri が ad-hoc で署名する（`tauri.conf.json` の `bundle.macOS.signingIdentity: "-"`・hardened runtime なし。Developer ID ではない）。linker の署名だけの `.app`（NIHO Desktop の今の形）は `codesign --verify` が通らず、ブラウザで落とすと「壊れている」扱いになりうるので、NIHO camera と同じ「正しい ad-hoc 署名」にした（`syspolicy_check distribution` は ad-hoc と未公証の 2 つだけになる）。ブラウザで落とした dmg の初回だけ、開くと止められるので **システム設定 →「プライバシーとセキュリティ」→「このまま開く」** で許可する（macOS 15 以降は右クリック →「開く」では通らない）。自動更新で入れ替わった版は許可が要らない。sidecar は署名し直されても署名 ID が `niho-speech` のまま（実行ファイルに埋め込んだ Info.plist。`check-app` が確かめる）。
 
 ### 署名鍵と公開鍵（最初の 1 回・2026-10-15 に設定済み）
@@ -181,7 +181,7 @@ NIHO_DOCS_SHELL=dev    npm -C apps/docs run dev:fake    # 開発の editor（loc
 1. 鍵を作る（パスワードを聞かれる。空でもよい）: `npm -C apps/docs exec -- tauri signer generate -w ~/.niho/docs-updater.key` → 秘密鍵 `~/.niho/docs-updater.key` と公開鍵 `~/.niho/docs-updater.key.pub`。秘密鍵は commit しない・人に渡さない（無くすと、配った版がそれ以降の更新を受け取れない）。
 2. 秘密鍵は `~/.niho/docs-updater.key`（権限 600）のまま手元に置く。GitHub の Environment や secret には入れない（以前の Environment `docs-release` の secret は使わない。`sign-and-publish.sh` は `NIHO_DOCS_UPDATER_KEY` で別の場所も指せる）。
 3. `src-tauri/tauri.conf.json` の `plugins.updater.pubkey` を `~/.niho/docs-updater.key.pub` の中身に差し替える PR を出す（この PR が main に入ると、その版から公開が始まる）。`node apps/docs/scripts/updater-key.mjs status` で鍵 ID が出れば形は合っている。公開のたびに `updater-key.mjs verify` が、上げる `.sig` をこの公開鍵で確かめる（秘密鍵との組の取り違えを止める）。
-4. 更新フィード `/docs/updater/latest.json` が、このリポジトリの公開 Release `docs-v*` を返すこと（移行は #286。`sign-and-publish.sh` は公開の前にフィードの今の版と比べる）。
+4. このリポジトリの公開 Release `docs-v*` にTauri static manifest `latest.json` を置くこと（`sign-and-publish.sh` が公開前にfeedの版を確認する）。既存アプリは旧endpointが焼き込み済みなので、初回だけ公開dmgを手動で入れ直す。以降の更新にniho-app PRやActionsは不要。
 
 **鍵を無くしたとき**（配った版は、それ以後の更新を受け取れない）:
 
@@ -189,14 +189,18 @@ NIHO_DOCS_SHELL=dev    npm -C apps/docs run dev:fake    # 開発の editor（loc
 2. 上の 3 の公開鍵の差し替え PR を出し、main に入ったらその SHA で候補を作って公開する（`sign-and-publish.sh` は製品 source の公開鍵と候補・署名の組を確かめる）。
 3. 配った版は古い公開鍵で署名を確かめるので、新しい版へは自動更新されない。各 Mac で新しい版の dmg を落として入れ直す（下の「新しい Mac への導入」の 1〜3）。
 
-### 公開（オーナーの Mac）
+### 公開（Mac Studio）
 
 ```sh
 git ls-remote --tags origin 'refs/tags/docs-v*' | node apps/docs/scripts/docs-version.mjs next   # 次の版の目安（配布済みの版より大きくする）
 ghN workflow run editor-mac-candidate.yml --repo niho-life/niho-editor --ref main -f source_sha=<製品 source の 40 桁 SHA> -f version=<X.Y.Z>
 # run が終わると prerelease editor-candidate-v<X.Y.Z>-<sha>-run-<run id>-attempt-<n> ができる
-GH=ghN scripts/editor-candidate/sign-and-publish.sh editor-candidate-v<X.Y.Z>-<sha>-run-<run id>-attempt-<n> --dry-run   # 検証・再確認・署名まで
-GH=ghN scripts/editor-candidate/sign-and-publish.sh editor-candidate-v<X.Y.Z>-<sha>-run-<run id>-attempt-<n>             # 公開 Release docs-v<X.Y.Z>-<sha12> に上げる
+# 初回のdirect feedだけ: dry-runと公開の両方でSKIP_FEEDを付ける
+NIHO_DOCS_SKIP_FEED=1 GH=ghN scripts/editor-candidate/sign-and-publish.sh editor-candidate-v<X.Y.Z>-<sha>-run-<run id>-attempt-<n> --dry-run
+NIHO_DOCS_SKIP_FEED=1 GH=ghN scripts/editor-candidate/sign-and-publish.sh editor-candidate-v<X.Y.Z>-<sha>-run-<run id>-attempt-<n>
+# 2回目以降は通常どおりfeedを検証する
+GH=ghN scripts/editor-candidate/sign-and-publish.sh editor-candidate-v<X.Y.Z>-<sha>-run-<run id>-attempt-<n> --dry-run
+GH=ghN scripts/editor-candidate/sign-and-publish.sh editor-candidate-v<X.Y.Z>-<sha>-run-<run id>-attempt-<n>
 ```
 
 - 鍵は `~/.niho/docs-updater.key`（`NIHO_DOCS_UPDATER_KEY` で別の場所も指せる。パスワードは `NIHO_DOCS_UPDATER_KEY_PASSWORD`、既定は空）。Apple Silicon・Node 24・`apps/docs` の `node_modules`（`tauri` CLI）・`gh` の認証。Rust と Xcode は要らない（ビルドは公開 CI）。
@@ -204,7 +208,7 @@ GH=ghN scripts/editor-candidate/sign-and-publish.sh editor-candidate-v<X.Y.Z>-<s
 
 ### 新しい Mac への導入（Apple Silicon・macOS 26 以上を推奨）
 
-1. 最新の `NIHO-docs-<版>-<sha12>.dmg` を落とす。NIHO にログインして（拠点のホスト・スタッフか管理者）開発者向けページ `https://niho.life/developer#docs` の「.dmg をダウンロード」を押す（Web の `apps/web/app/docs/latest-release`・`download` が、private の Release `docs-v*` の最新の dmg を代理で返す）。GitHub に権限があるなら、ブラウザか `gh release download <tag> --repo niho-coliving/niho-app --pattern 'NIHO-docs-*.dmg'` でもよい。
+1. 最新の `NIHO-docs-<版>-<sha12>.dmg` を落とす。このrepoの[公開Releases](https://github.com/niho-life/niho-editor/releases/latest)から最新の`NIHO-docs-<版>-<sha12>.dmg`を取得する（または`gh release download <tag> --repo niho-life/niho-editor --pattern 'NIHO-docs-*.dmg'`）。旧endpointを使う既存Macも、移行時はこの方法で1回だけ入れ替える。
 2. dmg を開いて `NIHO editor.app` を「アプリケーション」へドラッグする（dmg の中から直接開かない。自動更新が `.app` を差し替えられない）。
    以前の名前（`NIHO docs.app`）で入っている場合は、先に終了してゴミ箱へ入れてから置く（旧名と新名を並べない。bundle identifier と保存先は同じなので、設定・ページは同じ場所から読まれる）。同じ名前で入っている場合は置き換え、別名のコピーは作らない。アプリ本体のコピーは macOS 側で作れるが、同じユーザーの同じ保存領域を使うアプリは、場所・版が違っても 1 つだけ起動する。2 回目に開くと既存の画面を表示し、設定・同期・工程をもう一度始めない。認証 callback で開いた場合は同じユーザー専用 socket で URL を既存プロセスへ渡し、受領を確認する。ログイン時の `--background` が重なった場合は画面を出さない。旧版にはこの排他がないため、導入時は旧版を終了してから新しい版を開く。
 3. 開く。止められたら システム設定 →「プライバシーとセキュリティ」→「このまま開く」。
