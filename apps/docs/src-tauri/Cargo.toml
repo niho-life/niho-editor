@@ -25,10 +25,11 @@ niho_desktop_vault = { package = "niho-desktop-vault", path = "../../../packages
 async-trait = "0.1"
 # 版の記録の時刻（ISO 8601。保管庫の crate と同じ版）
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-tauri = { version = "2.11.2", features = ["protocol-asset", "tray-icon"] }
+tauri = { version = "2.12", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-opener = "2"
 # 自動更新（S4 #18385。NIHO Desktop と同じ plugin。https://niho.life/docs/updater/latest.json を見て、署名を確かめて差し替える）
-tauri-plugin-updater = "2"
+# zip archive parser differential (GHSA-m665-v7pm-7grj) 対策のため 2.14.1 以降が必須（zip 9.0.5+）
+tauri-plugin-updater = "2.14.1"
 serde = { version = "1.0", features = ["derive"] }
 # float_roundtrip: 本人 Mac 実行の固定入力の hash（personal_run.rs の canonical）を JS と同じ数値表記で作るため、JSON の小数を正確に読む
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
