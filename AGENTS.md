@@ -46,6 +46,7 @@
 ## 並行作業と worktree
 
 - 同じファイルを 2 つのレーンが書かない。**触らない範囲を PR 本文に書く。**
+- 既存の `niho-editor-N` seat を使い、新しい seat / clone は owner が明示した場合だけ作る。`scripts/seat.sh status` で確認し、clean な topic branch がある seat も再利用できる。`scripts/seat.sh start <branch>` は最新 `origin/main` から新しい branch を作り、前の branch ref を残す。未コミット差分と detached HEAD の unreferenced commit は保護する。詳細は [座席と topic branch の運用](docs/panes/panes-workflow.md)。
 - 番号付きの `niho-docs-N` を勝手に増やさない。worktree を作ったら、**終わったら片付ける**（`git worktree remove --force` と `git worktree prune`）。容量不足でセッションが起動できなくなる。
 - **`git stash` を使わない。** stash は全 worktree で共有で、他のセッションの変更を pop してしまう。退避は WIP commit で。
 - 共有のチェックアウトで作業するときは、**commit の直前に `git branch --show-current` を確かめる**。push は ref を明示（`git push origin <branch>:<branch>`）。
