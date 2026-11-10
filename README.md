@@ -2,6 +2,8 @@
 
 NIHO Docs の公開クライアントコードと、NIHO Photo と共有するクラウド contract を管理します。クライアント、共通 UI / Core、ローカル保存とクラウド共有 client contract は原則公開し、認証・認可の最終権限、実データ、API / DB / storage 実装、運用秘密は非公開側に置きます。公式サービスの利用には NIHO ログインが必要です。
 
+既存 seat の再利用と topic branch の準備は [Pane 作業フロー](docs/panes/panes-workflow.md) を参照してください。
+
 ## 公開境界と利用条件
 
 公開は自由な再利用の許諾を意味しません。NIHO 保有コード・素材は all rights reserved です。GitHub 上の閲覧・fork と第三者資産・依存ライブラリには各適用条件があります。詳細は [`LICENSE`](LICENSE)、[`ASSET_LICENSE.md`](ASSET_LICENSE.md)、[`TRADEMARKS.md`](TRADEMARKS.md)、[`CONTRIBUTING.md`](CONTRIBUTING.md) を参照してください。
