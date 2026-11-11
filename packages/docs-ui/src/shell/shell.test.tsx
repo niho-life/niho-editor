@@ -44,7 +44,7 @@ function sidebar(over: Partial<Parameters<typeof ShellSidebar>[0]> = {}) {
       onCollapse={noop}
       newMenu={{ open: false, onToggle: noop, onClose: noop, onPick: noop }}
       search={{ open: false, value: "", onOpen: noop, onClose: noop, onChange: noop }}
-     
+
       {...over}
     />
   );
