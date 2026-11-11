@@ -66,7 +66,7 @@ describe("一覧のフォルダの行とアイコン（kind = 'folder'）", () =
         ]}
         onToggleFolder={onToggle}
         onSelect={onSelect}
-       
+
       />,
     );
     expect(host.querySelector(".es-ditw")).toBeNull();
