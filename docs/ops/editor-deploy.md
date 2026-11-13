@@ -504,9 +504,9 @@ editor を動かしているのと同じ GCP プロジェクトで行う（別�
 
 ## 14. private job暗号化payloadのcleanup
 
-翻訳候補とGoogle Docs export snapshotは共通のencrypted private-job storeを使う。`PRIVATE_JOBS_MAINTENANCE=true`とkeyring参照なしで公式配備した後、`private-jobs-infra.sh`が5分ごとのcleanup Schedulerを構成する。cleanup Cloud Run Jobは`niho-editor-private`専用runtime identityを使い、Cloud SQL接続と`niho-editor-database-url` Secretだけを読む。Web runtimeが使うprivate-job keyring、AI/Google認証Secret、asset bucketにはアクセスを付けない。Scheduler identityには対象cleanup Jobの実行権限だけを付ける。
+翻訳候補とGoogle Docs export snapshotは共通のencrypted private-job storeを使う。`PRIVATE_JOBS_MAINTENANCE=true`とkeyring参照なしで公式配備した後、`private-jobs-infra.sh`が1時間ごと（毎時7分）のcleanup Schedulerを構成する。payloadの期限は22時間50分なので、作成から24時間以内に消える。5分ごとだと使われていなくてもJobが1日288回起動し月約$10かかったため、2026-11-13に変更した。cleanup Cloud Run Jobは`niho-editor-private`専用runtime identityを使い、Cloud SQL接続と`niho-editor-database-url` Secretだけを読む。Web runtimeが使うprivate-job keyring、AI/Google認証Secret、asset bucketにはアクセスを付けない。Scheduler identityには対象cleanup Jobの実行権限だけを付ける。
 
-ownerが`set-private-jobs-keyring.sh`へkeyringを安全な標準入力で投入できるのは、専用identity、固定command/args、DB URLだけのSecret設定、5分cleanupの稼働を確認した後。鍵の値はこのrepo・deploy.env・ログ・チャットへ記録せず、owner helperが出すSecretの固定数値版参照だけをignored `deploy.env`へ設定する。Google Docs用queue/sweepはNIHOのgatewayが公式配備されるまで作成・有効化せず、両方のmodeは`off`のまま保つ。
+ownerが`set-private-jobs-keyring.sh`へkeyringを安全な標準入力で投入できるのは、専用identity、固定command/args、DB URLだけのSecret設定、1時間おきのcleanupの稼働を確認した後。鍵の値はこのrepo・deploy.env・ログ・チャットへ記録せず、owner helperが出すSecretの固定数値版参照だけをignored `deploy.env`へ設定する。Google Docs用queue/sweepはNIHOのgatewayが公式配備されるまで作成・有効化せず、両方のmodeは`off`のまま保つ。
 
 ## Experience記事連携の撤去（2026-11-07、#332）
 

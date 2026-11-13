@@ -44,7 +44,7 @@ workerがNIHOを呼ぶときはruntimeの固定Google metadata identityを使い
 
 Google account/Editor接続の変更で旧jobを止め、本人の確認なしに新しいgrantへ切り替えない。本人・元ページの消去で一時snapshotを消す。NIHO grantは統合先へ移さず、退会/PII purgeに接続する。
 
-一時payloadは23時間50分以内で期限切れとし、共通5分cleanupで正常稼働時24時間以内に回収する。完了/取消時も不要payloadを即時消去する。鍵なし・cleanup未準備なら受付を閉じ、通常ページ編集は継続する。鍵破棄をpayload削除の代用にしない。
+一時payloadは22時間50分以内で期限切れとし、共通の1時間おきcleanupで正常稼働時24時間以内に回収する。完了/取消時も不要payloadを即時消去する。鍵なし・cleanup未準備なら受付を閉じ、通常ページ編集は継続する。鍵破棄をpayload削除の代用にしない。
 
 ## 検証と配備
 

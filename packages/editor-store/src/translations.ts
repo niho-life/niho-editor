@@ -3,7 +3,8 @@ import { imageObjectPath } from "./images.ts";
 import { isPageId } from "./store.ts";
 import type { Block, Database, OwnerId, PageKind, Queryable } from "./types.ts";
 
-export const TRANSLATION_PROPOSAL_TTL_HOURS = 23 + 50 / 60;
+// 1 時間おきの private-jobs cleanup と合わせて、作成から 24 時間以内に消える長さ。
+export const TRANSLATION_PROPOSAL_TTL_HOURS = 22 + 50 / 60;
 export const TRANSLATION_LEASE_MINUTES = 15;
 
 export type TranslationEnvelope = {
