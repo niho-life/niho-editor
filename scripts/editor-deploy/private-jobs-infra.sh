@@ -14,7 +14,8 @@ gcp iam service-accounts describe "$PRIVATE_JOBS_SCHEDULER_EMAIL" > /dev/null 2>
 # OAuth identity has only execute permission on this one job; no overrides, secrets, or DB access.
 gcp run jobs add-iam-policy-binding "$PRIVATE_JOBS_JOB" --region "$GCP_REGION" \
   --member "serviceAccount:$PRIVATE_JOBS_SCHEDULER_EMAIL" --role roles/run.jobsExecutor > /dev/null
-flags=(--location "$GCP_REGION" --schedule "*/5 * * * *" --time-zone Asia/Tokyo
+# Hourly (at :07): payload TTLs are 22h50m, so expired payloads are erased within 24h of creation.
+flags=(--location "$GCP_REGION" --schedule "7 * * * *" --time-zone Asia/Tokyo
   --uri "$(private_jobs_scheduler_uri)" --http-method post --message-body '{}'
   --oauth-service-account-email "$PRIVATE_JOBS_SCHEDULER_EMAIL"
   --oauth-token-scope https://www.googleapis.com/auth/cloud-platform

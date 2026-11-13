@@ -5,7 +5,8 @@ export const GOOGLE_DOCS_BATCH_MAX_PAGES = 200;
 export const GOOGLE_DOCS_BATCH_MAX_BYTES = 32 * 1024 * 1024;
 export const GOOGLE_DOCS_BATCH_MAX_ITEM_BYTES = 4 * 1024 * 1024;
 export const GOOGLE_DOCS_BATCH_MAX_RAW_SOURCE_BYTES = 32 * 1024 * 1024;
-export const GOOGLE_DOCS_BATCH_TTL_MINUTES = 23 * 60 + 50;
+// 1 時間おきの private-jobs cleanup と合わせて、作成から 24 時間以内に消える長さ。
+export const GOOGLE_DOCS_BATCH_TTL_MINUTES = 22 * 60 + 50;
 export const GOOGLE_DOCS_BATCH_LEASE_MINUTES = 6;
 
 export type GoogleDocsBatchOptions = { includeBackground: boolean; includeTranscript: boolean };

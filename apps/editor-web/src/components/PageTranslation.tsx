@@ -348,7 +348,7 @@ export function PageTranslation({ pageId, lang, saveFirst, savedRevision, curren
       </span>
       {proposal?.status === "generating" && <p role="status">英語案を生成しています。同じ操作を再送しても二重実行しません。</p>}
       {proposal?.status === "failed" && <p role="status">前回の生成は完了しませんでした。原文と英語版は変更していません。</p>}
-      {proposal?.status === "expired" && <p role="status">候補の24時間の期限が切れました。内容は消去されています。</p>}
+      {proposal?.status === "expired" && <p role="status">候補の期限が切れました。内容は消去されています。</p>}
       {candidateReady && (
         <>
           {omissions.length > 0 && <p>今回の対象外: {omissions.join("、")}</p>}

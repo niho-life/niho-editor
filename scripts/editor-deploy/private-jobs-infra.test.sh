@@ -29,6 +29,7 @@ bash "$here/private-jobs-infra.sh" > /dev/null
 grep -Eq 'run jobs add-iam-policy-binding niho-editor-private-jobs .*--role roles/run.jobsExecutor' "$CALLS"
 grep -Eq 'scheduler jobs create http niho-editor-private-jobs-sweep .*--message-body \{\}' "$CALLS"
 grep -Eq -- '--oauth-service-account-email niho-editor-private-jobs-cron@' "$CALLS"
+grep -Eq -- '--schedule 7 \* \* \* \* --time-zone Asia/Tokyo' "$CALLS"
 if grep -Eq 'secrets (versions|access)|storage |projects add-iam-policy-binding|--oidc|--overrides|scheduler jobs resume' "$CALLS"; then exit 1; fi
 EXISTS=true bash "$here/private-jobs-infra.sh" > /dev/null
 grep -Eq 'scheduler jobs update http niho-editor-private-jobs-sweep' "$CALLS"
