@@ -26,7 +26,8 @@ const EXPORT = "00000000-0000-4000-8000-000000000004";
 const OPERATION = "00000000-0000-4000-8000-000000000005";
 const GRANT = "00000000-0000-4000-8000-000000000006";
 const CHILD = "00000000-0000-4000-8000-000000000007";
-const EXPIRY = "2030-01-01T23:50:00.000Z";
+// now（2030-01-01T00:00Z）＋ GOOGLE_DOCS_BATCH_TTL_MINUTES（22 時間 50 分）。
+const EXPIRY = "2030-01-01T22:50:00.000Z";
 const tree: GoogleDocsBatchTreePage[] = [{
   id: ROOT, title: "DBに保存した題名", revision: 7, parent: null, depth: 0,
   blocks: [{ type: "paragraph", content: [{ type: "text", text: "DBに保存した本文" }] }] as GoogleDocsBatchTreePage["blocks"],
