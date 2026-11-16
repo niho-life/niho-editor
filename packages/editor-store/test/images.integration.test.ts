@@ -370,7 +370,11 @@ describe("page images on PostgreSQL", { skip: databaseUrl === undefined }, () =>
       startImageUpload(pool, OWNER, upload),
       store.savePage(OWNER, page, { blocks: [image, { type: "paragraph", content: [{ type: "text", text: "x" }] }] }, { baseRevision: before.revision }),
     ]);
-    assert.deepEqual([started?.status, saved?.status].sort(), ["created", "page_full"]);
+    assert.ok(
+      (started?.status === "created" && saved?.status === "page_full") ||
+        (started?.status === "page_full" && saved?.status === "saved"),
+      `expected exactly one concurrent write to fit, got upload=${started?.status ?? "none"}, save=${saved?.status ?? "none"}`,
+    );
     const after = (await store.getPage(OWNER, page))!;
     assert.ok(pageSizeBytes(after.title, after.blocks, await pageImageCharges(pool, OWNER, page)) <= PAGE_MAX_BYTES);
   });
