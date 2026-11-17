@@ -66,7 +66,7 @@ prefix は `https://api.editor.niho.life`。メソッドは `GET` と `HEAD` だ
 - 本文は `blocks`（限定 AST）と `markdown`（安全な Markdown の部分集合）の両方を返す。AST が正本、Markdown は投影。サーバーは `renderMarkdown(blocks, assets)` で投影する。検証器は既定では `markdown` が部分集合に収まることだけを確かめる（古い投影で保存した公開版を、新しい版の destination が読めなくならないように）。サーバーが返す直前の自己検証では `requireProjection` で投影との完全一致も確かめる。
 - **AST**：`paragraph`、`heading`（2・3）、`list`（箇条書き・番号付き、入れ子なし）、`quote`、`figure`（画像）、`divider`、`note`（囲み）。インライン：`text`（`bold`・`italic`・`strike`・`code`・`link` の mark を持てる）と `confirm`（未確認の印）。HTML は含まない。未知のブロック・mark は拒否する（描画せずに通さない）。
 - **リンク**は `https` の URL、またはサイト内の `/` から始まるパスだけ。資格情報つきの URL、`http:`・`mailto:`・`javascript:`・`data:`・`//host` は拒否する。
-- **画像**は `figure` が `assetId` を参照し、`assets` の `url`（editor の資産置き場から配信する `https` の URL）、`contentType`、`bytes`、`sha256`、`alt`、`credit` を持つ。本人のサイトは取り込むときに複製し、`sha256` で確かめる。録音の資産は公開版に含めない。
+- **画像**は `figure` が `assetId` を参照し、`assets` の `url`（editor の資産置き場から配信する `https` の URL）、`contentType`、`bytes`、`sha256`、`alt`、`credit` を持つ。`credit` は editor が常に `null` を書く（公開ページにクレジットを出さない。オーナー決定 2026-11-18。それより前の公開版には値が残る）。本人のサイトは取り込むときに複製し、`sha256` で確かめる。録音の資産は公開版に含めない。
 - **Markdown** は niho-experience の `guide-markdown` が受ける範囲に限る：`##` `###`、段落、`-` / `1.` の箇条書き（入れ子なし）、独立した行の `![alt](src "caption")`、`:::note` … `:::`、インラインの `**` `*` `[text](href)` `[CONFIRM: …]`、句読点の `\` エスケープ。HTML・`_`・`` ` ``・`~~`・引用・区切り線は出さない。AST の `quote` は段落に、`divider` は省き、`strike`・`code` は素のテキストにして Markdown に投影する（AST は変えない）。発信先が「引用を受けない」などを宣言していれば、editor は公開の前に止める（#39）。
 - 上限：1 つのブロックの文字数 20,000、ブロック数 2,000、公開版全体（正規化した JSON）1 MiB。
 
@@ -75,7 +75,7 @@ prefix は `https://api.editor.niho.life`。メソッドは `GET` と `HEAD` だ
 ```
 PublishedListItem
   id, slug, dest, lang, title, lead|null, cover|null, category|null,
-  coverShareable?: true                    ← 任意。カバーを共有画像（OG 画像・Article.image）にも使ってよいときだけ
+  coverShareable?: true                    ← 任意。カバーを共有画像（OG 画像・Article.image）にも使ってよいとき（使える形のカバーなら付く）
   author { name, handle|null, url|null }   ← 公開した時点のスナップショット
   authorProfile?: { role|null, bio|null }  ← 任意。公開した時点の著者紹介（肩書・紹介文）
   range: live | unlisted
@@ -88,7 +88,7 @@ PublishedDoc = PublishedListItem + { blocks, markdown, assets, contractVersion }
 
 任意の項目（値があるときだけ出す。無い公開版の応答・`ETag` は前と同じ）：
 
-- `coverShareable`：`true` だけ。著者がカバーに「掲載許諾」と「共有画像にも使ってよい許諾」の両方を付けたときだけ出る。無ければ、発信先はカバーをページの中には載せてよいが、OG 画像・`Article.image` など共有画像には使わない。`cover` が `null` なのに出ていれば拒否する。
+- `coverShareable`：`true` だけ。editor は使える形のカバーがあれば付ける（掲載許諾・共有画像の許諾は見ない。オーナー決定 2026-11-18）。無ければ、発信先はカバーをページの中には載せてよいが、OG 画像・`Article.image` など共有画像には使わない（それより前の公開版には無いことがある）。`cover` が `null` なのに出ていれば拒否する。
 - `authorProfile`：`{ role, bio }`（欄はこの 2 つだけ。どちらも `null` か空でない 1 行で、肩書は 120 字・紹介文は 600 字まで。両方 `null` は拒否）。`author` と同じく公開した時点の値で、あとで設定を変えても公開版は変わらない。プレビューには出ない。
 - どちらも**トップレベル**に置き、`cover`（`PublishedAsset`）や `author` の中には入れない。入れ子のオブジェクトは厳密（未知のキーは拒否）なので、中に足すとこの項目を知らない古い版の検証器が応答ごと拒否する。トップレベルの未知の項目は古い検証器が無視して落とすので、古い発信先はそのまま読める。
 

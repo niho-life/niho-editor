@@ -75,12 +75,13 @@ export interface AssetRecord {
   readonly sha256: string;
   readonly contentType: string;
   readonly alt: string | null;
+  /**
+   * クレジット・掲載許諾（consent）・共有画像の許諾（share）は、保存されている値をそのまま受け取るが、公開には使わない
+   * （オーナー決定 2026-11-18。置いた本人が許諾を得ている前提）。公開版の `credit` は常に null、使える形のカバーは
+   * 許諾によらず `coverShareable`。
+   */
   readonly credit: string | null;
   readonly consent: boolean;
-  /**
-   * 共有画像にも使ってよい（OG 画像・`Article.image`）。掲載許諾（consent）とは別の、画像ごとの許諾。
-   * Missing means false. Only a cover with both consent and share makes the published version say `coverShareable`.
-   */
   readonly share?: boolean;
 }
 

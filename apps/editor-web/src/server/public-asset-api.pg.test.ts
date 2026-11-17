@@ -89,14 +89,16 @@ describe.skipIf(databaseUrl === undefined)("public asset PostgreSQL authority", 
     const privateAsset = await seed("private");
     const retired = await seed("retired-exp", { published: true, dest: "exp" });
     const stopped = await seed("stopped", { published: true, stopped: true });
-    const revoked = await seed("revoked", { published: true, consent: false });
+    // 掲載許諾（consent）が false でも、いまの公開版に入っていれば配信の候補になる（オーナー決定 2026-11-18）
+    const withoutConsent = await seed("without-consent", { published: true, consent: false });
     const deleted = await seed("deleted", { published: true, deleted: true });
     const audio = await seed("audio", { published: true, kind: "audio" });
     const oldVersion = await seed("old-version", { published: true, currentOmitsAsset: true });
     const store = pgPublicAssetStore(pool);
 
     expect(await store.candidates(current.sha256)).toHaveLength(1);
-    for (const denied of [privateAsset, retired, stopped, revoked, deleted, audio]) {
+    expect(await store.candidates(withoutConsent.sha256)).toHaveLength(1);
+    for (const denied of [privateAsset, retired, stopped, deleted, audio]) {
       expect(await store.candidates(denied.sha256), denied.sha256).toEqual([]);
     }
     expect(await store.candidates(oldVersion.sha256)).toHaveLength(1);

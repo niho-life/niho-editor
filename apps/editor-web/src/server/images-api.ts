@@ -342,6 +342,8 @@ function readMetaPatch(value: unknown): MetaResult {
     }
     patch[key] = raw;
   }
+  // クレジット・掲載許諾・共有画像の許諾は、古いクライアントとの互換のために受け付けて保存するが、公開・配信の条件にはしない
+  // （オーナー決定 2026-11-18）。
   if ("consent" in value) {
     if (typeof value.consent !== "boolean") return { ok: false, reason: "consent" };
     patch.consent = value.consent;

@@ -407,20 +407,6 @@
       }
     },
     {
-      "name": "cover without consent",
-      "base": "exp",
-      "path": [
-        "requires",
-        1,
-        "consent"
-      ],
-      "delete": true,
-      "expect": {
-        "path": "$.requires[1].consent",
-        "reason": "required"
-      }
-    },
-    {
       "name": "lead max zero",
       "base": "exp",
       "path": [

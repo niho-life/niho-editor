@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { IMAGE_MAX_BYTES } from "@niho/editor-store";
 import { snapshot } from "../public-api/testing/synthetic";
 import type { ObjectStorage } from "../storage/types";
-import { readPublicAssetRoute, type PublicAssetDeps, type PublicAssetRow } from "./public-asset-api";
+import { pgPublicAssetStore, readPublicAssetRoute, type PublicAssetDeps, type PublicAssetRow } from "./public-asset-api";
 
 vi.mock("server-only", () => ({}));
 
@@ -39,7 +39,7 @@ describe("public current-publication assets", () => {
     expect([...response.headers].join(" ")).not.toContain(ID);
   });
 
-  it("returns the same 404 for malformed names, old/unpublished assets, another asset, audio, or revoked consent candidates", async () => {
+  it("returns the same 404 for malformed names, old/unpublished assets, or another asset", async () => {
     const wrong = { ...ROW, assetId: "00000000-0000-4000-8000-000000000099" };
     for (const [file, rows] of [["bad.jpg", [ROW]], [FILE, []], [FILE, [wrong]]] as const) {
       const fixture = deps(rows);
@@ -80,5 +80,23 @@ describe("public current-publication assets", () => {
     const timeout = await readPublicAssetRoute(FILE, deps([ROW], { body: stalled, sizeBytes: 3 }, 10).value);
     expect(timeout.status).toBe(503);
     expect(await timeout.json()).toEqual({ error: "unavailable" });
+  });
+});
+
+describe("public asset candidates SQL", () => {
+  it("掲載許諾（consent）を見ず、公開中・ready・image・page が消えていないことだけで絞る（オーナー決定 2026-11-18）", async () => {
+    const query = vi.fn<(sql: string, params?: readonly unknown[]) => Promise<{ rows: never[] }>>(async () => ({ rows: [] }));
+    await pgPublicAssetStore({ query } as unknown as Parameters<typeof pgPublicAssetStore>[0]).candidates(SHA);
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).not.toMatch(/consent/i);
+    expect(sql).not.toMatch(/\bshare\b/i);
+    expect(sql).toContain("p.stopped_at IS NULL");
+    expect(sql).toContain("p.dest = 'site'");
+    expect(sql).toContain("page.deleted_at IS NULL");
+    expect(sql).toContain("a.kind = 'image'");
+    expect(sql).toContain("a.upload_status = 'ready'");
+    expect(sql).toContain("pv.version = p.version");
+    expect(params).toEqual([SHA]);
   });
 });

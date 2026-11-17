@@ -25,13 +25,14 @@ DestinationDeclaration
   accepts: { blocks: Block["type"][], marks: Mark["type"][] }
   requires: Condition[]
 Condition = { id, message, fix, kind, …kind ごとの引数 }
-  kind: lang(equals) | cover(consent) | lead(max?) | category(oneOf?) | headings(min) | noConfirm | relatedLive
+  kind: lang(equals) | cover(consent?) | lead(max?) | category(oneOf?) | headings(min) | noConfirm | relatedLive
       | title(max) | images(alt)
   fix : lang | cover | lead | category | body | related     ← 「直す」で開く欄
 ```
 
 - 語彙は閉じている。**未知の `kind`・未知のフィールド・型の違いは宣言ごと拒否**し、その発信先は「いまは公開できません」になる（無視して公開を通さない＝fail closed）。
 - 「関連する体験が掲載中」（`relatedLive`）のような外の事実は、サーバーが `facts` として渡す。`null`（不明）は**満たさない**扱い。
+- `cover`：カバーが設定されているなら使える形であること。`consent`（真偽値）は既にある宣言のために受け付けるが、意味を持たない（無くてもよく、読んだ宣言には残さない）。掲載許諾は公開の条件にしない（オーナー決定 2026-11-18。一般的な CMS と同じく、置いた本人が許諾を得ている前提）。
 - `title(max)`：題名（整えたあとの 1 行）が `max` 文字以内。数えるのは code point（絵文字・サロゲートペアも 1 字）。`max` は必須で 1〜500 の整数。空の題名はどの発信先でも要る条件（`title`）が先に止める。
 - `images(alt)`：`alt: true` なら、公開版に入る画像（本文の `figure` それぞれと `cover`）の代替テキストが空でない。代替テキストの決め方は公開版と**同じ関数**（`publishedAlt`：画像ノードの `alt` → 資産の `alt` → 空）で数えるので、「条件を満たしたのに公開版の alt が空」は起きない。カバーはノードを持たないので資産の `alt` だけを見る。見つからない資産は数えない（別の問題で止まる）。`alt: false` は常に満たす。
 - どちらも `fix` は既存の `body`（本文の画面で直す）。`fix` の語彙は増やしていない。
@@ -42,7 +43,7 @@ Condition = { id, message, fix, kind, …kind ごとの引数 }
 
 - どの発信先でも要る条件：題名が空でない、本文に内容がある、`accepts` の外の要素（例：NIHO Experience に引用）がない。
 - 発信先の `requires` を順に評価し、満たさないものを `problems`（`id`、一言の `message`、`fix`）に積む。`ready` は `problems` が空のときだけ true。**true になるまで公開ボタンは押せない**。
-- `cover` と `lead` は任意の公開情報。宣言に条件があっても未設定なら公開・更新を止めず、設定されているときだけ画像の使用可否・掲載許諾・リードの長さを検証する。画像を設定したまま削除・許諾撤回された場合の公開停止は維持する。
+- `cover` と `lead` は任意の公開情報。宣言に条件があっても未設定なら公開・更新を止めず、設定されているときだけ画像の使用可否・リードの長さを検証する（掲載許諾・共有画像の許諾は見ない。オーナー決定 2026-11-18）。画像を設定したまま削除された場合の公開停止は維持する。
 - `notices` は止めない知らせ：録音のブロックは公開版に含まれない、など。
 - 入力は `collectFacts(page, assets, serverFacts)` が作る。評価は純粋関数で、同じ入力に同じ出力。
 
@@ -60,8 +61,9 @@ Condition = { id, message, fix, kind, …kind ごとの引数 }
 - **知らないノードは黙って落とさず、公開の前の問題（`fix: body`）にする**。録音は意図して落とし、`notices` に出す。空の段落は落とす。
 - 変換後は `markdown` を契約の `renderMarkdown` で作り、最後に契約の `parsePublishedDoc(doc, { requireProjection: true })` で自己検証する。通らなければ公開を失敗にする。
 - 公開版は深く freeze し、`fingerprint`（正規化した内容の SHA-256）を持つ。**「更新あり」は「いまの下書きの fingerprint が公開版と違う」こと**で、保存の時刻では決めない（直して元に戻せば「更新あり」でなくなる）。
-- 入力の約束：画像ノードは `attrs: { assetId, alt, caption? }`、資産は `{ id, kind, bytes, sha256, contentType, alt, credit, consent, share? }`（#33 の編集がこの形で保存する。`share` が無い資産は false）。
-- `coverShareable`：カバーがあり、その資産が使える形で**掲載許諾（`consent`）と共有画像の許諾（`share`）の両方**を持つときだけ、公開版のトップレベルに `coverShareable: true` を入れる。それ以外は**欄そのものを出さない**（`false` を書かない）。掲載許諾は「ページに載せてよい」、共有画像の許諾は「SNS・検索結果に出る OG 画像や `Article.image` にも使ってよい」で、画像ごとに別に持つ（`assets.share`。カバーの欄の 2 つ目のチェック）。fingerprint にも値があるときだけ入れるので、許諾の無い既存のページは「更新あり」にならず、公開版と ETag も変わらない。許諾を付ければ「更新あり」になる。
+- 入力の約束：画像ノードは `attrs: { assetId, alt, caption? }`、資産は `{ id, kind, bytes, sha256, contentType, alt, credit, consent, share? }`（#33 の編集がこの形で保存する）。`credit`・`consent`・`share` は受け取るが公開には使わない（オーナー決定 2026-11-18）。掲載許諾の無い写真・カバーも公開できる。
+- クレジット：公開版の `assets[].credit`・`cover.credit` は**常に `null`**（公開ページにクレジットを出さない。オーナー決定 2026-11-18）。版の JSON の形（キー・型）は変えない。fingerprint の資産の要約も `credit: null` にするので、クレジットを持つ写真のある公開済みのページは一度「更新あり」になる（更新を公開すると公開版から消える）。
+- `coverShareable`：カバーがあり、その資産が使える形なら、公開版のトップレベルに `coverShareable: true` を入れる（掲載許諾・共有画像の許諾 `assets.share` は見ない。オーナー決定 2026-11-18）。カバーが無いときは**欄そのものを出さない**（`false` を書かない）。fingerprint にも値があるときだけ入れるので、カバーの無いページの fingerprint は変わらない。共有画像の許諾の無いカバーで公開済みのページは一度「更新あり」になり、更新を公開すると `coverShareable` が付く。
 - `authorProfile`：公開した時点の著者紹介（設定 › 公開用の著者紹介の肩書 `role`・紹介文 `bio`）を、`author` と同じく公開版に固定する（あとで設定を変えても既存の公開版は変わらず、次に公開・更新したときに入る）。値は 1 行に整え、空は `null`、両方 `null` なら欄を出さない。`author` の中には入れない（`author` は入れ子の厳密なオブジェクトで、古い検証器が未知のキーで拒否するため）。著者名と同じく内容ではないので fingerprint には入れない。著者のポート（`AuthorSource.read`）が `{ name, handle, url, profile? }` を返し、`author` には契約の 3 つだけを渡す。プレビューには入れない（プレビュー token に結んでいない。公開版だけ）。
 
 ### 状態と主ボタン

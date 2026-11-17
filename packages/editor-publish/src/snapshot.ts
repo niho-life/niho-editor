@@ -454,9 +454,12 @@ export function toPublishedBlocks(content: unknown): Conversion {
 
 // --- assets -------------------------------------------------------------------------
 
-export type AssetState = "missing" | "unusable" | "no-consent" | "ok";
+export type AssetState = "missing" | "unusable" | "ok";
 
-/** A published image: present, an image of an allowed type with sane metadata, with 掲載許諾. */
+/**
+ * 公開できる画像か: あり、許された種類の画像で、メタデータが正しい。
+ * 掲載許諾（consent）・共有画像の許諾（share）は見ない（オーナー決定 2026-11-18。置いた本人が許諾を得ている前提）。
+ */
 export function assetState(asset: AssetRecord | undefined): AssetState {
   if (!asset) return "missing";
   if (
@@ -469,7 +472,7 @@ export function assetState(asset: AssetRecord | undefined): AssetState {
   ) {
     return "unusable";
   }
-  return asset.consent === true ? "ok" : "no-consent";
+  return "ok";
 }
 
 /** The URLs the editor's asset store serves. Must be https (checked again by the contract's validator). */
@@ -494,7 +497,7 @@ export interface ContentFingerprintInput {
   readonly lang: Lang;
   readonly lead: string | null;
   readonly cover: AssetDigest | null;
-  /** Only when true, so drafts and versions without the share permission keep the fingerprint they always had. */
+  /** true のときだけ入れる（カバーの無いページは、以前と同じ fingerprint のまま）。 */
   readonly coverShareable?: true;
   readonly blocks: readonly Block[];
   readonly figures: readonly AssetDigest[];
@@ -509,7 +512,8 @@ export async function contentFingerprint(input: ContentFingerprintInput): Promis
 
 function digest(id: string, asset: AssetRecord | undefined, alt: string): AssetDigest {
   if (!asset) return { id, missing: true };
-  return { id, sha256: asset.sha256, contentType: asset.contentType, bytes: asset.bytes, alt, credit: cleanLine(asset.credit) };
+  // 公開版のクレジットは常に null（publishedAsset と同じ）。キーは残し、クレジットの無い資産の fingerprint を変えない。
+  return { id, sha256: asset.sha256, contentType: asset.contentType, bytes: asset.bytes, alt, credit: null };
 }
 
 /**
@@ -521,13 +525,12 @@ export function publishedAlt(ref: FigureRef | null, asset: AssetRecord | undefin
 }
 
 /**
- * The cover may also be the share image: it is usable, has 掲載許諾, and the author confirmed sharing too.
- * The published version says `coverShareable: true` only then (and leaves the field out otherwise).
+ * カバーは、使える形なら共有画像（OG 画像・`Article.image`）にも使ってよい。公開版はそのとき `coverShareable: true` を持ち、
+ * それ以外（カバーが無い・使えない）は欄を出さない。掲載許諾・共有画像の許諾（`share`）は見ない（オーナー決定 2026-11-18）。
  */
 export function coverShareable(page: Pick<DraftPage, "coverAssetId">, assets: ReadonlyMap<string, AssetRecord>): boolean {
   if (page.coverAssetId === null) return false;
-  const asset = assets.get(page.coverAssetId);
-  return asset !== undefined && assetState(asset) === "ok" && asset.share === true;
+  return assetState(assets.get(page.coverAssetId)) === "ok";
 }
 
 function fingerprintInput(page: DraftPage, assets: ReadonlyMap<string, AssetRecord>, conversion: Conversion): ContentFingerprintInput {
@@ -616,13 +619,14 @@ function publishedAsset(asset: AssetRecord, alt: string, urls: AssetUrls, path: 
     bytes: asset.bytes,
     sha256: asset.sha256,
     alt,
-    credit: cleanLine(asset.credit),
+    // 公開ページにクレジットは出さない（オーナー決定 2026-11-18）。版の JSON の形は変えず、常に null。
+    credit: null,
   };
 }
 
 /**
  * Builds an immutable published version from the draft. Fails (`snapshot_invalid`) when the body has
- * conversion problems, an image is missing / unusable / without consent, or the result does not pass
+ * conversion problems, an image is missing / unusable, or the result does not pass
  * the contract's `parsePublishedDoc(doc, { requireProjection: true })`.
  */
 export async function buildSnapshot(input: SnapshotInput): Promise<SnapshotResult> {
@@ -661,7 +665,7 @@ export async function buildSnapshot(input: SnapshotInput): Promise<SnapshotResul
     title: cleanLine(input.page.title) ?? "",
     lead: cleanLine(input.page.lead),
     cover,
-    // Left out (not false) when not confirmed: published versions from before the field keep their shape and ETag.
+    // 共有画像にできないときは false を書かず欄ごと出さない（欄の無い版と同じ形のまま）。
     ...(cover !== null && coverShareable(input.page, index) ? { coverShareable: true as const } : {}),
     category: cleanLine(input.category),
     ...(input.categoryDisplay === undefined ? {} : { categoryDisplay: input.categoryDisplay }),

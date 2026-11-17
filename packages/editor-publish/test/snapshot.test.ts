@@ -293,9 +293,7 @@ describe("buildSnapshot", () => {
     ["the figure's asset is missing", [COVER, AUDIO], "$.assets[0]", "missing"],
     ["the figure is a recording", [COVER, { ...FIGURE, kind: "audio", contentType: "audio/mp4" }], "$.assets[0]", "unusable"],
     ["the figure is an SVG", [COVER, { ...FIGURE, contentType: "image/svg+xml" }], "$.assets[0]", "unusable"],
-    ["the figure has no consent", [COVER, { ...FIGURE, consent: false }], "$.assets[0]", "no-consent"],
     ["the cover is missing", [FIGURE], "$.cover", "missing"],
-    ["the cover has no consent", [{ ...COVER, consent: false }, FIGURE], "$.cover", "no-consent"],
     ["the cover has a broken hash", [{ ...COVER, sha256: "xyz" }, FIGURE], "$.cover", "unusable"],
   ] as const)("fails when %s", async (_name, assets, path, reason) => {
     const result = await build(readyPage(), {}, assets as readonly AssetRecord[]);
@@ -376,12 +374,20 @@ describe("fingerprint: 「更新あり」 is a content difference, not a save ti
     expect(one.snapshot.fingerprint).toBe(two.snapshot.fingerprint);
   });
 
-  it("changes with photo metadata that is published (credit, alt, file)", async () => {
+  it("changes with photo metadata that is published (alt, file)", async () => {
     const page = readyPage();
     const original = await draftFingerprint(page, assets);
-    expect(await draftFingerprint(page, [COVER, { ...FIGURE, credit: "Studio" }, AUDIO])).not.toBe(original);
     expect(await draftFingerprint(page, [{ ...COVER, alt: "Another alt" }, FIGURE, AUDIO])).not.toBe(original);
     expect(await draftFingerprint(page, [COVER, { ...FIGURE, sha256: "e".repeat(64) }, AUDIO])).not.toBe(original);
+  });
+
+  it("クレジット・掲載許諾・共有画像の許諾は公開版に効かないので、fingerprint も変えない", async () => {
+    const page = readyPage();
+    const original = await draftFingerprint(page, assets);
+    expect(await draftFingerprint(page, [COVER, { ...FIGURE, credit: "Studio" }, AUDIO])).toBe(original);
+    expect(await draftFingerprint(page, [{ ...COVER, credit: null }, FIGURE, AUDIO])).toBe(original);
+    expect(await draftFingerprint(page, [{ ...COVER, consent: false, share: false }, { ...FIGURE, consent: false }, AUDIO])).toBe(original);
+    expect(await draftFingerprint(page, [{ ...COVER, share: true }, FIGURE, AUDIO])).toBe(original);
   });
 
   it("differs while a draft has an unresolved node", async () => {
@@ -409,54 +415,69 @@ describe("category display snapshot", () => {
   });
 });
 
-describe("cover share permission (coverShareable)", () => {
-  it("is true only when the cover has both 掲載許諾 and the share permission", async () => {
-    const shared = await build(readyPage(), {}, [{ ...COVER, share: true }, FIGURE, AUDIO]);
-    if (!shared.ok) throw new Error("expected ok");
-    expect(shared.snapshot.coverShareable).toBe(true);
-    expect(parsePublishedDoc(shared.snapshot, { requireProjection: true }).ok).toBe(true);
-  });
-
+describe("cover as the share image (coverShareable)", () => {
   it.each([
+    ["the cover has 掲載許諾 and share", [{ ...COVER, share: true }, FIGURE, AUDIO]],
     ["share is false", [{ ...COVER, share: false }, FIGURE, AUDIO]],
     ["share was never set (an asset from before the field)", [COVER, FIGURE, AUDIO]],
-    ["only a body figure has share", [COVER, { ...FIGURE, share: true }, AUDIO]],
-  ] as const)("leaves the field out (never false) when %s", async (_name, assets) => {
+    ["the cover has neither 掲載許諾 nor share", [{ ...COVER, consent: false, share: false }, { ...FIGURE, consent: false, share: false }, AUDIO]],
+  ] as const)("is true for a usable cover whatever the permissions say (オーナー決定 2026-11-18): %s", async (_name, assets) => {
     const result = await build(readyPage(), {}, assets);
     if (!result.ok) throw new Error("expected ok");
-    expect("coverShareable" in result.snapshot).toBe(false);
+    expect(result.snapshot.coverShareable).toBe(true);
+    expect(result.snapshot.cover?.id).toBe(COVER.id);
+    expect(result.snapshot.assets.map((asset) => asset.id)).toEqual([FIGURE.id]);
+    expect(parsePublishedDoc(result.snapshot, { requireProjection: true }).ok).toBe(true);
   });
 
-  it("leaves the field out without a cover", async () => {
+  it("leaves the field out (never false) without a cover", async () => {
     const result = await build(readyPage({ coverAssetId: null }), {}, [{ ...COVER, share: true }, FIGURE, AUDIO]);
     if (!result.ok) throw new Error("expected ok");
     expect("coverShareable" in result.snapshot).toBe(false);
   });
 
-  it("keeps the fingerprint of pages without the permission exactly as before, and marks a change when it is given", async () => {
-    const page = readyPage();
-    const assets = [COVER, FIGURE, AUDIO];
-    const before = await draftFingerprint(page, assets);
-    // The fingerprint input without the field is the one used before `share` existed.
-    const conversion = toPublishedBlocks(page.content);
+  it("keeps the fingerprint of pages without a cover exactly as before, and the draft matches the published version", async () => {
+    const coverless = readyPage({ coverAssetId: null });
+    const conversion = toPublishedBlocks(coverless.content);
     const legacy = await contentFingerprint({
       title: "A morning walk along the coast",
       lang: "en",
       lead: "Start early, follow the shoreline, and stop for tea.",
-      cover: { id: COVER.id, sha256: COVER.sha256, contentType: COVER.contentType, bytes: COVER.bytes, alt: "Shoreline at sunrise", credit: "Example Photo Studio" },
+      cover: null,
       blocks: conversion.blocks,
       figures: [{ id: FIGURE.id, sha256: FIGURE.sha256, contentType: FIGURE.contentType, bytes: FIGURE.bytes, alt: "Fishing boats in the harbor", credit: null }],
       unresolved: [],
     });
-    expect(before).toBe(legacy);
-    expect(await draftFingerprint(page, [{ ...COVER, share: false }, FIGURE, AUDIO])).toBe(before);
-    // Share without 掲載許諾 is not a share permission (and not a content change).
-    expect(await draftFingerprint(page, [{ ...COVER, consent: false, share: true }, FIGURE, AUDIO])).toBe(before);
-    const shared = await draftFingerprint(page, [{ ...COVER, share: true }, FIGURE, AUDIO]);
-    expect(shared).not.toBe(before);
-    const published = await build(page, {}, [{ ...COVER, share: true }, FIGURE, AUDIO]);
+    expect(await draftFingerprint(coverless, [COVER, FIGURE, AUDIO])).toBe(legacy);
+
+    const page = readyPage();
+    const draft = await draftFingerprint(page, [{ ...COVER, consent: false, share: false }, FIGURE, AUDIO]);
+    expect(draft).toBe(await contentFingerprint({
+      title: "A morning walk along the coast",
+      lang: "en",
+      lead: "Start early, follow the shoreline, and stop for tea.",
+      cover: { id: COVER.id, sha256: COVER.sha256, contentType: COVER.contentType, bytes: COVER.bytes, alt: "Shoreline at sunrise", credit: null },
+      coverShareable: true,
+      blocks: toPublishedBlocks(page.content).blocks,
+      figures: [{ id: FIGURE.id, sha256: FIGURE.sha256, contentType: FIGURE.contentType, bytes: FIGURE.bytes, alt: "Fishing boats in the harbor", credit: null }],
+      unresolved: [],
+    }));
+    const published = await build(page, {}, [{ ...COVER, consent: false, share: false }, FIGURE, AUDIO]);
     if (!published.ok) throw new Error("expected ok");
-    expect(published.snapshot.fingerprint).toBe(shared);
+    expect(published.snapshot.fingerprint).toBe(draft);
+  });
+});
+
+describe("credit is never published (オーナー決定 2026-11-18)", () => {
+  it("writes credit: null for the cover and every figure, keeping the asset's shape", async () => {
+    expect(COVER.credit).toBe("Example Photo Studio");
+    const result = await build(readyPage(), {}, [COVER, { ...FIGURE, credit: "Studio" }, AUDIO]);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.snapshot.cover).toMatchObject({ id: COVER.id, credit: null });
+    expect(Object.keys(result.snapshot.cover ?? {}).sort()).toEqual(["alt", "bytes", "contentType", "credit", "id", "sha256", "url"]);
+    expect(result.snapshot.assets).toEqual([expect.objectContaining({ id: FIGURE.id, credit: null })]);
+    expect(JSON.stringify(result.snapshot)).not.toContain("Studio");
+    expect(parsePublishedDoc(result.snapshot, { requireProjection: true }).ok).toBe(true);
   });
 });
 

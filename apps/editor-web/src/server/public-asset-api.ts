@@ -27,7 +27,10 @@ type DbRow = {
   snapshot: unknown; asset_id: string; bucket_path: string; bytes: string; sha256: string; content_type: string;
 };
 
-/** Current, non-stopped publication rows only; old versions and private drafts never enter the candidate set. */
+/**
+ * Current, non-stopped publication rows only; old versions and private drafts never enter the candidate set.
+ * 掲載許諾（assets.consent）は見ない（オーナー決定 2026-11-18）。いまの公開版に入っていることが配信の根拠。
+ */
 export function pgPublicAssetStore(db: Queryable): PublicAssetStore {
   return {
     async candidates(sha256) {
@@ -38,7 +41,7 @@ export function pgPublicAssetStore(db: Queryable): PublicAssetStore {
            JOIN pages page ON page.id = p.page_id AND page.deleted_at IS NULL
            JOIN assets a ON a.page_id = page.id AND a.owner = page.owner
           WHERE p.stopped_at IS NULL AND p.dest = 'site'
-            AND a.kind = 'image' AND a.upload_status = 'ready' AND a.consent = true
+            AND a.kind = 'image' AND a.upload_status = 'ready'
             AND a.sha256 = $1
           LIMIT 64`,
         [sha256],

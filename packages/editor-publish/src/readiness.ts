@@ -26,7 +26,8 @@ export interface FactChoices {
   readonly related: readonly string[];
 }
 
-export type CoverFact = "none" | "missing" | "unusable" | "no-consent" | "ok";
+/** 掲載許諾（consent）・共有画像の許諾（share）は見ない（オーナー決定 2026-11-18。置いた本人が許諾を得ている前提）。 */
+export type CoverFact = "none" | "missing" | "unusable" | "ok";
 
 export interface ReadinessFacts {
   readonly title: string;
@@ -71,10 +72,8 @@ export const BUILTIN_PROBLEMS = {
   tooLong: { id: "body-too-long", message: "本文が長すぎます", fix: "body" },
   figureMissing: { id: "figure-missing", message: "写真が見つかりません", fix: "body" },
   figureUnusable: { id: "figure-unusable", message: "公開できない形式の写真があります", fix: "body" },
-  figureConsent: { id: "figure-consent", message: "掲載許諾のない写真があります", fix: "body" },
   coverMissing: { id: "cover-missing", message: "カバー写真が見つかりません", fix: "cover" },
   coverUnusable: { id: "cover-unusable", message: "公開できない形式のカバー写真です", fix: "cover" },
-  coverConsent: { id: "cover-consent", message: "カバー写真に掲載許諾がありません", fix: "cover" },
   category: { id: "category-format", message: "カテゴリの形が正しくありません", fix: "category" },
   categoryCurrent: { id: "category-current", message: "現在使えるカテゴリを選んでください", fix: "category" },
   related: { id: "related-format", message: "関連する体験の指定が正しくありません", fix: "related" },
@@ -171,7 +170,6 @@ export function collectFacts(
     const state = assetState(index.get(figure.assetId));
     if (state === "missing") add(BUILTIN_PROBLEMS.figureMissing);
     else if (state === "unusable") add(BUILTIN_PROBLEMS.figureUnusable);
-    else if (state === "no-consent") add(BUILTIN_PROBLEMS.figureConsent);
   }
   if (exceedsLimits(conversion.blocks)) add(BUILTIN_PROBLEMS.tooLong);
 
@@ -228,7 +226,7 @@ function conditionMet(condition: Condition, facts: ReadinessFacts): boolean {
     case "lang":
       return facts.lang === condition.equals;
     case "cover":
-      return facts.cover === "none" || facts.cover === "ok" || (!condition.consent && facts.cover === "no-consent");
+      return facts.cover === "none" || facts.cover === "ok";
     case "lead":
       return facts.lead === null || condition.max === undefined || codePointLength(facts.lead) <= condition.max;
     case "category":
@@ -267,11 +265,10 @@ export function evaluateReadiness(declaration: DestinationDeclaration, facts: Re
     }
   }
   const coverConditionFailed = declaration.requires.some((condition) => condition.kind === "cover" && !conditionMet(condition, facts));
-  // Whatever goes into a published version must be usable and have consent, whatever the destination.
+  // 公開版に入るカバーは、発信先によらず使える形であること（掲載許諾・共有画像の許諾は条件にしない。オーナー決定 2026-11-18）。
   if (!coverConditionFailed) {
     if (facts.cover === "missing") problems.push(BUILTIN_PROBLEMS.coverMissing);
     else if (facts.cover === "unusable") problems.push(BUILTIN_PROBLEMS.coverUnusable);
-    else if (facts.cover === "no-consent") problems.push(BUILTIN_PROBLEMS.coverConsent);
   }
   if (!facts.categoryValid) problems.push(BUILTIN_PROBLEMS.category);
   if (facts.categoryCurrent !== undefined && facts.categoryCurrent !== true) problems.push(BUILTIN_PROBLEMS.categoryCurrent);

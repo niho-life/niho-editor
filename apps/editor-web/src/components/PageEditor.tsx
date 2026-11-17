@@ -20,7 +20,7 @@ import { getPageVersion } from "@/lib/page-actions-client";
 import { normalizePastedHtml } from "@/editor/paste";
 import { prepareAi, replaceForAi, type AiBridge, type AiBridgeDeps } from "@/lib/ai-bridge";
 import { createAutosave, type Autosave, type SaveState } from "@/lib/autosave";
-import { pageImages, getImageMetadata, saveImageMeta } from "@/lib/image-upload-client";
+import { pageImages } from "@/lib/image-upload-client";
 import { PAGE_MAX_BYTES } from "@/image/image-limits";
 import {
   NEW_PAGE_DRAFT_KEY,
@@ -275,6 +275,7 @@ export function PageEditor(props: PageEditorProps) {
  *
  * 言語（公開のシート）、公開用のカバーとリードも同じ自動保存・下書きに載せる（別の PATCH を撃たない。revision・
  * 競合の判定・端末の下書きは題名・本文と同じ）。カバーは本文に挿入済みのこのページの画像から選び、本文と共有して使う。
+ * カバーの掲載許諾・共有画像の許諾は聞かない（公開と共有画像の条件にしない。オーナー決定 2026-11-18）。
  * 言語は変えたら 1 秒を待たずに送り、届かなければサーバーが持っている言語に戻して
  * 一言出す（戻した言語も同じ保存に載せる。届いたか分からない失敗のあとでも、サーバーを画面の言語に揃えるため）。
  * 「この内容で上書き」は、競合の相手と言語が違えば画面の言語も送る。
@@ -288,12 +289,6 @@ function EditorScreen(props: ScreenProps) {
   const [cover, setCover] = useState<string | null>(page.cover ?? null);
   const [lead, setLead] = useState<string | null>(page.lead ?? null);
   const [coverOptions, setCoverOptions] = useState(() => imageAssetIds(page.blocks, page.cover ?? null));
-  // 掲載許諾（consent）と、共有画像（SNS・検索結果）にも使う許諾（share）。公開版は両方あるときだけカバーを共有画像にできると言う
-  const [coverMetadata, setCoverMetadata] = useState<{ assetId: string; consent: boolean; share: boolean } | null>(null);
-  const coverConsent = coverMetadata?.assetId === cover ? coverMetadata.consent : null;
-  const coverShare = coverMetadata?.assetId === cover ? coverMetadata.share : null;
-  const [coverMetaBusy, setCoverMetaBusy] = useState(false);
-  const [coverError, setCoverError] = useState<string | null>(null);
   const [langNote, setLangNote] = useState<string | null>(null);
   const [state, setState] = useState<SaveState>("saved");
   const [pageFull, setPageFull] = useState(false);
@@ -629,7 +624,6 @@ function EditorScreen(props: ScreenProps) {
         coverRef.current = draftCover;
         leadRef.current = draftLead;
         setCover(draftCover);
-        setCoverMetadata(null);
         setLead(draftLead);
         const contentPatch = {
           ...(draft.cover !== undefined && draftCover !== openedCover ? { cover: draftCover } : {}),
@@ -661,27 +655,6 @@ function EditorScreen(props: ScreenProps) {
       cancelled = true;
     };
   }, [editor, storage, textListeners]);
-
-  useEffect(() => {
-    let active = true;
-    const assetId = cover;
-    if (!assetId) {
-      return () => {
-        active = false;
-      };
-    }
-    void getImageMetadata(assetId).then(
-      (image) => {
-        if (active && coverRef.current === assetId) setCoverMetadata({ assetId, consent: image.consent, share: image.share });
-      },
-      () => {
-        if (active && coverRef.current === assetId) setCoverError("カバー画像の掲載情報を読み込めませんでした。");
-      },
-    );
-    return () => {
-      active = false;
-    };
-  }, [cover]);
 
   useEffect(() => {
     if (editor) editor.setEditable(ready && !unreadable, false);
@@ -816,8 +789,6 @@ function EditorScreen(props: ScreenProps) {
             const next = event.currentTarget.value || null;
             coverRef.current = next;
             setCover(next);
-            setCoverMetadata(null);
-            setCoverError(null);
             autosaveRef.current?.change({ cover: next });
             keeperRef.current?.touch();
           }}
@@ -826,79 +797,12 @@ function EditorScreen(props: ScreenProps) {
           {coverOptions.map((assetId, index) => <option key={assetId} value={assetId}>本文の画像 {index + 1}</option>)}
         </select>
       </label>
-      {cover && (
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={coverConsent === true}
-            disabled={coverMetaBusy || coverConsent === null || !ready}
-            onChange={(event) => {
-              const assetId = coverRef.current;
-              if (!assetId) return;
-              const previous = coverConsent === true;
-              const share = coverShare === true;
-              const next = event.currentTarget.checked;
-              setCoverMetadata({ assetId, consent: next, share });
-              setCoverMetaBusy(true);
-              setCoverError(null);
-              void pageImages.saveMeta(assetId, { consent: next }).then((saved) => {
-                if (coverRef.current !== assetId) return;
-                if (!saved) {
-                  setCoverMetadata({ assetId, consent: previous, share });
-                  setCoverError("掲載許諾を保存できませんでした。");
-                  return;
-                }
-                // 資産の掲載メタデータの変更もページ revision に載せ、別端末の編集と競合を検出する。
-                autosaveRef.current?.change({ cover: assetId });
-                keeperRef.current?.touch();
-              }).finally(() => setCoverMetaBusy(false));
-            }}
-          />
-          この画像を公開先に掲載する許諾を確認しました
-        </label>
-      )}
-      {cover && (
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <input
-            type="checkbox"
-            data-cover-share=""
-            checked={coverConsent === true && coverShare === true}
-            disabled={coverMetaBusy || coverConsent !== true || coverShare === null || !ready}
-            onChange={(event) => {
-              const assetId = coverRef.current;
-              if (!assetId || coverConsent !== true) return;
-              const previous = coverShare === true;
-              const next = event.currentTarget.checked;
-              setCoverMetadata({ assetId, consent: true, share: next });
-              setCoverMetaBusy(true);
-              setCoverError(null);
-              void saveImageMeta(assetId, { share: next }).then(() => true, () => false).then((saved) => {
-                if (coverRef.current !== assetId) return;
-                if (!saved) {
-                  setCoverMetadata({ assetId, consent: true, share: previous });
-                  setCoverError("共有画像の許諾を保存できませんでした。");
-                  return;
-                }
-                // 掲載許諾と同じく、資産の許諾の変更もページ revision に載せる（別端末の編集と競合を検出する）。
-                autosaveRef.current?.change({ cover: assetId });
-                keeperRef.current?.touch();
-              }).finally(() => setCoverMetaBusy(false));
-            }}
-          />
-          <span>
-            SNS や検索結果に出る共有画像にも使う許諾を確認しました
-            {coverConsent !== true && <small style={{ display: "block", fontSize: 12, color: "var(--ed-ink-mute)" }}>掲載の許諾を確認すると選べます</small>}
-          </span>
-        </label>
-      )}
       {cover && <button type="button" className="es-btn es-btn--quiet es-btn--sm" style={{ justifySelf: "start" }} disabled={!ready || unreadable} onClick={() => {
         coverRef.current = null;
         setCover(null);
-        setCoverMetadata(null);
         autosaveRef.current?.change({ cover: null });
         keeperRef.current?.touch();
       }}>カバー画像を外す</button>}
-      {coverError && <p role="alert" className="es-upnote">{coverError}</p>}
       <div className="es-pf" data-page-lang="" tabIndex={-1} role="group" aria-label="言語">
         <span className="es-pf-row">
           <span className="es-pf-lbl" aria-hidden="true">言語</span>
@@ -919,7 +823,7 @@ function EditorScreen(props: ScreenProps) {
       </div>
       {pageId && <PageTranslation pageId={pageId} lang={lang} saveFirst={flush} savedRevision={savedRevision} currentRevision={revision} />}
     </section>
-  ), [lead, leadCount, cover, ready, unreadable, coverOptions, refreshCoverOptions, coverConsent, coverShare, coverMetaBusy, coverError, pageId, lang, changeLang, langNote, flush, savedRevision, revision, compositionStarted, compositionEnded]);
+  ), [lead, leadCount, cover, ready, unreadable, coverOptions, refreshCoverOptions, pageId, lang, changeLang, langNote, flush, savedRevision, revision, compositionStarted, compositionEnded]);
 
   // パネルから外した写真がカバーなら、カバーも外す（サーバーは外し済み。画面と保存の内容を揃える。同じ自動保存に載せる）
   const clearCover = useCallback((assetId: string) => {
@@ -927,8 +831,6 @@ function EditorScreen(props: ScreenProps) {
     if (!current || current.toLowerCase() !== assetId.toLowerCase()) return;
     coverRef.current = null;
     setCover(null);
-    setCoverMetadata(null);
-    setCoverError(null);
     autosaveRef.current?.change({ cover: null });
     keeperRef.current?.touch();
   }, []);

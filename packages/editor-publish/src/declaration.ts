@@ -36,8 +36,12 @@ interface ConditionBase {
 }
 
 export type LangCondition = ConditionBase & { readonly kind: "lang"; readonly equals: Lang };
-/** An optional cover, when set, must be usable; with `consent`, it also has 掲載許諾. */
-export type CoverCondition = ConditionBase & { readonly kind: "cover"; readonly consent: boolean };
+/**
+ * 任意のカバー。設定されているなら使える形であること。
+ * 宣言の `consent`（真偽値）は既にある宣言のために受け付けるが、意味を持たない（掲載許諾は条件にしない。オーナー決定 2026-11-18）。
+ * 読んだ宣言には残さない。
+ */
+export type CoverCondition = ConditionBase & { readonly kind: "cover" };
 /** An optional lead, at most `max` characters when given. */
 export type LeadCondition = ConditionBase & { readonly kind: "lead"; readonly max?: number };
 /** A category is chosen, one of `oneOf` when given. */
@@ -132,7 +136,7 @@ const TOP_KEYS = ["schemaVersion", "id", "label", "host", "path", "ranges", "ext
 const BASE_KEYS = ["id", "message", "fix", "kind"] as const;
 const KIND_KEYS: { readonly [K in ConditionKind]: { readonly allowed: readonly string[]; readonly required: readonly string[] } } = {
   lang: { allowed: ["equals"], required: ["equals"] },
-  cover: { allowed: ["consent"], required: ["consent"] },
+  cover: { allowed: ["consent"], required: [] },
   lead: { allowed: ["max"], required: [] },
   category: { allowed: ["oneOf"], required: [] },
   headings: { allowed: ["min"], required: ["min"] },
@@ -289,8 +293,9 @@ function conditionAt(value: unknown, path: string, issues: Issues, ids: Set<stri
         break;
       }
       case "cover": {
-        const consent = fields.consent === undefined ? undefined : typeof fields.consent === "boolean" ? fields.consent : issues.add(child(path, "consent"), "type");
-        condition = consent === undefined ? undefined : { ...base, kind, consent };
+        // consent は互換のために型だけ確かめて捨てる（意味を持たない）。
+        if (fields.consent !== undefined && typeof fields.consent !== "boolean") issues.add(child(path, "consent"), "type");
+        condition = { ...base, kind };
         break;
       }
       case "lead": {

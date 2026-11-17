@@ -333,9 +333,6 @@ describe("PageEditor autosave", () => {
     const urls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
       urls.push(url);
-      if (url === `/api/assets/${assetId}/meta`) {
-        return json(200, { image: { assetId, pageId: PAGE_ID, status: "ready", bytes: 5, contentType: "image/png", alt: null, credit: null, consent: false } });
-      }
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       patches.push(body);
       return json(200, { page: { id: PAGE_ID, revision: (body.baseRevision as number) + 1 } });
@@ -354,52 +351,30 @@ describe("PageEditor autosave", () => {
     const blocks = patches[0]?.blocks as Array<Record<string, unknown>>;
     expect(blocks[0]).toMatchObject({ type: "image", attrs: { assetId } });
     expect(urls.some((url) => url.endsWith("/images/start"))).toBe(false);
+    // カバーの許諾は聞かないので、資産のメタデータも読まない
+    expect(urls.some((url) => url.endsWith("/meta"))).toBe(false);
     expect(container!.querySelector<HTMLImageElement>("img[alt='カバー画像のプレビュー']")?.getAttribute("src")).toContain(assetId);
   });
 
-  it("offers the share-image permission for the cover only with 掲載許諾, saves it on the asset, and puts it back when saving fails", async () => {
+  it("カバーの欄に掲載許諾・共有画像の許諾のチェックを出さず、資産の許諾を読みも書きもしない（オーナー決定 2026-11-18）", async () => {
     const assetId = "00000000-0000-4000-8000-000000000004";
-    const metas: Array<Record<string, unknown>> = [];
+    const urls: string[] = [];
     const saves: Array<Record<string, unknown>> = [];
-    let consent = false;
-    let failShare = false;
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
-      const image = () => ({ image: { assetId, pageId: PAGE_ID, status: "ready", bytes: 5, contentType: "image/png", alt: "合成の写真", credit: null, consent, share: false } });
-      if (url === `/api/assets/${assetId}/meta`) return json(200, image());
-      if (url === `/api/assets/${assetId}`) {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        metas.push(body);
-        if (body.share !== undefined && failShare) return json(503, { error: "unavailable" });
-        if (typeof body.consent === "boolean") consent = body.consent;
-        return json(200, { image: { ...image().image, ...body } });
-      }
+      urls.push(url);
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       saves.push(body);
       return json(200, { page: { id: PAGE_ID, revision: (body.baseRevision as number) + 1 } });
     }));
     await renderEditor({ revision: 5, cover: assetId, blocks: [{ type: "image", attrs: { assetId } }] }, { settings: true });
-    const share = () => container!.querySelector<HTMLInputElement>("[data-cover-share]")!;
-    const consentBox = () => share().closest("section")!.querySelector<HTMLInputElement>('input[type="checkbox"]:not([data-cover-share])')!;
     await act(async () => undefined);
-    // 掲載許諾が無いあいだは押せない（理由も文字で出す）
-    expect(share().disabled).toBe(true);
-    expect(share().checked).toBe(false);
-    expect(share().closest("label")?.textContent).toContain("掲載の許諾を確認すると選べます");
-    await act(async () => consentBox().click());
-    await act(async () => undefined);
-    expect(share().disabled).toBe(false);
-    await act(async () => share().click());
-    await act(async () => undefined);
-    expect(metas).toEqual([{ consent: true }, { share: true }]);
-    expect(share().checked).toBe(true);
-    await waitForAutosave();
-    expect(saves.at(-1)).toMatchObject({ cover: assetId });
-    // 保存に失敗したら元に戻して一言出す
-    failShare = true;
-    await act(async () => share().click());
-    await act(async () => undefined);
-    expect(share().checked).toBe(true);
-    expect(container!.textContent).toContain("共有画像の許諾を保存できませんでした。");
+    const fields = container!.querySelector<HTMLElement>('section[aria-label="記事の情報"]')!;
+    expect(fields.querySelector("img[alt='カバー画像のプレビュー']")?.getAttribute("src")).toContain(assetId);
+    expect(fields.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+    expect(fields.querySelector("[data-cover-share]")).toBeNull();
+    expect(fields.textContent).not.toContain("許諾");
+    expect(urls.some((url) => url.startsWith("/api/assets/"))).toBe(false);
+    expect(saves).toEqual([]);
   });
 
   it("sends every autosave with the page's revision as baseRevision and advances it from each response", async () => {
