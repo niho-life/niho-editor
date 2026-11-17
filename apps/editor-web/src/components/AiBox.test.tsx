@@ -7,7 +7,7 @@ import axe from "axe-core";
 import type { AiDiffState, AttachedAi, AttachedAiDiff, AttachedAiSteps } from "@/lib/attached-page";
 import { AiSelection, aiSelectionOf } from "@/editor/ai-selection";
 import { buildPageExtensions } from "@/editor/page-extensions";
-import { AI_TEXT, AiPanel } from "./AiBox";
+import { AI_TEXT, AiPanel, aiFailText } from "./AiBox";
 
 const nativeMock = vi.hoisted(() => ({ shell: null as unknown }));
 vi.mock("niho-desktop-bridge/tauri-shell-transport", () => ({ detectShell: () => nativeMock.shell }));
@@ -1696,5 +1696,24 @@ describe("AiPanel: 本文の選択範囲を渡す（#280）", () => {
     expect(request.context).toEqual([...CONTEXT_FILES, { name: "selection", title: "選択範囲", markdown: "二つ目の段落です。" }]);
     expect(server.calls.find((call) => call.url.endsWith("/ai/chat/turns"))?.body.selection).toEqual({ startParagraph: 2, endParagraph: 2, revision: 1, chars: 9, text: "二つ目の段落です。" });
     expect(chipText()).toBe("");
+  });
+});
+
+describe("aiFailText（失敗の理由ごとの言い方）", () => {
+  it("もう一度では直らない理由は、もう一度を勧めずに理由を言う（code は出さない）", () => {
+    expect(aiFailText("ai_billing")).toContain("クレジット");
+    expect(aiFailText("ai_too_long")).toContain("新しい会話");
+    expect(aiFailText("ai_auth")).toContain("鍵");
+    for (const code of ["ai_billing", "ai_too_long", "ai_auth"]) {
+      expect(aiFailText(code)).not.toContain("もう一度お試しください");
+      expect(aiFailText(code)).not.toContain(code);
+    }
+    expect(aiFailText("ai_overloaded")).toContain("少し待って");
+  });
+
+  it("知らない code・code の無い失敗は、これまでの言い方のまま", () => {
+    expect(aiFailText("ai_bad_request")).toBe(AI_TEXT.chatFailed);
+    expect(aiFailText("something_new")).toBe(AI_TEXT.chatFailed);
+    expect(aiFailText(null)).toBe(AI_TEXT.chatFailed);
   });
 });

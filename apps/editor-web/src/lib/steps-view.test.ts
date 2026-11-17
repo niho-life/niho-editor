@@ -86,7 +86,14 @@ describe("steps-view（流れの run の見た目。#309）", () => {
     expect(stepFailure("invalid_output")).toMatchObject({ retryable: false, rerun: true, settings: "steps" });
     expect(stepFailure("ai_timeout")).toMatchObject({ retryable: true, rerun: true, settings: null });
     expect(stepFailure("input_changed").message).toContain("最初から作り直してください");
-    for (const code of ["quota_exceeded", "invalid_output", "ai_timeout", "lease_expired"]) expect(stepFailure(code).message).not.toContain(code);
+    // クレジット不足・利用上限は、補充されるまでやり直しても同じなので、やり直しのボタンを出さない
+    expect(stepFailure("ai_billing")).toMatchObject({ retryable: false, rerun: false, settings: null });
+    expect(stepFailure("ai_billing").message).toContain("クレジット");
+    // 長すぎるときだけ「短くする」を勧める（ほかの 400 には勧めない）
+    expect(stepFailure("ai_too_long")).toMatchObject({ retryable: false, rerun: true, settings: "steps" });
+    expect(stepFailure("ai_too_long").message).toContain("短くすると");
+    expect(stepFailure("ai_bad_request").message).not.toContain("短くすると");
+    for (const code of ["quota_exceeded", "invalid_output", "ai_timeout", "lease_expired", "ai_billing", "ai_too_long", "ai_bad_request"]) expect(stepFailure(code).message).not.toContain(code);
     expect(stepFailure("something_new")).toBe(UNKNOWN_FAILURE);
     expect(stepFailure(null)).toBe(UNKNOWN_FAILURE);
   });
