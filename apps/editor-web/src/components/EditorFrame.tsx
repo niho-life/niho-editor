@@ -44,9 +44,9 @@ import {
   type SidebarPublication,
 } from "@/lib/sidebar-items";
 import { usePageHistory } from "@/lib/use-page-history";
-import { AI_GRAY_ITEM, usePageMenu, type AttachedPage, type PageMenuLocalItem } from "@/lib/use-page-menu";
+import { ADD_TAB_ITEM, AI_GRAY_ITEM, PUBLISH_ITEM, usePageMenu, type AttachedPage, type PageMenuLocalItem } from "@/lib/use-page-menu";
 import { setAiGray, useAiGray } from "@/lib/ai-gray";
-import type { AttachedAiSteps, AttachedFlow } from "@/lib/attached-page";
+import type { AttachedAiSteps, AttachedFlow, AttachedTabAdder } from "@/lib/attached-page";
 import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
 import { usePageShare } from "@/lib/use-page-share";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
@@ -57,7 +57,7 @@ import { InfoPanel } from "./InfoPanel";
 import { PagePanel } from "./PagePanel";
 import { SidePage } from "./SidePage";
 import { PageInfo } from "./PageInfo";
-import { usePagePublish } from "./PagePublish";
+import { PUBLISHED_LABEL, usePagePublish } from "./PagePublish";
 import { BUSY_STYLE } from "./sheet-parts";
 import { ShareSheet } from "./ShareSheet";
 
@@ -148,6 +148,8 @@ export type EditorFrameApi = {
   registerAiSteps: (steps: AttachedAiSteps) => () => void;
   /** 「ページ」パネルの流れ（#309）を登録する。登録元が外れたら返す関数で外す。 */
   registerFlow: (flow: AttachedFlow) => () => void;
+  /** 「…」の「タブを追加」（開いているページの PageTabs が登録する。#344）。登録元が外れたら返す関数で外す。 */
+  registerTabAdder: (adder: AttachedTabAdder) => () => void;
   /** 公開のシートを開く（ページを開いている画面だけで出る）。 */
   openPublish: () => void;
   /** 「写真」のパネルで写真を上げている途中か（何も足していないページを捨てる判定に使う）。 */
@@ -175,6 +177,7 @@ const FrameContext = createContext<EditorFrameApi>({
   registerTools: noop,
   registerAiSteps: () => noop,
   registerFlow: () => noop,
+  registerTabAdder: () => noop,
   pageRemoved: noop,
   flowPagesChanged: noop,
   attachPage: () => noop,
@@ -207,6 +210,11 @@ type ListState = {
   /** この画面でゴミ箱へ入れたページ（検索の結果からも外す。結果はサーバーの、削除の前の答えのことがある）。 */
   gone: ReadonlySet<string>;
 };
+
+/** 状態の札が出ているときは丸を出さない（state を private にすると丸は消え、tip は読み上げの live region に残る）。 */
+function withoutDot<T extends { state: string; tip: string }>(status: T | undefined, badge: boolean): T | { state: "private"; tip: string } | undefined {
+  return status && badge ? { state: "private", tip: status.tip } : status;
+}
 
 function samePublication(a: SidebarPublication | null, b: SidebarPublication | null): boolean {
   return a === b || (a !== null && b !== null && a.dest === b.dest && a.handle === b.handle && a.range === b.range && a.stopped === b.stopped);
@@ -510,6 +518,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // 「ページ」パネルの流れ（開いているタブの FlowWatcher が登録する）
   const [flow, setFlow] = useState<AttachedFlow | null>(null);
   const flowRef = useRef<AttachedFlow | null>(null);
+  // 「…」の「タブを追加」（開いているページの PageTabs が登録する）
+  const [tabAdder, setTabAdder] = useState<AttachedTabAdder | null>(null);
+  const tabAdderRef = useRef<AttachedTabAdder | null>(null);
   // 版に戻して開き直したページ。そのページが登録し直したとき、フォーカスが外れていたら「…」へ戻す
   const refocusRef = useRef<string | null>(null);
   // 「写真」のパネルで上げている途中か
@@ -690,6 +701,15 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           if (flowRef.current !== next) return;
           flowRef.current = null;
           setFlow(null);
+        };
+      },
+      registerTabAdder: (next) => {
+        tabAdderRef.current = next;
+        setTabAdder(next);
+        return () => {
+          if (tabAdderRef.current !== next) return;
+          tabAdderRef.current = null;
+          setTabAdder(null);
         };
       },
       pageRemoved: (id) => {
@@ -1095,6 +1115,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // 公開のシートはページを開いている画面だけ（一覧・設定・新しいページ・録音からでは出さない）。開いているあいだは ⌘N・⌘K を効かせない
   const sheetShown = publishing.shown;
   const openPublish = publishing.open;
+  // 「…」の「公開…」（フォルダには出さない）と、その補足（公開済みのときの状態の札と同じ言葉）
+  const canPublish = openPage !== undefined && openPage.kind !== "folder";
+  const publishedHint = publishing.badge ? (publishing.badge.updated ? `${publishing.badge.label} · ${PUBLISHED_LABEL.updated}` : publishing.badge.label) : undefined;
 
   const openSearch = () => {
     if (sheetShown) return;
@@ -1165,11 +1188,29 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     openSheet: (sheet, owner) => (sheet === "share" ? share.open(owner) : history.open(owner)),
     focusMore,
     goToGoogleDocsBatch: (path) => router.push(path),
-    extras: railIsFolder ? { folder: true } : { move: canFolder || canOrder, pageInfo: railSummary !== undefined, aiGray },
+    extras: railIsFolder
+      ? { folder: true }
+      : {
+          move: canFolder || canOrder,
+          pageInfo: railSummary !== undefined,
+          aiGray,
+          // 公開の入口（ヘッダーに公開のボタンは出さない。#344）。公開済みなら状態を補足に
+          publish: canPublish ? { hint: publishedHint } : undefined,
+          // タブを足す口は、開いているページの PageTabs が登録したときだけ
+          addTab: tabAdder !== null && tabAdder.ownerId === railSummary?.id,
+        },
     // 「移動…」はシート、「ページの情報」は右下のポップオーバー。開いたときのページの id で持つ
     onLocal: (item: PageMenuLocalItem) => {
       if (item === AI_GRAY_ITEM) {
         setAiGray(!aiGray);
+        return;
+      }
+      if (item === PUBLISH_ITEM) {
+        openPublish();
+        return;
+      }
+      if (item === ADD_TAB_ITEM) {
+        if (tabAdder && tabAdder.ownerId === railSummary?.id) tabAdder.add();
         return;
       }
       const id = railSummary?.id;
@@ -1302,7 +1343,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               tools={editorBar && !narrow && !railIsFolder ? <ShellTools {...editorBar} compact /> : undefined}
               // 狭い画面のページ・設定の画面で戻る（URL へ。`/` か親のページ）。デスクトップの一覧は右上の「一覧を出す」（閉じているパネルの組）
               back={narrow && !sidebarOpen ? { label: backTo ? backTo.title || "無題" : "一覧", onClick: () => router.push(backTo ? `/p/${backTo.id}` : "/") } : undefined}
-              status={attached ? headerStatus(attached.status, publishing.status) : publishing.status}
+              // 公開済みは状態の札（published）が言葉で出すので、丸（地球のマーク）は出さず、読み上げの文だけ残す（#344）
+              status={withoutDot(attached ? headerStatus(attached.status, publishing.status) : publishing.status, publishing.badge !== null && publishing.badge !== undefined)}
               trailing={
                 <>
                   {attached && SAVE_FAILURES.has(attached.status) && (
@@ -1344,7 +1386,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               }
               panels={{ closed: closedPanels, onOpen: openPanel }}
               more={menu.more}
-              publish={publishing.publish}
+              // 公開は「…」の先頭の「公開…」から。公開済みのページだけ状態の札（押すと公開のシート。#344）
+              published={publishing.badge}
             />
           }
           overlay={

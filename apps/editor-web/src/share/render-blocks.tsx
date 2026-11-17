@@ -51,16 +51,17 @@ function renderChildren(node: JsonNode, depth: number, assetSrc: AssetSrc | null
 }
 
 /**
- * 画像。alt は本文の attrs の値（無ければ空の alt）、クレジットがあれば figcaption に出す。
+ * 画像。alt は本文の attrs の値（無ければ空の alt）、キャプションがあれば figcaption に出す。
+ * クレジットは出さない（公開ページと揃える。#344 オーナー決定 D。値は本文の attrs に残る）。
  * 大きさ・読み込みの指示は付けない（元の大きさで、遅延読み込み）。
  */
 function renderImage(node: JsonNode, key: number, assetSrc: AssetSrc | null): ReactNode {
   if (!assetSrc || !isNode(node.attrs)) return null;
-  const { assetId, alt, credit } = node.attrs;
+  const { assetId, alt, caption: text } = node.attrs;
   if (typeof assetId !== "string" || !UUID.test(assetId)) return null;
   const src = assetSrc(assetId);
   if (src === null) return null;
-  const caption = typeof credit === "string" && credit !== "" ? credit : null;
+  const caption = typeof text === "string" && text !== "" ? text : null;
   return (
     <figure key={key}>
       {/* eslint-disable-next-line @next/next/no-img-element -- 中継の path をそのまま読む（next/image の最適化・外部 loader を通さない） */}

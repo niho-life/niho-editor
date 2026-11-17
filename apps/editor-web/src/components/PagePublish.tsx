@@ -121,6 +121,9 @@ export function focusPageField(field: PublishFixField): void {
   target.scrollIntoView?.({ block: "nearest" });
 }
 
+/** 状態の札の言葉（公開中・限定公開）。札の「 · 更新あり」は docs-ui の ShellHeader が足す（「…」の「公開…」の補足はここで組む）。 */
+export const PUBLISHED_LABEL = { live: "公開中", unlisted: "限定公開", updated: "更新あり" } as const;
+
 type View = { kind: "closed" } | { kind: "publish" } | { kind: "stop" } | { kind: "done"; url: string };
 
 type State = {
@@ -148,6 +151,11 @@ const initialState = (pageId: string | null): State => ({
 export type PagePublishUi = {
   status?: ShellHeaderProps["status"];
   publish?: ShellHeaderProps["publish"];
+  /**
+   * ヘッダーの状態の札（#344）。公開済み（公開中・限定公開。やめていない）のページだけ。押すと公開のシート。
+   * 公開の入口は「…」の「公開…」で、ヘッダーに公開のボタンは出さない（`publish` は Mac・gallery の形のために残す）。
+   */
+  badge?: ShellHeaderProps["published"];
   overlay?: ReactNode;
   /** そのページを保存した（公開中なら、少し待って「更新あり」を確かめ直す）。 */
   pageSaved: (id: string) => void;
@@ -457,9 +465,11 @@ export function usePagePublish(input: {
   }
 
   const publication = shellPublicationOf(sheet);
+  const published = publication && publication.range !== "stopped" ? publication : null;
   return {
     status: sheet ? shellStatus(publication) : undefined,
     publish: { ...shellPublishButton({ pub: publication, isArticle }), onClick: open },
+    badge: published ? { label: published.range === "unlisted" ? PUBLISHED_LABEL.unlisted : PUBLISHED_LABEL.live, updated: published.updated === true, onClick: open } : null,
     overlay,
     pageSaved,
     open,

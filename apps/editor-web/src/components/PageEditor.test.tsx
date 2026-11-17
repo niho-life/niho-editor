@@ -129,8 +129,14 @@ async function renderEditor(page: Partial<EditablePage> & { revision: number }, 
   expect(container.querySelector(".ProseMirror")?.getAttribute("contenteditable")).toBe("true");
   if (options.settings) {
     // 記事の情報（リード・カバー画像・言語・英語版）は、公開のシートの中だけに出る
-    await act(async () => container!.querySelector<HTMLButtonElement>(".es-dt .es-pubbtn")!.click());
+    await openPublishSheet();
   }
+}
+
+/** 公開のシートを開く（ヘッダーの「…」の先頭の「公開…」。ヘッダーに公開のボタンは無い。#344）。 */
+async function openPublishSheet() {
+  await act(async () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="その他"]')!.click());
+  await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="menu"] button')].find((button) => button.textContent?.startsWith("公開…"))!.click());
 }
 
 async function advance(ms: number) {
@@ -218,6 +224,29 @@ describe("niho-docs-ui on React 19", () => {
     expect(status()?.textContent).toBe("保存済み");
   });
 
+  it("belowTitle（#344）: 題名の下・本文の前に置く（タブの帯・録音の欄の置き場）", async () => {
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        <PageEditor
+          page={{ id: PAGE_ID, title: "合成の題名", blocks: [{ type: "paragraph", content: [{ type: "text", text: "本文" }] }], revision: 1, updatedAt: UPDATED_AT }}
+          belowTitle={<input data-probe="" aria-label="合成の欄" />}
+        />,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const title = container.querySelector("textarea.page-title")!;
+    const probe = container.querySelector("[data-probe]")!;
+    const body = container.querySelector(".ProseMirror")!;
+    expect(title.compareDocumentPosition(probe) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(probe.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(probe.closest("[data-below-title]")).not.toBeNull();
+  });
+
   it("caps the title at the server limit so an over-long title never enters autosave", async () => {
     container = document.createElement("div");
     document.body.append(container);
@@ -300,7 +329,7 @@ describe("PageEditor autosave", () => {
     // シートを閉じて開き直しても、打った値はエディタが持っている
     await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === "閉じる")!.click());
     expect(container!.querySelector("[data-page-lead]")).toBeNull();
-    await act(async () => container!.querySelector<HTMLButtonElement>(".es-dt .es-pubbtn")!.click());
+    await openPublishSheet();
     expect(container!.querySelector<HTMLTextAreaElement>("[data-page-lead]")?.value).toBe("新しい要約");
     await advance(300);
     await settleIdb();
@@ -321,7 +350,7 @@ describe("PageEditor autosave", () => {
     await act(async () => {
       bodyEditor().commands.insertContent({ type: "image", attrs: { assetId } });
     });
-    await act(async () => container!.querySelector<HTMLButtonElement>(".es-dt .es-pubbtn")!.click());
+    await openPublishSheet();
     const after = container!.querySelector<HTMLSelectElement>("[data-page-cover]")!;
     expect(after.disabled).toBe(false);
     expect([...after.options].map((option) => option.value)).toEqual(["", assetId]);

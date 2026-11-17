@@ -4,7 +4,7 @@ import "niho-ui/styles/tokens.css";
 import "niho-docs-ui/styles/tokens.css";
 import "niho-docs-ui/styles/editor.css";
 import "niho-ui/styles/editor-tokens.css";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CompositionEvent, type ReactNode } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import type { PageKind, PageLang } from "@niho/editor-store";
 import { PageTitle } from "niho-docs-ui/components/BlockEditor";
@@ -112,11 +112,19 @@ export type PageEditorProps = {
   /** 題名の上の 1 行（狭い画面の場所。docs-ui の ShellLocation）。 */
   aboveTitle?: ReactNode;
   /**
+   * 題名の下・本文の前に置くもの（タブの帯（2 つ以上のときだけ描かれる）と、録音のタブの「この録音について」など。#344）。
+   * 題名はページの名前で、タブは中身の切り替えなので、帯は題名の下に並べる。
+   */
+  belowTitle?: ReactNode;
+  /**
    * 本文のエディタを出さない（題名と場所だけ。#310 の文字起こしのタブ: 本文は TranscriptPage が題名の下に出す。オーナー決定 2026-11-07）。
    * 題名はページの名前として保存する。本文の保存・書式の帯・下書きは動かない。
    */
   bodyless?: boolean;
 } & PageEditorEvents;
+
+/** 題名の下の部品の変換を、エディタの根（題名・本文の変換を見ている）へ伝えない。 */
+const stopComposition = (event: CompositionEvent<HTMLDivElement>) => event.stopPropagation();
 
 /** 何も足していないか（onLeftEmpty の判定）。空ならページの id と、まだ届いていない保存があるか。空でなければ null。 */
 type LeaveCheck = () => { id: string; busy: () => boolean } | null;
@@ -937,6 +945,12 @@ function EditorScreen(props: ScreenProps) {
         }}
       />
       {titleClamped && <p role="status">題名は {MAX_TITLE_CHARS} 字までです。</p>}
+      {props.belowTitle !== undefined && (
+        // 題名の下の部品（タブの名前・「この録音について」の欄）の変換は、題名・本文の変換ではない（保存を待たせない）
+        <div data-below-title="" onCompositionStart={stopComposition} onCompositionEnd={stopComposition}>
+          {props.belowTitle}
+        </div>
+      )}
       {pageFull && (
         <p role="alert" style={{ fontSize: 13, lineHeight: 1.5, overflowWrap: "anywhere", color: "var(--docs-warn-ink)" }}>
           ページの{PAGE_MAX_BYTES / (1024 * 1024)} MiB上限を超えるため保存できませんでした。本文やカバーから不要な画像を外すか、アップロード中の画像を中止してください。直前の保存内容は残っています。

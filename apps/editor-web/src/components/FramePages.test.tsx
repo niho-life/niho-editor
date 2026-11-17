@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type EditorProps = {
   bodyless?: boolean;
+  belowTitle?: ReactNode;
   page?: { id: string | null; title?: string; blocks?: unknown[]; revision?: number | null; lang?: string };
   createOnOpen?: boolean;
   onCreated?: (id: string) => void;
@@ -12,6 +13,7 @@ type EditorProps = {
   onLeftEmpty?: (id: string, options: { keepalive: boolean }) => void;
 };
 const editors: EditorProps[] = [];
+const tabAdders: { ownerId: string; add: () => void }[] = [];
 const frame = {
   pageCreated: vi.fn(),
   pageTitleChanged: vi.fn(),
@@ -20,6 +22,11 @@ const frame = {
   pageLangChanged: vi.fn(),
   pageRemoved: vi.fn(),
   registerPageSaver: vi.fn(() => () => undefined),
+  // 「…」の「タブを追加」の口（PageTabs が登録する。#344）。登録された口を預かる
+  registerTabAdder: vi.fn((adder: { ownerId: string; add: () => void }) => {
+    tabAdders.push(adder);
+    return () => undefined;
+  }),
   openPage: vi.fn(),
   pages: [] as unknown[],
   narrow: false,
@@ -35,10 +42,11 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("./EditorFrame", () => ({ useEditorFrame: () => frame, isNarrowNow: () => false }));
 vi.mock("@/lib/last-page", () => ({ rememberLastPage: vi.fn() }));
+// 題名の下の部品（belowTitle）は、エディタの中（題名の下）に描く
 vi.mock("./PageEditor", () => ({
   PageEditor: (props: EditorProps) => {
     editors.push(props);
-    return <div data-editor="" />;
+    return <div data-editor="">{props.belowTitle}</div>;
   },
 }));
 vi.mock("./RecordingInfo", () => ({
@@ -86,6 +94,7 @@ let container: HTMLElement | null = null;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   editors.length = 0;
+  tabAdders.length = 0;
   vi.clearAllMocks();
   window.history.replaceState(null, "", "/p/new");
   window.localStorage.clear();
@@ -128,6 +137,16 @@ describe("NewPage: the creation redirect belongs to the draft that made the page
     expect(rememberLastPage).not.toHaveBeenCalled();
     // ページは作られているので、一覧には載せる
     expect(frame.pageCreated).toHaveBeenCalledWith("22222222-2222-4222-8222-222222222222", "", "note", null);
+  });
+
+  it("draws no tab bar for a new page (not even an empty placeholder while it is made); once made, it registers the …「タブを追加」 for that page (#344)", async () => {
+    await mount();
+    expect(container!.querySelector(".es-tabbar")).toBeNull();
+    expect(editors.at(-1)!.belowTitle).toBeUndefined();
+    expect(tabAdders).toEqual([]);
+    await act(async () => editors.at(-1)!.onCreated!("66666666-6666-4666-8666-666666666666"));
+    expect(container!.querySelector(".es-tabbar")).toBeNull();
+    expect(tabAdders.map((adder) => adder.ownerId)).toEqual(["66666666-6666-4666-8666-666666666666"]);
   });
 
   it("drops the retired Experience handoff and keeps the default page language", async () => {
@@ -186,7 +205,7 @@ describe("NewPage: a page left without anything added is discarded (owner decisi
   });
 });
 
-describe("OpenPage: the tab bar, the flow watcher, the transcript, then the title and body", () => {
+describe("OpenPage: the flow watcher, then the title; under the title the tab bar (2+ tabs) and the recording, then the body", () => {
   const PAGE = "33333333-3333-4333-8333-333333333333";
   const HOLDER = "55555555-5555-4555-8555-555555555555";
   const OTHER = "66666666-6666-4666-8666-666666666666";
@@ -203,14 +222,16 @@ describe("OpenPage: the tab bar, the flow watcher, the transcript, then the titl
     return container;
   }
 
-  const order = (host: HTMLElement) =>
-    [...host.children].map((node) =>
-      node.classList.contains("es-tabbar") ? "tabbar" : (node.getAttribute("data-steps") ?? node.getAttribute("data-transcript") ?? node.getAttribute("data-transcript-page") ?? (node.hasAttribute("data-recording-info") ? "info" : "editor")),
-    );
+  const name = (node: Element) =>
+    node.classList.contains("es-tabbar") ? "tabbar" : (node.getAttribute("data-steps") ?? node.getAttribute("data-transcript") ?? node.getAttribute("data-transcript-page") ?? (node.hasAttribute("data-recording-info") ? "info" : node.hasAttribute("data-editor") ? "editor" : node.className));
+  const order = (host: Element) => [...host.children].map(name);
+  /** エディタ（のモック）の中、題名の下に置いた部品の並び。 */
+  const belowTitle = (host: Element) => order(host.querySelector("[data-editor]")!);
 
-  it("puts the tab bar first, the flow watcher (nothing drawn), then この録音について and the transcript (kind=rec), then the page editor", async () => {
-    const host = await open("rec");
-    expect(order(host)).toEqual(["tabbar", `${PAGE}:rec`, "info", PAGE, "editor"]);
+  it("puts the flow watcher (nothing drawn) and the page editor; under the title the tab bar, then この録音について and the transcript (kind=rec)", async () => {
+    const host = await open("rec", null, [tab(PAGE, 1), tab(OTHER, 2)]);
+    expect(order(host)).toEqual([`${PAGE}:rec`, "editor"]);
+    expect(belowTitle(host)).toEqual(["tabbar", "info", PAGE]);
     expect(frame.pageOpened).toHaveBeenCalledTimes(1);
   });
 
@@ -220,28 +241,33 @@ describe("OpenPage: the tab bar, the flow watcher, the transcript, then the titl
     expect(host.querySelector("[data-editor]")).toBeNull();
     expect(host.querySelector("[data-steps]")).toBeNull();
     expect(host.querySelector(".es-tabbar")).toBeNull();
+    expect(tabAdders).toEqual([]);
   });
 
-  it("タブの帯（#308）: 1 つなら ＋ だけ。＋ でまっさらなタブを足し、一覧に知らせて開く。2 つ以上なら名前と ▾", async () => {
+  it("タブの帯（#308・#344）: 1 つなら帯を出さず、「…」の「タブを追加」の口を枠に登録する（まっさらなタブを足し、一覧に知らせて開く）。2 つ以上なら題名の下に名前と ▾ と ＋", async () => {
     createTab.mockResolvedValue({ id: OTHER, page: HOLDER });
     let host = await open("note");
-    expect(host.querySelectorAll(".es-tab")).toHaveLength(0);
-    await act(async () => host.querySelector<HTMLButtonElement>(".es-tab-add")!.click());
+    expect(host.querySelector(".es-tabbar")).toBeNull();
+    expect(host.querySelector(".es-tab-add")).toBeNull();
+    expect(tabAdders.map((adder) => adder.ownerId)).toEqual([PAGE]);
+    await act(async () => tabAdders[0]!.add());
     expect(createTab).toHaveBeenCalledWith(PAGE);
     expect(frame.pageCreated).toHaveBeenCalledWith(OTHER, "録音", "note", null, HOLDER);
     expect(router.push).toHaveBeenCalledWith(`/p/${OTHER}`);
     await act(async () => root?.unmount());
     container?.remove();
     host = await open("note", null, [tab(PAGE, 1, "下書き"), tab(OTHER, 2)]);
+    expect(belowTitle(host)).toEqual(["tabbar"]);
     expect([...host.querySelectorAll(".es-tab")].map((el) => [el.textContent, el.getAttribute("aria-current")])).toEqual([["下書き", "true"], ["2", null]]);
     expect(host.querySelector(".es-tab-menu")?.getAttribute("aria-label")).toBe("タブ「下書き」のメニュー");
+    expect(host.querySelector(".es-tabbar > .es-tab-add")).not.toBeNull();
     act(() => [...host.querySelectorAll<HTMLButtonElement>(".es-tab")][1]!.click());
     expect(frame.openPage).toHaveBeenCalledWith(OTHER);
   });
 
   it("文字起こしのタブ（#310）: 題名だけのエディタ（本文なし）の下に TranscriptPage。普通のページには本文がある", async () => {
     const host = await open("note", OTHER, [tab(PAGE, 1)], HOLDER);
-    expect(order(host)).toEqual(["tabbar", `${PAGE}:note`, "editor", `${PAGE}:${HOLDER}`]);
+    expect(order(host)).toEqual([`${PAGE}:note`, "editor", `${PAGE}:${HOLDER}`]);
     expect(editors.at(-1)!.bodyless).toBe(true);
     await act(async () => root?.unmount());
     container?.remove();
@@ -249,9 +275,10 @@ describe("OpenPage: the tab bar, the flow watcher, the transcript, then the titl
     expect(editors.at(-1)!.bodyless).toBe(false);
   });
 
-  it("shows the editor for an ordinary page, without the transcript", async () => {
+  it("shows the editor for an ordinary page, without the transcript (one tab: no tab bar)", async () => {
     const host = await open("note");
-    expect(order(host)).toEqual(["tabbar", `${PAGE}:note`, "editor"]);
+    expect(order(host)).toEqual([`${PAGE}:note`, "editor"]);
+    expect(belowTitle(host)).toEqual([]);
     expect(host.querySelector("[data-transcript]")).toBeNull();
     expect(host.querySelector("[data-transcript-page]")).toBeNull();
     // 既にあるページ（このタブの「新しいページ」で作っていない）は、空でも捨てない
@@ -274,7 +301,7 @@ describe("OpenPage: the tab bar, the flow watcher, the transcript, then the titl
 
   it("gives the steps state the parent of a step subpage (the run belongs to the recording page)", async () => {
     const host = await open("step", "44444444-4444-4444-8444-444444444444");
-    expect(order(host)).toEqual(["tabbar", `${PAGE}:step`, "editor"]);
+    expect(order(host)).toEqual([`${PAGE}:step`, "editor"]);
   });
 
   it("段階が終わって本文が入れ替わったら、読み直してエディタを開き直す（#37。帯だけ「済み」にしない）", async () => {

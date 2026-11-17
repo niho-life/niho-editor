@@ -100,7 +100,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **ヘッダーの状態と「…」（#34 第 1 段・第 2 段）**:
   - **状態の丸**（docs-ui の `StatusDot`）: 公開の状態（公開中・更新あり・限定公開・公開をやめた。公開のシートが読んだもの。#39）＋保存の状態（「公開中 · … · 保存済み」「自分だけ · 保存中」「· オフライン・この端末に保持」など。言葉は `src/lib/save-status.ts` の `headerStatus`）。公開のシートがまだ読めていない間は「自分だけ」。ページの外（`/`・設定・録音から）では出さない。
   - **読み上げ**: 保存の状態を読み上げるのはヘッダーの丸（`aria-live="polite"`）だけ。本文の上の「保存済み」などの表示は見える文字として残し、live region にしない（二重に読み上げない）。
-  - **「…」**: リンクで共有・書き出し（.md）・履歴・複製・削除（docs-ui の `shellMoreItems` の順）。Google ドキュメントへの書き出しは NIHO の API 待ち。まだ作っていないページ（`/p/new`）と、端末の下書きを読み終える前は出さない。開閉と項目の移動は `ShellMenu`（↑↓・Home・End・Esc）で、選んだらフォーカスは「…」へ戻る。リンクで共有の補足「共有中」は、共有していると分かっているときだけ出す（`/p/{id}` の RSC が開くときに真偽だけを読んで渡し、共有のシートで読んだ・変えた値で更新する。読めなければ出さない。リンクそのものは RSC の payload に入れない）。
+  - **「…」**: 公開…（先頭。ヘッダーに公開のボタンは置かない。#344）・リンクで共有・書き出し（.md）・[タブを追加]・履歴・複製・削除（`shellMoreItems` の順に `src/lib/use-page-menu.ts` が足す）。公開済みのページだけ、ヘッダーに状態の札（「公開中」「公開中 · 更新あり」。押すと公開のシート）。Google ドキュメントへの書き出しは NIHO の API 待ち。まだ作っていないページ（`/p/new`）と、端末の下書きを読み終える前は出さない。開閉と項目の移動は `ShellMenu`（↑↓・Home・End・Esc）で、選んだらフォーカスは「…」へ戻る。リンクで共有の補足「共有中」は、共有していると分かっているときだけ出す（`/p/{id}` の RSC が開くときに真偽だけを読んで渡し、共有のシートで読んだ・変えた値で更新する。読めなければ出さない。リンクそのものは RSC の payload に入れない）。
   - **どの操作も先に保存する**: まだ届いていない変更を今送り、全て届くまで待つ（`Autosave.settle`）。届かなければ（オフライン・ログイン切れ・サーバーの失敗・競合で止めている）操作を止め、シートも開かずに「〜の前に変更を保存できませんでした」（履歴は「履歴を開く前に…」）と出す（編集は捨てない）。同じページの操作は 1 つずつ。
   - **複製**: `POST …/duplicate` → 一覧の上に足し、`/p/{新しい id}` へ。失敗は「…」の左に短く（`role="alert"`。「複製できませんでした」）。
   - **書き出し**: 同じ origin の `<a href="/api/pages/{id}/export.md" download>` を押す（本文は fetch で読まない。ファイル名はサーバーの Content-Disposition）。
@@ -253,9 +253,9 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **上限**: 受け付ける種類は `image/jpeg`・`image/png`・`image/webp`・`image/avif`・`image/gif`（**SVG は script を持てるので受け付けない**）、1 枚 **20 MiB**、1 ページ **100 枚**、alt 1000 文字・クレジット 500 文字。ページの題名・正規化後の本文 JSON・本文が参照する ready 画像・uploading 予約の合計は **30 MiB**。録音音声は別枠。ページロック内で開始・完了・本文保存を判定する。
 - **申告値**: `sha256`・`contentType`・`sizeBytes` はクライアントの申告（ブラウザで sha256 を計算して送る）。サーバーは中身を読まず、sha256 を検証しない。大きさは complete で保存先の実寸に確定する。中継のときだけ中身を通す。
 - **冪等**: 同じ `Idempotency-Key`・同じページ・同じ内容（ページ・種類・大きさ・sha256 を正規化した SHA-256 で比べる）は 200 で同じ資産。アップロード中なら ticket を作り直し、済んでいれば `upload: null`。complete は何度呼んでもよい。
-- **エディタ**（`src/editor/`）: `image-node.ts`（TipTap のノード。block・atom・draggable、貼り付け・ドロップのファイルを受ける plugin、「/」「＋」の「画像」からのファイル選択）と `ImageNodeView.tsx`（React の NodeView。`src` は中継の path。**画像を選ぶと alt・クレジット・掲載許諾の欄をここに出し**、直すと本文の自動保存と資産の行の両方へ入る）。入れられないとき（ページがまだ無い・種類・大きさ・枚数・失敗）は本文を変えずに、本文の下に理由を出す。
+- **エディタ**（`src/editor/`）: `image-node.ts`（TipTap のノード。block・atom・draggable、貼り付け・ドロップのファイルを受ける plugin、「/」「＋」の「画像」からのファイル選択）と `ImageNodeView.tsx`（React の NodeView。`src` は中継の path。欄は出さず、右クリック・選んでいる間の ⋯ のメニューでキャプション・代替テキスト・削除。代替テキストは本文の自動保存と資産の行の両方へ、キャプションは本文だけに入る。クレジット・掲載許諾は入力しない。#344）。入れられないとき（ページがまだ無い・種類・大きさ・枚数・失敗）は本文を変えずに、本文の下に理由を出す。
 - **表**: migration `0011_image_assets.sql`（assets に `upload_status`（uploading／ready）・`upload_key`・`request_hash`）と `20261103014130_page_image_reservation_expiry.sql`（失われた開始応答の予約を GCS ticket の失効後に掃除する期限）。資産は assets（`kind=image`、`bucket_path` = `image/{asset id}`、`alt`・`credit`・`consent` は 0001 から）。コードは `packages/editor-store/src/images.ts`。
-- **共有リンク**: `/s/{token}` の本文の画像は `sharedImageAsset`（その token のページの、ready の画像だけ）で絞って中継する。描くのは `src/share/render-blocks.tsx`（`assetSrc` を渡さなければ画像を描かない＝読めない `img` を置かない。クレジットは `figcaption`）。**ページの複製（#34）は本文（資産の id）を写すが資産の行は写さない**ので、複製したページの共有リンクでは画像が出ない（資産は 1 つのページに属する。必要になったら写す側で足す）。
+- **共有リンク**: `/s/{token}` の本文の画像は `sharedImageAsset`（その token のページの、ready の画像だけ）で絞って中継する。描くのは `src/share/render-blocks.tsx`（`assetSrc` を渡さなければ画像を描かない＝読めない `img` を置かない。キャプションは `figcaption`。クレジットは出さない。#344）。**ページの複製（#34）は本文（資産の id）を写すが資産の行は写さない**ので、複製したページの共有リンクでは画像が出ない（資産は 1 つのページに属する。必要になったら写す側で足す）。
 - **object の扱い**: 取消・予約期限切れ・ゴミ箱 purge は資産の行だけを消し、object は残り得る（`purgeTrash` は場所を返す。画像 object に期限のライフサイクル規則はない）。ページ容量の予約は解放される。
 
 ## 本文の囲み（#33）

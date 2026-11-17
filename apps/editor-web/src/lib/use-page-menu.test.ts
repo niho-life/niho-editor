@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AI_GRAY_ITEM, pageMenuItems } from "./use-page-menu";
+import { ADD_TAB_ITEM, AI_GRAY_ITEM, PUBLISH_ITEM, pageMenuItems } from "./use-page-menu";
 import { googleDocsConnectPath, GOOGLE_DOCS_CONNECT_PATH } from "./google-docs-paths";
 
 /** 「…」の項目と、Google ドキュメントの失敗の文言（code ごと）。 */
@@ -41,6 +41,17 @@ describe("「…」の項目", () => {
     expect(on.find((item) => item.id === AI_GRAY_ITEM)).toMatchObject({ label: "AI の文を灰色で見せる", checked: true });
     expect(pageMenuItems(null, { aiGray: false }).find((item) => item.id === AI_GRAY_ITEM)?.checked).toBe(false);
     expect(pageMenuItems(null).some((item) => item.id === AI_GRAY_ITEM)).toBe(false);
+  });
+
+  it("「公開…」は先頭、「タブを追加」は書き出しの後ろ（前後に区切り）。渡さなければ出さず、フォルダには出さない（#344）", () => {
+    const items = pageMenuItems(null, { publish: { hint: "公開中 · 更新あり" }, addTab: true, pageInfo: true });
+    expect(items.map((item) => item.label)).toEqual(["公開…", "リンクで共有", "書き出し", "Google ドキュメントへ", "タブを追加", "履歴", "複製", "ページの情報", "削除"]);
+    expect(items[0]).toMatchObject({ id: PUBLISH_ITEM, icon: "globe", hint: "公開中 · 更新あり" });
+    expect(items.filter((item) => item.separated).map((item) => item.id)).toEqual([ADD_TAB_ITEM, "history"]);
+    expect(pageMenuItems(null, { publish: {} })[0]).toMatchObject({ id: PUBLISH_ITEM, label: "公開…" });
+    expect(pageMenuItems(null, { publish: {} })[0]!.hint).toBeUndefined();
+    expect(pageMenuItems(null).some((item) => item.id === PUBLISH_ITEM || item.id === ADD_TAB_ITEM || item.separated)).toBe(false);
+    expect(pageMenuItems(null, { folder: true, publish: {}, addTab: true }).map((item) => item.id)).toEqual(["export-folder", "delete"]);
   });
 
   it("共有中が分かっているときだけ補足を出す", () => {

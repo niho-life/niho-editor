@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import type { Editor } from "@tiptap/core";
+import axe from "axe-core";
+import { closeHistory } from "@tiptap/pm/history";
 import { Slice } from "@tiptap/pm/model";
 import type { Plugin } from "@tiptap/pm/state";
 import { EditorContent, useEditor } from "@tiptap/react";
@@ -150,8 +152,41 @@ function typeInto(input: HTMLInputElement, value: string): void {
 
 const problem = () => container!.querySelector("[data-image-problem]")?.textContent ?? null;
 const images = () => [...container!.querySelectorAll("img")];
-const field = (label: string) =>
-  [...container!.querySelectorAll("label")].find((item) => item.textContent?.includes(label))?.querySelector("input") ?? null;
+/** 画像の右上の ⋯（選んでいる間だけ）。 */
+const more = () => container!.querySelector<HTMLButtonElement>('button[aria-label="画像のメニュー"]');
+const imageMenu = () => container!.querySelector<HTMLElement>('[role="menu"][aria-label="画像"]');
+/** メニューの項目の見える文字（補足も含む）。 */
+const menuLabels = () => [...(imageMenu()?.querySelectorAll("button") ?? [])].map((button) => button.textContent ?? "");
+const captionInput = () => container!.querySelector<HTMLInputElement>('input[aria-label="キャプション"]');
+
+/**
+ * 入れた画像（insertPageImage の focus）が次の描画の前にエディタへフォーカスを移し終えるのを待つ
+ * （待たないと、あとで ⋯・入力へ移したフォーカスを横から取られる）。
+ */
+async function settleFocus() {
+  await act(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  });
+}
+
+async function selectImage(editor: Editor) {
+  await settleFocus();
+  await act(async () => {
+    editor.commands.setNodeSelection(0);
+  });
+  await flush();
+}
+
+async function openMenu() {
+  await act(async () => more()!.click());
+}
+
+async function pickItem(label: string) {
+  const item = [...(imageMenu()?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent?.startsWith(label));
+  expect(item, `the image menu has 「${label}」`).toBeDefined();
+  await act(async () => item!.click());
+  await flush();
+}
 
 describe("the image node", () => {
   it("uploads a pasted file and inserts only the asset id, with the relay as the src", async () => {
@@ -229,55 +264,232 @@ describe("the image node", () => {
     expect(savedBlocks(editor)).toEqual([{ type: "paragraph" }]);
   });
 
-  it("shows the alt, credit and consent fields when the image is selected, and saves what is typed", async () => {
+  it("shows no fields when the image is selected: only the ⋯ (image menu) on the image, and no credit or consent input anywhere (#344)", async () => {
+    const { images: port } = stubImages();
+    const editor = await render({ images: port, pageId: () => PAGE });
+    await act(async () => {
+      editor.commands.insertPageImage({ assetId: ASSET, credit: "合成の提供元" });
+      // 入れた直後は画像が選ばれている。いちど本文の行へ戻す
+      editor.commands.setTextSelection(editor.state.doc.content.size - 1);
+    });
+    await flush();
+    // 選んでいない画像には ⋯ も欄も出さない
+    expect(more()).toBeNull();
+    expect(container!.querySelectorAll("input")).toHaveLength(0);
+    await selectImage(editor);
+    expect(more()!.getAttribute("aria-haspopup")).toBe("menu");
+    expect(more()!.getAttribute("aria-expanded")).toBe("false");
+    // 欄（代替テキスト・キャプション・クレジット・掲載許諾）と注意文は出ない
+    expect(container!.querySelectorAll("input, label")).toHaveLength(0);
+    expect(container!.textContent).not.toMatch(/掲載許諾|クレジット|公開の前に/);
+    // 既にあるクレジットは属性に残す（消さない）が、figcaption にも出さない
+    expect(savedBlocks(editor)[0]).toEqual({ type: "image", attrs: { assetId: ASSET, credit: "合成の提供元", consent: false } });
+    expect(container!.querySelector("figcaption")).toBeNull();
+  });
+
+  it("opens the image menu from ⋯ (under the button) and from a right click (at the pointer, the default menu stopped)", async () => {
+    const { images: port } = stubImages();
+    const editor = await render({ images: port, pageId: () => PAGE });
+    await act(async () => {
+      editor.commands.insertPageImage({ assetId: ASSET });
+      editor.commands.setTextSelection(editor.state.doc.content.size - 1);
+    });
+    await flush();
+    await settleFocus();
+    // 右クリック: 選んでいなくても、その画像を選んで押した位置にメニュー
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 50 });
+    await act(async () => {
+      images()[0]!.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(true);
+    expect(editor.state.selection.from).toBe(0);
+    expect(menuLabels()).toEqual(["キャプションを追加", "代替テキスト…なし", "削除"]);
+    expect(imageMenu()!.style.left).toBe("40px");
+    expect(imageMenu()!.style.top).toBe("50px");
+    expect(document.activeElement).toBe(imageMenu()!.querySelector("button"));
+    // Esc で閉じて ⋯ へ戻る
+    await act(async () => {
+      imageMenu()!.querySelector("button")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(imageMenu()).toBeNull();
+    expect(document.activeElement).toBe(more());
+    // ⋯: 押すとメニュー、もう一度押すと閉じる
+    await act(async () => more()!.click());
+    expect(more()!.getAttribute("aria-expanded")).toBe("true");
+    expect(imageMenu()?.getAttribute("aria-label")).toBe("画像");
+    await act(async () => more()!.click());
+    expect(imageMenu()).toBeNull();
+  });
+
+  it("does not open the menu on a page that can only be read (the browser's menu stays)", async () => {
+    const editor = await render({});
+    await act(async () => {
+      editor.commands.setContent({ type: "doc", content: [{ type: "image", attrs: { assetId: ASSET, caption: "読むだけのキャプション" } }, { type: "paragraph" }] });
+      editor.setEditable(false);
+    });
+    await flush();
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    await act(async () => {
+      images()[0]!.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(false);
+    expect(imageMenu()).toBeNull();
+    expect(more()).toBeNull();
+    // キャプションは文字だけ（押せない）
+    expect(container!.querySelector("figcaption")?.textContent).toBe("読むだけのキャプション");
+    expect(container!.querySelector("figcaption button")).toBeNull();
+  });
+
+  it("adds a caption from the menu (one line, Enter to set), shows it under the image, and drops it when left empty", async () => {
+    const { images: port, metas } = stubImages();
+    const editor = await render({ images: port, pageId: () => PAGE });
+    await act(async () => {
+      editor.commands.insertPageImage({ assetId: ASSET });
+    });
+    await selectImage(editor);
+    await openMenu();
+    await pickItem("キャプションを追加");
+    const input = captionInput()!;
+    expect(input.getAttribute("placeholder")).toBe("キャプションを入力");
+    expect(input.maxLength).toBe(1000);
+    expect(document.activeElement).toBe(input);
+    await act(async () => typeInto(input, "合成のキャプション"));
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    expect(captionInput()).toBeNull();
+    expect(savedBlocks(editor)[0]).toEqual({ type: "image", attrs: { assetId: ASSET, caption: "合成のキャプション", consent: false } });
+    expect(container!.querySelector("figcaption")?.textContent).toBe("合成のキャプション");
+    // キャプションは本文の属性だけ（資産の行には送らない）
+    expect(metas).toEqual([]);
+    // あるときは「キャプションを外す」
+    await openMenu();
+    expect(menuLabels()[0]).toBe("キャプションを外す");
+    await pickItem("キャプションを外す");
+    expect(savedBlocks(editor)[0]).toEqual({ type: "image", attrs: { assetId: ASSET, consent: false } });
+    expect(container!.querySelector("figcaption")).toBeNull();
+    // 空のまま離れたら入力を消し、キャプションは null のまま
+    await openMenu();
+    await pickItem("キャプションを追加");
+    await act(async () => captionInput()!.blur());
+    expect(captionInput()).toBeNull();
+    expect(savedBlocks(editor)[0]).toEqual({ type: "image", attrs: { assetId: ASSET, consent: false } });
+  });
+
+  it("edits the alt text in a small popover under the image, and saves it to the node and (after typing) to the asset row", async () => {
     const { images: port, metas } = stubImages();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const editor = await render({ images: port, pageId: () => PAGE });
     await act(async () => {
       editor.commands.insertPageImage({ assetId: ASSET });
-      // 入れた直後は画像が選ばれている。いちど本文の行へ戻す
-      editor.commands.setTextSelection(editor.state.doc.content.size - 1);
     });
-    await flush();
-    // 選んでいない画像には欄を出さない
-    expect(field("代替テキスト")).toBeNull();
-    await act(async () => {
-      editor.commands.setNodeSelection(0);
-    });
-    await flush();
-    const alt = field("代替テキスト")!;
-    const credit = field("クレジット")!;
-    const consent = field("掲載許諾")!;
-    expect(alt.value).toBe("");
-    expect(consent.type).toBe("checkbox");
-
+    await selectImage(editor);
+    await openMenu();
+    await pickItem("代替テキスト…");
+    const pop = container!.querySelector<HTMLElement>('[role="dialog"][aria-label="代替テキスト"]')!;
+    expect(pop.textContent).toContain("読み上げと検索で使います。ページには出ません。");
+    const alt = pop.querySelector("input")!;
+    expect(alt.maxLength).toBe(1000);
+    expect(document.activeElement).toBe(alt);
     await act(async () => typeInto(alt, "合成の写真"));
-    await act(async () => typeInto(credit, "合成の提供元"));
-    await act(async () => consent.click());
-    // 本文（AST）には 3 つとも入る
-    expect(savedBlocks(editor)[0]).toEqual({ type: "image", attrs: { assetId: ASSET, alt: "合成の写真", credit: "合成の提供元", consent: true } });
-    // 資産の行へは、打ち終わってから送る
+    // 本文（AST）には入る。資産の行へは、打ち終わってから送る
+    expect(savedBlocks(editor)[0]).toEqual({ type: "image", attrs: { assetId: ASSET, alt: "合成の写真", consent: false } });
+    expect(images()[0]!.getAttribute("alt")).toBe("合成の写真");
     expect(metas).toEqual([]);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
-    expect(metas).toEqual([{ assetId: ASSET, patch: { alt: "合成の写真", credit: "合成の提供元", consent: true } }]);
+    expect(metas).toEqual([{ assetId: ASSET, patch: { alt: "合成の写真" } }]);
+    // Enter で閉じる。メニューの補足は「あり」
+    await act(async () => {
+      alt.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    expect(container!.querySelector('[role="dialog"]')).toBeNull();
+    await openMenu();
+    expect(menuLabels()[1]).toBe("代替テキスト…あり");
+    // Esc でも閉じる。外を押しても閉じ、まだ送っていない分を送る
+    await pickItem("代替テキスト…");
+    const again = container!.querySelector<HTMLInputElement>('[role="dialog"] input')!;
+    await act(async () => {
+      again.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    expect(container!.querySelector('[role="dialog"]')).toBeNull();
+    await openMenu();
+    await pickItem("代替テキスト…");
+    await act(async () => typeInto(container!.querySelector<HTMLInputElement>('[role="dialog"] input')!, ""));
+    await act(async () => {
+      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
+    expect(container!.querySelector('[role="dialog"]')).toBeNull();
+    expect(metas.at(-1)).toEqual({ assetId: ASSET, patch: { alt: null } });
     vi.useRealTimers();
   });
 
-  it("does not let the fields change the body: keys in the inputs stay in the inputs", async () => {
+  it("deletes the image node from the menu as an ordinary edit (undo brings it back)", async () => {
     const { images: port } = stubImages();
     const editor = await render({ images: port, pageId: () => PAGE });
     await act(async () => {
       editor.commands.insertPageImage({ assetId: ASSET });
-      editor.commands.setNodeSelection(0);
+      // 入れたことと消したことを別の Undo にする（続けて行うと 1 つにまとまる）
+      editor.view.dispatch(closeHistory(editor.state.tr));
+    });
+    await selectImage(editor);
+    await openMenu();
+    await pickItem("削除");
+    await flush();
+    expect(savedBlocks(editor).some((block) => block.type === "image")).toBe(false);
+    await act(async () => {
+      editor.commands.undo();
     });
     await flush();
-    const alt = field("代替テキスト")!;
+    expect(savedBlocks(editor)[0]).toEqual({ type: "image", attrs: { assetId: ASSET, consent: false } });
+  });
+
+  it("axe: serious 以上が無い（⋯・メニュー・キャプションの入力・代替テキスト）", async () => {
+    const { images: port } = stubImages();
+    const editor = await render({ images: port, pageId: () => PAGE });
+    await act(async () => {
+      editor.commands.insertPageImage({ assetId: ASSET, caption: "合成のキャプション" });
+    });
+    await selectImage(editor);
+    const check = async () =>
+      (await axe.run(container!, { rules: { "color-contrast": { enabled: false } } })).violations
+        .filter((entry) => entry.impact === "serious" || entry.impact === "critical")
+        .map((entry) => [entry.id, entry.nodes.map((node) => node.html)]);
+    expect(await check()).toEqual([]);
+    await openMenu();
+    expect(await check()).toEqual([]);
+    await pickItem("代替テキスト…");
+    expect(await check()).toEqual([]);
+    await openMenu();
+    await pickItem("キャプションを外す");
+    await openMenu();
+    await pickItem("キャプションを追加");
+    expect(await check()).toEqual([]);
+  });
+
+  it("does not let the caption or alt inputs change the body: keys in the inputs stay in the inputs", async () => {
+    const { images: port } = stubImages();
+    const editor = await render({ images: port, pageId: () => PAGE });
+    await act(async () => {
+      editor.commands.insertPageImage({ assetId: ASSET });
+    });
+    await selectImage(editor);
+    await openMenu();
+    await pickItem("代替テキスト…");
     const before = JSON.stringify(editor.getJSON());
-    for (const key of ["Backspace", "Enter", "Delete"]) {
+    const alt = container!.querySelector<HTMLInputElement>('[role="dialog"] input')!;
+    for (const key of ["Backspace", "Delete"]) {
       await act(async () => {
         alt.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      });
+    }
+    expect(JSON.stringify(editor.getJSON())).toBe(before);
+    await openMenu();
+    await pickItem("キャプションを追加");
+    for (const key of ["Backspace", "Delete"]) {
+      await act(async () => {
+        captionInput()!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
       });
     }
     expect(JSON.stringify(editor.getJSON())).toBe(before);

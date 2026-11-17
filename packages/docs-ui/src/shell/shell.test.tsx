@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   EditorShell,
   RecordingStart,
@@ -286,6 +286,22 @@ describe("ShellHeader", () => {
     expect(shellPublishButton({ pub: pub({ updated: true }) })).toEqual({ label: "更新を公開", tone: "primary", menu: false });
     expect(shellPublishButton({ pub: pub({}) })).toEqual({ label: "公開中", tone: "quiet", menu: true });
     expect(shellPublishButton({ pub: pub({ range: "stopped" }), isArticle: true }).label).toBe("公開");
+  });
+
+  it("公開済みの状態の札（#344）: 文字のボタンで「公開中」、直したあとは「公開中 · 更新あり」。押すと onClick。渡さなければ出さない", () => {
+    const onClick = vi.fn();
+    const live = renderToStaticMarkup(header({ publish: null, published: { label: "公開中", updated: false, onClick } }));
+    expect(live).toContain('class="es-pubstate" aria-haspopup="dialog" title="公開中"');
+    expect(live.replace(/<[^>]*>/g, "")).toContain("公開中");
+    expect(live).not.toContain("更新あり");
+    expect(live).not.toContain("es-pubbtn");
+    // 状態の丸の後ろ・「…」の前
+    expect(live.indexOf("es-st-wrap")).toBeLessThan(live.indexOf("es-pubstate"));
+    expect(live.indexOf("es-pubstate")).toBeLessThan(live.indexOf('aria-label="その他"'));
+    const updated = renderToStaticMarkup(header({ publish: null, published: { label: "公開中", updated: true, onClick } }));
+    expect(updated).toContain('title="公開中 · 更新あり"');
+    expect(updated).toContain('<span class="es-pubstate-more"> · <b>更新あり</b></span>');
+    expect(renderToStaticMarkup(header({ publish: null }))).not.toContain("es-pubstate");
   });
 
   it("録音からの画面は状態・公開のかわりに trailing を出す", () => {

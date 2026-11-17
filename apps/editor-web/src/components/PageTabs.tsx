@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PageKind, PageSummary, StepStatus } from "@niho/editor-store";
 import { TabBar, type PageTabMoveTarget } from "niho-docs-ui/page/TabBar";
@@ -30,8 +30,10 @@ export const PAGE_TABS_TEXT = {
 const BUSY_STYLE = { opacity: 0.6, pointerEvents: "none" } as const;
 
 /**
- * 本文の上のタブの帯（#308。モック editor-folder-pages-v1 の 2〜3）。docs-ui の TabBar に、通信と枠（一覧）への知らせを足したもの。
- * - ＋: まっさらなタブを足して開く。▾: 名前を変える・複製（まず保存）・並べて開く（デスクトップ）・別のページへ移す（同じフォルダのページ）・削除（確認）。
+ * タブの帯（#308。#344 でモック editor-page-refine-v1 の 4）。docs-ui の TabBar に、通信と枠（一覧）への知らせを足したもの。
+ * 帯はタブが 2 つ以上のときだけ描かれ、置き場は題名の下（PageEditor の `belowTitle`）。1 つのページでは何も描かない。
+ * - 足す: まっさらなタブを足して開く。帯の ＋ と、枠の「…」の「タブを追加」（ここが `registerTabAdder` で枠に登録する）の両方から。
+ * - ▾: 名前を変える・複製（まず保存）・並べて開く（デスクトップ）・別のページへ移す（同じフォルダのページ）・削除（確認）。
  * - 一覧の行は枠が持つので、足した・複製した・移したタブは `pageCreated`／`pageRemoved` で知らせる（入れ物の行に集まる。lib/sidebar-items.ts）。
  * - 題名はページの名前で、入れ物と全てのタブで同じ（サーバーが写す）。
  */
@@ -89,6 +91,13 @@ export function PageTabs({ page, tabs, saveNow }: { page: Pick<PageSummary, "id"
       frame.pageCreated(created.id, page.title, "note", page.parent, created.page ?? holder);
       router.push(`/p/${created.id}`);
     }, PAGE_TABS_TEXT.addFailed);
+  // 枠の「…」の「タブを追加」から呼ぶ口。登録するのはページ（id）ごとに 1 回で、呼ぶときは今の足す処理（busy・題名）を使う
+  const addRef = useRef(add);
+  useEffect(() => {
+    addRef.current = add;
+  });
+  const { registerTabAdder } = frame;
+  useEffect(() => registerTabAdder({ ownerId: id, add: () => void addRef.current() }), [registerTabAdder, id]);
 
   const confirmDelete = async () => {
     if (!confirm || confirm.busy) return;

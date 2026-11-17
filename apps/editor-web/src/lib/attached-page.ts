@@ -57,6 +57,14 @@ export type AttachedAiSteps = {
   start: (id: string) => Promise<{ ok: boolean; message: string }>;
 };
 
+/** 開いているページの「タブを追加」（PageTabs が枠に登録し、「…」の「タブを追加」が呼ぶ。#344）。 */
+export type AttachedTabAdder = {
+  /** 開いているページ（タブ）の id（別のページの分を使わないための持ち主）。 */
+  ownerId: string;
+  /** まっさらなタブを足して開く（帯の ＋ と同じ）。 */
+  add: () => void;
+};
+
 /**
  * 「ページ」パネルの「流れ」（#309）。開いているタブの FlowWatcher が枠に登録し、PagePanel が描く。
  * 行の内容と、押したときにすることを持つ（通信は FlowWatcher の側）。

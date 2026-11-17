@@ -51,7 +51,13 @@ export type ShellHeaderProps = {
   /** 道具の帯（ShellTools）。 */
   tools?: ReactNode;
   status?: { state: ShellStatusState; tip: string };
+  /** 公開のボタン（Mac・gallery）。editor-web は出さず、「…」の「公開…」と状態の札（published）にする（#344）。 */
   publish?: { label: string; tone: ShellButtonTone; menu?: boolean; onClick?: () => void } | null;
+  /**
+   * 公開済みのページの状態の札（文字のボタン。押すと公開のシート。#344）。未公開・公開をやめたページでは渡さない。
+   * label は「公開中」など。updated（公開したあとに直した）なら「 · 更新あり」を足す（720px 以下では省き、title に全体を残す）。
+   */
+  published?: { label: string; updated: boolean; onClick: () => void } | null;
   /** 状態・公開ボタンのかわりに出す操作（録音からの「やめる」など）。 */
   trailing?: ReactNode;
   /** 右のレール（AIと作る）の開閉のボタン（dock を使わない画面。gallery）。 */
@@ -78,13 +84,16 @@ export function shellMoreItems(shared?: boolean): ShellMenuItem[] {
   ];
 }
 
+/** 状態の札の「更新あり」の言葉。 */
+const PUBLISHED_UPDATED_TEXT = "更新あり";
+
 /**
- * ヘッダーは1段: [一覧] [道具] … [状態] [公開] [閉じているパネル] […]。
+ * ヘッダーは1段: [一覧] [道具] … [状態] [公開・状態の札] [閉じているパネル] […]。
  * 状態は丸ひとつ（言葉はホバー／フォーカスの吹き出し）。保存ボタンは持たない（自動保存）。
  */
 export function ShellHeader(props: ShellHeaderProps) {
   const moreButton = useRef<HTMLButtonElement | null>(null);
-  const { publish, more } = props;
+  const { publish, published, more } = props;
   return (
     <header className={props.plain ? "es-dt es-dt--plain" : "es-dt"}>
       {props.back && (
@@ -117,6 +126,24 @@ export function ShellHeader(props: ShellHeaderProps) {
         >
           {publish.label}
           {publish.menu && <span aria-hidden="true"> ▾</span>}
+        </button>
+      )}
+      {published && (
+        <button
+          type="button"
+          className="es-pubstate"
+          aria-haspopup="dialog"
+          title={published.updated ? `${published.label} · ${PUBLISHED_UPDATED_TEXT}` : published.label}
+          onClick={published.onClick}
+        >
+          <i aria-hidden="true" />
+          {published.label}
+          {published.updated && (
+            <span className="es-pubstate-more">
+              {" · "}
+              <b>{PUBLISHED_UPDATED_TEXT}</b>
+            </span>
+          )}
         </button>
       )}
       {props.trailing}

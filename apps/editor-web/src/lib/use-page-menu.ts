@@ -25,9 +25,13 @@ export const PAGE_INFO_ITEM = "page-info";
 
 /** 「AI の文を灰色で見せる」（この端末の表示の切り替え。src/lib/ai-gray.ts）。 */
 export const AI_GRAY_ITEM = "ai-gray";
+/** 「公開…」（公開のシートを開く。ヘッダーの公開ボタンの代わり。#344）。 */
+export const PUBLISH_ITEM = "publish";
+/** 「タブを追加」（まっさらなタブを足して開く。タブが 1 つのページには帯が無いので、ここから足す。#344）。 */
+export const ADD_TAB_ITEM = "add-tab";
 
 /** 枠が受け持つ項目（ページの操作ではなく、シートやポップオーバーを開く・表示を切り替える）。 */
-export type PageMenuLocalItem = typeof MOVE_ITEM | typeof PAGE_INFO_ITEM | typeof AI_GRAY_ITEM;
+export type PageMenuLocalItem = typeof MOVE_ITEM | typeof PAGE_INFO_ITEM | typeof AI_GRAY_ITEM | typeof PUBLISH_ITEM | typeof ADD_TAB_ITEM;
 
 /** 「…」に足す項目（ページによって出し分ける）。 */
 export type PageMenuExtras = {
@@ -42,10 +46,14 @@ export type PageMenuExtras = {
   pageInfo?: boolean;
   /** 「AI の文を灰色で見せる」の今の値（✓）。undefined なら項目を出さない。 */
   aiGray?: boolean;
+  /** 「公開…」を先頭に出すか（フォルダには出さない）。hint は公開済みのときの状態（「公開中」など）。 */
+  publish?: { hint?: string };
+  /** 「タブを追加」を「Google ドキュメントへ」の後ろ（区切りの間）に出すか。 */
+  addTab?: boolean;
 };
 
 /**
- * 「…」の項目: リンクで共有・書き出し（.md）・Google ドキュメントへ・履歴・複製・[移動…]・[ページの情報]・
+ * 「…」の項目: [公開…]・リンクで共有・書き出し（.md）・Google ドキュメントへ・[─ タブを追加 ─]・履歴・複製・[移動…]・[ページの情報]・
  * [AI の文を灰色で見せる]・削除。フォルダでは 書き出し（.zip）・削除 だけ。shellMoreItems（Mac も使う）は変えず、ここで足す。
  * shellMoreItems の「書き出し」は .md と Google ドキュメントをまとめた 1 項目だが、項目は入れ子にできないので、
  * ここで 2 つに分ける（「書き出し」は .md、Google ドキュメントは次の項目）。
@@ -56,13 +64,16 @@ export function pageMenuItems(shared: boolean | null, extras: PageMenuExtras = {
     const remove = shellMoreItems(false).find((item) => item.id === "delete")!;
     return [{ id: FOLDER_EXPORT_ITEM, label: "書き出し", icon: "doc", hint: ".zip" }, { ...remove, hint: "中のページも" }];
   }
-  return shellMoreItems(shared === true).flatMap((item): ShellMenuItem[] => {
+  const items = shellMoreItems(shared === true).flatMap((item): ShellMenuItem[] => {
     if (item.id === "export") {
       return [
         { ...item, hint: ".md" },
         { id: GOOGLE_DOCS_BATCH_ITEM, label: "Google ドキュメントへ", icon: item.icon },
+        // 「タブを追加」は書き出しの後ろ。前後に区切り（モック editor-page-refine-v1 の ⋯ の並び）
+        ...(extras.addTab ? [{ id: ADD_TAB_ITEM, label: "タブを追加", icon: "plus" as const, separated: true }] : []),
       ];
     }
+    if (item.id === "history" && extras.addTab) return [{ ...item, separated: true }];
     if (item.id === "delete") {
       return [
         ...(extras.move ? [{ id: MOVE_ITEM, label: "移動…", icon: "side" as const }] : []),
@@ -73,9 +84,11 @@ export function pageMenuItems(shared: boolean | null, extras: PageMenuExtras = {
     }
     return [item];
   });
+  // 「公開…」は先頭（ヘッダーの公開ボタンの代わり。#344）
+  return extras.publish ? [{ id: PUBLISH_ITEM, label: "公開…", icon: "globe", hint: extras.publish.hint }, ...items] : items;
 }
 
-const LOCAL_ITEMS: ReadonlySet<string> = new Set([MOVE_ITEM, PAGE_INFO_ITEM, AI_GRAY_ITEM]);
+const LOCAL_ITEMS: ReadonlySet<string> = new Set([MOVE_ITEM, PAGE_INFO_ITEM, AI_GRAY_ITEM, PUBLISH_ITEM, ADD_TAB_ITEM]);
 
 
 /** 「…」から開くシート（どちらも、まだ届いていない変更を保存してから開く）。 */

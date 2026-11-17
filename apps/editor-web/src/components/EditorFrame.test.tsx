@@ -192,10 +192,14 @@ describe("EditorFrame", () => {
     expect(container!.querySelector<HTMLTextAreaElement>("textarea.page-title")?.value).toBe("");
     expect(container!.querySelector(".ProseMirror")?.textContent).toBe("");
     expect(window.location.pathname).toBe(`/p/${PAGE_ID}`);
-    expect(buttonByText("公開")).toBeDefined();
+    // 公開の入口はヘッダーの「…」の先頭の「公開…」（ヘッダーに公開のボタンは無い。#344）
+    expect(buttonByText("公開")).toBeUndefined();
+    await act(async () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="その他"]')!.click());
+    const publishItem = [...container!.querySelectorAll<HTMLButtonElement>('[role="menu"] button')].find((button) => button.textContent?.startsWith("公開…"));
+    expect(publishItem).toBeDefined();
     // 文字数は本文の列の右下。言語は公開のシートの中
     expect(container!.querySelector(".es-corner .es-count")?.textContent).toBe("0 字");
-    await act(async () => buttonByText("公開")!.click());
+    await act(async () => publishItem!.click());
     expect(buttonByText("日本語", dialog()!)?.getAttribute("aria-pressed")).toBe("true");
     await act(async () => buttonByText("閉じる", dialog()!)!.click());
     // ページを作るのは 1 回だけ（ほかは公開のシートの英語版の状態を読むだけ）
@@ -560,7 +564,7 @@ describe("EditorFrame", () => {
     expect(document.activeElement).toBe(container!.querySelector('input[type="search"]'));
   });
 
-  it("⌘⇧P and the header's 公開 open the publish sheet on a page only, and Esc closes it back to where it was opened", async () => {
+  it("⌘⇧P opens the publish sheet on a page only (the header has no 公開 button, #344), and Esc closes it back to where it was opened", async () => {
     await mount({ pages: [page(PAGE_ID, "合成の題名")] });
     // 一覧・設定・新しいページ・録音からでは出さず、キーはブラウザに任せる
     for (const [path, search] of [["/", ""], ["/settings", ""], ["/p/new", ""], ["/p/new", "from=recording"]] as const) {
@@ -572,7 +576,10 @@ describe("EditorFrame", () => {
     }
 
     await moveTo(`/p/${PAGE_ID}`);
-    const opener = buttonByText("公開")!;
+    // ページでもヘッダーに公開のボタンは出さない（入口は「…」の「公開…」と ⌘⇧P）
+    expect(buttonByText("公開")).toBeUndefined();
+    expect(container!.querySelector(".es-pubbtn")).toBeNull();
+    const opener = container!.querySelector<HTMLButtonElement>('button[aria-label="検索（⌘K）"]')!;
     await act(async () => opener.focus());
     const event = await shortcut("P", { shiftKey: true }, opener);
     expect(event.defaultPrevented).toBe(true);
@@ -584,7 +591,7 @@ describe("EditorFrame", () => {
     expect(dialog()).toBeNull();
     expect(document.activeElement).toBe(opener);
 
-    await act(async () => opener.click());
+    await shortcut("P", { shiftKey: true });
     expect(dialog()?.getAttribute("aria-label")).toBe("公開");
     // 開いているあいだ、⌘N・⌘K は使わない
     await shortcut("n");
@@ -782,15 +789,16 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows the open page's save state as 「自分だけ」 (no publish state; the 公開 button is the frame's, #43), and nothing outside a page", async () => {
+  it("shows the open page's save state as 「自分だけ」 (no publish state, no 公開 button: publishing is in the …, #344), and nothing outside a page", async () => {
     const a = fakePage(A);
     await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={a} />);
-    // 非公開のページには丸を出さない（公開ボタンの文言で分かる）。文は読み上げのための live region に残る
+    // 非公開のページには丸を出さない。文は読み上げのための live region に残る
     expect(dot()).toBeNull();
     expect(tip()).toBe("自分だけ · 保存済み");
     expect(container!.querySelector(".es-dt .es-st-wrap")?.getAttribute("aria-live")).toBe("polite");
-    // 公開ボタンは枠（#43）が出す。公開のシートが読めていない（この suite では読み込みを無効にしている）間は、丸は「自分だけ」
-    expect(container!.querySelector(".es-pubbtn")).not.toBeNull();
+    // 公開の入口は「…」の「公開…」（#344）。ヘッダーに公開のボタンは無く、未公開のページには状態の札も出さない
+    expect(container!.querySelector(".es-pubbtn")).toBeNull();
+    expect(container!.querySelector(".es-pubstate")).toBeNull();
 
     // 保存済み・保存中は見える文字を出さない（読み上げは丸の live region）。失敗のときだけヘッダーに琥珀の小さな文字
     const saveNote = () => container!.querySelector(".es-dt [data-save-note]");
@@ -818,22 +826,22 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     expect(moreButton()).toBeNull();
   });
 
-  it("opens and closes the … menu with リンクで共有, 書き出し (.md), Google ドキュメントへ, 履歴, 複製 and 削除, moved by the keyboard; none for a page not created yet", async () => {
+  it("opens and closes the … menu with 公開…, リンクで共有, 書き出し (.md), Google ドキュメントへ, 履歴, 複製 and 削除, moved by the keyboard; none for a page not created yet", async () => {
     await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A)} />);
     expect(moreButton()?.getAttribute("aria-expanded")).toBe("false");
     await act(async () => moreButton()!.click());
     expect(moreButton()?.getAttribute("aria-expanded")).toBe("true");
-    // 書き出しは .md と Google ドキュメントの 2 項目。共有しているか分からないときは「共有中」を出さない
-    // 移動できない（入れ先も並べ替える相手も無い）ページには「移動…」を出さない。「ページの情報」は削除の前
-    expect(menuItems().map((item) => item.textContent)).toEqual(["リンクで共有", "書き出し.md", "Google ドキュメントへ", "履歴", "複製", "ページの情報", "削除"]);
-    const [shareItem, exportItem, , , , , deleteItem] = menuItems();
-    expect(document.activeElement).toBe(shareItem);
+    // 先頭は「公開…」（ヘッダーの公開ボタンの代わり。#344）。書き出しは .md と Google ドキュメントの 2 項目。共有しているか分からないときは「共有中」を出さない
+    // 移動できない（入れ先も並べ替える相手も無い）ページには「移動…」を出さない。「ページの情報」は削除の前。タブを足す口の無いページには「タブを追加」を出さない
+    expect(menuItems().map((item) => item.textContent)).toEqual(["公開…", "リンクで共有", "書き出し.md", "Google ドキュメントへ", "履歴", "複製", "ページの情報", "削除"]);
+    const [publishItem, shareItem, , , , , , deleteItem] = menuItems();
+    expect(document.activeElement).toBe(publishItem);
     await press(document.activeElement!, "ArrowDown");
-    expect(document.activeElement).toBe(exportItem);
+    expect(document.activeElement).toBe(shareItem);
     await press(document.activeElement!, "End");
     expect(document.activeElement).toBe(deleteItem);
     await press(document.activeElement!, "ArrowDown");
-    expect(document.activeElement).toBe(shareItem);
+    expect(document.activeElement).toBe(publishItem);
     await press(document.activeElement!, "Escape");
     expect(menu()).toBeNull();
     expect(document.activeElement).toBe(moreButton());
@@ -1247,8 +1255,8 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     expect(nav.push).not.toHaveBeenCalled();
     // 移った先の「…」はふつうに使える
     await act(async () => moreButton()!.click());
-    // 2 ページあるので「移動…」も出る（共有・書き出し 2・履歴・複製・移動…・ページの情報・削除）
-    expect(menuItems()).toHaveLength(8);
+    // 2 ページあるので「移動…」も出る（公開…・共有・書き出し 2・履歴・複製・移動…・ページの情報・削除）
+    expect(menuItems()).toHaveLength(9);
   });
 
   describe("リンクで共有 (#34 第 2 段)", () => {
@@ -1324,7 +1332,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       vi.stubGlobal("fetch", vi.fn());
       const shareItem = async () => {
         await act(async () => moreButton()!.click());
-        const text = menuItems()[0]!.textContent;
+        const text = menuItems().find((item) => item.textContent?.startsWith("リンクで共有"))!.textContent;
         await act(async () => moreButton()!.click());
         return text;
       };
@@ -1701,7 +1709,9 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       expect(shell().rail).toBe("open");
       expect([...rail()!.querySelectorAll("h2, h3")].map((heading) => heading.textContent)).toEqual(["AIと作る"]);
       expect(rail()!.textContent).not.toMatch(/ページ設定|言語|著者|書き出し|削除|発信先|公開|Google/);
-      expect(container!.querySelector(".es-pubbtn")).not.toBeNull();
+      // 公開の入口はヘッダーの「…」（#344）。ヘッダーに公開のボタンも置かない
+      expect(container!.querySelector(".es-pubbtn")).toBeNull();
+      expect(moreButton()).not.toBeNull();
 
       const draft = rail()!.querySelector<HTMLTextAreaElement>('textarea[aria-label="AIへのメッセージ"]')!;
       draft.value = "閉じても残す draft";
@@ -2026,7 +2036,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       restoringServer(calls);
       const shareItem = async () => {
         await act(async () => moreButton()!.click());
-        const text = menuItems()[0]!.textContent;
+        const text = menuItems().find((item) => item.textContent?.startsWith("リンクで共有"))!.textContent;
         await act(async () => moreButton()!.click());
         return text;
       };
@@ -2069,7 +2079,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       // 言語は公開のシートの中（記事の情報）。シートを開いて、その中の言語の欄を見る
       const sheetLang = () => container!.querySelector<HTMLElement>('[role="dialog"][aria-label="公開"] [data-page-lang]');
       const openRail = async () => {
-        if (!sheetLang()) await act(async () => container!.querySelector<HTMLButtonElement>(".es-dt .es-pubbtn")!.click());
+        if (!sheetLang()) await choose("公開…");
         await tick();
       };
       const closeSheet = async () => {
@@ -2423,7 +2433,7 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
     expect(document.activeElement?.getAttribute("aria-label")).toBe("その他");
   });
 
-  it("書式の帯はヘッダーに常設で（＋・画像・録音だけ。書式は選んだ文字の上）、録音は枠が受けて録音から始める画面へ移る", async () => {
+  it("書式の帯はヘッダーに常設で ＋ だけ（画像・録音・書式は出さない。#344）。＋ でブロックの一覧（画像を含む）", async () => {
     nav.pathname = `/p/${PAGE_ID}`;
     const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })));
@@ -2434,6 +2444,27 @@ describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・
     await until(() => container!.querySelector('.es-dt [role="toolbar"]') !== null);
     const bar = container!.querySelector<HTMLElement>('.es-dt [role="toolbar"]')!;
     expect(bar.getAttribute("aria-label")).toBe("書式とブロック");
+    expect([...bar.querySelectorAll("button")].map((button) => button.getAttribute("aria-label"))).toEqual(["ブロックを足す"]);
+    // 端末の下書きを読み終えて書けるようになってから押す
+    await until(() => container!.querySelector(".ProseMirror")?.getAttribute("contenteditable") === "true");
+    await act(async () => bar.querySelector<HTMLButtonElement>('button[aria-label="ブロックを足す"]')!.click());
+    // 画像は ＋ のブロックの一覧から入れる
+    expect(bar.querySelector('button[aria-label="ブロックを足す"]')?.getAttribute("aria-expanded")).toBe("true");
+    expect([...document.querySelectorAll('[role="menu"][aria-label="ブロックを足す"] button')].map((item) => item.textContent)).toContain("画像");
+  });
+
+  it("狭い画面の下端の帯は今のまま（＋・画像・録音）。録音は枠が受けて録音から始める画面へ移る", async () => {
+    narrow = true;
+    nav.pathname = `/p/${PAGE_ID}`;
+    const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })));
+    await mount(
+      { pages: [page(PAGE_ID, "合成の題名")], initialNarrow: true },
+      <PageEditor page={{ id: PAGE_ID, title: "合成の題名", blocks: [{ type: "paragraph", content: [{ type: "text", text: "本文" }] }], revision: 1, updatedAt: "2026-10-31T02:00:00.000Z" }} drafts={drafts} />,
+    );
+    await until(() => container!.querySelector('.es-mtb [role="toolbar"]') !== null);
+    expect(container!.querySelector('.es-dt [role="toolbar"]')).toBeNull();
+    const bar = container!.querySelector<HTMLElement>('.es-mtb [role="toolbar"]')!;
     expect([...bar.querySelectorAll("button")].map((button) => button.getAttribute("aria-label"))).toEqual(["ブロックを足す", "画像", "録音"]);
     await act(async () => bar.querySelector<HTMLButtonElement>('button[aria-label="録音"]')!.click());
     expect(nav.push).toHaveBeenLastCalledWith("/p/new?from=recording");
@@ -2764,6 +2795,14 @@ describe("EditorFrame: 「写真」のパネルと、何も足していない新
   const openPhotos = () => act(async () => photosButton()!.click());
   const tick = () => act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
   const sends = () => calls.filter((call) => call.method !== "GET");
+  /** ヘッダーの「…」の「タブを追加」（タブが 1 つのページには帯が無いので、ここから足す。#344）。 */
+  const addTabFromMenu = async () => {
+    await act(async () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="その他"]')!.click());
+    const item = [...container!.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="その他"] button')].find((button) => button.textContent === "タブを追加");
+    expect(item, "the … has タブを追加").toBeDefined();
+    await act(async () => item!.click());
+    await tick();
+  };
 
   /** 合成のサーバー（ページの作成・保存・写真の一覧・外す・捨てる）。 */
   function server(options: { photos?: string[]; discarded?: boolean; discard?: (id: string) => Response | undefined } = {}) {
@@ -2901,8 +2940,7 @@ describe("EditorFrame: 「写真」のパネルと、何も足していない新
     expect(rows()).toEqual([]);
   });
 
-  it("shows the tab bar on a page made the moment it opens (＋ is held while it is made), and adding a tab keeps the blank page", async () => {
-    // 作る間（POST が返るまで）は ＋ を押せない。帯の場所は先に取ってある
+  it("draws no tab bar on a page made the moment it opens (not even while it is made); …「タブを追加」 adds a tab, and adding a tab keeps the blank page (#344)", async () => {
     let release: () => void = () => undefined;
     const made = new Promise<void>((resolve) => {
       release = resolve;
@@ -2916,18 +2954,16 @@ describe("EditorFrame: 「写真」のパネルと、何も足していない新
     nav.pathname = "/p/new";
     window.history.replaceState(null, "", "/p/new");
     await mount({}, <NewPage />);
-    const add = () => container!.querySelector<HTMLButtonElement>(".es-tabbar .es-tab-add");
-    expect(add()).not.toBeNull();
-    expect(add()!.disabled).toBe(true);
+    // 作る間も、場所取りの空の帯を出さない
+    expect(container!.querySelector(".es-tabbar")).toBeNull();
     await act(async () => release());
     nav.pathname = window.location.pathname;
     await rerender(<NewPage />);
     await tick();
-    // 作ったあと: 帯の ＋ が押せる（再読み込みして /p/{id} を開き直さなくても、タブを足せる）
+    // 作ったあと: タブは 1 つなので帯は無い。「…」の「タブを追加」で足せる（再読み込みして /p/{id} を開き直さなくても）
     expect(window.location.pathname).toBe(`/p/${NEW}`);
-    expect(add()!.disabled).toBe(false);
-    await act(async () => add()!.click());
-    await tick();
+    expect(container!.querySelector(".es-tabbar")).toBeNull();
+    await addTabFromMenu();
     expect(sends().filter((call) => call.url === `/api/pages/${NEW}/tabs`)).toHaveLength(1);
     expect(nav.push).toHaveBeenCalledWith(`/p/${SECOND_TAB}`);
     // タブを足したページは、何も足していない新しいページではない: 印が外れ、次のタブへ移っても捨てない
@@ -2938,7 +2974,7 @@ describe("EditorFrame: 「写真」のパネルと、何も足していない新
     expect(sends().filter((call) => call.url.endsWith("/discard"))).toEqual([]);
   });
 
-  it("a page made inside a folder (/p/new?in=) keeps that folder for the tab bar, so the tab added from it lands in the same folder", async () => {
+  it("a page made inside a folder (/p/new?in=) keeps that folder for adding a tab, so the tab added from it lands in the same folder", async () => {
     const FOLDER = "00000000-0000-4000-8000-0000000000f5";
     server();
     nav.pathname = "/p/new";
@@ -2951,8 +2987,7 @@ describe("EditorFrame: 「写真」のパネルと、何も足していない新
     await rerender(<NewPage />);
     await tick();
     expect(window.location.pathname).toBe(`/p/${NEW}`);
-    await act(async () => container!.querySelector<HTMLButtonElement>(".es-tabbar .es-tab-add")!.click());
-    await tick();
+    await addTabFromMenu();
     // 足したタブの行も、フォルダの中（深さ 1）に出る。ルート（深さ 0）には出ない
     const depths = [...container!.querySelectorAll(".es-sb-list li")].map((li) => {
       let depth = 0;

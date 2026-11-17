@@ -11,8 +11,9 @@ export type ShellToolsProps = {
   /** 「行の種類」のボタンに見せる、いまの行の種類（既定は「テキスト」）。見える文字はボタンの名前にも入る。 */
   textType?: string;
   /**
-   * 書式（行の種類・B・I・リンク・見出し・箇条書き）を出さず、＋（ブロックを足す）・画像・録音だけにする。
-   * 書式は選んだ文字の上（ShellBubbleMenu）が持つ。既定は false（全部）。
+   * 書式（行の種類・B・I・リンク・見出し・箇条書き）を出さない形。書式は選んだ文字の上（ShellBubbleMenu）が持つ。既定は false（全部）。
+   * ヘッダー（ShellTools）では ＋（ブロックを足す）だけ（#344。画像は ＋ の一覧・写真パネル・ドラッグ・貼り付け、録音は一覧の ＋「録音から」）。
+   * 下端の帯（ShellMobileToolbar）では今のまま ＋・画像・録音。
    */
   compact?: boolean;
 };
@@ -22,7 +23,12 @@ export type ShellToolsProps = {
  * 書式は選んだ文字の上にも出る（ShellBubbleMenu / ShellSelectionBar）。
  * キーボードは WAI-ARIA の toolbar（Tab の停止点は 1 つ、← → と Home・End で中を動く。useRovingFocus）。
  */
-export function ShellTools({ onAction, blockMenuOpen, textType = "テキスト", compact = false }: ShellToolsProps) {
+export function ShellTools(props: ShellToolsProps) {
+  return <Tools {...props} media={false} />;
+}
+
+/** `media`: compact のときに画像・録音も並べるか（下端の帯だけ true）。compact でない形は常に全部。 */
+function Tools({ onAction, blockMenuOpen, textType = "テキスト", compact = false, media }: ShellToolsProps & { media: boolean }) {
   const roving = useRovingFocus<HTMLDivElement>();
   const fire = (action: ShellToolAction) => () => onAction?.(action);
   if (compact) {
@@ -31,12 +37,16 @@ export function ShellTools({ onAction, blockMenuOpen, textType = "テキスト",
         <button type="button" className="es-tb" aria-label="ブロックを足す" title="ブロックを足す" aria-haspopup="menu" aria-expanded={blockMenuOpen ?? false} onClick={fire("add-block")}>
           <Icon name="plus" />
         </button>
-        <button type="button" className="es-tb" aria-label="画像" onClick={fire("image")}>
-          <Icon name="img" />
-        </button>
-        <button type="button" className="es-tb" aria-label="録音" onClick={fire("record")}>
-          <Icon name="mic" />
-        </button>
+        {media && (
+          <>
+            <button type="button" className="es-tb" aria-label="画像" onClick={fire("image")}>
+              <Icon name="img" />
+            </button>
+            <button type="button" className="es-tb" aria-label="録音" onClick={fire("record")}>
+              <Icon name="mic" />
+            </button>
+          </>
+        )}
       </div>
     );
   }
@@ -85,7 +95,7 @@ export function ShellTools({ onAction, blockMenuOpen, textType = "テキスト",
 export function ShellMobileToolbar(props: ShellToolsProps) {
   return (
     <div className="es-mtb" role="region" aria-label="道具の帯">
-      <ShellTools {...props} />
+      <Tools {...props} media />
     </div>
   );
 }
