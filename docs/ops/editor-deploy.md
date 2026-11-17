@@ -175,7 +175,7 @@ AI（チャット・手順の段階・翻訳）は Anthropic の Messages API（
 
 **Web 検索（#283）**: チャットのサーバー経路は Anthropic のサーバー側 `web_search`（基本版の `web_search_20250305` を全モデルで使う。動的な絞り込みの `web_search_20260209` 以降は使わない）を道具に足し、AI が必要なときだけ検索する。**1 回の依頼で 5 回まで**（`max_uses: 5`。依頼のループ全体の回数を応答の `usage.server_tool_use.web_search_requests` で足し、使い切ったら道具を出さない）。検索の呼び出し・結果・引用つきの文のブロックは次の往復へそのまま返し、`pause_turn` は応答をそのまま返して続ける。出典（題名と URL）は返答の末尾にだけ付け、本文には入れない。会話に残すのは道具名・成否・件数だけ（検索語・結果の本文は残さない）。設定の「Web を検索する」（`editor_settings.web_search`、既定 true）で切れる。`web_fetch` は入れない（取得したページに紛れた指示で本文を外の URL へ持ち出させないため）。Mac の CLI の経路では数えない。
 
-1 回の呼び出しの時間切れ（`EDITOR_AI_TIMEOUT_MS`、既定 120 秒）は `deploy.sh` から渡さない（アプリの既定のまま）。出力の上限（`EDITOR_AI_MAX_TOKENS`。思考の分を含む）は上の表の `AI_MAX_TOKENS` から渡す（#276）。Cloud Run の要求の時間切れは 300 秒を土台に、手順（§11）や文字起こし（§12）が有効なら、その 1 回分が収まる長さまで延ばす（`lib.sh` の `service_request_timeout`）。自動の再試行はしない。チャットは上流の失敗（401・429・529・5xx・時間切れ）を `failed`（`ai_auth`・`ai_rate_limit` などの短い code）で終える。
+1 回の呼び出しの時間切れ（`EDITOR_AI_TIMEOUT_MS`、既定 120 秒）は `deploy.sh` から渡さない（アプリの既定のまま）。出力の上限（`EDITOR_AI_MAX_TOKENS`。思考の分を含む）は上の表の `AI_MAX_TOKENS` から渡す（#276）。Cloud Run の要求の時間切れは 300 秒を土台に、手順（§11）や文字起こし（§12）が有効なら、その 1 回分が収まる長さまで延ばす（`lib.sh` の `service_request_timeout`）。自動の再試行はしない。チャットは上流の失敗（401・429・529・5xx・時間切れ）を `failed`（`ai_auth`・`ai_rate_limit` などの短い code）で終える。HTTP の失敗は本文の `error.type` と文から種類を決め、クレジット残高の不足・利用上限への到達（Anthropic は 400 か 402 で返す）は `ai_billing`、入力が長すぎる（400 の文か 413）は `ai_too_long`、それ以外の 400 は `ai_bad_request` にする。ログ `editor-web: anthropic request failed` に出るのは `kind`・`status`・`type`（決まった一覧の `error.type`。一覧の外は `other`）だけで、文・鍵・本文は出さない。**`kind: 'billing'` が出たら Anthropic Console の Billing（残高）と Limits を見る**（補充すれば再配備なしで戻る）。
 
 ### 有効にする
 
@@ -287,7 +287,7 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
   - `editor-web: sweep could not requeue every step`: 掃除の積み直しの一部が失敗した（次の回でまた拾う）。
   - `editor-web: sweep read only the oldest queued steps`: queued の段階が 1,000 件を超えて残っている（掃除は古い順に 100 件ずつ 10 回まで読む）。Cloud Tasks のキューが止まっていないか（`gcloud tasks queues describe`）を見る。
 - **段階の失敗の理由**: 帯（`GET /api/pages/{id}/steps` の `errorCode`）。`lease_expired` は実行中に worker が落ちて lease が切れたもの。AI の分は次のとおり（再試行するものは Cloud Tasks が自動で、しないものはその段階で失敗にする）:
-  - 再試行しない: `ai_unavailable`（`EDITOR_AI_MODE` が無効・鍵が無い）・`quota_exceeded`（今月の上限に達した。モデルを呼ぶ前に止めた）・`ai_auth`（鍵が通らない。401・402・403）・`ai_bad_request`・`invalid_output`（答えが使える形でなかった）・`output_too_long`（出力の上限で切れ、続きを 8 回頼んでも終わらなかった）・`unknown_step`
+  - 再試行しない: `ai_unavailable`（`EDITOR_AI_MODE` が無効・鍵が無い）・`quota_exceeded`（今月の上限に達した。モデルを呼ぶ前に止めた）・`ai_auth`（鍵が通らない。401・403）・`ai_billing`（クレジット残高の不足・利用上限。400 の文か 402）・`ai_too_long`（入力が文脈の上限を超えた。400 の文か 413）・`ai_bad_request`（それ以外の 400）・`invalid_output`（答えが使える形でなかった）・`output_too_long`（出力の上限で切れ、続きを 8 回頼んでも終わらなかった）・`unknown_step`
   - 再試行する: `ai_rate_limit`（429）・`ai_overloaded`（529）・`ai_server`（5xx）・`ai_timeout`・`ai_network`・`usage_unavailable`（DB に届かず使用量を数えられなかった）
 - **段階の費用**: §10 の使用量（`GET /api/ai/usage`）にチャットと一緒に入る（1 人・1 か月の見込みの上限は同じものが効く）。
 - **Cloud Scheduler のジョブ**の最後の実行: 成功は 200 `{"requeued": n}`。

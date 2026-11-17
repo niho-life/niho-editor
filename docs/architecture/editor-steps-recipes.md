@@ -225,6 +225,8 @@ T5 の実行器で code が 11 個増える。**文言はここに書かない**
 | `quota_exceeded` | しない | 今月の上限。**設定の「使用量」へ**（上限を上げるか来月まで待つ）。`[fake]` でなく実際にモデルを呼ぶ前に止めているので、費用は増えていない |
 | `invalid_output` | しない | AI の答えが本文にならなかった。**やり直す**が効く（同じ入力で結果が変わる） |
 | `ai_auth`・`ai_bad_request` | しない | 運用が直す。`ai_unavailable` と同じ見せ方でよい（利用者に鍵・要求の話をしない） |
+| `ai_billing` | しない | Anthropic のクレジット残高の不足・利用上限への到達（400 の文か 402 で見分ける）。**運用が補充する**まで、やり直しても同じなので `WAIT`（やり直しのボタンを出さない）。帯は「利用残高（クレジット）が足りないか、利用の上限に達した」と言う |
+| `ai_too_long` | しない | 入力が文脈の上限を超えた（400 の文か 413 で見分ける）。`FIX` ＋ `settings: "steps"`。録音を分けるか、手順の指示・お手本を短くすると通る。`ai_bad_request` は残高・長さ以外の 400 なので「短くすると直る」とは言わない |
 | `output_too_long` | しない | 続きを 8 回使い切った。**段階の指示で範囲を分ける**（設定の「手順」へ案内し、やり直しのボタンも出す） |
 | `usage_unavailable`・`ai_rate_limit`・`ai_overloaded`・`ai_server`・`ai_timeout`・`ai_network` | する | 待つ。3 回とも失敗したら「時間をおいて、やり直してください」 |
 | 既存: `unknown_recipe`・`unknown_step` | しない | 手順が変わった。設定の「手順」を見るか、作り直す |
@@ -246,7 +248,9 @@ T5 の実行器で code が 11 個増える。**文言はここに書かない**
 
 #### `output_too_long`（T5 の続きを使い切ったとき）
 
-T5 が旧 NIHO docs の続きを実装した（#125）。出力が上限で切れたら書きかけを渡して続きを書かせ、繋ぎ目は docs-core の
+T5 が旧 NIHO docs の続きを実装した（#125）。出力が上限で切れたら、同じ会話の続きとして頼む（ここまでの答えを
+assistant の発言にし、docs-core の `CONTINUATION_INSTRUCTION` を user で足す。Mac の CLI の続きと同じ形）。
+assistant で終える書きかけ（prefill）は claude-sonnet-5-5 を含む Claude 4.6 以降のモデルが 400 で断るので使わない。繋ぎ目は docs-core の
 `joinContinuation`（4〜400 字の最長一致）で繋ぐ。**8 回まで**で、それでも終わらなければ `output_too_long` で失敗する。
 
 **`FIX` ＋ `settings: "steps"`**（`invalid_output`・`ai_bad_request` と同じ扱い）。文は

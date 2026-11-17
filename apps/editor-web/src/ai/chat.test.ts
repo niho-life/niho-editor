@@ -249,8 +249,10 @@ describe("one chat turn", () => {
   it("maps the upstream failure to a short code and never carries its text", async () => {
     for (const [kind, code] of [
       ["auth", "ai_auth"],
+      ["billing", "ai_billing"],
       ["rate_limit", "ai_rate_limit"],
       ["timeout", "ai_timeout"],
+      ["too_long", "ai_too_long"],
     ] as const) {
       const failing = {
         converse: async () => {

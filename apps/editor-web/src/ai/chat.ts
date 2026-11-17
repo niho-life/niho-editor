@@ -1,5 +1,5 @@
 import type { About, GlossaryEntry } from "@niho/docs-core";
-import { AnthropicError, type AnthropicClient, type ToolCall } from "./anthropic";
+import { AI_FAILURE_CODES, AnthropicError, type AnthropicClient, type ToolCall } from "./anthropic";
 import { MAX_CHAT_INPUT_CHARS } from "./chat-limits";
 import { selectionPromptSection, selectionRule, type ChatSelection } from "./chat-selection";
 import { MAX_COMPOSE_GUIDE_CHARS } from "./compose";
@@ -457,18 +457,6 @@ export type ChatRunner = {
   webSearch?: ChatWebSearch;
 };
 
-/** 上流の失敗の種類から会話に残す code（ai-executor.ts と同じ名前）。 */
-const ERROR_CODES: Record<string, string> = {
-  auth: "ai_auth",
-  rate_limit: "ai_rate_limit",
-  overloaded: "ai_overloaded",
-  server: "ai_server",
-  timeout: "ai_timeout",
-  network: "ai_network",
-  bad_request: "ai_bad_request",
-  invalid_output: "invalid_output",
-};
-
 /** 作業の行に出す語句の長さ（文字）。 */
 const DETAIL_QUERY_CHARS = 20;
 
@@ -604,7 +592,7 @@ export async function runChatTurn(options: ChatRunner): Promise<ChatRun> {
     } catch (error) {
       if (error instanceof AnthropicError) {
         if (error.usage) await options.onUsage?.(error.usage);
-        return finish({ reply, items, result: "failed", code: ERROR_CODES[error.kind] ?? "ai_failed" });
+        return finish({ reply, items, result: "failed", code: AI_FAILURE_CODES[error.kind] ?? "ai_failed" });
       }
       throw error;
     }

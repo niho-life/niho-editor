@@ -1,4 +1,4 @@
-import { MAX_CONTINUATIONS } from "@niho/docs-core";
+import { CONTINUATION_INSTRUCTION, MAX_CONTINUATIONS } from "@niho/docs-core";
 import { describe, expect, it, vi } from "vitest";
 import type { AiUsageDelta, AiUsageTotals, Block, OwnerId } from "@niho/editor-store";
 import { AnthropicError, type AnthropicClient } from "../ai/anthropic";
@@ -236,12 +236,14 @@ describe("the real step executor", () => {
   it("maps the upstream failure to a short code and keeps the retryable ones retryable", async () => {
     const cases = [
       ["auth", "ai_auth", false],
+      ["billing", "ai_billing", false],
       ["rate_limit", "ai_rate_limit", true],
       ["overloaded", "ai_overloaded", true],
       ["server", "ai_server", true],
       ["timeout", "ai_timeout", true],
       ["network", "ai_network", true],
       ["bad_request", "ai_bad_request", false],
+      ["too_long", "ai_too_long", false],
       ["invalid_output", "invalid_output", false],
     ] as const;
     for (const [kind, code, retryable] of cases) {
@@ -354,9 +356,15 @@ describe("the real step executor", () => {
       { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "合成の見出し" }] },
       { type: "paragraph", content: [{ type: "text", text: "合成の本文" }] },
     ]);
-    // 2 通目には、ここまでの答えを assistant の書きかけとして渡す
+    // 2 通目は同じ会話の続き: ここまでの答えを assistant の発言にし、続きの指示を user で足す
+    // （assistant で終える書きかけ＝prefill は claude-sonnet-5-5 が 400 で断る）
     expect(client.calls).toHaveLength(2);
-    expect(client.calls[1]!.messages[1]).toEqual({ role: "assistant", content: head });
+    expect(client.calls[1]!.messages).toEqual([
+      client.calls[0]!.messages[0],
+      { role: "assistant", content: head },
+      { role: "user", content: CONTINUATION_INSTRUCTION },
+    ]);
+    for (const call of client.calls) expect((call.messages.at(-1) as { role: string }).role).toBe("user");
     // どちらの呼び出しも使用量に数え、帯に出す数は合計
     expect(usage.records).toHaveLength(2);
     expect(output.usage).toEqual({ inputTokens: 2_200, outputTokens: 600, model: "claude-sonnet-5-5" });

@@ -136,14 +136,14 @@ describe("createAnthropicClient (the shared HTTP path)", () => {
     }
   });
 
-  it("maps HTTP failures to a kind and the status, without reading or keeping the body", async () => {
+  it("maps HTTP failures to a kind and the status, without keeping the body", async () => {
     const cases: [number, string][] = [
       [400, "bad_request"],
       [401, "auth"],
-      [402, "auth"],
+      [402, "billing"],
       [403, "auth"],
       [404, "bad_request"],
-      [413, "bad_request"],
+      [413, "too_long"],
       [429, "rate_limit"],
       [500, "server"],
       [503, "server"],
@@ -159,7 +159,58 @@ describe("createAnthropicClient (the shared HTTP path)", () => {
       // 自動の再試行はしない
       expect(calls).toHaveLength(1);
     }
-    expect(log).toHaveBeenCalledWith("editor-web: anthropic request failed", { kind: "overloaded", status: 529 });
+    // 一覧の外の error.type は other としてだけ出す
+    expect(log).toHaveBeenCalledWith("editor-web: anthropic request failed", { kind: "overloaded", status: 529, type: "other" });
+    expect(JSON.stringify([log.mock.calls])).not.toContain(SECRET_TEXT);
+  });
+
+  it("tells a billing or too-long rejection apart from other 400s, without keeping or logging the message", async () => {
+    const error = (type: string, message: string) => JSON.stringify({ type: "error", error: { type, message: `${message} ${SECRET_TEXT} ${KEY}` } });
+    const cases: [string, number, string, string, string | undefined][] = [
+      ["credit balance", 400, error("invalid_request_error", "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."), "billing", "invalid_request_error"],
+      ["usage limits", 400, error("invalid_request_error", "You have reached your specified API usage limits. You will regain access on 2026-12-01 at 00:00 UTC."), "billing", "invalid_request_error"],
+      ["billing_error", 402, error("billing_error", "synthetic"), "billing", "billing_error"],
+      ["prompt too long", 400, error("invalid_request_error", "prompt is too long: 1200000 tokens > 1000000 maximum"), "too_long", "invalid_request_error"],
+      ["context limit", 400, error("invalid_request_error", "input length and `max_tokens` exceed context limit: 990000 + 32000 > 1000000"), "too_long", "invalid_request_error"],
+      ["request_too_large", 413, error("request_too_large", "Request exceeds the maximum allowed number of bytes."), "too_long", "request_too_large"],
+      ["other 400", 400, error("invalid_request_error", "messages.0.content: Field required"), "bad_request", "invalid_request_error"],
+      // 文で見分けるのは 400 だけ（429 の文に usage limits が入っていても混み合いのまま）
+      ["429 with the words", 429, error("rate_limit_error", "This request would exceed your usage limits for tokens per minute."), "rate_limit", "rate_limit_error"],
+      ["unknown type", 400, error("made_up_error", "credit balance"), "billing", "other"],
+      ["not JSON", 400, `credit balance ${SECRET_TEXT} ${KEY}`, "bad_request", undefined],
+      // 上限を超える本文は読み切らない（読めた分が JSON でないので status だけで決める）
+      ["too large body", 400, error("invalid_request_error", `credit balance ${"x".repeat(20_000)}`), "bad_request", undefined],
+    ];
+    for (const [label, status, body, kind, type] of cases) {
+      log.mockClear();
+      const { fetch } = fakeFetch(() => new Response(body, { status, headers: { "content-type": "application/json" } }));
+      const failed = await failureOf(createAnthropicClient({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: KEY }, fetch }).complete({ ...ASK }));
+      expect([failed.kind, failed.status], label).toEqual([kind, status]);
+      expect(failed.retryable, label).toBe(kind === "rate_limit");
+      expect(log, label).toHaveBeenCalledWith("editor-web: anthropic request failed", { kind, status, ...(type ? { type } : {}) });
+      const exposed = JSON.stringify([log.mock.calls, failed, String(failed), failed.stack]);
+      expect(exposed, label).not.toContain(SECRET_TEXT);
+      expect(exposed, label).not.toContain(KEY);
+      expect(exposed, label).not.toContain("credit");
+    }
+  });
+
+  it("returns the caller's reason when the caller aborts while the failure body is read", async () => {
+    const controller = new AbortController();
+    const reason = new Error("synthetic caller abort");
+    const { fetch } = fakeFetch((call) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(stream) {
+          // 本物の fetch と同じく、中断されたら本文の読み取りも失敗させる
+          call.init.signal?.addEventListener("abort", () => stream.error(new DOMException("aborted", "AbortError")));
+          stream.enqueue(new TextEncoder().encode('{"type":"error","error":{"type":"invalid_request_error",'));
+          controller.abort(reason);
+        },
+      });
+      return new Response(body, { status: 400, headers: { "content-type": "application/json" } });
+    });
+    const client = createAnthropicClient({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: KEY }, fetch });
+    await expect(client.complete({ ...ASK, signal: controller.signal })).rejects.toBe(reason);
   });
 
   it("fails with invalid_output and a short reason on an empty, truncated or refused answer and on a body that is not a message", async () => {
@@ -408,6 +459,8 @@ describe("createAnthropicClient.converse (streaming)", () => {
     expect(error.kind).toBe("server");
     expect(error.message).not.toContain(SECRET_TEXT);
     expect(JSON.stringify(log.mock.calls)).not.toContain(SECRET_TEXT);
+    // ログには決まった一覧のエラーの種類だけ出す
+    expect(log).toHaveBeenCalledWith("editor-web: anthropic request failed", { kind: "server", type: "overloaded_error" });
   });
 
   it("fails as invalid_output when the tool input is broken JSON or the stream ends early", async () => {
