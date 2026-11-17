@@ -274,17 +274,17 @@ describe("EditorShell のパネルの配置（dock）", () => {
 
   it("アプリ名は左上端、設定は左下（settings を渡したとき）。左上が一覧なら一覧の上の 1 行の左、それ以外は枠の帯（skip link の次）。左のドックが細い列なら中央のヘッダーの左を空ける（data-left=none）", () => {
     const real = (dock: EditorShellDock) => (
-      <EditorShell sidebar={<ShellSidebar items={[]} search={{ open: false, value: "", onOpen: vi.fn(), onClose: vi.fn(), onChange: vi.fn() }} panel />} header={<header className="es-dt">ヘッダー</header>} rail={<ShellRail>AI</ShellRail>} sidebarOpen railOpen settings={{ onOpen: () => undefined }} dock={dock}>
+      <EditorShell sidebar={<ShellSidebar items={[]} search={{ open: false, value: "", onOpen: vi.fn(), onClose: vi.fn(), onChange: vi.fn() }} />} header={<header className="es-dt">ヘッダー</header>} rail={<ShellRail>AI</ShellRail>} sidebarOpen railOpen settings={{ onOpen: () => undefined }} dock={dock}>
         <p>本文</p>
       </EditorShell>
     );
     const brands = (root: HTMLElement) => [...root.querySelectorAll(".es-brand")].map((node) => node.parentElement!.className);
     const { host, render } = mount(real(dockOf()));
     const root = host.querySelector<HTMLElement>(".es-root")!;
-    // 既定（左の一番上が一覧）: 「Editor ⋮⋮ …… 検索」の 1 行。枠の帯は出さない
+    // 既定（左の一番上が一覧）: 「Editor …… 検索」の 1 行。枠の帯は出さない
     expect([...root.children].map((node) => node.className)).toEqual(["es-skip", "es-ws", "es-setbar"]);
     expect(brands(root)).toEqual(["es-sb-top"]);
-    expect([...root.querySelector(".es-sb-top")!.children].map((node) => node.className)).toEqual(["es-brand", "es-grip", "es-sp", "es-ib"]);
+    expect([...root.querySelector(".es-sb-top")!.children].map((node) => node.className)).toEqual(["es-brand", "es-sp", "es-ib"]);
     expect(root.querySelector(".es-sb")!.getAttribute("data-brand")).toBe("true");
     const settings = root.querySelector(".es-setbar .es-sb-settings");
     expect(settings?.getAttribute("aria-label")).toBeNull();
@@ -298,7 +298,7 @@ describe("EditorShell のパネルの配置（dock）", () => {
     );
     expect(brands(root)).toEqual([]);
     expect(root.querySelector(".es-sb-top .es-sb-find")).not.toBeNull();
-    // 一覧を右のドックへ移した・左の一番上が AI: アプリ名は枠の帯。一覧は上の行にアプリ名を出さない
+    // 保存済み配置で左の一番上に一覧がない場合: アプリ名は枠の帯
     for (const docks of [
       { left: [], right: [{ id: "list", size: 1 }, { id: "ai", size: 1 }] },
       { left: [{ id: "ai", size: 1 }, { id: "list", size: 1 }], right: [] },
@@ -527,15 +527,6 @@ describe("EditorShell のパネルの配置（dock）", () => {
     expect(host.querySelector(".es-ghost")!.textContent).toBe("");
     drag(root, "drop", photos, { x: 1650, y: 800 });
     expect(dock.onMove).toHaveBeenLastCalledWith("photos", { side: "right", at: "bottom" });
-    // 一覧を空のドックへ（ほかのパネルが無ければドック全体）
-    const empty = dockOf({ docks: { left: [{ id: "list", size: 1 }], right: [] } }, { list: true, ai: false, page: false, photos: false });
-    const { host: lone } = mount(<Shell dock={empty} railOpen={false} pageOpen={false} photosOpen={false} />);
-    const list = transfer({ [SHELL_DND.list]: "list" });
-    drag(lone.querySelector(".es-root")!, "dragover", list, { x: 1650, y: 800 });
-    expect(lone.querySelector(".es-ghost")!.textContent).toBe("");
-    expect(lone.querySelector<HTMLElement>(".es-ghost")!.style.height).toBe("888px");
-    drag(lone.querySelector(".es-root")!, "drop", list, { x: 1650, y: 800 });
-    expect(empty.onMove).toHaveBeenLastCalledWith("list", { side: "right", at: "top" });
   });
 });
 
@@ -720,18 +711,15 @@ describe("一覧の右に並べる操作・行の削除・パネルの移動（S
     expect(data.store).toEqual({ "text/plain": "b", [SHELL_DND.page]: "b" });
   });
 
-  it("panel を渡すと、上段を掴んで動かせる（移すメニューは無い。ドラッグだけ）", () => {
-    const { host } = mount(<ShellSidebar items={items} panel />);
+  it("一覧の上段はドラッグ不可で、ハンドルを表示しない", () => {
+    const { host } = mount(<ShellSidebar items={items} />);
     const top = host.querySelector<HTMLElement>(".es-sb-top")!;
-    expect(top.getAttribute("draggable")).toBe("true");
-    expect(top.querySelector(".es-grip")).not.toBeNull();
+    expect(top.hasAttribute("draggable")).toBe(false);
+    expect(top.querySelector(".es-grip")).toBeNull();
     const data = transfer();
     drag(top, "dragstart", data);
-    expect(data.store[SHELL_DND.list]).toBe("list");
+    expect(data.store).toEqual({});
     expect(host.querySelector('button[aria-label="一覧のメニュー"]')).toBeNull();
-    const plain = mount(<ShellSidebar items={items} />).host.querySelector<HTMLElement>(".es-sb-top")!;
-    expect(plain.hasAttribute("draggable")).toBe(false);
-    expect(plain.querySelector(".es-grip")).toBeNull();
   });
 });
 
