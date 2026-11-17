@@ -113,6 +113,22 @@ export function aiStopText(code: string | null): string {
   return (code !== null && AI_STOP_TEXT[code]) || AI_TEXT.stopped;
 }
 
+/**
+ * 失敗の理由（resultCode。ai/anthropic.ts の AI_FAILURE_CODES）ごとの言い方。無い code は AI_TEXT.chatFailed。
+ * 「もう一度」で直らないもの（残高・鍵・長さ）は、もう一度を勧めない。
+ */
+export const AI_FAIL_TEXT: Record<string, string> = {
+  ai_billing: "AI の利用残高（クレジット）が足りないか、利用の上限に達したため答えられませんでした。補充されるまで AI は使えません",
+  ai_auth: "AI の鍵が使えなかったため答えられませんでした。設定が直るまで AI は使えません",
+  ai_too_long: "会話や資料が長すぎて AI が受け付けませんでした。会話を軽量化するか、新しい会話で頼んでください",
+  ai_rate_limit: "AI が混み合っています。少し待ってからもう一度お試しください",
+  ai_overloaded: "AI が混み合っています。少し待ってからもう一度お試しください",
+};
+
+export function aiFailText(code: string | null): string {
+  return (code !== null && AI_FAIL_TEXT[code]) || AI_TEXT.chatFailed;
+}
+
 export const AI_TOOL_TEXT: Record<string, string> = {
   list_pages: "ページを見ました",
   read_page: "読みました",
@@ -893,7 +909,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged }: A
       if (generation !== generationRef.current) return;
       setStatus(answer.resultCode === "revision_conflict" ? "ページが更新されました。もう一度お試しください" :
         native && macRoute !== "server" && answer.resultCode === "write_refused" ? (sent ? AI_TEXT.nativeRefusedSelection : AI_TEXT.nativeRefused) :
-          answer.result === "failed" ? AI_TEXT.chatFailed : answer.result === "stopped" ? aiStopText(answer.resultCode) : "");
+          answer.result === "failed" ? aiFailText(answer.resultCode) : answer.result === "stopped" ? aiStopText(answer.resultCode) : "");
       settled = answer.result === "done" && answer.resultCode === null;
       if (answer.conversation) {
         const summary: AiChatSummary = { id: answer.conversation.id, updatedAt: new Date().toISOString(), messages: thread.length + 2, lastText: answer.reply };
@@ -967,7 +983,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged }: A
       const summary = answer.reply.trim();
       if (answer.result !== "done" || summary.length === 0) {
         setText(keptDraft);
-        setStatus(answer.result === "stopped" ? aiStopText(answer.resultCode) : AI_TEXT.chatFailed);
+        setStatus(answer.result === "stopped" ? aiStopText(answer.resultCode) : answer.result === "failed" ? aiFailText(answer.resultCode) : AI_TEXT.chatFailed);
         return;
       }
       const handoff = `前の会話の要約:\n${summary}${keptDraft.trim() ? `\n\n${keptDraft}` : ""}`;

@@ -91,6 +91,8 @@ function messageOf(error: unknown): string {
     quota_exceeded: "今月のAPI利用上限に達しています。",
     ai_unavailable: "英語案を作るAPIを利用できません。設定を確認してください。",
     ai_rate_limit: "APIが混み合っています。候補は採用されていません。時間をおいて新しく実行してください。",
+    ai_billing: "AIの利用残高（クレジット）が足りないか、利用の上限に達しています。補充されるまで英語案を作れません。",
+    ai_too_long: "翻訳対象が長すぎてAIが受け付けませんでした。ページを分けてください。",
   };
   return (error.code && messages[error.code]) || "翻訳処理を完了できませんでした。原文と既存の英語版は変更していません。";
 }

@@ -1,4 +1,4 @@
-import { MAX_CONTINUATIONS, estimateTokenCostUsd, joinContinuation } from "@niho/docs-core";
+import { CONTINUATION_INSTRUCTION, MAX_CONTINUATIONS, estimateTokenCostUsd, joinContinuation } from "@niho/docs-core";
 import {
   DEFAULT_EDITOR_SETTINGS,
   stepBlocksText,
@@ -11,7 +11,7 @@ import {
   type OwnerId,
   type ReferencePage,
 } from "@niho/editor-store";
-import { AnthropicError, maxTokensLimit, timeoutMs, type AnthropicErrorKind } from "../ai/anthropic";
+import { AI_FAILURE_CODES, AnthropicError, maxTokensLimit, timeoutMs } from "../ai/anthropic";
 import { buildComposePrompt, composeBlocks, composeMaxTokens, composeSourceUsedChars, parseComposeOutput, partialComposeBlocks, type ComposeInput, type ComposeSource } from "../ai/compose";
 import type { AiComposeBackend } from "../ai/config";
 import type { AiUsageReport } from "../ai/model";
@@ -57,18 +57,6 @@ export type AiStepExecutorDeps = {
 
 /** Cloud Tasks は最大 30 分。6 分を保存・終了処理用に残して、AI 呼び出しは 24 分で打ち切る。 */
 export const MAX_STEP_GENERATION_MS = 24 * 60 * 1000;
-
-/** 上流の失敗の種類から段階の失敗の code（`^[a-z0-9_]{1,64}$`）。 */
-const ERROR_CODES: Record<AnthropicErrorKind, string> = {
-  auth: "ai_auth",
-  rate_limit: "ai_rate_limit",
-  overloaded: "ai_overloaded",
-  server: "ai_server",
-  timeout: "ai_timeout",
-  network: "ai_network",
-  bad_request: "ai_bad_request",
-  invalid_output: "invalid_output",
-};
 
 function count(value: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
@@ -167,9 +155,13 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
       let outputTokens = 0;
       let truncated = false;
       for (let round = 0; round <= MAX_CONTINUATIONS; round++) {
-        // 2 回目からは、ここまでの答えを assistant の書きかけとして渡す（モデルは止まった所の続きから書く）
+        // 2 回目からは、同じ会話の続きとして頼む: ここまでの答えを assistant の発言にし、続きの指示を user で足す
+        // （docs-core の CONTINUATION_INSTRUCTION。Mac の CLI の続きと同じ）。assistant で終える書きかけ（prefill）は
+        // claude-sonnet-5-5 を含む Claude 4.6 以降のモデルが 400 で断るので使わない。重なりは joinContinuation が除く
         const messages: unknown[] =
-          round === 0 ? [{ role: "user", content: prompt.user }] : [{ role: "user", content: prompt.user }, { role: "assistant", content: text }];
+          round === 0
+            ? [{ role: "user", content: prompt.user }]
+            : [{ role: "user", content: prompt.user }, { role: "assistant", content: text }, { role: "user", content: CONTINUATION_INSTRUCTION }];
         if (round > 0 && overLimit(await usage.get(owner, month), limitUsd)) throw new StepError("quota_exceeded", false);
         // 呼び出しの最大時間を丸ごと予約し、Cloud Tasks の期限前に runner が結果を保存できるようにする。
         if (monotonicNowMs() - startedAt + timeoutMs(env) > stepBudgetMs) {
@@ -189,7 +181,7 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
         } catch (error) {
           // 応答が届いたのに使えなかった分も課金されているので記録する
           if (error instanceof AnthropicError && error.usage) await usage.record(owner, month, usageDelta(backend, error.usage));
-          if (error instanceof AnthropicError) throw new StepError(ERROR_CODES[error.kind], error.retryable);
+          if (error instanceof AnthropicError) throw new StepError(AI_FAILURE_CODES[error.kind], error.retryable);
           // 中断（lease を失った・取消）は runner が世代で見分ける
           throw error;
         }

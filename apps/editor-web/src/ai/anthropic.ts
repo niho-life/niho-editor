@@ -6,7 +6,10 @@ import type { AiUsageReport } from "./model";
  *
  * - 呼ぶのは固定の URL（`ANTHROPIC_MESSAGES_URL`）だけ。設定では変えられない。転送（redirect）も追わない。
  * - 鍵は要求のたびに `ANTHROPIC_API_KEY` から読む（import のときに固めない）。鍵・プロンプト・本文・応答の本文は、
- *   エラー・例外・ログに出さない（ログは kind と、HTTP ステータスか invalid_output の理由の code だけ）。
+ *   エラー・例外・ログに出さない（ログは kind と、HTTP ステータスか invalid_output の理由の code と、決まった一覧の
+ *   エラーの種類 `type` だけ）。
+ * - HTTP の失敗は、本文の `error.type` と文（message）から種類だけを決める（クレジット不足・利用上限は `billing`、
+ *   入力が長すぎるのは `too_long`）。文は判定に使うだけで、持たない・ログに出さない。
  * - 自動の再試行はしない。失敗はすべて `AnthropicError`（呼び出し元の中断だけは、呼び出し元の理由をそのまま投げる）。
  * - `temperature` は送らない: claude-sonnet-5-5 を含む Claude 4.7 以降のモデルは既定以外の値を 400 で断る。
  * - 工程生成では工程 snapshot の profile を `thinking: adaptive` と `output_config.effort` に訳す（対応する Claude 4.6+ / 5+ のみ）。
@@ -26,7 +29,21 @@ export const DEFAULT_MAX_TOKENS = 12_000;
 const MIN_MAX_TOKENS = 256;
 const MAX_MAX_TOKENS = 32_000;
 
-export type AnthropicErrorKind = "auth" | "rate_limit" | "overloaded" | "bad_request" | "server" | "timeout" | "network" | "invalid_output";
+/**
+ * 失敗の種類。`billing` はクレジット残高の不足・利用上限への到達（Anthropic は 400 か 402 で返す。待っても補充されるまで直らない）、
+ * `too_long` は入力が長すぎる（文脈の上限・413）。どちらも同じ要求を繰り返しても通らない。
+ */
+export type AnthropicErrorKind =
+  | "auth"
+  | "billing"
+  | "rate_limit"
+  | "overloaded"
+  | "bad_request"
+  | "too_long"
+  | "server"
+  | "timeout"
+  | "network"
+  | "invalid_output";
 
 /**
  * `invalid_output` の理由（短い code だけ）: 文が無い・空（empty）、出力の上限で途中で切れた（max_tokens）、断られた（refusal）、
@@ -34,13 +51,50 @@ export type AnthropicErrorKind = "auth" | "rate_limit" | "overloaded" | "bad_req
  */
 export type AnthropicInvalidReason = "empty" | "max_tokens" | "refusal" | "not_json" | "bad_body";
 
+/**
+ * Anthropic のエラーの種類（失敗の本文の `error.type`）。ログに出すのはこの一覧の値だけで、それ以外は `other` にする
+ * （本文の値をそのままログへ流さない）。
+ */
+const ANTHROPIC_API_ERROR_TYPES = [
+  "invalid_request_error",
+  "authentication_error",
+  "billing_error",
+  "permission_error",
+  "not_found_error",
+  "request_too_large",
+  "rate_limit_error",
+  "api_error",
+  "timeout_error",
+  "overloaded_error",
+] as const;
+
+type AnthropicApiErrorType = (typeof ANTHROPIC_API_ERROR_TYPES)[number] | "other";
+
 const RETRYABLE: readonly AnthropicErrorKind[] = ["rate_limit", "overloaded", "server", "timeout", "network"];
 
-type FailureDetails = { status?: number; reason?: AnthropicInvalidReason; usage?: AiUsageReport };
+/**
+ * 失敗の種類から、AI チャットの会話・手順の段階に残す code（`^[a-z0-9_]{1,64}$`）。画面の言い方はこの code で引く
+ * （チャットは AiBox.tsx の AI_FAIL_TEXT、手順は lib/steps-view.ts の FAILURES）。
+ */
+export const AI_FAILURE_CODES: Readonly<Record<AnthropicErrorKind, string>> = {
+  auth: "ai_auth",
+  billing: "ai_billing",
+  rate_limit: "ai_rate_limit",
+  overloaded: "ai_overloaded",
+  server: "ai_server",
+  timeout: "ai_timeout",
+  network: "ai_network",
+  bad_request: "ai_bad_request",
+  too_long: "ai_too_long",
+  invalid_output: "invalid_output",
+};
+
+type FailureDetails = { status?: number; reason?: AnthropicInvalidReason; type?: AnthropicApiErrorType; usage?: AiUsageReport };
 
 /**
  * Anthropic の呼び出しの失敗。持つのは kind と（あれば）HTTP ステータス・invalid_output の理由・使用量だけ
- * （応答の本文・鍵・プロンプトは持たない）。`usage` は応答が届いたのに使えなかったとき（JSON でない・途中で切れた）。
+ * （応答の本文・鍵・プロンプトは持たない。`error.type` もログにだけ出し、ここには持たない）。
+ * `usage` は応答が届いたのに使えなかったとき（JSON でない・途中で切れた）。
  * トークンは課金されているので、ai-api.ts はこの分も使用量に数える。
  */
 export class AnthropicError extends Error {
@@ -150,18 +204,79 @@ export function maxTokensLimit(env: AnthropicEnv): number {
 }
 
 function statusKind(status: number): AnthropicErrorKind {
-  if (status === 401 || status === 402 || status === 403) return "auth";
+  if (status === 402) return "billing";
+  if (status === 401 || status === 403) return "auth";
+  if (status === 413) return "too_long";
   if (status === 429) return "rate_limit";
   if (status === 529) return "overloaded";
   if (status >= 500) return "server";
   return "bad_request";
 }
 
-/** 失敗を作ってログに残す（kind と status か理由の code だけ）。 */
+/** 失敗の本文の、読む上限（字）。Anthropic のエラーは短い JSON なので、超える分は読まない（読めた分が JSON でなければ status だけで決める）。 */
+const MAX_ERROR_BODY_CHARS = 16_384;
+
+/**
+ * 400 の文のうち、クレジット残高の不足・利用上限への到達（例: "Your credit balance is too low to access the Anthropic API"、
+ * "You have reached your specified API usage limits"）。
+ */
+const BILLING_MESSAGE = /credit balance|usage limits?\b|spend(?:ing)? limits?\b/i;
+
+/** 400 の文のうち、入力が長すぎる（例: "prompt is too long: … tokens > … maximum"、"input length and `max_tokens` exceed context limit"）。 */
+const TOO_LONG_MESSAGE = /prompt is too long|exceeds? (?:the )?context (?:limit|window)/i;
+
+function apiErrorType(value: unknown): AnthropicApiErrorType {
+  return typeof value === "string" && (ANTHROPIC_API_ERROR_TYPES as readonly string[]).includes(value) ? (value as AnthropicApiErrorType) : "other";
+}
+
+/** 本文を上限まで読む（残りは読まずに閉じる）。 */
+async function readCapped(response: Response, limit: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    while (text.length < limit) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return text.slice(0, limit);
+}
+
+/**
+ * HTTP の失敗の種類を、status と本文の `error.type`・文（message）から決める。文は判定に使うだけで、返さない・ログに出さない。
+ * 本文が読めない・JSON でないときは status だけで決める（`type` は無し）。
+ */
+async function classifyRejection(response: Response): Promise<{ kind: AnthropicErrorKind; type?: AnthropicApiErrorType }> {
+  const status = response.status;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readCapped(response, MAX_ERROR_BODY_CHARS));
+  } catch {
+    return { kind: statusKind(status) };
+  }
+  const error = isPlainObject(parsed) && isPlainObject(parsed.error) ? parsed.error : null;
+  if (!error) return { kind: statusKind(status) };
+  const type = error.type === undefined ? undefined : apiErrorType(error.type);
+  const message = typeof error.message === "string" ? error.message : "";
+  if (type === "billing_error") return { kind: "billing", type };
+  if (type === "request_too_large") return { kind: "too_long", type };
+  // 文で見分けるのは 400 だけ（429 の「rate limit」などを取り違えない）
+  if (status === 400 && BILLING_MESSAGE.test(message)) return { kind: "billing", ...(type ? { type } : {}) };
+  if (status === 400 && TOO_LONG_MESSAGE.test(message)) return { kind: "too_long", ...(type ? { type } : {}) };
+  return { kind: statusKind(status), ...(type ? { type } : {}) };
+}
+
+/** 失敗を作ってログに残す（kind と status か理由の code、決まった一覧のエラーの種類だけ）。 */
 function failure(kind: AnthropicErrorKind, details: FailureDetails = {}): AnthropicError {
-  const logged: { kind: AnthropicErrorKind; status?: number; reason?: AnthropicInvalidReason } = { kind };
+  const logged: { kind: AnthropicErrorKind; status?: number; reason?: AnthropicInvalidReason; type?: AnthropicApiErrorType } = { kind };
   if (details.status !== undefined) logged.status = details.status;
   if (details.reason !== undefined) logged.reason = details.reason;
+  if (details.type !== undefined) logged.type = details.type;
   console.error("editor-web: anthropic request failed", logged);
   return new AnthropicError(kind, details);
 }
@@ -315,9 +430,10 @@ async function send(
       throw interrupted("network");
     }
     if (!response.ok) {
-      // 失敗の本文は読まない（モデル名やプロンプトの一部を含みうる）
-      await response.body?.cancel().catch(() => undefined);
-      throw failure(statusKind(response.status), { status: response.status });
+      // 失敗の本文は種類を決めるためだけに読む（文はモデル名やプロンプトの一部を含みうるので、持たない・ログに出さない）
+      const rejected = await classifyRejection(response);
+      if (signal?.aborted) throw signal.reason;
+      throw failure(rejected.kind, { status: response.status, ...(rejected.type ? { type: rejected.type } : {}) });
     }
     return await read(response, {
       touch: arm,
@@ -450,9 +566,11 @@ function readStream(onText: (delta: string) => void, requested: string, onServer
         case "message_stop":
           stopped = true;
           return;
-        case "error":
-          // 上流が途中で失敗した（本文は持ち出さない）
-          throw failure("server");
+        case "error": {
+          // 上流が途中で失敗した（本文は持ち出さない。ログには決まった一覧のエラーの種類だけ）
+          const error = isPlainObject(data.error) ? data.error : {};
+          throw failure("server", error.type === undefined ? {} : { type: apiErrorType(error.type) });
+        }
         default:
           // ping など
           return;
