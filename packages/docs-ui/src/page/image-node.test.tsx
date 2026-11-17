@@ -354,6 +354,14 @@ describe("the image node", () => {
     expect(input.maxLength).toBe(1000);
     expect(document.activeElement).toBe(input);
     await act(async () => typeInto(input, "合成のキャプション"));
+    // IME の変換を確定する Enter・取り消す Esc（isComposing、Safari は keyCode 229）では閉じない
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true }));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true, cancelable: true }));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true }));
+    });
+    expect(captionInput()).toBe(input);
+    expect(savedBlocks(editor)[0]).toEqual({ type: "image", attrs: { assetId: ASSET, consent: false } });
     await act(async () => {
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     });
@@ -400,6 +408,12 @@ describe("the image node", () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
     expect(metas).toEqual([{ assetId: ASSET, patch: { alt: "合成の写真" } }]);
+    // IME の変換を確定する Enter（isComposing・keyCode 229）では閉じない
+    await act(async () => {
+      alt.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true }));
+      alt.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true, cancelable: true }));
+    });
+    expect(container!.querySelector('[role="dialog"]')).not.toBeNull();
     // Enter で閉じる。メニューの補足は「あり」
     await act(async () => {
       alt.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));

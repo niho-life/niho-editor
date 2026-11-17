@@ -58,6 +58,11 @@ function menuAt(x: number, y: number): MenuAt {
   };
 }
 
+/** IME の変換中のキー（Safari は確定の Enter を keyCode 229 で送る）。 */
+function composing(event: ReactKeyboardEvent): boolean {
+  return event.nativeEvent.isComposing || event.keyCode === 229;
+}
+
 /** 欄の操作を本文の編集に渡さない（Enter で段落が割れる・Backspace で画像が消えるのを防ぐ）。 */
 const keepInside = {
   onMouseDown: (event: ReactMouseEvent) => event.stopPropagation(),
@@ -235,6 +240,8 @@ export function ImageNodeView(props: NodeViewProps) {
             value={captionDraft ?? ""}
             onChange={(event) => setCaptionDraft(event.target.value)}
             onKeyDown={(event) => {
+              // IME の変換中の Enter（確定）・Esc（取り消し）は変換の操作。入力を閉じない
+              if (composing(event)) return;
               if (event.key === "Enter") {
                 event.preventDefault();
                 finishCaption(event.currentTarget.value);
@@ -293,7 +300,8 @@ function ImageAltPopover({ alt, onChange, onClose }: { alt: string | null; onCha
           autoFocus
           onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
           onKeyDown={(event) => {
-            if (event.key !== "Enter" && event.key !== "Escape") return;
+            // IME の変換中の Enter・Esc は変換の操作。ポップオーバーを閉じない
+            if (composing(event) || (event.key !== "Enter" && event.key !== "Escape")) return;
             event.preventDefault();
             onClose(true);
           }}
