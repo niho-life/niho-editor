@@ -66,7 +66,7 @@ export type AttachedTabAdder = {
 };
 
 /**
- * 「ページ」パネルの「流れ」（#309）。開いているタブの FlowWatcher が枠に登録し、PagePanel が描く。
+ * 「手順」パネルの「流れ」（#309・#344）。開いているタブの FlowWatcher が枠に登録し、PagePanel が描く。
  * 行の内容と、押したときにすることを持つ（通信は FlowWatcher の側）。
  */
 export type AttachedFlow = {

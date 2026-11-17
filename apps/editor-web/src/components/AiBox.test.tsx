@@ -7,7 +7,7 @@ import axe from "axe-core";
 import type { AiDiffState, AttachedAi, AttachedAiDiff, AttachedAiSteps } from "@/lib/attached-page";
 import { AiSelection, aiSelectionOf } from "@/editor/ai-selection";
 import { buildPageExtensions } from "@/editor/page-extensions";
-import { AI_TEXT, AiPanel } from "./AiBox";
+import { AI_TEXT, AiPanel, type AiPanelProps } from "./AiBox";
 
 const nativeMock = vi.hoisted(() => ({ shell: null as unknown }));
 vi.mock("niho-desktop-bridge/tauri-shell-transport", () => ({ detectShell: () => nativeMock.shell }));
@@ -151,7 +151,7 @@ function defaultServer(options: {
   return { calls, fetcher };
 }
 
-async function render(pageId: string | null = PAGE_1, ai: AttachedAi | null = context(pageId ?? PAGE_1), steps: AttachedAiSteps | null = null) {
+async function render(pageId: string | null = PAGE_1, ai: AttachedAi | null = context(pageId ?? PAGE_1), steps: AttachedAiSteps | null = null, extra: Partial<AiPanelProps> = {}) {
   if (!container) {
     container = document.createElement("div");
     container.setAttribute("data-docs-app-root", "");
@@ -160,7 +160,7 @@ async function render(pageId: string | null = PAGE_1, ai: AttachedAi | null = co
     root = createRoot(container);
   }
   await act(async () => {
-    root!.render(<div className="es-root"><AiPanel pageId={pageId} context={ai} steps={steps} /></div>);
+    root!.render(<div className="es-root"><AiPanel pageId={pageId} context={ai} steps={steps} {...extra} /></div>);
   });
 }
 
@@ -278,6 +278,30 @@ describe("AiPanel", () => {
     setValue("/要約");
     await press("Escape");
     expect(container!.querySelector('[aria-label="工程とスキル"]')).toBeNull();
+  });
+
+  it("「工程とスキル」の先頭に「手順で作る…」（onFlow を渡したときだけ）。押すと onFlow を呼び、入力欄の「/…」だけを消す（#344）", async () => {
+    defaultServer();
+    await render();
+    await until(() => !button("工程とスキルを開く").disabled);
+    await click(button("工程とスキルを開く"));
+    expect([...container!.querySelectorAll(".es-ai-menu-row")].some((item) => item.textContent?.startsWith("手順で作る…"))).toBe(false);
+    await click(button("工程とスキルを開く"));
+
+    const onFlow = vi.fn();
+    await render(PAGE_1, context(), null, { onFlow });
+    await click(button("工程とスキルを開く"));
+    const rows = [...container!.querySelectorAll<HTMLButtonElement>(".es-ai-menu-row")];
+    expect(rows[0]!.textContent).toMatch(/^手順で作る…/);
+    await click(rows[0]!);
+    expect(onFlow).toHaveBeenCalledOnce();
+    expect(container!.querySelector('[aria-label="工程とスキル"]')).toBeNull();
+    // 「/手順」でも出る。選ぶと入力欄の「/…」は消え、前の文は残る
+    setValue("前置き /手順");
+    expect(container!.querySelector('[aria-label="工程とスキル"]')?.textContent).toContain("手順で作る…");
+    await press("Enter");
+    expect(onFlow).toHaveBeenCalledTimes(2);
+    expect(field().value).toBe("前置き ");
   });
 
   it("grows the textarea up to ten lines and keeps vertical manual resize enabled", async () => {

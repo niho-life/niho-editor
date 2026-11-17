@@ -381,7 +381,7 @@ describe("EditorShell のパネルの配置（dock）", () => {
     const dock = dockOf();
     const { host } = mount(<Shell dock={dock} />);
     const splits = [...host.querySelectorAll<HTMLElement>('[role="separator"][aria-orientation="horizontal"]')];
-    expect(splits.map((split) => split.getAttribute("aria-label"))).toEqual(["「ページ」と「AIと作る」の境目"]);
+    expect(splits.map((split) => split.getAttribute("aria-label"))).toEqual(["「手順」と「AIと作る」の境目"]);
     const split = splits[0]!;
     expect(split.className).toBe("es-sash es-sash--split");
     expect(split.style.top).toBe("50%");

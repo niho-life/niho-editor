@@ -189,7 +189,11 @@ type MacPrefs = Pick<MacAiChoice, "models" | "efforts">;
 type SkillId = "factcheck" | "polish" | "expand" | "compact";
 type MenuItem =
   | { id: SkillId; kind: "skill"; label: string; hint: string; search: string; disabledReason: string | null }
-  | { id: string; kind: "step"; label: string; hint: string; search: string; disabledReason: string | null };
+  | { id: string; kind: "step"; label: string; hint: string; search: string; disabledReason: string | null }
+  | { id: "flow"; kind: "flow"; label: string; hint: string; search: string; disabledReason: null };
+
+/** 「工程とスキル」の先頭の「手順で作る…」（押すと手順のカードを出す。#344）。 */
+const FLOW_MENU_ITEM: MenuItem = { id: "flow", kind: "flow", label: "手順で作る…", hint: "手順のカードを出して、このページから作る", search: "手順で作る 手順 文書 記事 工程 flow", disabledReason: null };
 
 const FACTCHECK_TEXT = "本文の主張（数字・固有名詞・日付・引用）を列挙し、文字起こし（search_transcript）と Web の検索で確かめてください。本文は直さず、返答に「確かめた／食い違い／確かめられない」の一覧と根拠を書いてください。直すのは、一覧を見て私が頼んだときだけです。";
 const POLISH_TEXT = "文体をそろえ、繰り返しと冗長な言い回しを削って読みやすくしてください。意味・固有名詞・数字・引用は変えないでください。";
@@ -296,6 +300,11 @@ export type AiPanelProps = {
   placement?: AiPanelPlacement;
   /** AI がページを書き換えた・元に戻した（右に並べたページを読み直すため）。直したページの id。 */
   onPagesChanged?: (pageIds: readonly string[]) => void;
+  /**
+   * 「工程とスキル」の先頭の「手順で作る…」を押した（枠が手順のカードを出してフォーカスを移す。#344）。
+   * 渡したときだけ項目を出す（手順の流れを読めたページだけ）。
+   */
+  onFlow?: () => void;
 };
 
 /**
@@ -303,7 +312,7 @@ export type AiPanelProps = {
  * ページ（タブ）を移っても会話・送信待ち・CLI session・書きかけは残る（捨てるのは「新しい会話」のときだけ）。
  * 依頼は今開いているページで頼み（`/api/pages/{今のページ}/ai/chat`）、発言にそのページが残る（「◯◯ で」）。
  */
-export function AiPanel({ pageId, context, steps, placement, onPagesChanged }: AiPanelProps) {
+export function AiPanel({ pageId, context, steps, placement, onPagesChanged, onFlow }: AiPanelProps) {
   const [thread, setThread] = useState<AiChatMessage[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<AiChatSummary[]>([]);
@@ -556,7 +565,9 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged }: A
     writeMacAiChoice({ route: macRoute, ...next });
   };
 
+  const flowItem = onFlow !== undefined;
   const allMenuItems = useMemo<MenuItem[]>(() => [
+    ...(flowItem ? [FLOW_MENU_ITEM] : []),
     ...(steps?.options.map((step): MenuItem => ({ ...step, kind: "step", search: `${step.label} ${step.hint} 工程 手順` })) ?? []),
     { id: "factcheck", kind: "skill", label: "事実確認", hint: "固有名詞・数値・日付・引用を確認", search: "事実確認 ファクトチェック factcheck 固有名詞 数値 日付 引用", disabledReason: null },
     { id: "polish", kind: "skill", label: "推敲", hint: "文体・重複・読みやすさ", search: "推敲 polish 文体 重複 冗長 読みやすさ", disabledReason: null },
@@ -569,7 +580,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged }: A
       search: "要約 軽く compact 引き継ぎ 新しい会話",
       disabledReason: conversationId && thread.length > 0 ? null : "要約する会話がまだありません。",
     },
-  ], [steps, conversationId, thread.length]);
+  ], [flowItem, steps, conversationId, thread.length]);
 
   const menuItems = useMemo(() => {
     const query = menuQuery.trim().toLocaleLowerCase("ja");
@@ -1065,6 +1076,12 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged }: A
     const caret = field?.selectionStart ?? text.length;
     const stripped = removeSlash(text, caret);
     setMenuOpen(false);
+    if (item.kind === "flow") {
+      // 入力欄の「/…」だけを消し、フォーカスは枠が手順のカードへ移す
+      setText(stripped.value);
+      onFlow?.();
+      return;
+    }
     if (item.kind === "step") {
       setText(stripped.value);
       setSelectedStep(steps?.options.find((step) => step.id === item.id) ?? null);
@@ -1514,7 +1531,7 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged }: A
               {menuItems.length === 0 && <p>該当する工程・スキルがありません。</p>}
               {menuItems.map((item, index) => (
                 <button key={`${item.kind}-${item.id}`} type="button" className="es-ai-menu-row" aria-current={index === activeMenuIndex ? "true" : undefined} aria-disabled={item.disabledReason ? true : undefined} onMouseDown={(event) => event.preventDefault()} onClick={() => selectMenuItem(item)}>
-                  <Icon name={item.kind === "step" ? "play" : item.id === "factcheck" ? "check" : item.id === "polish" || item.id === "expand" ? "edit" : "doc"} />
+                  <Icon name={item.kind === "flow" ? "spark" : item.kind === "step" ? "play" : item.id === "factcheck" ? "check" : item.id === "polish" || item.id === "expand" ? "edit" : "doc"} />
                   <span>{item.label}<small>{item.disabledReason ?? item.hint}</small></span>
                 </button>
               ))}

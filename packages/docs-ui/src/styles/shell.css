@@ -1007,29 +1007,44 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-row b{font-size:13.5px;font-weight:600;color:var(--ed-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-row small{font-size:12px;color:var(--ed-ink-mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pn-row .es-btn[aria-disabled="true"]{color:var(--ed-ink-mute);cursor:default}
-/* 「ページ」パネルの流れ（#309。モック editor-folder-pages-v1 の .sec / .fl）。各行の右端に 作成／済み */
+/* 「手順」のカード（#309 の流れ → #344。モック editor-page-refine-v1 の .mod / .steps / .mk）。済み ✓・いま ●・これから ○（番号）。作成のボタンは 1 つ */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow{position:relative;padding:8px 0 4px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-hd{display:flex;align-items:center;gap:6px;min-width:0;margin:0 0 6px;font-size:12px;font-weight:600;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-recipe{display:inline-flex;align-items:center;gap:3px;min-height:28px;padding:1px 4px 1px 6px;border-radius:6px;font-size:12.5px;font-weight:600;color:var(--ed-ink-sub);cursor:pointer}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-recipe:hover{background:var(--ed-sand)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-recipe svg{width:12px;height:12px;flex:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-folder{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-rows{display:flex;flex-direction:column;gap:1px;margin:0;padding:0;list-style:none}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-row{display:flex;align-items:center;gap:4px;min-width:0}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-go{display:flex;align-items:center;gap:8px;flex:1;min-width:0;min-height:36px;padding:4px 8px;border-radius:8px;color:var(--ed-ink-sub);font-size:13px;font-weight:500;flex-wrap:wrap;text-align:left}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-rows{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;list-style:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-row{position:relative;min-width:0}
+/* 段階をつなぐ縦の線（印の後ろ。最初の行は印から下、最後の行は印まで） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-row::before{content:"";position:absolute;left:18px;top:0;bottom:-2px;border-left:1.5px solid var(--ed-line-3)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-row:first-child::before{top:15px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-row:last-child::before{bottom:auto;height:15px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-row:only-child::before{display:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-go{display:grid;grid-template-columns:22px minmax(5em,1fr) minmax(0,max-content);align-items:center;column-gap:8px;width:100%;min-width:0;min-height:36px;padding:4px 8px;border-radius:8px;color:var(--ed-ink-sub);font-size:13px;font-weight:500;text-align:left}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root button.es-flow-go{cursor:pointer}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root button.es-flow-go:hover{background:var(--ed-sand)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-go>span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-go small{margin-left:auto;padding-left:8px;font-size:12px;color:var(--ed-ink-mute);white-space:nowrap}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-src{flex-basis:100%;margin-top:-3px;padding-left:22px;font-size:12px;font-style:normal;font-weight:500;color:var(--ed-ink-mute)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-ico{width:14px;height:14px;flex:none;color:var(--ed-ink-mute)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-ico--on{color:var(--ed-accent-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-dot{position:relative;z-index:1;display:grid;place-items:center;width:22px;height:22px;border-radius:50%;border:1.5px solid var(--ed-line-3);background:var(--ed-white);color:var(--ed-ink-mute);font-size:12px;line-height:1;font-variant-numeric:tabular-nums}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-dot svg{width:13px;height:13px;stroke-width:2.4}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-row--done .es-flow-dot{border-color:transparent;background:var(--ed-accent-soft);color:var(--ed-accent-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-row--cur .es-flow-dot{border:2px solid var(--ed-accent-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-row--cur .es-flow-dot:empty::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--ed-accent-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-go .es-busy{width:12px;height:12px;color:var(--ed-accent-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-nm{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 狭いドックでは右端（タブの札・札）を先に省略し、段階の名前は 5 文字分を残す */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-go small{min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--ed-ink-mute);white-space:nowrap}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-src{grid-column:2/-1;font-size:12px;font-style:normal;font-weight:500;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-tag{min-width:0;overflow:hidden;text-overflow:ellipsis;padding:1px 8px;border-radius:999px;background:var(--ed-accent-soft);color:var(--ed-accent-ink);font-size:12px;font-weight:600;white-space:nowrap}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-tag--now{background:var(--ed-white);color:var(--ed-ink-sub);font-weight:500}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-row--cur .es-flow-go{background:var(--ed-accent-soft);color:var(--ed-accent-ink);font-weight:600}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-row--none .es-flow-go{color:var(--ed-ink-mute);font-weight:500}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-mk{display:inline-flex;align-items:center;gap:3px;height:28px;padding:0 10px;border-radius:999px;font-size:12px;font-weight:600;background:var(--ed-primary-bg);color:var(--ed-primary-ink);flex:none;white-space:nowrap;cursor:pointer}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-mk svg{width:11px;height:11px;flex:none}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-mk[disabled],:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-mk[aria-disabled="true"]{background:var(--ed-sand);color:var(--ed-ink-mute);cursor:default}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-row--after .es-flow-nm{color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-mk{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+/* 段階の名前が長いと 1 行に入らないので、主ボタンは折り返す */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-make{flex-wrap:wrap;gap:0;width:100%;height:auto;min-height:36px;padding:6px 16px;border-radius:18px;white-space:normal;text-align:center}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-make svg{width:14px;height:14px;margin-left:4px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-make .es-busy{margin-right:6px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-count{white-space:nowrap}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-mk p{font-size:12px;line-height:1.5;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-note{margin:6px 0 0;min-height:1.5em;font-size:12px;line-height:1.5;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-flow .es-stepband-partial{margin:10px 0 0}

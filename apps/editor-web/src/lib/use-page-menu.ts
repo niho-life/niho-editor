@@ -29,9 +29,11 @@ export const AI_GRAY_ITEM = "ai-gray";
 export const PUBLISH_ITEM = "publish";
 /** 「タブを追加」（まっさらなタブを足して開く。タブが 1 つのページには帯が無いので、ここから足す。#344）。 */
 export const ADD_TAB_ITEM = "add-tab";
+/** 「手順で作る…」（手順のカードを出してフォーカスを移す。直接書いたページには手順のカードを出さないので、ここから呼ぶ。#344）。 */
+export const FLOW_ITEM = "flow";
 
 /** 枠が受け持つ項目（ページの操作ではなく、シートやポップオーバーを開く・表示を切り替える）。 */
-export type PageMenuLocalItem = typeof MOVE_ITEM | typeof PAGE_INFO_ITEM | typeof AI_GRAY_ITEM | typeof PUBLISH_ITEM | typeof ADD_TAB_ITEM;
+export type PageMenuLocalItem = typeof MOVE_ITEM | typeof PAGE_INFO_ITEM | typeof AI_GRAY_ITEM | typeof PUBLISH_ITEM | typeof ADD_TAB_ITEM | typeof FLOW_ITEM;
 
 /** 「…」に足す項目（ページによって出し分ける）。 */
 export type PageMenuExtras = {
@@ -50,10 +52,12 @@ export type PageMenuExtras = {
   publish?: { hint?: string };
   /** 「タブを追加」を「Google ドキュメントへ」の後ろ（区切りの間）に出すか。 */
   addTab?: boolean;
+  /** 「手順で作る…」を「タブを追加」の後ろ（同じ区切りの間）に出すか。 */
+  flow?: boolean;
 };
 
 /**
- * 「…」の項目: [公開…]・リンクで共有・書き出し（.md）・Google ドキュメントへ・[─ タブを追加 ─]・履歴・複製・[移動…]・[ページの情報]・
+ * 「…」の項目: [公開…]・リンクで共有・書き出し（.md）・Google ドキュメントへ・[─ タブを追加・手順で作る… ─]・履歴・複製・[移動…]・[ページの情報]・
  * [AI の文を灰色で見せる]・削除。フォルダでは 書き出し（.zip）・削除 だけ。shellMoreItems（Mac も使う）は変えず、ここで足す。
  * shellMoreItems の「書き出し」は .md と Google ドキュメントをまとめた 1 項目だが、項目は入れ子にできないので、
  * ここで 2 つに分ける（「書き出し」は .md、Google ドキュメントは次の項目）。
@@ -69,11 +73,12 @@ export function pageMenuItems(shared: boolean | null, extras: PageMenuExtras = {
       return [
         { ...item, hint: ".md" },
         { id: GOOGLE_DOCS_BATCH_ITEM, label: "Google ドキュメントへ", icon: item.icon },
-        // 「タブを追加」は書き出しの後ろ。前後に区切り（モック editor-page-refine-v1 の ⋯ の並び）
+        // 「タブを追加」「手順で作る…」は書き出しの後ろ。前後に区切り（モック editor-page-refine-v1 の ⋯ の並び）
         ...(extras.addTab ? [{ id: ADD_TAB_ITEM, label: "タブを追加", icon: "plus" as const, separated: true }] : []),
+        ...(extras.flow ? [{ id: FLOW_ITEM, label: "手順で作る…", icon: "spark" as const, separated: !extras.addTab }] : []),
       ];
     }
-    if (item.id === "history" && extras.addTab) return [{ ...item, separated: true }];
+    if (item.id === "history" && (extras.addTab || extras.flow)) return [{ ...item, separated: true }];
     if (item.id === "delete") {
       return [
         ...(extras.move ? [{ id: MOVE_ITEM, label: "移動…", icon: "side" as const }] : []),
@@ -88,7 +93,7 @@ export function pageMenuItems(shared: boolean | null, extras: PageMenuExtras = {
   return extras.publish ? [{ id: PUBLISH_ITEM, label: "公開…", icon: "globe", hint: extras.publish.hint }, ...items] : items;
 }
 
-const LOCAL_ITEMS: ReadonlySet<string> = new Set([MOVE_ITEM, PAGE_INFO_ITEM, AI_GRAY_ITEM, PUBLISH_ITEM, ADD_TAB_ITEM]);
+const LOCAL_ITEMS: ReadonlySet<string> = new Set([MOVE_ITEM, PAGE_INFO_ITEM, AI_GRAY_ITEM, PUBLISH_ITEM, ADD_TAB_ITEM, FLOW_ITEM]);
 
 
 /** 「…」から開くシート（どちらも、まだ届いていない変更を保存してから開く）。 */

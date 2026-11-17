@@ -14,6 +14,7 @@ import { COUNT_DELAY_MS } from "./PageInfo";
 import { LANG_NOT_SAVED, PageEditor } from "./PageEditor";
 import { NewPage } from "./FramePages";
 import { LEFT_EMPTY_PAGES_KEY, TAB_CREATED_PAGES_KEY } from "@/lib/left-empty-pages";
+import type { AttachedFlow } from "@/lib/attached-page";
 
 // 公開のシートの読み込み（#39）は PagePublish.test.tsx で本物の fetch の形で確かめる。ここでは、ページを開くたびに出る読み込みが
 // fetch の呼び出しの順や回数（複製・削除・書き出しの検査）を乱さないよう、読めなかったことにする
@@ -34,6 +35,8 @@ vi.mock("next/navigation", () => ({
 type AiMockProps = {
   placement?: { at: string; onMove: (to: "left" | "right" | "float") => void; open: boolean; onOpenChange: (open: boolean) => void };
   onPagesChanged?: (ids: readonly string[]) => void;
+  /** 「工程とスキル」の「手順で作る…」（#344）。 */
+  onFlow?: () => void;
 };
 const aiMock = vi.hoisted(() => ({ props: null as AiMockProps | null }));
 vi.mock("./AiBox", () => ({
@@ -2593,7 +2596,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     await mount({ pages: [{ ...page(FOLDER, "鎌倉の記事"), kind: "folder" }, inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER)} />);
     expect(await moreLabels()).toEqual(["書き出し.zip", "削除中のページも"]);
     // AI・ページ・公開は出さない（パネルも、右上のボタンも）
-    expect(container!.querySelector('.es-dt button[aria-label="AIと作るを出す"], .es-dt button[aria-label="ページを出す"]')).toBeNull();
+    expect(container!.querySelector('.es-dt button[aria-label="AIと作るを出す"], .es-dt button[aria-label="手順を出す"]')).toBeNull();
     expect(container!.querySelector<HTMLElement>('.es-pn[data-panel="ai"]')?.hidden ?? true).toBe(true);
     nav.pathname = `/p/${INSIDE}`;
     await rerender(<FakePage page={fakePage(INSIDE)} />);
@@ -2857,7 +2860,8 @@ describe("EditorFrame: 「写真」のパネルと、何も足していない新
     await openPhotos();
     await tick();
     expect(photosPane()?.hidden).toBe(false);
-    expect(photosPane()?.dataset).toMatchObject({ dock: "right", index: "2" });
+    // 直接書いたページには手順のパネルが無い（#344）ので、AI の下
+    expect(photosPane()?.dataset).toMatchObject({ dock: "right", index: "1" });
     expect(photosPane()!.querySelector(".es-pn-hd h2")?.textContent).toBe("写真");
     expect(photosButton()).toBeNull();
     expect(calls.filter((call) => call.url.endsWith("/images")).map((call) => call.url)).toEqual([`/api/pages/${A}/images`]);
@@ -3107,6 +3111,40 @@ describe("EditorFrame: 「写真」のパネルと、何も足していない新
   });
 });
 
+/** 流れの中のタブの入れ物（文字起こし）。 */
+const FLOW_HOLDER = "00000000-0000-4000-8000-0000000000f1";
+
+/** FlowWatcher が登録する流れの代わり。inFlow なら開いているタブ（ownerId）が文字起こしの入れ物の行（今の行）。 */
+function fakeFlow(ownerId: string, inFlow: boolean): AttachedFlow {
+  const done = async () => ({ ok: true, message: "合成: 受け付けました" });
+  return {
+    ownerId,
+    folder: inFlow ? { id: "00000000-0000-4000-8000-0000000000f0", title: "合成の取材" } : null,
+    recipe: { id: "article", name: "記事制作" },
+    recipes: [{ id: "article", name: "記事制作", defaultName: "記事制作" }],
+    rows: [
+      { key: "rec", kind: "rec", name: "録音", holder: null, tabs: [], current: false, from: null, action: null },
+      inFlow
+        ? { key: "transcript", kind: "transcript", name: "文字起こし", holder: { id: FLOW_HOLDER, title: "文字起こし" }, tabs: [{ id: ownerId, label: "", status: null, running: false }], current: true, from: null, action: null }
+        : { key: "transcript", kind: "transcript", name: "文字起こし", holder: null, tabs: [], current: false, from: null, action: null },
+      { key: "step:plan", kind: "step", name: "記事方針", holder: null, tabs: [], current: false, from: null, action: "go" },
+      { key: "step:body", kind: "step", name: "記事本文", holder: null, tabs: [], current: false, from: null, action: "go" },
+    ],
+    run: null,
+    busy: false,
+    note: null,
+    actions: [],
+    onAction: vi.fn(),
+    open: vi.fn(),
+    make: vi.fn(done),
+    regenerate: vi.fn(done),
+    transcribe: vi.fn(done),
+    changeRecipe: vi.fn(done),
+    refresh: vi.fn(),
+    generated: false,
+  };
+}
+
 describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの配置。設計 §5.5）", () => {
   const A = "00000000-0000-4000-8000-0000000000a1";
   const B = "00000000-0000-4000-8000-0000000000b1";
@@ -3120,9 +3158,12 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     return { left: saved.docks.left.map((item) => item.id), right: saved.docks.right.map((item) => item.id) };
   };
 
-  /** ページの中の PageEditor の代わり（枠に登録すると、AI のレールが出る）。 */
-  function FakePage({ id }: { id: string }) {
-    const { attachPage } = useEditorFrame();
+  /**
+   * ページの中の PageEditor の代わり（枠に登録すると、AI のレールが出る）。`flow` は FlowWatcher の代わりに登録する流れ:
+   * in は流れの中（録音から作ったページ。手順のパネルが出る）、out は流れの外（直接書いたページ）、none は読み終えていない。
+   */
+  function FakePage({ id, flow = "in" }: { id: string; flow?: "in" | "out" | "none" }) {
+    const { attachPage, registerFlow } = useEditorFrame();
     useEffect(
       () =>
         attachPage({
@@ -3140,6 +3181,7 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
         }),
       [attachPage, id],
     );
+    useEffect(() => (flow === "none" ? undefined : registerFlow(fakeFlow(id, flow === "in"))), [registerFlow, id, flow]);
     return <p>合成の本文</p>;
   }
   const sideJson = (title: string, text: string, revision = 2) =>
@@ -3200,7 +3242,7 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
       "左のドックの幅",
       "右に並べたページの幅",
       "右のドックの幅",
-      "「ページ」と「AIと作る」の境目",
+      "「手順」と「AIと作る」の境目",
     ]);
   });
 
@@ -3382,13 +3424,13 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     expect(pane("list").hidden).toBe(false);
     expect(pane("list").dataset).toMatchObject({ dock: "left", index: "0" });
     expect(container!.querySelector(".es-dt .es-tg")).toBeNull();
-    // 「ページ」の × も同じ（順は 一覧・AI・ページ・写真）
-    await act(async () => pane("page").querySelector<HTMLButtonElement>('button[aria-label="ページを閉じる"]')!.click());
+    // 「手順」の × も同じ（順は 一覧・AI・手順・写真）
+    await act(async () => pane("page").querySelector<HTMLButtonElement>('button[aria-label="手順を閉じる"]')!.click());
     expect(pane("page").hidden).toBe(true);
     await act(async () => pane("ai").querySelector<HTMLButtonElement>('button[aria-label="AIと作るを閉じる"]')!.click());
-    expect([...container!.querySelectorAll(".es-dt .es-tg button")].map((button) => button.getAttribute("aria-label"))).toEqual(["AIと作るを出す", "ページを出す"]);
+    expect([...container!.querySelectorAll(".es-dt .es-tg button")].map((button) => button.getAttribute("aria-label"))).toEqual(["AIと作るを出す", "手順を出す"]);
     expect(savedDocks()).toEqual({ left: ["list"], right: [] });
-    await act(async () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="ページを出す"]')!.click());
+    await act(async () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="手順を出す"]')!.click());
     expect(savedDocks()).toEqual({ left: ["list"], right: ["page"] });
     expect(pane("page").dataset).toMatchObject({ dock: "right", index: "0" });
   });
@@ -3400,7 +3442,7 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     expect(pane("list").dataset.dock).toBe("right");
     expect(pane("ai").dataset.dock).toBe("left");
     expect(pane("page").hidden).toBe(true);
-    expect([...container!.querySelectorAll(".es-dt .es-tg button")].map((button) => button.getAttribute("aria-label"))).toEqual(["ページを出す"]);
+    expect([...container!.querySelectorAll(".es-dt .es-tg button")].map((button) => button.getAttribute("aria-label"))).toEqual(["手順を出す"]);
     await act(async () => root!.unmount());
     root = null;
     container!.remove();
@@ -3436,6 +3478,90 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     await act(async () => aiMock.props!.onPagesChanged!([A, B]));
     await tick();
     expect(sideReads(fetcher)).toBe(2);
+  });
+
+  it("直接書いたページ（流れの外）には手順のパネルもヘッダーのボタンも出さない（AI が縦いっぱい）。⋯「手順で作る…」で出て「このページ」から始まり、カードへフォーカスが移る。× で消え、呼んだ印も外れる（#344）", async () => {
+    await mount({ pages: pages() }, <FakePage id={A} flow="out" />);
+    await tick();
+    expect(pane("page").hidden).toBe(true);
+    expect(container!.querySelector(".es-dt .es-tg")).toBeNull();
+    expect(pane("ai").dataset).toMatchObject({ dock: "right", index: "0" });
+    expect(container!.querySelectorAll('[role="separator"][aria-label$="の境目"]')).toHaveLength(0);
+    await chooseMore("手順で作る…");
+    await tick();
+    expect(pane("page").hidden).toBe(false);
+    expect(pane("page").dataset).toMatchObject({ dock: "right", index: "0" });
+    expect(pane("page").querySelector(".es-pn-tt")?.textContent).toBe("手順");
+    const card = pane("page").querySelector<HTMLElement>(".es-flow")!;
+    expect(document.activeElement).toBe(card);
+    // 録音・文字起こしの段階は出さず「このページ」から。「（まだ）」は無く、作成のボタンは 1 つ
+    expect([...card.querySelectorAll(".es-flow-nm")].map((node) => node.textContent)).toEqual(["このページ（いま開いているページ）", "記事方針（これから）", "記事本文（これから）"]);
+    expect(card.textContent).not.toContain("（まだ）");
+    expect([...card.querySelectorAll(".es-flow-mk button")].map((button) => button.textContent)).toEqual(["記事本文まで作る（2 段階）"]);
+    expect(card.querySelector(".es-flow-mk")?.textContent).toContain("作ったページは、このページと一緒に新しいフォルダにまとまります。");
+
+    // 呼んだ印はそのページだけ（この画面の間）。ほかの書いたページでは出さず、戻ると出たまま
+    nav.pathname = `/p/${C}`;
+    await rerender(<FakePage id={C} flow="out" />);
+    await tick();
+    expect(pane("page").hidden).toBe(true);
+    nav.pathname = `/p/${A}`;
+    await rerender(<FakePage id={A} flow="out" />);
+    await tick();
+    expect(pane("page").hidden).toBe(false);
+    // × で閉じると消え、ヘッダーにボタンも出ない。呼んだ印も外れる（出し直すと手順のパネルは元のドックへ戻るが、このページでは出ない）
+    await act(async () => pane("page").querySelector<HTMLButtonElement>('button[aria-label="手順を閉じる"]')!.click());
+    expect(pane("page").hidden).toBe(true);
+    expect(container!.querySelector(".es-dt .es-tg")).toBeNull();
+    expect(savedDocks().right).toEqual(["ai"]);
+  });
+
+  it("AI の「工程とスキル」の「手順で作る…」（onFlow）でも呼べる。流れを読めていないページには口を出さない（⋯ にも AI にも）", async () => {
+    await mount({ pages: pages() }, <FakePage id={A} flow="none" />);
+    await tick();
+    expect(aiMock.props?.onFlow).toBeUndefined();
+    expect(await moreLabels()).not.toContain("手順で作る…");
+    expect(pane("page").hidden).toBe(true);
+    await rerender(<FakePage id={A} flow="out" />);
+    await tick();
+    expect(await moreLabels()).toContain("手順で作る…");
+    expect(aiMock.props?.onFlow).toBeTypeOf("function");
+    await act(async () => aiMock.props!.onFlow!());
+    await tick();
+    expect(pane("page").hidden).toBe(false);
+    expect(document.activeElement).toBe(pane("page").querySelector(".es-flow"));
+  });
+
+  it("録音から作ったページ（流れの中）には出す。流れを読み終えるまでは、流れの中と分かっている入れ物のタブなら出したまま（読む間は一言）", async () => {
+    const tab = (id: string, title: string) => ({ ...page(id, title), page: FLOW_HOLDER });
+    await mount({ pages: [{ ...page(FLOW_HOLDER, "文字起こし"), kind: "page" as const }, tab(A, "文字起こし"), tab(B, "文字起こし"), page(C, "書いたページ")] }, <FakePage id={A} />);
+    await tick();
+    expect(pane("page").hidden).toBe(false);
+    expect(pane("page").querySelector(".es-flow-row--cur .es-flow-nm")?.textContent).toBe("文字起こし（いま開いているページ）");
+    expect([...pane("page").querySelectorAll(".es-flow-nm")].map((node) => node.textContent)).toEqual([
+      "録音（これから）",
+      "文字起こし（いま開いているページ）",
+      "記事方針（これから）",
+      "記事本文（これから）",
+    ]);
+    // 同じ入れ物の別のタブへ: 流れを読む前も出したまま
+    nav.pathname = `/p/${B}`;
+    await rerender(<FakePage id={B} flow="none" />);
+    await tick();
+    expect(pane("page").hidden).toBe(false);
+    expect(pane("page").querySelector(".es-pn-note")?.textContent).toBe("手順を読み込んでいます。");
+    await rerender(<FakePage id={B} />);
+    await tick();
+    expect(pane("page").querySelector(".es-flow")).not.toBeNull();
+    // 書いたページ（入れ物が流れに無い）は、読む前も読んだ後も出さない
+    nav.pathname = `/p/${C}`;
+    await rerender(<FakePage id={C} flow="none" />);
+    await tick();
+    expect(pane("page").hidden).toBe(true);
+    await rerender(<FakePage id={C} flow="out" />);
+    await tick();
+    expect(pane("page").hidden).toBe(true);
+    expect(container!.querySelector(".es-dt .es-tg")).toBeNull();
   });
 });
 
