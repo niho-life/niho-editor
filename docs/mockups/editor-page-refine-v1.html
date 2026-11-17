@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>ページ画面リファイン案 v1</title>
+<!--
+  mock: NIHO editor のページ画面（/p/{id}）リファイン v1（PC・375px・320px）
+  色と文字: 単体で開けるよう、色は :root の仮値（hex）で持つ。実装（docs-ui / editor-web）では packages/ui/src/styles/tokens.css の
+  token を引き、生の hex は足さない。文字は 12px 以上。
+
+  オーナーの指示（2026-11-18）と置き方:
+    1. 画像の下の欄（代替テキスト・キャプション・クレジット・掲載許諾）が常に出るのがうるさい
+       → 欄をなくす。画像を右クリック（触れる端末は画像を選ぶと出る右上の ⋯）でメニュー:
+         キャプションを追加／代替テキスト…／画像を置き換える／削除。キャプションは選んだときだけ画像の下に 1 行の入力が出る。
+         クレジットと掲載許諾のチェックは消す（置いた本人が許諾を得ている前提）。許諾は配信の条件からも外す（オーナー 2026-11-18）。
+    2. 上のマイクは不要（録音は左上の ＋「録音から」で始める） → 消す。
+    3. 写真のアイコンが 2 つ → 左（画像を差し込む）を消す。画像は ＋ のブロック一覧・写真パネル・ドラッグ・貼り付けで入る。
+    4. 右の「ページ」パネルの流れ（録音・文字起こし（まだ）…）
+       → 文書生成の「手順」として、使うときだけ出すカードにする。録音から作ったページ・手順の途中のページでは右上に出る。
+         書いたページでは出さず、AI の ＋「手順で作る」から呼ぶ。書いたページから呼んだときは録音・文字起こしの段階を出さず「このページ」から始める。
+         「（まだ）」をやめ、済み ✓・いま ●・これから ○（番号つき）にする。作成ボタンは 1 つ（いちばん後の段階まで）。行を押すとそこで止める。
+    5. 題名の上のタブの罫線と ＋ → タブが 1 つなら帯を出さない（⋯「タブを追加」）。2 つ以上なら題名の下に並べる。
+    6. 公開ボタン → ⋯ の先頭「公開…」。公開済みのときだけヘッダーに「公開中 · 更新あり」の札（押すと公開のシート）。
+    7. 新しいページを開いたら AI は新しい会話。
+
+  見かた:
+    - 上の黒い帯は mock 用。場面（書いたページ／録音から作ったページ／新しいページ）と幅（PC／375／320）を切り替える。
+    - 緑の丸数字は変更点の番号（下の一覧と対応）。帯の「番号」で消せる。
+    - 画像を押すと右上に ⋯、右クリックでも同じメニュー。「キャプションを追加」で画像の下に入力が出る（空のまま外すと消える）。
+    - AI の入力欄の ＋ →「記事制作」で手順のカードが出る。手順の行を押すと「ここまで作る」の段階が替わる。
+    - 375／320 ではヘッダーの AI ボタンで AI（と手順）が下から出る。
+
+  作っていない:
+    - 本文の編集・保存・公開・AI の送信・手順の実行・タブの追加・書き出し・削除は見た目だけ（押すと一言）。
+    - ＋ のブロック一覧は項目だけ。スマホ幅の下端の書式バー（ShellMobileToolbar）は描いていない（今のまま）。
+    - 公開のシートの中身は今のまま（入口だけ移す）。左の一覧は固定の見た目。
+  参照: packages/docs-ui/src/page/ImageNodeView.tsx / packages/docs-ui/src/shell/tools.tsx（compact）/ packages/docs-ui/src/shell/header.tsx /
+        packages/docs-ui/src/page/PageFlow.tsx / apps/editor-web/src/components/PagePanel.tsx / apps/editor-web/src/components/PageTabs.tsx /
+        apps/editor-web/src/components/AiBox.tsx（#312 の会話の続け方）/ packages/editor-publish/src/readiness.ts・snapshot.ts /
+        apps/editor-web/src/server/public-asset-api.ts / docs/mockups/editor-ui-refine-v1.html / docs/mockups/editor-folder-pages-v1.html
+-->
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* layout: 実物と同じ 3 列（一覧・紙面・右のドック）を枠に入れ、枠の幅で PC／スマホを切り替える（container query） */
+:root{
+  color-scheme:light;
+  --ink:#2a2a26;--ink2:#54544d;--mute:#6e6d66;--faint:#898880;
+  --white:#fff;--canvas:#fffdfa;--shell:#fcfaf5;--sand:#f7f7f4;--sand2:#f2efe8;
+  --line:#f1f1ed;--line2:#e7e7e2;--line3:#dbdbd5;
+  --moss:#56751e;--pale:#EEF6E1;--leaf:#B2D67C;--deep:#63A109;
+  --grad:linear-gradient(140deg,#7DBA3A 0%,#63A109 100%);
+  --amber-ink:#a55827;--amber-pale:#FAF0E6;
+  --red:#B42318;
+  --band:#22221f;--band-ink:#f3f2ec;--band-mute:#b9b8b0;--band-on:#3a3a35;
+  --sans:"Hiragino Maru Gothic ProN","Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;
+  --sbw:236px;--aiw:340px;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--sand);color:var(--ink);font:14px/1.6 var(--sans)}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+button:focus-visible,[contenteditable]:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--deep);outline-offset:2px}
+svg.i{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* ---- mock 用の帯 ---- */
+.band{background:var(--band);color:var(--band-ink);padding-block:10px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px}
+.band h1{font-size:14px;margin:0 8px 0 0;font-weight:700;letter-spacing:.02em}
+.band .grp{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.band .lb{font-size:12px;color:var(--band-mute)}
+.seg{display:inline-flex;border:1px solid #4a4a44;border-radius:8px;overflow:hidden}
+.seg button{font-size:12px;padding:5px 10px;color:var(--band-mute)}
+.seg button[aria-pressed="true"]{background:var(--band-on);color:var(--band-ink)}
+.chk{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--band-mute)}
+
+.stage{padding-block:16px 8px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.frame{container-type:inline-size;margin:0 auto;max-width:1400px;border:1px solid var(--line3);border-radius:12px;overflow:hidden;background:var(--canvas);box-shadow:0 1px 2px rgba(40,40,30,.06)}
+.frame[data-w="375"]{max-width:375px}
+.frame[data-w="320"]{max-width:320px}
+
+/* ---- 画面 ---- */
+.app{display:grid;grid-template-columns:var(--sbw) minmax(0,1fr) var(--aiw);grid-template-rows:minmax(0,1fr);height:760px;position:relative;overflow:hidden}
+.sb{background:var(--shell);border-right:1px solid var(--line2);display:flex;flex-direction:column;min-width:0;min-height:0}
+.sb-top{display:flex;align-items:center;gap:2px;padding:10px 8px 6px 12px}
+.sb-app{display:flex;align-items:center;gap:8px;font-weight:700;font-size:15px;flex:1;min-width:0}
+.sb-app i{width:22px;height:22px;border-radius:6px;background:var(--grad);display:inline-block}
+.ib{width:30px;height:30px;border-radius:8px;display:inline-grid;place-items:center;color:var(--ink2);position:relative}
+.ib:hover{background:var(--sand2)}
+.ib[aria-expanded="true"]{background:var(--sand2)}
+.sb-list{list-style:none;margin:4px 0;padding:0 6px;overflow:auto;flex:1}
+.sb-list button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:6px 8px;border-radius:7px;font-size:14px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb-list button:hover{background:var(--sand2)}
+.sb-list button[aria-current="page"]{background:var(--sand2);color:var(--ink);font-weight:700}
+.sb-list .kid button{padding-left:30px}
+.sb-list svg.i{width:16px;height:16px;color:var(--faint)}
+.sb-foot{border-top:1px solid var(--line2);padding:8px 12px}
+.sb-foot button{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink2);padding:4px 0}
+
+.main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
+.back{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.n4{left:-28px;top:12px}
+.hd{height:48px;display:flex;align-items:center;gap:4px;padding:0 10px 0 14px;flex:none}
+.hd .sp{flex:1}
+.loc{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mute);min-width:0}
+.loc button{display:inline-flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;white-space:nowrap}
+.loc button:hover{background:var(--sand2)}
+.loc svg.i{width:16px;height:16px}
+.back{display:none;align-items:center;gap:2px;font-size:14px;color:var(--ink2);padding:4px 6px 4px 2px;border-radius:7px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--moss);background:var(--pale);border-radius:999px;padding:4px 10px;white-space:nowrap}
+.pill i{width:7px;height:7px;border-radius:50%;background:var(--deep)}
+.pill b{font-weight:400;color:var(--amber-ink)}
+.ai-btn{display:none}
+
+.scroll{flex:1;overflow:auto;position:relative}
+.paper{max-width:760px;margin:0 auto;padding:28px 56px 120px}
+.ttl{font-size:32px;font-weight:700;line-height:1.35;margin:8px 0 6px;outline:none;word-break:break-word}
+.ttl:empty::before{content:attr(data-ph);color:var(--faint)}
+.tabs{display:flex;align-items:center;gap:4px;margin:6px 0 18px;border-bottom:1px solid var(--line2);flex-wrap:wrap}
+.tab{font-size:13px;color:var(--mute);padding:6px 10px;border-bottom:2px solid transparent;margin-bottom:-1px;display:inline-flex;align-items:center;gap:6px}
+.tab[aria-selected="true"]{color:var(--ink);border-color:var(--ink);font-weight:700}
+.tab small{font-size:12px;color:var(--faint);font-weight:400}
+.body{font-size:16px;line-height:1.95;color:var(--ink)}
+.body p{margin:0 0 14px}
+.body .ph{color:var(--faint)}
+.ts{display:inline-block;font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums;margin-right:8px;min-width:3.2em}
+.count{position:absolute;right:20px;bottom:12px;font-size:12px;color:var(--faint)}
+
+figure.img{margin:6px 0 18px;position:relative}
+figure.img canvas{display:block;width:100%;height:auto;border-radius:6px;cursor:pointer;background:#a98b60}
+figure.img.sel canvas{outline:2px solid var(--deep);outline-offset:2px}
+.img-more{position:absolute;top:10px;right:10px;width:30px;height:30px;border-radius:8px;background:rgba(255,255,255,.94);box-shadow:0 1px 3px rgba(0,0,0,.18);display:grid;place-items:center;opacity:0;transition:opacity .12s}
+figure.img:hover .img-more,figure.img.sel .img-more{opacity:1}
+figcaption{font-size:13px;color:var(--mute);margin-top:8px;outline:none;min-height:1.6em}
+figcaption:empty::before{content:"キャプションを入力";color:var(--faint)}
+
+.pop{position:absolute;z-index:30;background:var(--white);border:1px solid var(--line3);border-radius:10px;box-shadow:0 8px 24px rgba(40,40,30,.14);padding:4px;min-width:220px;max-width:calc(100% - 16px)}
+.pop[hidden]{display:none}
+.mi{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:7px 10px;border-radius:7px;font-size:13px;color:var(--ink)}
+.mi:hover,.mi:focus-visible{background:var(--sand2)}
+.mi svg.i{width:16px;height:16px;color:var(--mute)}
+.mi .h{margin-left:auto;font-size:12px;color:var(--faint);white-space:nowrap}
+.mi.danger,.mi.danger svg.i{color:var(--red)}
+.msep{height:1px;background:var(--line2);margin:4px 6px}
+.mhd{font-size:12px;color:var(--faint);padding:6px 10px 2px}
+.altpop{padding:12px;width:340px}
+.altpop label{display:block;font-size:12px;color:var(--mute);margin-bottom:6px}
+.altpop input{width:100%;font:inherit;font-size:14px;padding:7px 9px;border:1px solid var(--line3);border-radius:8px;background:var(--white);color:var(--ink)}
+.altpop p{font-size:12px;color:var(--faint);margin:6px 0 0}
+
+/* ---- 右のドック ---- */
+.dock{border-left:1px solid var(--line2);background:var(--shell);display:flex;flex-direction:column;min-width:0;min-height:0}
+.grab{display:none}
+.mod{border-bottom:1px solid var(--line2);padding:12px 14px 14px;position:relative;flex:none}
+.mod[hidden]{display:none}
+.mod-hd{display:flex;align-items:center;gap:4px;margin-bottom:8px}
+.mod-name{display:inline-flex;align-items:center;gap:6px;font-weight:700;font-size:14px;padding:3px 6px;margin-left:-6px;border-radius:6px}
+.mod-name:hover{background:var(--sand2)}
+.mod-name svg.i{width:16px;height:16px;color:var(--moss)}
+.mod-hd .sp{flex:1}
+.steps{list-style:none;margin:0;padding:0}
+.steps li{position:relative}
+.steps li+li::before{content:"";position:absolute;left:13px;top:-9px;height:18px;border-left:1.5px solid var(--line3)}
+.steps li.done+li::before{border-color:var(--leaf)}
+.step{display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:6px;width:100%;text-align:left;padding:5px 6px 5px 0;border-radius:8px;font-size:14px;min-height:36px}
+button.step:hover{background:var(--sand2)}
+.dot{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;margin-left:2px;font-variant-numeric:tabular-nums}
+.done .dot{background:var(--pale);color:var(--moss)}
+.done .dot svg.i{width:14px;height:14px;stroke-width:2.4}
+.cur .dot{background:var(--white);border:2px solid var(--deep)}
+.cur .dot::after{content:"";width:9px;height:9px;border-radius:50%;background:var(--deep)}
+.todo .dot{border:1.5px solid var(--line3);color:var(--faint);background:var(--white)}
+.todo .nm{color:var(--ink2)}
+.cur .nm{font-weight:700}
+.meta{font-size:12px;color:var(--faint);white-space:nowrap}
+.tag{font-size:12px;border-radius:999px;padding:1px 8px;white-space:nowrap}
+.tag.now{background:var(--sand2);color:var(--ink2)}
+.tag.goal{background:var(--pale);color:var(--moss)}
+.todo.after .nm{color:var(--faint)}
+.mk{display:flex;flex-direction:column;gap:6px;margin-top:10px;position:relative}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:14px;font-weight:700;border-radius:10px;padding:9px 14px}
+.btn-pri{background:var(--grad);color:var(--white)}
+.btn-out{border:1px solid var(--line3);background:var(--white);color:var(--ink)}
+.mk p{margin:0;font-size:12px;color:var(--faint)}
+
+.ai{flex:1;display:flex;flex-direction:column;min-height:0}
+.ai-hd{display:flex;align-items:center;gap:2px;padding:10px 10px 6px 14px;position:relative}
+.ai-hd h2{font-size:14px;margin:0;flex:1}
+.thread{flex:1;overflow:auto;padding:6px 16px 12px;display:flex;flex-direction:column;gap:12px;font-size:14px;line-height:1.8}
+.thread .day{font-size:12px;color:var(--faint);text-align:center}
+.me{align-self:flex-end;background:var(--sand2);border-radius:14px;padding:7px 12px;max-width:85%}
+.bot{max-width:100%}
+.empty{margin:auto 0;display:flex;flex-direction:column;gap:10px}
+.empty h3{font-size:15px;margin:0}
+.empty p{margin:0;color:var(--mute);font-size:13px}
+.chips{display:flex;flex-direction:column;gap:6px}
+.chip{display:flex;align-items:center;gap:8px;text-align:left;border:1px solid var(--line3);background:var(--white);border-radius:10px;padding:8px 10px;font-size:13px}
+.chip:hover{border-color:var(--leaf)}
+.chip svg.i{width:16px;height:16px;color:var(--moss)}
+.comp{margin:0 12px 12px;border:1px solid var(--line3);border-radius:14px;background:var(--white);padding:8px 8px 6px 12px;position:relative}
+.comp textarea{width:100%;border:0;resize:none;font:inherit;font-size:14px;color:var(--ink);background:transparent;height:44px;outline:none}
+.comp textarea::placeholder{color:var(--faint)}
+.comp-row{display:flex;align-items:center;justify-content:space-between}
+.send{width:30px;height:30px;border-radius:50%;background:var(--grad);color:var(--white);display:grid;place-items:center}
+.send svg.i{width:16px;height:16px;stroke-width:2.2}
+
+.toast{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);background:var(--ink);color:var(--white);font-size:13px;border-radius:10px;padding:8px 14px;z-index:60;max-width:calc(100% - 32px);text-align:center}
+.sheet-bg{position:absolute;inset:0;background:rgba(30,30,25,.28);z-index:50;display:grid;place-items:center;padding:16px}
+.sheet{background:var(--white);border-radius:14px;padding:18px;max-width:420px;width:100%;box-shadow:0 12px 32px rgba(0,0,0,.18)}
+.sheet h3{margin:0 0 8px;font-size:16px}
+.sheet p{margin:0 0 14px;font-size:13px;color:var(--ink2)}
+
+/* 変更点の番号 */
+.n{display:none;position:absolute;z-index:20;width:20px;height:20px;border-radius:50%;background:var(--moss);color:var(--white);font-size:12px;font-weight:700;place-items:center;pointer-events:none;box-shadow:0 0 0 2px var(--white)}
+.frame.nums .n{display:grid}
+
+/* 中くらいの幅: 一覧をしまう */
+@container (max-width: 980px){
+  .app{grid-template-columns:minmax(0,1fr) var(--aiw)}
+  .sb{display:none}
+  .paper{padding:24px 32px 120px}
+}
+/* スマホ幅 */
+@container (max-width: 720px){
+  .app{grid-template-columns:minmax(0,1fr);height:700px}
+  .hd{padding:0 6px 0 4px;height:46px}
+  .back{display:inline-flex}
+  .loc{display:none}
+  .tool-plus{display:none}
+  .ai-btn{display:inline-grid}
+  .pill .w{display:none}
+  .paper{padding:12px 16px 100px}
+  .n4{left:-12px;top:-2px}
+  .ttl{font-size:26px}
+  .body{font-size:16px}
+  .img-more{opacity:1}
+  .dock{position:absolute;left:0;right:0;bottom:0;height:82%;z-index:40;border-left:0;border-radius:16px 16px 0 0;box-shadow:0 -8px 28px rgba(0,0,0,.18);transform:translateY(105%);transition:transform .2s ease;background:var(--shell)}
+  .app.ai-open .dock{transform:none}
+  .grab{display:block;width:40px;height:4px;border-radius:2px;background:var(--line3);margin:8px auto 0;flex:none}
+  .altpop{width:auto;left:8px!important;right:8px}
+  .count{right:12px}
+}
+@media (prefers-reduced-motion: reduce){.dock,.img-more{transition:none}}
+
+/* ---- 下の説明 ---- */
+.notes{max-width:1400px;margin:0 auto;padding-block:20px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));gap:20px}
+.card{background:var(--white);border:1px solid var(--line2);border-radius:12px;padding:16px 18px;min-width:0}
+.card h2{font-size:15px;margin:0 0 10px;text-wrap:balance}
+.card ol,.card ul{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:10px}
+.card li{display:grid;grid-template-columns:24px minmax(0,1fr);gap:8px;font-size:13px;line-height:1.7}
+.card li .k{width:20px;height:20px;border-radius:50%;background:var(--moss);color:var(--white);font-size:12px;font-weight:700;display:grid;place-items:center;margin-top:2px}
+.card li .k.q{background:var(--amber-ink)}
+.card li .k.x{background:var(--faint)}
+.card b{font-weight:700}
+.card .was{color:var(--mute)}
+.card .rec{display:inline-block;font-size:12px;background:var(--pale);color:var(--moss);border-radius:6px;padding:0 6px;margin-left:2px}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></symbol>
+  <symbol id="i-img" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-5 4 4 3-3 4 4"/></symbol>
+  <symbol id="i-side" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10.5a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5z"/><path d="M14 3.5V8h4"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V20.5"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5l1.8 5 5 1.8-5 1.8-1.8 5-1.8-5-5-1.8 5-1.8z"/><path d="M18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M14 7l3 3"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4.5 6.5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H11l-4.5 3.5V16.5h0a2 2 0 0 1-2-2z"/><path d="M12 8l.9 2.1 2.1.9-2.1.9L12 14l-.9-2.1-2.1-.9 2.1-.9z"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+  <symbol id="i-out" viewBox="0 0 24 24"><path d="M12 4v11M7.5 8.5L12 4l4.5 4.5"/><path d="M5 14v4.5a1.5 1.5 0 0 0 1.5 1.5h11a1.5 1.5 0 0 0 1.5-1.5V14"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M5 7h14M10 7V4.5h4V7M7 7l1 13h8l1-13"/></symbol>
+  <symbol id="i-tab" viewBox="0 0 24 24"><path d="M3.5 19.5V8a1.5 1.5 0 0 1 1.5-1.5h5L11.5 9H19a1.5 1.5 0 0 1 1.5 1.5v9"/><path d="M3 19.5h18"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></symbol>
+  <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 6.5h14M5 12h14M5 17.5h9"/></symbol>
+  <symbol id="i-swap" viewBox="0 0 24 24"><path d="M5 9h12l-3.5-3.5M19 15H7l3.5 3.5"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.6 3.5 5.5 3.5 8.5s-1 5.9-3.5 8.5c-2.5-2.6-3.5-5.5-3.5-8.5s1-5.9 3.5-8.5z"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M19.5 11.5l-7.8 7.8a4.5 4.5 0 0 1-6.4-6.4l8.2-8.2a3 3 0 0 1 4.2 4.2l-8.1 8.1a1.5 1.5 0 0 1-2.1-2.1l7.4-7.4"/></symbol>
+  <symbol id="i-h" viewBox="0 0 24 24"><path d="M6 5v14M18 5v14M6 12h12"/></symbol>
+  <symbol id="i-listb" viewBox="0 0 24 24"><path d="M9 7h11M9 12h11M9 17h11"/><circle cx="5" cy="7" r=".9"/><circle cx="5" cy="12" r=".9"/><circle cx="5" cy="17" r=".9"/></symbol>
+</svg>
+
+<div class="band" role="region" aria-label="モックの切り替え（実物には無い）">
+  <h1>ページ画面リファイン案 v1</h1>
+  <div class="grp"><span class="lb">場面</span>
+    <div class="seg" id="seg-scene">
+      <button type="button" data-v="a" aria-pressed="true">書いたページ</button>
+      <button type="button" data-v="b" aria-pressed="false">録音から作ったページ</button>
+      <button type="button" data-v="c" aria-pressed="false">新しいページ</button>
+    </div>
+  </div>
+  <div class="grp"><span class="lb">幅</span>
+    <div class="seg" id="seg-w">
+      <button type="button" data-v="pc" aria-pressed="true">PC</button>
+      <button type="button" data-v="375" aria-pressed="false">375</button>
+      <button type="button" data-v="320" aria-pressed="false">320</button>
+    </div>
+  </div>
+  <label class="chk"><input type="checkbox" id="nums" checked> 変更点の番号</label>
+</div>
+
+<div class="stage">
+<div class="frame nums" id="frame" data-w="pc">
+<div class="app" id="app" data-scene="a">
+
+  <aside class="sb" aria-label="一覧">
+    <div class="sb-top">
+      <span class="sb-app"><i aria-hidden="true"></i>Editor</span>
+      <button type="button" class="ib" aria-label="検索" title="検索 ⌘K"><svg class="i"><use href="#i-search"/></svg></button>
+      <button type="button" class="ib" aria-label="新しいページ" title="新しいページ ⌘N" data-toast="＋ は今のまま（空のページ／録音から／フォルダ）。録音はここから始めます"><svg class="i"><use href="#i-plus"/></svg></button>
+      <button type="button" class="ib" aria-label="一覧をしまう"><svg class="i"><use href="#i-side"/></svg></button>
+    </div>
+    <ul class="sb-list">
+      <li data-scenes="c"><button type="button" aria-current="page"><svg class="i"><use href="#i-doc"/></svg>無題</button></li>
+      <li><button type="button" data-cur="a"><svg class="i"><use href="#i-doc"/></svg>鎌倉の朝の散歩</button></li>
+      <li><button type="button"><svg class="i"><use href="#i-folder"/></svg>北鎌倉の取材</button></li>
+      <li class="kid"><button type="button"><svg class="i"><use href="#i-mic"/></svg>録音 11/16</button></li>
+      <li class="kid"><button type="button" data-cur="b"><svg class="i"><use href="#i-text"/></svg>文字起こし</button></li>
+      <li><button type="button"><svg class="i"><use href="#i-doc"/></svg>NIHO</button></li>
+      <li><button type="button"><svg class="i"><use href="#i-doc"/></svg>週末の市場メモ</button></li>
+      <li><button type="button"><svg class="i"><use href="#i-doc"/></svg>Getting to Kamakura</button></li>
+      <li><button type="button"><svg class="i"><use href="#i-doc"/></svg>Kamakura After 4 PM</button></li>
+      <li><button type="button"><svg class="i"><use href="#i-doc"/></svg>鎌倉大好き</button></li>
+    </ul>
+    <div class="sb-foot"><button type="button"><svg class="i"><use href="#i-gear"/></svg>設定</button></div>
+  </aside>
+
+  <main class="main">
+    <header class="hd">
+      <button type="button" class="back" data-toast="一覧へ戻る（今のまま）"><svg class="i"><use href="#i-back"/></svg><span data-scenes="a,c">一覧</span><span data-scenes="b">北鎌倉の取材</span></button>
+      <nav class="loc" aria-label="場所" data-scenes="b"><button type="button"><svg class="i"><use href="#i-folder"/></svg>北鎌倉の取材</button></nav>
+      <span class="tool-plus" style="position:relative">
+        <button type="button" class="ib" id="btn-block" aria-label="ブロックを足す" title="ブロックを足す（/ でも）" aria-haspopup="menu" aria-expanded="false"><svg class="i"><use href="#i-plus"/></svg></button>
+        <i class="n" style="left:30px;top:-4px">2</i>
+      </span>
+      <span class="sp"></span>
+      <button type="button" class="pill" data-scenes="a" id="pill-pub"><i aria-hidden="true"></i>公開中<span class="w"> · <b>更新あり</b></span></button>
+      <button type="button" class="ib" aria-label="写真を出す" title="写真を出す" data-toast="写真パネル（今のまま）。画像はここからドラッグでも入れられます"><svg class="i"><use href="#i-img"/></svg></button>
+      <button type="button" class="ib ai-btn" id="btn-ai" aria-label="AIと作る" title="AIと作る"><svg class="i"><use href="#i-chat"/></svg></button>
+      <span style="position:relative">
+        <button type="button" class="ib" id="btn-more" aria-label="その他" title="その他" aria-haspopup="menu" aria-expanded="false"><svg class="i"><use href="#i-more"/></svg></button>
+        <i class="n" style="right:-6px;top:-6px">3</i>
+      </span>
+    </header>
+
+    <div class="scroll" id="scroll">
+      <article class="paper" id="paper">
+        <div style="position:relative">
+          <i class="n n4">4</i>
+          <h1 class="ttl" contenteditable="true" data-ph="無題" data-scenes="a">鎌倉の朝の散歩</h1>
+          <h1 class="ttl" contenteditable="true" data-ph="無題" data-scenes="b">文字起こし</h1>
+          <h1 class="ttl" contenteditable="true" data-ph="無題" data-scenes="c"></h1>
+        </div>
+        <div class="tabs" role="tablist" aria-label="タブ" data-scenes="b">
+          <button type="button" class="tab" role="tab" aria-selected="true">Apple 音声認識</button>
+          <button type="button" class="tab" role="tab" aria-selected="false">Whisper</button>
+          <button type="button" class="ib" aria-label="タブを追加" title="タブを追加" data-toast="タブを足す（今の ＋ と同じ）"><svg class="i" style="width:16px;height:16px"><use href="#i-plus"/></svg></button>
+        </div>
+
+        <div class="body" data-scenes="a">
+          <figure class="img" id="fig">
+            <i class="n" style="left:-10px;top:-10px">1</i>
+            <canvas id="cv" width="960" height="560" role="img" aria-label="冬の芝生に寝転んで本を読む人" tabindex="0"></canvas>
+            <button type="button" class="img-more" id="img-more" aria-label="画像のメニュー" aria-haspopup="menu" aria-expanded="false"><svg class="i"><use href="#i-more"/></svg></button>
+            <figcaption id="cap" contenteditable="true" hidden></figcaption>
+          </figure>
+          <p>朝の七時、源氏山公園の芝生はまだ霜の名残で白っぽい。日が当たりはじめると、乾いた芝が少しずつ金色に変わっていく。</p>
+          <p>ベンチを探すのをやめて、そのまま芝に寝転んだ。持ってきた文庫本は三ページで止まり、空のほうを見ている時間のほうが長かった。</p>
+          <p>帰りは化粧坂を下りて、海蔵寺の前の茶屋で甘酒を一杯。観光客が増える前の一時間が、この町でいちばん静かな時間だと思う。</p>
+        </div>
+
+        <div class="body" data-scenes="b">
+          <p><span class="ts">00:00</span>じゃあ、源氏山のほうから歩いていきます。今朝はちょっと冷えますね。</p>
+          <p><span class="ts">00:42</span>芝生のところ、朝のこの時間は誰もいなくて、霜がまだ残ってるんですよ。</p>
+          <p><span class="ts">01:15</span>ここで少し休憩して、本を読もうかなと思ったんですけど、空がきれいで。</p>
+          <p><span class="ts">02:03</span>化粧坂は滑りやすいので、下りは気をつけてください。石がけっこう濡れてます。</p>
+          <p><span class="ts">03:30</span>海蔵寺の前の茶屋、甘酒が三百円。ここは九時から開いてます。</p>
+        </div>
+
+        <div class="body" data-scenes="c">
+          <p class="ph">書き始める（「/」で見出し・画像などを足す）</p>
+        </div>
+      </article>
+      <span class="count" data-scenes="a">186 字</span>
+      <span class="count" data-scenes="b">142 字</span>
+      <span class="count" data-scenes="c">0 字</span>
+    </div>
+
+    <!-- 画像のメニュー -->
+    <div class="pop" id="m-img" role="menu" aria-label="画像" hidden>
+      <button type="button" class="mi" role="menuitem" id="mi-cap"><svg class="i"><use href="#i-text"/></svg><span id="mi-cap-l">キャプションを追加</span></button>
+      <button type="button" class="mi" role="menuitem" id="mi-alt"><svg class="i"><use href="#i-pencil"/></svg>代替テキスト…<span class="h" id="mi-alt-h">あり</span></button>
+      <button type="button" class="mi" role="menuitem" data-toast="画像を選び直す（写真パネル・ファイル）"><svg class="i"><use href="#i-swap"/></svg>画像を置き換える</button>
+      <div class="msep"></div>
+      <button type="button" class="mi danger" role="menuitem" data-toast="画像を消す（⌘Z で戻せる）"><svg class="i"><use href="#i-trash"/></svg>削除</button>
+    </div>
+    <div class="pop altpop" id="p-alt" role="dialog" aria-label="代替テキスト" hidden>
+      <label for="alt-in">代替テキスト</label>
+      <input id="alt-in" type="text" value="冬の芝生に寝転んで本を読む人" maxlength="200">
+      <p>読み上げと検索で使います。ページには出ません。</p>
+    </div>
+
+    <!-- ＋ ブロック -->
+    <div class="pop" id="m-block" role="menu" aria-label="ブロックを足す" hidden>
+      <button type="button" class="mi" role="menuitem" data-toast="見出しを足す"><svg class="i"><use href="#i-h"/></svg>見出し<span class="h">#</span></button>
+      <button type="button" class="mi" role="menuitem" data-toast="箇条書きを足す"><svg class="i"><use href="#i-listb"/></svg>箇条書き<span class="h">-</span></button>
+      <button type="button" class="mi" role="menuitem" data-toast="画像を足す（写真パネル・ファイル）"><svg class="i"><use href="#i-img"/></svg>画像</button>
+      <button type="button" class="mi" role="menuitem" data-toast="区切り線を足す"><svg class="i"><use href="#i-text"/></svg>区切り線<span class="h">---</span></button>
+    </div>
+
+    <!-- ⋯ -->
+    <div class="pop" id="m-more" role="menu" aria-label="その他" hidden style="min-width:250px">
+      <button type="button" class="mi" role="menuitem" id="mi-pub"><svg class="i"><use href="#i-globe"/></svg>公開…<span class="h" id="mi-pub-h">公開中 · 更新あり</span></button>
+      <button type="button" class="mi" role="menuitem" data-toast="リンクで共有（今のまま）"><svg class="i"><use href="#i-link"/></svg>リンクで共有</button>
+      <button type="button" class="mi" role="menuitem" data-toast="書き出し（今のまま）"><svg class="i"><use href="#i-out"/></svg>書き出し<span class="h">.md · Google ドキュメント</span></button>
+      <div class="msep"></div>
+      <button type="button" class="mi" role="menuitem" data-toast="タブを足すと、題名の下にタブが並びます"><svg class="i"><use href="#i-tab"/></svg>タブを追加</button>
+      <button type="button" class="mi" role="menuitem" id="mi-flow"><svg class="i"><use href="#i-spark"/></svg>手順で作る…</button>
+      <div class="msep"></div>
+      <button type="button" class="mi" role="menuitem" data-toast="履歴（今のまま）"><svg class="i"><use href="#i-clock"/></svg>履歴</button>
+      <button type="button" class="mi" role="menuitem" data-toast="複製（今のまま）"><svg class="i"><use href="#i-copy"/></svg>複製</button>
+      <button type="button" class="mi danger" role="menuitem" data-toast="削除（今のまま。ゴミ箱に 30 日）"><svg class="i"><use href="#i-trash"/></svg>削除</button>
+    </div>
+  </main>
+
+  <aside class="dock" id="dock" aria-label="右のパネル">
+    <span class="grab" aria-hidden="true"></span>
+    <section class="mod" id="mod" aria-label="手順" hidden>
+      <i class="n" style="left:-10px;top:8px">5</i>
+      <div class="mod-hd">
+        <button type="button" class="mod-name" id="btn-recipe" aria-haspopup="menu" aria-expanded="false"><svg class="i"><use href="#i-spark"/></svg><span>記事制作</span><svg class="i" style="width:14px;height:14px;color:var(--faint)"><use href="#i-down"/></svg></button>
+        <span class="sp"></span>
+        <button type="button" class="ib" id="mod-x" aria-label="手順を閉じる" title="閉じる"><svg class="i" style="width:16px;height:16px"><use href="#i-x"/></svg></button>
+      </div>
+      <ol class="steps" id="steps" aria-label="段階"></ol>
+      <div class="mk">
+        <i class="n" style="right:-8px;top:-8px">6</i>
+        <button type="button" class="btn btn-pri" id="btn-make"></button>
+        <p id="mk-hint"></p>
+      </div>
+      <div class="pop" id="m-recipe" role="menu" aria-label="手順" hidden style="top:40px;left:8px">
+        <div class="mhd">このフォルダの手順</div>
+        <button type="button" class="mi" role="menuitem" data-toast="今の手順"><svg class="i"><use href="#i-check"/></svg>記事制作<span class="h">今の手順</span></button>
+        <button type="button" class="mi" role="menuitem" data-toast="手順を替える（今のまま）"><span style="width:16px"></span>SNS 投稿</button>
+        <button type="button" class="mi" role="menuitem" data-toast="手順を替える（今のまま）"><span style="width:16px"></span>取材メモの整理</button>
+      </div>
+    </section>
+
+    <section class="ai" aria-label="AIと作る">
+      <div class="ai-hd">
+        <i class="n" style="left:-10px;top:6px">7</i>
+        <h2>AIと作る</h2>
+        <button type="button" class="ib" id="btn-newchat" aria-label="新しい会話" title="新しい会話"><svg class="i"><use href="#i-pencil"/></svg></button>
+        <button type="button" class="ib" aria-label="会話の履歴" title="会話の履歴" data-toast="会話の履歴（ほかのページの会話もここから開ける）"><svg class="i"><use href="#i-more"/></svg></button>
+        <button type="button" class="ib" id="ai-x" aria-label="AIと作るを閉じる" title="閉じる"><svg class="i"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="thread" id="thread" role="log" aria-label="AIとの会話"></div>
+      <div class="comp">
+        <textarea id="ta" aria-label="AIへの依頼" placeholder="直したいこと・作りたいもの…"></textarea>
+        <div class="comp-row">
+          <button type="button" class="ib" id="btn-attach" aria-label="添付と手順" title="添付・手順で作る" aria-haspopup="menu" aria-expanded="false"><svg class="i"><use href="#i-plus"/></svg></button>
+          <button type="button" class="send" aria-label="送る" data-toast="送る（モックでは動きません）"><svg class="i"><use href="#i-up"/></svg></button>
+        </div>
+        <div class="pop" id="m-attach" role="menu" aria-label="添付と手順" hidden style="bottom:44px;left:4px">
+          <button type="button" class="mi" role="menuitem" data-toast="写真・ファイルを添付（今のまま）"><svg class="i"><use href="#i-clip"/></svg>写真・ファイルを添付</button>
+          <div class="msep"></div>
+          <div class="mhd">手順で作る</div>
+          <button type="button" class="mi" role="menuitem" data-flow="1"><svg class="i"><use href="#i-spark"/></svg>記事制作</button>
+          <button type="button" class="mi" role="menuitem" data-toast="手順のカードが出る（記事制作と同じ形）"><svg class="i"><use href="#i-spark"/></svg>SNS 投稿</button>
+          <button type="button" class="mi" role="menuitem" data-toast="手順の設定（今のまま）"><span style="width:16px"></span>手順を編集…</button>
+        </div>
+      </div>
+    </section>
+  </aside>
+
+  <div class="sheet-bg" id="sheet" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-t">
+      <h3 id="sheet-t">公開</h3>
+      <p>中身は今の公開のシートのまま（どこに出すか・URL・カバー・英語版）。入口をヘッダーのボタンから「⋯」の先頭に移すだけです。</p>
+      <p>写真の掲載許諾は公開の条件から外すので、「掲載許諾のない写真があります」は出なくなります。</p>
+      <button type="button" class="btn btn-out" id="sheet-x">閉じる</button>
+    </div>
+  </div>
+  <div class="toast" id="toast" role="status" hidden></div>
+</div>
+</div>
+</div>
+
+<section class="notes" aria-label="説明">
+  <div class="card">
+    <h2>変更点（画面の緑の番号）</h2>
+    <ol>
+      <li><span class="k">1</span><div><b>画像の下の欄をなくす。</b>右クリック（スマホは画像の ⋯）で「キャプションを追加／代替テキスト…／画像を置き換える／削除」。キャプションは選んだときだけ画像の下に 1 行出す。<b>クレジットと掲載許諾のチェックは削除</b>。<br><span class="was">今: 画像を選ぶたびに 4 つの欄と注意文が出る</span></div></li>
+      <li><span class="k">2</span><div><b>上のバーは ＋ だけ。</b>画像ボタン（左の写真アイコン）とマイクを消す。画像は ＋・写真パネル・ドラッグ・貼り付けで、録音は左上の ＋「録音から」で始める。<br><span class="was">今: ＋・画像・マイク。マイクは録音ページを新しく作る</span></div></li>
+      <li><span class="k">3</span><div><b>公開は ⋯ の先頭「公開…」。</b>公開済みのページだけヘッダーに「公開中 · 更新あり」の札を出し、押すと公開のシート。<br><span class="was">今: 「公開」ボタンが常にヘッダーにある</span></div></li>
+      <li><span class="k">4</span><div><b>題名の上のタブの罫線をやめる。</b>タブが 1 つなら帯を出さない（⋯「タブを追加」）。2 つ以上のときは題名の下に並べる（題名はページの名前で、タブは中身の切り替え）。<br><span class="was">今: 1 つでも題名の上に罫線と ＋</span></div></li>
+      <li><span class="k">5</span><div><b>手順（文書生成）は使うときだけ出るカードにする。</b>録音から作ったページ・手順の途中のページでは右上に出る。書いたページでは出さず、AI の ＋「手順で作る」か ⋯「手順で作る…」で呼ぶ。書いたページから呼ぶと録音・文字起こしの段階は出さず「このページ」から始まる。<br><span class="was">今: どのページでも「ページ」パネルに 録音（まだ）・文字起こし（まだ）…</span></div></li>
+      <li><span class="k">6</span><div><b>「（まだ）」をやめ、✓ 済み・● いま・○ これから（番号つき）。</b>作成ボタンは 1 つ（「記事本文まで作る」）。途中で止めたいときは段階の行を押す。フォルダの外の長い一言はやめ、ボタンの下に「できたページは…にまとまります」と出す。<br><span class="was">今: 「作成」ボタンが 3 つ並ぶ</span></div></li>
+      <li><span class="k">7</span><div><b>新しいページを開いたら、AI は新しい会話。</b>前のページの会話は履歴から開ける。<br><span class="was">今: どのページでも、いちばん新しい会話の続き（#312）</span></div></li>
+      <li><span class="k x">8</span><div><b>掲載許諾を公開と配信の条件から外す</b>（画面には出ない変更）。公開前チェックの「掲載許諾のない写真があります」「カバー写真に掲載許諾がありません」、公開画像の配信の <code>consent = true</code>、発信先の宣言の cover の consent 条件。</div></li>
+    </ol>
+  </div>
+  <div class="card">
+    <h2>相談したいこと</h2>
+    <ol>
+      <li><span class="k q">A</span><div><b>「共有画像（SNS・検索結果）にも使ってよい」の許諾も外すか。</b>今は公開のシートのカバーにだけある別のチェックで、これが無いと OG 画像にカバーを使わない。<span class="rec">推奨: 外す</span> カバーをそのまま OG 画像にする（一般的な CMS と同じ）。</div></li>
+      <li><span class="k q">B</span><div><b>既にあるページへ移ったときの AI の会話。</b>(a) そのページで最後に話した会話を開く（無ければ新しい会話）／(b) 今どおり直前の会話を続ける。<span class="rec">推奨: (a)</span> 会話がページの中身とずれない。#312「会話は利用者のもの」は履歴から全部開けることで保つ。</div></li>
+      <li><span class="k q">C</span><div><b>代替テキストの置き場。</b>指示に無かったので、画像のメニューの「代替テキスト…」に入れた（読み上げと検索に使う）。<span class="rec">推奨: このまま</span></div></li>
+      <li><span class="k q">D</span><div><b>既にあるクレジット。</b>入力欄を消すと直せなくなるので、公開ページの表示も止める（列は後の migration で消す）。<span class="rec">推奨: 表示も止める</span></div></li>
+    </ol>
+  </div>
+  <div class="card">
+    <h2>作っていない</h2>
+    <ul>
+      <li><span class="k x">–</span><div>本文の編集・保存・公開・AI の送信・手順の実行・タブの追加・書き出し・削除は見た目だけ（押すと一言）。</div></li>
+      <li><span class="k x">–</span><div>公開のシートの中身・左の一覧・写真パネルは今のまま。スマホ幅の下端の書式バーは描いていない。</div></li>
+      <li><span class="k x">–</span><div>Mac アプリは同じ UI を描くので、別に作らない。</div></li>
+    </ul>
+  </div>
+</section>
+
+<script>
+(function(){
+  var app=document.getElementById('app'), frame=document.getElementById('frame');
+  var S={scene:'a',w:'pc',mod:{a:false,b:true,c:false},target:{},cap:'',capOn:false,chat:{a:'page',b:'page',c:'new'}};
+  var FLOW={
+    b:[{k:'rec',nm:'録音',st:'done',meta:'4 分 12 秒'},{k:'tr',nm:'文字起こし',st:'cur',meta:'タブ 2'},{k:'fix',nm:'文字起こし修正',st:'todo'},{k:'plan',nm:'記事方針',st:'todo'},{k:'art',nm:'記事本文',st:'todo'}],
+    page:[{k:'src',nm:'このページ',st:'cur'},{k:'plan',nm:'記事方針',st:'todo'},{k:'art',nm:'記事本文',st:'todo'}]
+  };
+  var CHAT={
+    a:[{d:'このページの会話 · 11/17'},{me:'書き出しをもう少し短くして'},{bot:'1 段落目を 2 文にまとめました。「霜の名残」はそのまま残しています。'},{me:'最後に茶屋の営業時間も足して'},{bot:'3 段落目の終わりに「茶屋は 9 時から」を足しました。'}],
+    b:[{d:'このページの会話 · 11/16'},{me:'固有名詞の表記をそろえて'},{bot:'「化粧坂」「海蔵寺」にそろえました（3 か所）。'}]
+  };
+  function $(id){return document.getElementById(id)}
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+  var toastT;
+  function toast(t){var el=$('toast');el.textContent=t;el.hidden=false;clearTimeout(toastT);toastT=setTimeout(function(){el.hidden=true},2600)}
+
+  function closeMenus(except){
+    ['m-img','p-alt','m-block','m-more','m-attach','m-recipe'].forEach(function(id){if(id!==except)$(id).hidden=true});
+    document.querySelectorAll('[aria-expanded="true"]').forEach(function(b){if(!except||b.dataset.menu!==except)b.setAttribute('aria-expanded','false')});
+  }
+  function place(menu,anchor,align){
+    menu.hidden=false;
+    var r=anchor.getBoundingClientRect(), base=menu.offsetParent.getBoundingClientRect();
+    var w=menu.offsetWidth, left=align==='right'?r.right-base.left-w:r.left-base.left;
+    left=Math.max(8,Math.min(left,base.width-w-8));
+    menu.style.left=left+'px'; menu.style.top=(r.bottom-base.top+6)+'px'; menu.style.right='auto';
+  }
+  function toggle(btn,id,align){
+    var m=$(id), open=m.hidden;
+    closeMenus(); if(!open)return;
+    btn.dataset.menu=id; btn.setAttribute('aria-expanded','true'); place(m,btn,align);
+    var f=m.querySelector('button,input'); if(f)f.focus({preventScroll:true});
+  }
+
+  function render(){
+    app.dataset.scene=S.scene; frame.dataset.w=S.w;
+    document.querySelectorAll('[data-scenes]').forEach(function(el){el.hidden=el.dataset.scenes.split(',').indexOf(S.scene)<0});
+    document.querySelectorAll('.sb-list [data-cur]').forEach(function(b){if(b.dataset.cur===S.scene)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
+    $('mi-pub-h').textContent=S.scene==='a'?'公開中 · 更新あり':'未公開';
+    renderMod(); renderChat(); closeMenus();
+  }
+  function renderMod(){
+    var on=S.mod[S.scene]; $('mod').hidden=!on; if(!on)return;
+    var rows=S.scene==='b'?FLOW.b:FLOW.page;
+    var todo=rows.filter(function(r){return r.st==='todo'});
+    var tgt=S.target[S.scene]||todo[todo.length-1].k, n=0, passed=false, html='';
+    rows.forEach(function(r,i){
+      var cls=r.st, tag='', dot='';
+      if(r.st==='done')dot='<svg class="i"><use href="#i-check"/></svg>';
+      if(r.st==='todo'){n++;dot=String(i+1); if(passed)cls+=' after'; if(r.k===tgt){tag='<span class="tag goal">ここまで</span>';passed=true}}
+      if(r.st==='cur')tag='<span class="tag now">いま見ている</span>';
+      var sr={done:'済み',cur:'いま開いているページ',todo:'これから'}[r.st];
+      var inner='<span class="dot" aria-hidden="true">'+dot+'</span><span class="nm">'+esc(r.nm)+'<span class="vh">（'+sr+'）</span></span>'+(tag||(r.meta?'<span class="meta">'+esc(r.meta)+'</span>':''));
+      var el=r.st==='todo'?'<button type="button" class="step" data-k="'+r.k+'" aria-pressed="'+(r.k===tgt)+'">'+inner+'</button>':(r.st==='done'?'<button type="button" class="step" data-open="'+esc(r.nm)+'">'+inner+'</button>':'<div class="step" aria-current="page">'+inner+'</div>');
+      html+='<li class="'+cls+'">'+el+'</li>';
+    });
+    $('steps').innerHTML=html;
+    var t=rows.filter(function(r){return r.k===tgt})[0], cnt=0, hit=false;
+    todo.forEach(function(r){if(!hit)cnt++; if(r.k===tgt)hit=true});
+    $('btn-make').textContent=t.nm+'まで作る'+(cnt>1?'（'+cnt+' 段階）':'');
+    $('mk-hint').textContent=S.scene==='b'?'段階を押すと、そこで止められます。できたページは「北鎌倉の取材」に入ります。':'段階を押すと、そこで止められます。できたページはこのページと一緒にフォルダにまとまります。';
+  }
+  function renderChat(){
+    var th=$('thread'), mode=S.chat[S.scene];
+    if(mode==='new'){
+      th.innerHTML='<div class="empty"><h3>新しい会話</h3><p>このページについて頼めます。</p><div class="chips">'+
+        '<button type="button" class="chip" data-flow="1"><svg class="i"><use href="#i-spark"/></svg>記事制作の手順で作る</button>'+
+        '<button type="button" class="chip" data-fill="書き出しの案を 3 つ出して"><svg class="i"><use href="#i-pencil"/></svg>書き出しの案を出す</button>'+
+        '<button type="button" class="chip" data-fill="見出しの構成を考えて"><svg class="i"><use href="#i-listb"/></svg>見出しの構成を考える</button></div></div>';
+      return;
+    }
+    th.innerHTML=CHAT[S.scene].map(function(m){return m.d?'<div class="day">'+esc(m.d)+'</div>':m.me?'<div class="me">'+esc(m.me)+'</div>':'<div class="bot">'+esc(m.bot)+'</div>'}).join('');
+    th.scrollTop=th.scrollHeight;
+  }
+  function openFlow(){S.mod[S.scene]=true;renderMod();closeMenus();if(S.w!=='pc')app.classList.add('ai-open');toast('手順のカードを出しました（このページから）')}
+
+  // 帯
+  function seg(id,key){$(id).addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;S[key]=b.dataset.v;$(id).querySelectorAll('button').forEach(function(x){x.setAttribute('aria-pressed',String(x===b))});app.classList.remove('ai-open');render()})}
+  seg('seg-scene','scene'); seg('seg-w','w');
+  $('nums').addEventListener('change',function(e){frame.classList.toggle('nums',e.target.checked)});
+
+  // 画像
+  var fig=$('fig'), cv=$('cv');
+  function selImg(on){fig.classList.toggle('sel',on)}
+  cv.addEventListener('click',function(){selImg(true)});
+  cv.addEventListener('contextmenu',function(e){
+    e.preventDefault(); selImg(true); closeMenus();
+    var m=$('m-img'); m.hidden=false; var base=m.offsetParent.getBoundingClientRect();
+    var l=Math.min(e.clientX-base.left,base.width-m.offsetWidth-8), t=Math.min(e.clientY-base.top,base.height-m.offsetHeight-8);
+    m.style.left=Math.max(8,l)+'px'; m.style.top=Math.max(8,t)+'px'; m.querySelector('button').focus({preventScroll:true});
+  });
+  $('img-more').addEventListener('click',function(e){e.stopPropagation();selImg(true);toggle(this,'m-img','right')});
+  $('mi-cap').addEventListener('click',function(){
+    var c=$('cap'); closeMenus();
+    if(S.capOn){S.capOn=false;c.textContent='';c.hidden=true;$('mi-cap-l').textContent='キャプションを追加';toast('キャプションを外しました');return}
+    S.capOn=true; c.hidden=false; c.focus(); $('mi-cap-l').textContent='キャプションを外す';
+  });
+  $('cap').addEventListener('blur',function(){var c=$('cap');if(!c.textContent.trim()){c.textContent='';c.hidden=true;S.capOn=false;$('mi-cap-l').textContent='キャプションを追加'}});
+  $('cap').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();this.blur()}});
+  $('mi-alt').addEventListener('click',function(){closeMenus();var p=$('p-alt');p.hidden=false;var r=fig.getBoundingClientRect(),base=p.offsetParent.getBoundingClientRect();p.style.left=Math.max(8,r.left-base.left)+'px';p.style.top=(Math.min(r.bottom,base.bottom-120)-base.top-8)+'px';$('alt-in').focus()});
+  $('alt-in').addEventListener('input',function(){$('mi-alt-h').textContent=this.value?'あり':'なし'});
+  $('alt-in').addEventListener('keydown',function(e){if(e.key==='Enter'||e.key==='Escape'){$('p-alt').hidden=true}});
+
+  // ヘッダー
+  $('btn-block').addEventListener('click',function(e){e.stopPropagation();toggle(this,'m-block','left')});
+  $('btn-more').addEventListener('click',function(e){e.stopPropagation();toggle(this,'m-more','right')});
+  $('mi-pub').addEventListener('click',function(){closeMenus();$('sheet').hidden=false;$('sheet-x').focus()});
+  $('pill-pub').addEventListener('click',function(){$('sheet').hidden=false;$('sheet-x').focus()});
+  $('sheet-x').addEventListener('click',function(){$('sheet').hidden=true});
+  $('mi-flow').addEventListener('click',openFlow);
+  $('btn-ai').addEventListener('click',function(){app.classList.toggle('ai-open')});
+  $('ai-x').addEventListener('click',function(){if(S.w!=='pc'){app.classList.remove('ai-open')}else toast('AI を閉じる（今のまま。右上のボタンで出せる）')});
+
+  // 手順
+  $('steps').addEventListener('click',function(e){var b=e.target.closest('button.step');if(!b)return;if(b.dataset.k){S.target[S.scene]=b.dataset.k;renderMod()}else if(b.dataset.open)toast('「'+b.dataset.open+'」を開く')});
+  $('btn-make').addEventListener('click',function(){toast(this.textContent.replace(/（.*）/,'')+'…（モックでは動きません）')});
+  $('mod-x').addEventListener('click',function(){S.mod[S.scene]=false;renderMod();toast('手順を閉じました。AI の ＋「手順で作る」でまた出せます')});
+  $('btn-recipe').addEventListener('click',function(e){e.stopPropagation();var m=$('m-recipe'),open=m.hidden;closeMenus();if(open){m.hidden=false;this.setAttribute('aria-expanded','true');this.dataset.menu='m-recipe'}});
+
+  // AI
+  $('btn-attach').addEventListener('click',function(e){e.stopPropagation();var m=$('m-attach'),open=m.hidden;closeMenus();if(open){m.hidden=false;this.setAttribute('aria-expanded','true');this.dataset.menu='m-attach'}});
+  $('btn-newchat').addEventListener('click',function(){S.chat[S.scene]='new';renderChat();toast('新しい会話にしました')});
+  document.addEventListener('click',function(e){
+    var f=e.target.closest('[data-flow]'); if(f){e.stopPropagation();openFlow();return}
+    var fl=e.target.closest('[data-fill]'); if(fl){$('ta').value=fl.dataset.fill;$('ta').focus();return}
+    var t=e.target.closest('[data-toast]'); if(t){closeMenus();toast(t.dataset.toast);return}
+    if(!e.target.closest('.pop')&&!e.target.closest('[aria-haspopup]')){closeMenus(); if(!e.target.closest('#fig'))selImg(false)}
+  });
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeMenus();$('sheet').hidden=true;$('p-alt').hidden=true}});
+
+  // 画像（冬の芝生）を描く
+  (function draw(){
+    var c=cv.getContext('2d'),W=cv.width,H=cv.height,seed=7;
+    function rnd(){seed=(seed*16807)%2147483647;return (seed-1)/2147483646}
+    var g=c.createLinearGradient(0,0,0,H);g.addColorStop(0,'#b79a6c');g.addColorStop(.55,'#a2835a');g.addColorStop(1,'#7e6242');
+    c.fillStyle=g;c.fillRect(0,0,W,H);
+    c.fillStyle='rgba(222,206,176,.55)';c.beginPath();c.ellipse(W*.32,H*.12,W*.36,H*.12,-.08,0,Math.PI*2);c.fill();
+    c.fillStyle='rgba(60,44,28,.22)';c.beginPath();c.ellipse(W*.78,H*.2,W*.2,H*.08,.1,0,Math.PI*2);c.fill();
+    var cols=['#d6c095','#b8975f','#8f6f45','#6e5234','#c7a978'];
+    for(var i=0;i<5200;i++){var x=rnd()*W,y=rnd()*H,l=6+rnd()*14*(.5+y/H),a=-1.9+rnd()*.8;c.strokeStyle=cols[(rnd()*cols.length)|0];c.globalAlpha=.35+rnd()*.5;c.lineWidth=1+rnd()*1.2;c.beginPath();c.moveTo(x,y);c.lineTo(x+Math.cos(a)*l,y+Math.sin(a)*l);c.stroke()}
+    c.globalAlpha=1;
+    // 寝転ぶ人（ごく簡単な形）
+    c.fillStyle='#2b2f3a';c.beginPath();c.ellipse(W*.6,H*.62,W*.17,H*.085,.18,0,Math.PI*2);c.fill();
+    c.fillStyle='#3a3f4c';c.beginPath();c.ellipse(W*.77,H*.7,W*.12,H*.06,.25,0,Math.PI*2);c.fill();
+    c.fillStyle='#1d1a18';c.beginPath();c.arc(W*.45,H*.5,H*.065,0,Math.PI*2);c.fill();
+    c.fillStyle='#f2efe6';c.beginPath();c.moveTo(W*.33,H*.55);c.lineTo(W*.41,H*.52);c.lineTo(W*.43,H*.58);c.lineTo(W*.35,H*.61);c.closePath();c.fill();
+  })();
+
+  render();
+})();
+</script>
+</body>
+</html>
