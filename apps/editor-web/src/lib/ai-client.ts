@@ -54,7 +54,11 @@ export type AiChatMessage = {
   pageTitle: string | null;
 };
 
-export type AiChatSummary = { id: string; updatedAt: string; messages: number; lastText: string | null };
+/**
+ * 会話の一覧の 1 つ。`pageId` は始めたページ、`lastPageId` はいちばん新しい発言の turn で開いていたページ
+ * （どちらも消えたページ・古い記録・欄を返さない古いサーバーなら null）。画面はページを開いたときに、これでそのページの会話を選ぶ（#344）。
+ */
+export type AiChatSummary = { id: string; updatedAt: string; messages: number; lastText: string | null; pageId: string | null; lastPageId: string | null };
 export type AiChat = { conversation: AiChatSummary; messages: AiChatMessage[] };
 
 /** AI が直した・作ったページ（1 回の依頼ごと）。 */
@@ -220,6 +224,9 @@ function chatSummaryOf(value: unknown): AiChatSummary | null {
     updatedAt: value.updatedAt,
     messages: isIndex(value.messages, 0) ? value.messages : 0,
     lastText: typeof value.lastText === "string" ? value.lastText : null,
+    // 欄が無い（古いサーバー）・null でも失敗にせず null として読む
+    pageId: typeof value.pageId === "string" ? value.pageId : null,
+    lastPageId: typeof value.lastPageId === "string" ? value.lastPageId : null,
   };
 }
 
@@ -241,7 +248,7 @@ async function get(path: string, signal?: AbortSignal): Promise<unknown> {
   }
 }
 
-/** そのページの会話の一覧（新しい順）。 */
+/** 利用者の会話の一覧（新しい順。どのページで始めたかによらない。`pageId` は開いているページで、本人のものかの確認に使う）。 */
 export async function listAiChats(pageId: string, options: { signal?: AbortSignal } = {}): Promise<AiChatSummary[]> {
   const data = await get(pagePath(pageId, "/ai/conversations"), options.signal);
   if (!isRecord(data) || !Array.isArray(data.conversations)) throw new AiRequestError("failed");

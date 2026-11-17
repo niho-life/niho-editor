@@ -32,7 +32,7 @@ type MemoryUsage = ReturnType<typeof memoryUsage>;
 
 /** owner とページで絞る会話（ai-conversations.ts と同じ約束: 他人のもの・無いものはどちらも null）。 */
 function memoryConversations() {
-  type Row = { id: string; owner: string; pageId: string; messages: AiMessage[] };
+  type Row = { id: string; owner: string; pageId: string; lastPageId: string | null; messages: AiMessage[] };
   const rows: Row[] = [];
   const summary = (row: Row): AiConversationSummary => ({
     id: row.id,
@@ -41,6 +41,7 @@ function memoryConversations() {
     updatedAt: NOW.toISOString(),
     messages: row.messages.length,
     lastText: row.messages.at(-1)?.text ?? null,
+    lastPageId: row.lastPageId,
   });
   const message = (seq: number, role: AiMessage["role"], text: string): AiMessage => ({
     id: randomUUID(),
@@ -65,12 +66,13 @@ function memoryConversations() {
   const pages = new Map<string, string>();
   return {
     pages,
-    add(owner: string, pageId: string, texts: string[]): string {
-      const row: Row = { id: randomUUID(), owner, pageId, messages: texts.map((text, index) => message(index + 1, index % 2 === 0 ? "user" : "assistant", text)) };
+    /** `lastPageId` は最後の発言の turn で開いていたページ（渡さなければ始めたページ）。 */
+    add(owner: string, pageId: string, texts: string[], lastPageId: string | null = pageId): string {
+      const row: Row = { id: randomUUID(), owner, pageId, lastPageId, messages: texts.map((text, index) => message(index + 1, index % 2 === 0 ? "user" : "assistant", text)) };
       rows.push(row);
       return row.id;
     },
-    // 会話は利用者のもの（#312）。pageId は開いているページが本人のものかの確認だけ
+    // 会話は利用者のもの（#312）。pageId は開いているページが本人のものかの確認だけ（一覧はどのページからも同じ）
     async list(owner: string, pageId: string): Promise<AiConversationSummary[] | null> {
       if (pages.get(pageId) !== owner) return null;
       return rows.filter((row) => row.owner === owner).map(summary).reverse();
@@ -164,10 +166,12 @@ describe("the conversations of the owner (from any page)", () => {
     const d = deps("user-a", { conversations: chats });
     expect(((await (await listChats(pageId, d)).json()) as { conversations: AiConversationSummary[] }).conversations).toEqual([]);
     const first = chats.add("user-a", pageId, ["合成の頼み", "合成の返答"]);
-    const second = chats.add("user-a", otherPage, ["次の頼み", "次の返答"]);
+    // 2 つ目は otherPage で始めて、最後は pageId で話した（#344 の会話選びに使う lastPageId を、そのまま返す）
+    const second = chats.add("user-a", otherPage, ["次の頼み", "次の返答"], pageId);
     const list = ((await (await listChats(pageId, d)).json()) as { conversations: AiConversationSummary[] }).conversations;
     expect(list.map((item) => item.id)).toEqual([second, first]);
-    expect(list[0]).toMatchObject({ pageId: otherPage, messages: 2, lastText: "次の返答" });
+    expect(list[0]).toMatchObject({ pageId: otherPage, lastPageId: pageId, messages: 2, lastText: "次の返答" });
+    expect(list[1]).toMatchObject({ pageId, lastPageId: pageId });
     // 別のページを開いていても同じ一覧・同じ会話
     expect(((await (await listChats(otherPage, d)).json()) as { conversations: AiConversationSummary[] }).conversations.map((item) => item.id)).toEqual([second, first]);
     const opened = (await (await openChat(otherPage, first, d)).json()) as AiConversation;

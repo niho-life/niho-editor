@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AiConflictError, AiRequestError, streamAiChat, type AiChatEvent } from "./ai-client";
+import { AiConflictError, AiRequestError, getAiChat, listAiChats, streamAiChat, type AiChatEvent } from "./ai-client";
 
 const PAGE_ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
 
@@ -119,5 +119,36 @@ describe("streamAiChat", () => {
       throw new DOMException("aborted", "AbortError");
     });
     await expect(streamAiChat(PAGE_ID, { text: "x" }, { signal: controller.signal, onEvent: vi.fn() })).rejects.toMatchObject({ code: "aborted" });
+  });
+});
+
+describe("listAiChats / getAiChat（会話の一覧。#344）", () => {
+  const OTHER_PAGE = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d22";
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+
+  it("reads the page a conversation was started on (pageId) and the page it was last talked on (lastPageId)", async () => {
+    const fetchMock = stubFetch(json({
+      conversations: [
+        { id: "conversation-2", pageId: OTHER_PAGE, lastPageId: PAGE_ID, createdAt: "2026-11-18T00:00:00.000Z", updatedAt: "2026-11-18T01:00:00.000Z", messages: 4, lastText: "続きの返答" },
+        { id: "conversation-1", pageId: null, lastPageId: null, createdAt: "2026-11-17T00:00:00.000Z", updatedAt: "2026-11-17T01:00:00.000Z", messages: 0, lastText: null },
+      ],
+    }));
+    expect(await listAiChats(PAGE_ID)).toEqual([
+      { id: "conversation-2", updatedAt: "2026-11-18T01:00:00.000Z", messages: 4, lastText: "続きの返答", pageId: OTHER_PAGE, lastPageId: PAGE_ID },
+      { id: "conversation-1", updatedAt: "2026-11-17T01:00:00.000Z", messages: 0, lastText: null, pageId: null, lastPageId: null },
+    ]);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/pages/${PAGE_ID}/ai/conversations`);
+  });
+
+  it("does not fail on an older server that has no lastPageId (or pageId): both read as null", async () => {
+    stubFetch(json({ conversations: [{ id: "conversation-1", updatedAt: "2026-11-17T01:00:00.000Z", messages: 2, lastText: "前の返答" }] }));
+    expect(await listAiChats(PAGE_ID)).toEqual([{ id: "conversation-1", updatedAt: "2026-11-17T01:00:00.000Z", messages: 2, lastText: "前の返答", pageId: null, lastPageId: null }]);
+    stubFetch(json({ conversation: { id: "conversation-1", pageId: PAGE_ID, updatedAt: "2026-11-17T01:00:00.000Z", messages: 0, lastText: null }, messages: [] }));
+    expect((await getAiChat(PAGE_ID, "conversation-1")).conversation).toMatchObject({ pageId: PAGE_ID, lastPageId: null });
+  });
+
+  it("still refuses a list item without an id", async () => {
+    stubFetch(json({ conversations: [{ updatedAt: "2026-11-17T01:00:00.000Z", lastPageId: PAGE_ID }] }));
+    await expect(listAiChats(PAGE_ID)).rejects.toMatchObject({ code: "failed" });
   });
 });

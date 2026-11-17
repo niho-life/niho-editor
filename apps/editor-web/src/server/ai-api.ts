@@ -92,7 +92,8 @@ function currentMonth(deps: AiApiDeps): string {
 }
 
 /**
- * GET /api/pages/{id}/ai/conversations — そのページの会話の一覧（新しい順）。AI が無効でも答える（履歴は読める）。
+ * GET /api/pages/{id}/ai/conversations — 利用者の会話の一覧（新しい順。どのページで始めたかによらない）。AI が無効でも答える（履歴は読める）。
+ * 各会話に始めたページ（`pageId`）と最後に話したページ（`lastPageId`）を添える（画面がページを開いたときの会話選び。#344）。
  * 他人のページ・無いページは同じ 404。
  */
 export function listAiConversations(request: Request, id: string, deps: AiApiDeps): Promise<Response> {

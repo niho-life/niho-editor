@@ -138,6 +138,9 @@ export const AI_WORK_TEXT: Record<string, string> = {
 
 const AI_WORK_FALLBACK = "作業しています…";
 
+/** 会話の一覧・会話を読めなかったときの知らせの頭（読めたら、残っているこの知らせを消す）。 */
+const HISTORY_FAILED = "会話履歴を読み込めませんでした。";
+
 /** 書きかけの AI の発言（SSE・CLI の出来事を足していく）。`split` は次の文を新しい段落にする（道具をまたいだ）。 */
 export type AiLiveTurn = {
   input: string;
@@ -236,6 +239,15 @@ function removeSlash(value: string, caret: number): { value: string; caret: numb
   return { value: value.slice(0, token.from) + value.slice(caret), caret: token.from };
 }
 
+/**
+ * ページを開いたときに続ける会話（#344 決定 B。オーナー 2026-11-18）。一覧は新しい順。
+ * (a) そのページで最後に話した会話（`lastPageId`）のいちばん新しいもの、(b) 無ければそのページで始めた会話（`pageId`）の
+ * いちばん新しいもの、(c) どちらも無ければ null（新しい会話）。ほかのページの会話は履歴（⋯）から開く。
+ */
+export function conversationForPage(chats: readonly AiChatSummary[], pageId: string): AiChatSummary | null {
+  return chats.find((chat) => chat.lastPageId === pageId) ?? chats.find((chat) => chat.pageId === pageId) ?? null;
+}
+
 function historyLabel(chat: AiChatSummary): string {
   const text = chat.lastText?.trim().replace(/\s+/g, " ");
   return text ? Array.from(text).slice(0, 28).join("") : "新しい会話";
@@ -309,7 +321,9 @@ export type AiPanelProps = {
 
 /**
  * 「AIと作る」の常設の AI（アプリ全体で 1 つ。#312）。パネルを閉じても EditorShell が unmount しないため draft と実行状態を保つ。
- * ページ（タブ）を移っても会話・送信待ち・CLI session・書きかけは残る（捨てるのは「新しい会話」のときだけ）。
+ * ページ（タブ）を移ると、会話はそのページのものを選び直す（そのページで最後に話した会話。無ければ新しい会話。#344 決定 B）。
+ * ほかのページの会話は履歴（⋯）から開ける（会話は利用者のもの。#312）。依頼の途中に移ったときは今の会話のまま続ける。
+ * 書きかけの文と送信待ちは、ページを移っても残る。
  * 依頼は今開いているページで頼み（`/api/pages/{今のページ}/ai/chat`）、発言にそのページが残る（「◯◯ で」）。
  */
 export function AiPanel({ pageId, context, steps, placement, onPagesChanged, onFlow }: AiPanelProps) {
@@ -365,11 +379,16 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, onF
   const pagesChangedRef = useRef(onPagesChanged);
   const pageRef = useRef(pageId);
   const contextRef = useRef(context);
+  // ページが替わったときの会話選び（下の effect）が、依存にせずに今の値を読む
+  const busyRef = useRef<Busy>(null);
+  const conversationIdRef = useRef<string | null>(null);
   useEffect(() => {
     placementRef.current = placement;
     pagesChangedRef.current = onPagesChanged;
     pageRef.current = pageId;
     contextRef.current = context;
+    busyRef.current = busy;
+    conversationIdRef.current = conversationId;
   });
   /**
    * 依頼で変わった本文を、頼んだページ（`turnPage`）をまだ開いているときだけ載せ替える
@@ -449,8 +468,8 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, onF
     });
   }, [diff]);
 
-  // ページ（タブ）を移っても会話は続く（#312）: thread・会話の id・送信待ち・CLI session・書きかけ・進行中の依頼は保つ。
-  // ページに属するもの（選んだ工程・「変更を見る」の行・開いているメニュー）だけ閉じる
+  // ページ（タブ）を移ったら、ページに属するもの（選んだ工程・「変更を見る」の行・開いているメニュー）を閉じる。
+  // 会話は下の effect が移った先のページで選び直す（#344。依頼の途中なら今の会話のまま）。書きかけ・送信待ち・進行中の依頼は保つ
   useEffect(() => {
     editedRef.current = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the page the panel is attached to changed
@@ -472,16 +491,40 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, onF
     [],
   );
 
-  // 会話の履歴は利用者のもの。最初に（と「再試行」で）いちばん新しい会話を開く。ページが無い間（下書きを読んでいる・作る前）は待ち、
-  // ページが決まってから読む。読んでいる途中でページが替わったら、次のページで読み直す。読み終えたあとは、ページを移っても
-  // 読み直さない（履歴で選んだ会話・「新しい会話」の下書きをそのまま続ける）
-  const loadedForRef = useRef(-1);
+  /**
+   * ページを開いたときの会話（#344 決定 B。オーナー 2026-11-18）。ページ（`pageId`）が決まった・替わったときと「再試行」で、
+   * 会話の一覧を読み直し、`conversationForPage` で選ぶ（そのページで最後に話した会話 → そのページで始めた会話 → 新しい会話）。
+   * - 新しい会話は「新しい会話」を押したのと同じ状態（thread を空に、会話の id を null）。入力欄の書きかけは残す。
+   * - 選んだ会話が今の会話なら、そのまま続ける（thread・CLI session も保つ）。別の会話なら履歴から選んだときと同じく CLI session を外す。
+   * - 依頼の途中（作業中・送信待ちあり）にページが替わったら切り替えない（今の依頼はその会話のもの）。終わったあとも切り替えず、
+   *   次にページを移ったときに選ぶ。
+   * - ページが無い間（新しいページを保存する前・下書きを読んでいる間）は待ち、決まったときに選ぶ。同じページへ付け直した
+   *   （bridge だけ替わった）ときは選び直さない（履歴で選んだ会話・「新しい会話」をそのまま続ける）。
+   * - 読んでいる途中でまたページが替わったら、前の読み込みは捨てて（古い結果で上書きしない）新しいページで選び直す。
+   */
+  const pickedForRef = useRef<string | null>(null);
+  const attached = Boolean(context?.bridge);
   useEffect(() => {
-    if (!pageId || !context?.bridge || loadedForRef.current === retry) return;
-    loadedForRef.current = retry;
+    if (!pageId || !attached) return;
+    const key = `${pageId}#${retry}`;
+    if (pickedForRef.current === key) return;
+    pickedForRef.current = key;
+    if (busyRef.current !== null || flightRef.current || queueRef.current.length > 0) return;
+    // 履歴から選んだ会話を読んでいる途中なら、それは捨てて、このページで選ぶ
+    sessionControllerRef.current?.abort();
     const generation = generationRef.current;
     const controller = new AbortController();
     sessionControllerRef.current = controller;
+    const current = () => !controller.signal.aborted && generationRef.current === generation;
+    /** 選んだ会話を出す（null は新しい会話）。履歴から選んだときと同じく CLI session と前の知らせを外し、書きかけは残す。 */
+    const show = (id: string | null, messages: AiChatMessage[]) => {
+      setConversationId(id);
+      setThread(messages);
+      setResumeSession(null);
+      setSessionError(null);
+      setFailedSessionId(null);
+      setStatus("");
+    };
     // 読み終えた（成功・失敗・ほかの操作での中断のどれでも）。cleanup で「読んでいる途中にページが替わった」と見分ける
     let settled = false;
     setHistoryState("loading");
@@ -490,32 +533,37 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, onF
     void (async () => {
       try {
         const listed = await listAiChats(pageId, { signal: controller.signal });
-        if (controller.signal.aborted || generationRef.current !== generation) return;
+        if (!current()) return;
         setSessions(listed);
-        const newest = listed[0];
-        if (newest) {
-          const chat = await getAiChat(pageId, newest.id, { signal: controller.signal });
-          if (controller.signal.aborted || generationRef.current !== generation) return;
-          setConversationId(chat.conversation.id);
-          setThread(chat.messages);
+        const picked = conversationForPage(listed, pageId);
+        if (picked === null) {
+          show(null, []);
+        } else if (picked.id !== conversationIdRef.current) {
+          const chat = await getAiChat(pageId, picked.id, { signal: controller.signal });
+          if (!current()) return;
+          show(chat.conversation.id, chat.messages);
+        } else {
+          // 今の会話のまま続ける。前に読めなかった知らせだけ消す
+          setStatus((now) => (now.startsWith(HISTORY_FAILED) ? "" : now));
         }
         setHistoryState("ready");
       } catch (error) {
-        if (controller.signal.aborted || generationRef.current !== generation) return;
+        if (!current()) return;
         setHistoryState("error");
-        setStatus(`会話履歴を読み込めませんでした。${messageError(error)}`);
+        setStatus(`${HISTORY_FAILED}${messageError(error)}`);
       } finally {
         settled = true;
-        if (generationRef.current === generation && !controller.signal.aborted) setSessionLoading(false);
+        // 後から始めた読み込み（次のページ・履歴の切り替え）があれば、読み込み中の印はそちらが下ろす
+        if (generationRef.current === generation && sessionControllerRef.current === controller) setSessionLoading(false);
       }
     })();
     return () => {
-      // 読み終える前にページが替わった（か外れた）: 次のページで読み直す。読み終えていれば今の会話のまま
+      // 読み終える前にページが替わった（か外れた）: この読み込みは捨て、次のページで選び直す
       if (settled || controller.signal.aborted) return;
       controller.abort();
-      if (loadedForRef.current === retry) loadedForRef.current = -1;
+      if (pickedForRef.current === key) pickedForRef.current = null;
     };
-  }, [pageId, context?.bridge, retry]);
+  }, [pageId, attached, retry]);
 
   useLayoutEffect(() => {
     const field = textareaRef.current;
@@ -738,7 +786,8 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, onF
         setSessionError(`会話を切り替えられませんでした。${messageError(error)}`);
       }
     } finally {
-      if (generation === generationRef.current) setSessionLoading(false);
+      // 読んでいる途中にページが替わって、そのページの会話選びが始まっていたら、読み込み中の印はそちらが下ろす
+      if (generation === generationRef.current && sessionControllerRef.current === controller) setSessionLoading(false);
     }
   };
 
@@ -907,8 +956,13 @@ export function AiPanel({ pageId, context, steps, placement, onPagesChanged, onF
           answer.result === "failed" ? AI_TEXT.chatFailed : answer.result === "stopped" ? aiStopText(answer.resultCode) : "");
       settled = answer.result === "done" && answer.resultCode === null;
       if (answer.conversation) {
-        const summary: AiChatSummary = { id: answer.conversation.id, updatedAt: new Date().toISOString(), messages: thread.length + 2, lastText: answer.reply };
-        setSessions((current) => [summary, ...current.filter((item) => item.id !== summary.id)]);
+        const id = answer.conversation.id;
+        // 履歴の一覧も新しい順に並べ直す（始めたページは前の値。新しい会話なら頼んだページ。最後に話したのは頼んだページ）
+        setSessions((current) => {
+          const known = current.find((item) => item.id === id);
+          const summary: AiChatSummary = { id, updatedAt: new Date().toISOString(), messages: thread.length + 2, lastText: answer.reply, pageId: known ? known.pageId : target.pageId, lastPageId: target.pageId };
+          return [summary, ...current.filter((item) => item.id !== id)];
+        });
       }
     } catch (error) {
       await fail(error, generation, pageId);

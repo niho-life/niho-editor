@@ -7,7 +7,7 @@ import axe from "axe-core";
 import type { AiDiffState, AttachedAi, AttachedAiDiff, AttachedAiSteps } from "@/lib/attached-page";
 import { AiSelection, aiSelectionOf } from "@/editor/ai-selection";
 import { buildPageExtensions } from "@/editor/page-extensions";
-import { AI_TEXT, AiPanel, type AiPanelProps } from "./AiBox";
+import { AI_TEXT, AiPanel, conversationForPage, type AiPanelProps } from "./AiBox";
 
 const nativeMock = vi.hoisted(() => ({ shell: null as unknown }));
 vi.mock("niho-desktop-bridge/tauri-shell-transport", () => ({ detectShell: () => nativeMock.shell }));
@@ -43,12 +43,26 @@ afterEach(async () => {
 
 const PAGE_1 = "00000000-0000-4000-8000-000000000001";
 const PAGE_2 = "00000000-0000-4000-8000-000000000002";
+const PAGE_3 = "00000000-0000-4000-8000-000000000003";
+const PAGE_4 = "00000000-0000-4000-8000-000000000004";
 const CHAT_1 = "00000000-0000-4000-8000-0000000000c1";
 const CHAT_2 = "00000000-0000-4000-8000-0000000000c2";
+const CHAT_3 = "00000000-0000-4000-8000-0000000000c3";
 const MESSAGE = "00000000-0000-4000-8000-0000000000a1";
 const AT = "2026-11-03T01:00:00.000Z";
 
-const summary = (id: string, lastText = "前の返答") => ({ id, updatedAt: AT, messages: 2, lastText });
+/**
+ * 会話の一覧の 1 つ。始めたページ（`pageId`）と最後に話したページ（`lastPageId`）は、渡さなければ PAGE_1
+ * （PAGE_1 を開くとその会話を選ぶ。#344）。`null` を渡すと欄を null にする。
+ */
+const summary = (id: string, lastText = "前の返答", at: { pageId?: string | null; lastPageId?: string | null } = {}) => ({
+  id,
+  updatedAt: AT,
+  messages: 2,
+  lastText,
+  pageId: at.pageId === undefined ? PAGE_1 : at.pageId,
+  lastPageId: at.lastPageId === undefined ? PAGE_1 : at.lastPageId,
+});
 const messages = (name = "前の会話") => [
   { id: `${name}-u`, seq: 1, role: "user", text: name, preset: null, proposal: null, version: null, result: null, items: [], changes: [] },
   { id: `${name}-a`, seq: 2, role: "assistant", text: `${name}の返答`, preset: null, proposal: null, version: null, result: "done", items: [], changes: [] },
@@ -122,7 +136,8 @@ const CONTEXT_FILES = [
 ];
 
 function defaultServer(options: {
-  list?: Response | Promise<Response>;
+  /** 会話の一覧（GET /ai/conversations）。関数なら開いているページの id ごとに返す。同じ Response は読むたびに複製する（ページを移るたびに読み直すため）。 */
+  list?: Response | Promise<Response> | ((pageId: string) => Response | Promise<Response>);
   get?: (id: string) => Response | Promise<Response>;
   device?: () => Response | Promise<Response>;
   chat?: (body: Record<string, unknown>, signal: AbortSignal | null | undefined) => Response | Promise<Response>;
@@ -136,7 +151,11 @@ function defaultServer(options: {
     const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
     calls.push({ url, method, body, signal: init.signal });
     if (method === "GET" && url.endsWith("/ai/context")) return options.context ? await options.context() : json(200, { context: CONTEXT_FILES });
-    if (method === "GET" && url.endsWith("/ai/conversations")) return await (options.list ?? json(200, { conversations: [] }));
+    if (method === "GET" && url.endsWith("/ai/conversations")) {
+      const list = options.list;
+      if (typeof list === "function") return await list(decodeURIComponent(url.split("/").at(-3)!));
+      return (await (list ?? json(200, { conversations: [] }))).clone();
+    }
     if (method === "GET" && url.includes("/ai/conversations/")) {
       const id = decodeURIComponent(url.split("/").at(-1)!);
       if (options.get) return await options.get(id);
@@ -709,13 +728,16 @@ describe("AiPanel", () => {
     expect(String(recorded?.body.input)).not.toContain("写真をライブラリに共有しない");
   });
 
-  it("keeps the conversation when the page changes (#312): the reply to the old page still lands in the thread, tagged with that page, but no body is replaced", async () => {
+  it("keeps the conversation when the page changes while a turn is in flight (#344): the reply to the old page still lands in the thread, tagged with that page, but no body is replaced", async () => {
     const waiting = deferred<Response>();
-    defaultServer({ chat: () => waiting.promise });
+    // PAGE_2 には PAGE_2 の会話があるが、依頼の途中に移ったので選び直さない（今の依頼はこの会話のもの）
+    const server = defaultServer({ chat: () => waiting.promise, list: json(200, { conversations: [summary(CHAT_2, "二つ目", { pageId: PAGE_2, lastPageId: PAGE_2 })] }) });
+    const lists = () => server.calls.filter((call) => call.method === "GET" && call.url.endsWith("/ai/conversations")).length;
     const first = context(PAGE_1);
     await render(PAGE_1, first);
     setValue("古い依頼");
     await until(() => !button("メッセージを送る").disabled);
+    expect(lists()).toBe(1);
     await press("Enter");
     const second = context(PAGE_2);
     await render(PAGE_2, second);
@@ -728,9 +750,14 @@ describe("AiPanel", () => {
     // 頼んだページをもう開いていないので、本文は載せ替えない（開き直したときにサーバーから読む）
     expect(second.bridge.replace).not.toHaveBeenCalled();
     expect(first.bridge.replace).not.toHaveBeenCalled();
+    // 終わったあとも切り替えない（次にページを移ったときに選ぶ）
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+    expect(lists()).toBe(1);
+    expect(server.calls.some((call) => call.url.endsWith(`/ai/conversations/${CHAT_2}`))).toBe(false);
+    expect(logText()).toContain("古い返答");
   });
 
-  it("an instruction typed on another page while a turn is in flight waits in the queue, and goes to that page in the same conversation once the old reply settles (#312)", async () => {
+  it("an instruction typed on another page while a turn is in flight waits in the queue, and goes to that page in the same conversation once the old reply settles (#344: no switch mid-request)", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const oldReply = deferred<Response>();
@@ -785,39 +812,209 @@ describe("AiPanel", () => {
     expect(server.calls.some((call) => call.method === "DELETE")).toBe(false);
   });
 
-  it("履歴を読み終えたあとにページを移っても、最新の会話を読み直さない（続けている会話・履歴で選んだ会話・「新しい会話」の下書きをそのまま続ける。#312 レビュー）", async () => {
-    const server = defaultServer({ list: json(200, { conversations: [summary(CHAT_1), summary(CHAT_2, "二つ目")] }), chat: () => chatResponse("返答") });
+  it("ページを移ると、そのページで最後に話した会話を開く（lastPageId を優先、無ければ始めたページ、どちらも無ければ新しい会話）。書きかけは残し、ほかの会話は履歴から開ける（#344）", async () => {
+    const server = defaultServer({
+      list: json(200, {
+        conversations: [
+          summary(CHAT_1, "一つ目", { pageId: PAGE_1, lastPageId: PAGE_1 }),
+          // PAGE_2 で始めて、最後は PAGE_1 で話した
+          summary(CHAT_2, "二つ目", { pageId: PAGE_2, lastPageId: PAGE_1 }),
+          // PAGE_3 で始めて、最後は PAGE_2 で話した
+          summary(CHAT_3, "三つ目", { pageId: PAGE_3, lastPageId: PAGE_2 }),
+        ],
+      }),
+    });
+    const opened = () => server.calls.filter((call) => call.method === "GET" && call.url.includes("/ai/conversations/")).map((call) => call.url.split("/").at(-1));
+    const ready = () => !button("新しい会話").disabled;
+    await render(PAGE_1, context(PAGE_1));
+    await until(() => logText().includes(CHAT_1));
+    setValue("書きかけ");
+    // PAGE_2: 最後に PAGE_2 で話した CHAT_3（PAGE_2 で始めた CHAT_2 の方が新しくても、最後に話したページを優先）
+    await render(PAGE_2, context(PAGE_2));
+    await until(() => logText().includes(CHAT_3) && ready());
+    expect(logText()).not.toContain(CHAT_1);
+    expect(field().value).toBe("書きかけ");
+    // 戻れば、また PAGE_1 で最後に話した会話
+    await render(PAGE_1, context(PAGE_1));
+    await until(() => logText().includes(CHAT_1) && ready());
+    // PAGE_3: 最後に話した会話は無いので、PAGE_3 で始めた CHAT_3
+    await render(PAGE_3, context(PAGE_3));
+    await until(() => logText().includes(CHAT_3) && ready());
+    // PAGE_4: どちらも無いので新しい会話（「新しい会話」を押したのと同じ。書きかけは残る）
+    await render(PAGE_4, context(PAGE_4));
+    await until(() => !logText().includes(CHAT_3) && ready());
+    expect(logText()).toBe("");
+    expect(field().value).toBe("書きかけ");
+    expect(opened()).toEqual([CHAT_1, CHAT_3, CHAT_1, CHAT_3]);
+    // ほかのページの会話は、今どおり履歴（⋯）から開ける
+    await click(button("会話履歴と切り替え"));
+    expect([...container!.querySelectorAll<HTMLButtonElement>(".es-ai-menu-row")].map((item) => item.textContent)).toEqual(["一つ目", "二つ目", "三つ目"]);
+    await click([...container!.querySelectorAll<HTMLButtonElement>(".es-ai-menu-row")].find((item) => item.textContent?.includes("二つ目"))!);
+    await until(() => logText().includes(CHAT_2));
+  });
+
+  it("同じページのまま付け直した（bridge だけ替わった）ときは選び直さない（履歴で選んだ会話・「新しい会話」をそのまま続ける。#344）", async () => {
+    const server = defaultServer({ list: json(200, { conversations: [summary(CHAT_1), summary(CHAT_2, "二つ目")] }) });
     const lists = () => server.calls.filter((call) => call.method === "GET" && call.url.endsWith("/ai/conversations")).length;
     const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
     await render(PAGE_1, context(PAGE_1));
     await until(() => logText().includes(CHAT_1));
-    const listed = lists();
-    // 読み終えたあとの移動: 一覧を読み直さず、続けている会話（送った分も）がそのまま
-    setValue("続きの依頼");
-    await press("Enter");
-    await until(() => logText().includes("返答"));
-    await render(PAGE_2, context(PAGE_2));
-    await settle();
-    expect(lists()).toBe(listed);
-    expect(logText()).toContain("続きの依頼");
-    expect(logText()).toContain("返答");
-    // 履歴から古い会話へ切り替えてから移っても、選んだ会話のまま
     await click(button("会話履歴と切り替え"));
     await click([...container!.querySelectorAll<HTMLButtonElement>(".es-ai-menu-row")].find((item) => item.textContent?.includes("二つ目"))!);
     await until(() => logText().includes(CHAT_2));
     await render(PAGE_1, context(PAGE_1));
     await settle();
-    expect(lists()).toBe(listed);
+    expect(lists()).toBe(1);
+    expect(logText()).toContain(CHAT_2);
+    await click(button("新しい会話"));
+    await render(PAGE_1, context(PAGE_1));
+    await settle();
+    expect(lists()).toBe(1);
+    expect(logText()).toBe("");
+  });
+
+  it("新しいページ（保存する前）は AI を使えず、保存されてページが決まったら新しい会話で始まる（#344）", async () => {
+    const server = defaultServer({ list: json(200, { conversations: [summary(CHAT_1)] }) });
+    const lists = () => server.calls.filter((call) => call.method === "GET" && call.url.endsWith("/ai/conversations")).map((call) => call.url);
+    await render(PAGE_1, context(PAGE_1));
+    await until(() => logText().includes(CHAT_1));
+    // /p/new: 保存されるまでページの id は無い（AI は使えない。一覧も読まない）
+    const fresh = context(PAGE_4);
+    await render(null, fresh);
+    expect(field().disabled).toBe(true);
+    expect(lists()).toHaveLength(1);
+    // 保存されてページが決まった: そのページの会話は無いので新しい会話
+    await render(PAGE_4, fresh);
+    await until(() => !logText().includes(CHAT_1) && !button("新しい会話").disabled);
+    expect(lists()).toEqual([expect.stringContaining(PAGE_1), expect.stringContaining(PAGE_4)]);
+    setValue("新しいページの相談");
+    await press("Enter");
+    await until(() => logText().includes("返答しました"));
+    const sent = server.calls.find((call) => call.url.endsWith("/ai/chat"));
+    expect(sent?.url).toContain(PAGE_4);
+    expect(sent?.body).not.toHaveProperty("conversationId");
+  });
+
+  it("読み込み中にまたページが替わったら、前の読み込みは捨てる（遅れて届いた古い一覧・会話で上書きしない。#344）", async () => {
+    const page1List = deferred<Response>();
+    let holdPage1 = true;
+    const chat1 = deferred<Response>();
+    const lists = {
+      [PAGE_1]: () => (holdPage1 ? page1List.promise : json(200, { conversations: [summary(CHAT_1), summary(CHAT_2, "二つ目", { pageId: PAGE_2, lastPageId: PAGE_2 })] })),
+      [PAGE_2]: () => json(200, { conversations: [summary(CHAT_2, "二つ目", { pageId: PAGE_2, lastPageId: PAGE_2 }), summary(CHAT_1)] }),
+    } as Record<string, () => Response | Promise<Response>>;
+    const server = defaultServer({
+      list: (id) => lists[id]!(),
+      get: (id) => (id === CHAT_1 ? chat1.promise : json(200, { conversation: summary(id), messages: messages(id) })),
+    });
+    const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+    // 1) 一覧を読んでいる途中に PAGE_2 へ
+    await render(PAGE_1, context(PAGE_1));
+    await render(PAGE_2, context(PAGE_2));
+    await until(() => logText().includes(CHAT_2) && !button("新しい会話").disabled);
+    expect(server.calls.find((call) => call.url.endsWith(`${PAGE_1}/ai/conversations`))?.signal?.aborted).toBe(true);
+    page1List.resolve(json(200, { conversations: [summary(CHAT_1)] }));
+    await settle();
     expect(logText()).toContain(CHAT_2);
     expect(logText()).not.toContain(CHAT_1);
-    // 「新しい会話」の下書きも、移って最新の会話に戻されない
-    await click(button("新しい会話"));
-    expect(logText()).not.toContain(CHAT_2);
+    // 2) PAGE_1 の会話を読んでいる途中に PAGE_2 へ戻る（PAGE_2 の会話は今の会話なので、そのまま）
+    holdPage1 = false;
+    await render(PAGE_1, context(PAGE_1));
+    await until(() => server.calls.some((call) => call.url.endsWith(`/ai/conversations/${CHAT_1}`)));
     await render(PAGE_2, context(PAGE_2));
+    await until(() => !button("新しい会話").disabled);
+    chat1.resolve(json(200, { conversation: summary(CHAT_1), messages: messages(CHAT_1) }));
     await settle();
-    expect(lists()).toBe(listed);
+    expect(logText()).toContain(CHAT_2);
     expect(logText()).not.toContain(CHAT_1);
-    expect(logText()).not.toContain(CHAT_2);
+    // 読み込み中の印は下りていて、そのまま頼める
+    setValue("続けて");
+    await press("Enter");
+    await until(() => logText().includes("返答しました"));
+    expect(server.calls.find((call) => call.url.endsWith("/ai/chat"))?.body).toMatchObject({ conversationId: CHAT_2 });
+  });
+
+  it("移った先で一覧を読めなかったら今の会話のまま失敗を出し、再試行でそのページの会話を選ぶ（#344）", async () => {
+    let failPage2 = true;
+    const server = defaultServer({
+      list: (id) => (id === PAGE_2 && failPage2
+        ? json(503, { error: "ai_unavailable" })
+        : json(200, { conversations: [summary(CHAT_2, "二つ目", { pageId: PAGE_2, lastPageId: PAGE_2 }), summary(CHAT_1)] })),
+    });
+    await render(PAGE_1, context(PAGE_1));
+    await until(() => logText().includes(CHAT_1));
+    await render(PAGE_2, context(PAGE_2));
+    await until(() => container!.textContent!.includes("会話履歴を読み込めませんでした"));
+    expect(logText()).toContain(CHAT_1);
+    failPage2 = false;
+    await click(button("会話履歴と切り替え"));
+    await click([...container!.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent === "再試行")!);
+    await until(() => logText().includes(CHAT_2));
+    expect(logText()).not.toContain(CHAT_1);
+    expect(container!.textContent).not.toContain("会話履歴を読み込めませんでした");
+    // 読めなかったあと、今の会話のページへ戻って読めたら（会話はそのまま。読み直さない）、残っていた知らせは消える
+    failPage2 = true;
+    await render(PAGE_1, context(PAGE_1));
+    await until(() => logText().includes(CHAT_1) && !button("新しい会話").disabled);
+    await render(PAGE_2, context(PAGE_2));
+    await until(() => container!.textContent!.includes("会話履歴を読み込めませんでした"));
+    const opened = server.calls.filter((call) => call.url.includes("/ai/conversations/")).length;
+    failPage2 = false;
+    await render(PAGE_1, context(PAGE_1));
+    await until(() => !container!.textContent!.includes("会話履歴を読み込めませんでした") && !button("新しい会話").disabled);
+    expect(logText()).toContain(CHAT_1);
+    expect(server.calls.filter((call) => call.url.includes("/ai/conversations/")).length).toBe(opened);
+  });
+
+  it("Mac の CLI の session は選んだ会話に合わせる（移った先でも同じ会話なら続け、新しい会話なら外す。#344）", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const aiTurn = vi.fn(async (turnId: string, request: Record<string, unknown>) => {
+      void turnId;
+      void request;
+      return {
+        finalEvent: {
+          type: "Done" as const,
+          text: "CLI の返答",
+          stop_reason: "EndTurn" as const,
+          session_id: "resume-one",
+          usage: { input_tokens: 1, output_tokens: 1, cost_usd: null, model_used: "gpt-5", cost_known: false },
+          duration_ms: 1,
+          continuations: 0,
+        },
+        page: null,
+        pageRemoved: false,
+        extraFiles: 0,
+      };
+    });
+    nativeMock.shell = {
+      aiEngines: vi.fn(async () => [{ engine: "cli:codex", installed: true, authenticated: true, reason: null, models: ["gpt-5"], effort: true, resume: true }]),
+      aiTurn,
+      aiStop: vi.fn(async () => true),
+    };
+    // CHAT_1 は PAGE_2 で始めて、最後は PAGE_1 で話した
+    const server = defaultServer({ list: json(200, { conversations: [summary(CHAT_1, "一つ目", { pageId: PAGE_2, lastPageId: PAGE_1 })] }) });
+    const lists = () => server.calls.filter((call) => call.method === "GET" && call.url.endsWith("/ai/conversations")).length;
+    const turns = () => server.calls.filter((call) => call.url.endsWith("/ai/chat/turns"));
+    await render(PAGE_1, context(PAGE_1));
+    await until(() => logText().includes(CHAT_1) && (enginePill()?.textContent?.includes("Codex CLI") ?? false));
+    setValue("一つ目の依頼");
+    await press("Enter");
+    await until(() => turns().length === 1 && !button("新しい会話").disabled);
+    // PAGE_2 でも選ぶのは CHAT_1（始めたページ）＝今の会話なので、CLI の session ごと続ける
+    await render(PAGE_2, context(PAGE_2));
+    await until(() => lists() === 2 && !button("新しい会話").disabled);
+    setValue("二つ目の依頼");
+    await press("Enter");
+    await until(() => turns().length === 2 && !button("新しい会話").disabled);
+    expect(aiTurn.mock.calls[1]?.[1]).toMatchObject({ resumeSession: "resume-one", conversationId: CHAT_1 });
+    // PAGE_3 には会話が無いので新しい会話。session は持ち込まない
+    await render(PAGE_3, context(PAGE_3));
+    await until(() => lists() === 3 && !logText().includes("二つ目の依頼") && !button("新しい会話").disabled);
+    setValue("三つ目の依頼");
+    await press("Enter");
+    await until(() => turns().length === 3);
+    expect(aiTurn.mock.calls[2]?.[1]).not.toHaveProperty("resumeSession");
+    expect(turns()[2]?.body).not.toHaveProperty("conversationId");
   });
 
   it("shows a saved-chat read failure and retries the same conversation", async () => {
@@ -955,7 +1152,7 @@ describe("AiPanel", () => {
     await until(() => container!.querySelector(".es-ai-message--live") === null);
     expect(container!.querySelector(".es-ai-work")).toBeNull();
     expect(logText()).toContain("一段落目を直しました。");
-    // 頼んだページ（「◯◯ で」）を添える（会話はページを移っても続くので）
+    // 頼んだページ（「◯◯ で」）を添える（会話は履歴から開けば別のページでも続けられるので）
     expect([...container!.querySelectorAll(".es-ai-message--user")].map((node) => node.textContent)).toEqual(["合成ページ で一段落目を直して"]);
     expect(button("メッセージを送る")).toBeTruthy();
   });
@@ -1090,6 +1287,23 @@ describe("AiPanel", () => {
     await click(button("工程とスキルを開く"));
     await click([...container!.querySelectorAll<HTMLButtonElement>(".es-ai-menu-row")].find((item) => item.textContent?.startsWith(label))!);
     expect(field().value).toContain(text);
+  });
+});
+
+describe("conversationForPage（ページを開いたときの会話。#344）", () => {
+  const chat = (id: string, pageId: string | null, lastPageId: string | null) => ({ ...summary(id), pageId, lastPageId });
+  it("そのページで最後に話した会話のいちばん新しいもの → そのページで始めた会話のいちばん新しいもの → 無ければ null", () => {
+    const chats = [chat(CHAT_1, PAGE_2, PAGE_1), chat(CHAT_2, PAGE_1, PAGE_3), chat(CHAT_3, PAGE_2, PAGE_2)];
+    expect(conversationForPage(chats, PAGE_1)?.id).toBe(CHAT_1);
+    // PAGE_2 で始めた CHAT_1 の方が新しくても、最後に PAGE_2 で話した CHAT_3
+    expect(conversationForPage(chats, PAGE_2)?.id).toBe(CHAT_3);
+    // 最後に PAGE_3 で話したのは CHAT_2
+    expect(conversationForPage(chats, PAGE_3)?.id).toBe(CHAT_2);
+    expect(conversationForPage(chats, PAGE_4)).toBeNull();
+    // 欄の無い古い応答（どちらも null）は、どのページでも新しい会話
+    expect(conversationForPage([chat(CHAT_1, null, null)], PAGE_1)).toBeNull();
+    // lastPageId だけ無い（古いサーバー）なら、始めたページで選ぶ
+    expect(conversationForPage([chat(CHAT_1, PAGE_3, null), chat(CHAT_2, PAGE_1, null)], PAGE_1)?.id).toBe(CHAT_2);
   });
 });
 
@@ -1441,7 +1655,7 @@ describe("AiPanel: 作業中の指示を送信待ちに積む（#282）", () => 
     expect(result.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical")).toEqual([]);
   });
 
-  it("別のページへ替わっても待ちは残り、今のページで送る（会話はアプリ全体で 1 つ。#312）", async () => {
+  it("作業中に別のページへ替わっても会話は切り替えず、待ちは残って今のページで同じ会話に送る（#344）", async () => {
     fakeDelay();
     const { held, server } = await startHeldTurn();
     setValue("前のページの指示");
@@ -1457,6 +1671,9 @@ describe("AiPanel: 作業中の指示を送信待ちに積む（#282）", () => 
     await until(() => chatCalls(server.calls).length === 2);
     expect(chatCalls(server.calls)).toEqual(["最初の依頼", "前のページの指示"]);
     expect(server.calls.filter((call) => call.url.endsWith("/ai/chat")).at(-1)?.url).toContain(PAGE_2);
+    expect(server.calls.filter((call) => call.url.endsWith("/ai/chat")).at(-1)?.body).toMatchObject({ conversationId: CHAT_1 });
+    // 依頼の途中に移ったので、PAGE_2 の会話を選びに一覧を読み直していない
+    expect(server.calls.filter((call) => call.method === "GET" && call.url.endsWith("/ai/conversations")).map((call) => call.url)).toEqual([expect.stringContaining(PAGE_1)]);
   });
 });
 

@@ -538,7 +538,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-body{position:relative;flex:1;min-height:0;padding:0;display:flex;flex-direction:column;overflow:hidden}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-thread{flex:1;min-height:72px;overflow:auto;padding:10px 13px 14px;display:flex;flex-direction:column;gap:14px;scrollbar-width:thin}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message{flex:none;min-width:0;font-size:12.5px;line-height:1.75;overflow-wrap:anywhere;white-space:pre-wrap}
-/* 頼んだときに開いていたページ（「◯◯ で」。会話はページを移っても続くので、どこで頼んだかを添える。#312） */
+/* 頼んだときに開いていたページ（「◯◯ で」。会話は履歴から開けば別のページでも続けられるので、どこで頼んだかを添える。#312・#344） */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-at{display:flex;align-items:center;gap:4px;margin-bottom:2px;font-size:12px;line-height:1.4;color:var(--ed-ink-mute);white-space:nowrap}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-at .es-ico{width:13px;height:13px;flex:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ai-message--user{align-self:flex-end;max-width:88%;padding:8px 12px;background:var(--ed-accent-soft);color:var(--ed-ink);border-radius:16px 4px 16px 16px}
