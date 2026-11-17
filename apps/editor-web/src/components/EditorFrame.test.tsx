@@ -3404,19 +3404,16 @@ describe("EditorFrame: 分割ビュー（右に並べたページ・パネルの
     expect(after.value).toBe("動かしても残す書きかけ");
   });
 
-  it("一覧は上の 1 行を掴んで右のドックへ移せる。× で閉じると右上にそのボタンだけ出て、押すと元のドックの下に戻る。全部開いていればボタンは無い", async () => {
+  it("一覧は左に固定してドラッグハンドルを出さない。× で閉じて出し直すと左へ戻る", async () => {
     await mount({ pages: pages() }, <FakePage id={A} />);
     await tick();
-    expect(container!.querySelector(".es-sb-top")!.getAttribute("draggable")).toBe("true");
+    expect(container!.querySelector(".es-sb-top")!.hasAttribute("draggable")).toBe(false);
+    expect(container!.querySelector(".es-sb-top .es-grip")).toBeNull();
+    expect(pane("list").dataset).toMatchObject({ dock: "left", index: "0" });
     expect(container!.querySelector('button[aria-label="一覧のメニュー"]')).toBeNull();
     // 一覧・AI・ページが開いている（写真はこのページに無い）ので、右上のボタンの組は無い
     expect(container!.querySelector(".es-dt .es-tg")).toBeNull();
-    // 右の端の帯（枠の幅は jsdom では測れないので、どの幅でも右端より右になる位置）。ページと AI の下に入る
-    await dropPanel(SHELL_DND.list, 100_000);
-    expect(pane("list").dataset).toMatchObject({ dock: "right", index: "2" });
-    expect(savedDocks()).toEqual({ left: [], right: ["page", "ai", "list"] });
-    expect(shellRoot().dataset.left).toBe("none");
-    // 「一覧をしまう」は右のドックにいても効き、右上に「一覧を出す」だけが出る。押すと元のドック（左）へ
+    // 「一覧をしまう」は使え、右上に「一覧を出す」だけが出る。出し直しても左に残る
     await act(async () => container!.querySelector<HTMLButtonElement>('button[aria-label="一覧をしまう"]')!.click());
     expect(pane("list").hidden).toBe(true);
     expect([...container!.querySelectorAll(".es-dt .es-tg button")].map((button) => button.getAttribute("aria-label"))).toEqual(["一覧を出す"]);

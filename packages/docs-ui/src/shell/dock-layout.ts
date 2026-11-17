@@ -9,8 +9,10 @@ import type { ShellIconName } from "./types";
 
 /** ドック（左右の端の列）。 */
 export type ShellDockSide = "left" | "right";
-/** 動かせるパネル。 */
+/** ドック配置を持つパネル。 */
 export type ShellPanelId = "list" | "ai" | "page" | "photos";
+/** ドラッグで配置を変えられるパネル。一覧は左のドックに固定する。 */
+export type ShellPanelMovableId = Exclude<ShellPanelId, "list">;
 /**
  * @deprecated メインの下に浮かせる置き場所は無くなった（#311。AI もドックへ）。AiBox が #312 で置き換えるまで型だけ残す。
  */
@@ -53,8 +55,7 @@ export const SHELL_DOCK_DEFAULT: Readonly<ShellDockWidths> = { left: 272, right:
 /** 入りきらないときに畳んだドックの幅（アイコンの列）。 */
 export const SHELL_DOCK_STRIP = 48;
 
-const PANEL_DND: Record<ShellPanelId, string> = {
-  list: "application/x-niho-panel-list",
+const PANEL_DND: Record<ShellPanelMovableId, string> = {
   ai: "application/x-niho-panel-ai",
   page: "application/x-niho-panel-page",
   photos: "application/x-niho-panel-photos",
@@ -69,8 +70,6 @@ export const SHELL_DND = {
   page: "application/x-niho-page",
   /** 右に並べたページの上の帯。値はページの id。 */
   side: "application/x-niho-side-page",
-  /** 一覧のパネルの見出し。 */
-  list: PANEL_DND.list,
   /** 「AIと作る」の見出し。 */
   ai: PANEL_DND.ai,
   /** パネルの見出し（id ごと）。値はパネルの id。 */
@@ -106,7 +105,7 @@ const sameOrder = (a: readonly ShellDockPanel[], b: readonly ShellDockPanel[]) =
  * パネルを落とし先（ドックの上か下）へ移す。今いるドックの中での上下の入れ替えもこれ。
  * 高さの割合はそのまま持っていく（閉じていたパネルは 1）。並びが変わらなければ同じ値を返す（保存しない）。
  */
-export function movePanel(docks: ShellDocks, panel: ShellPanelId, to: ShellPanelTarget): ShellDocks {
+export function movePanel(docks: ShellDocks, panel: ShellPanelMovableId, to: ShellPanelTarget): ShellDocks {
   const entry = [...docks.left, ...docks.right].find((item) => item.id === panel) ?? { id: panel, size: 1 };
   const left = without(docks.left, panel);
   const right = without(docks.right, panel);
@@ -232,7 +231,7 @@ const EDGE = 140;
  * x・y は枠の左上からの位置、height は枠の高さ、ids はそれぞれのドックに見えているパネル。
  */
 export function panelDropTarget(
-  panel: ShellPanelId,
+  panel: ShellPanelMovableId,
   point: { x: number; y: number },
   fit: ShellDockFit,
   height: number,
@@ -251,7 +250,7 @@ export function panelDropTarget(
 
 /** 「落とすと入る形」（ghost）の位置と大きさ（枠の左上から。モックの placeZones()）。 */
 export function panelGhostRect(
-  panel: ShellPanelId,
+  panel: ShellPanelMovableId,
   target: ShellPanelTarget,
   fit: ShellDockFit,
   height: number,

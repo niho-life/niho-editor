@@ -109,25 +109,24 @@ describe("useShellLayout", () => {
     vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(1680);
     const layout = mountProbe();
     act(() => layout().move("ai", { side: "left", at: "bottom" }));
-    act(() => layout().move("list", { side: "right", at: "top" }));
     act(() => layout().setWidth("side", 9999));
-    expect(ids(layout())).toEqual({ left: ["ai"], right: ["list", "page"] });
+    expect(ids(layout())).toEqual({ left: ["list", "ai"], right: ["page"] });
     expect(layout().widths.side).toBe(760);
-    act(() => layout().resize("right", 1, 0.25));
-    expect(layout().docks.right.map((item) => item.size)).toEqual([0.5, 1.5]);
+    act(() => layout().resize("left", 1, 0.25));
+    expect(layout().docks.left.map((item) => item.size)).toEqual([0.5, 1.5]);
     act(() => layout().close("page"));
     act(() => layout().open("photos"));
-    expect(ids(layout())).toEqual({ left: ["ai"], right: ["list", "photos"] });
+    expect(ids(layout())).toEqual({ left: ["list", "ai"], right: ["photos"] });
     expect(layout().shown).toEqual({ list: true, ai: true, page: false, photos: true });
     const saved = JSON.parse(window.localStorage.getItem(LAYOUT_STORAGE_KEY)!);
     expect(saved).toEqual({
       v: 2,
-      docks: { left: [{ id: "ai", size: 1 }], right: [{ id: "list", size: 0.5 }, { id: "photos", size: 1 }] },
+      docks: { left: [{ id: "list", size: 0.5 }, { id: "ai", size: 1.5 }], right: [{ id: "photos", size: 1 }] },
       widths: { left: 272, right: 340, side: 760 },
     });
     // 出すと元のドックの下に戻る
     act(() => layout().open("page"));
-    expect(ids(layout())).toEqual({ left: ["ai"], right: ["list", "photos", "page"] });
+    expect(ids(layout())).toEqual({ left: ["list", "ai"], right: ["photos", "page"] });
     // 変わらない操作は保存しない
     const before = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
     act(() => layout().open("page"));

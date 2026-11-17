@@ -54,8 +54,6 @@ export type ShellSidebarProps = {
    * 確認は呼ぶ側が出す（ゴミ箱に 30 日。ヘッダーの「…」の削除と同じ）。
    */
   onDeleteRow?: (id: string) => void;
-  /** true なら上の 1 行（掴む所 ⋮⋮）を掴んで一覧のパネルをドックへ移せる（設計 §5.5。デスクトップだけ）。移すメニューは無い（ドラッグだけ）。 */
-  panel?: boolean;
 };
 
 /** ドロップの位置。into はその行（フォルダ）の中へ、before / after はその行の前・後（同じ階層）。 */
@@ -272,14 +270,14 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder, drag, ro
 }
 
 /**
- * 左の一覧（パネル）。上は 1 行: [アプリ名] [掴む所（panel）] …… [検索] [＋] [一覧をしまう]（検索を押すとその行が検索欄に変わる）。
+ * 左の一覧（パネル）。上は 1 行: [アプリ名] …… [検索] [＋] [一覧をしまう]（検索を押すとその行が検索欄に変わる）。
  * アプリ名は、一覧が枠の左上にあるとき（EditorShell が ShellListBrandContext に true を入れる）だけこの行の左に出し、高さは枠のヘッダーにそろえる。
- * それ以外（一覧が右のドック・枠の外）は枠が画面の左上端に出す。「設定」はいつも枠が左下に出す（パネルの配置に関係なく。#311）。
+ * それ以外（保存済み配置で一覧が右のドックにある場合など）は枠が画面の左上端に出す。「設定」はいつも枠が左下に出す（パネルの配置に関係なく。#311）。
  * 絞り込み（すべて／公開中／録音）は持たない。`onDrop` を渡すと、行をドラッグしてフォルダへ入れる・並べ替える。
  * 1行は題名だけ。2行目は公開先・録音・作成中のときだけ。行の「…」は「削除」だけ（`onDeleteRow`）。
  * 一覧は 1 本の木（フォルダ＝`kind = 'folder'` の入れ物。空ならフォルダ画面を開く）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
  */
-export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, onDrop, canDrop, listEnd, recent, side, onDeleteRow, panel }: ShellSidebarProps) {
+export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, onDrop, canDrop, listEnd, recent, side, onDeleteRow }: ShellSidebarProps) {
   const withBrand = useContext(ShellListBrandContext);
   const newButton = useRef<HTMLButtonElement | null>(null);
   const rowMenuTrigger = useRef<HTMLElement | null>(null);
@@ -326,19 +324,7 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
     : undefined;
   return (
     <aside className="es-sb" aria-label="ページ" data-brand={withBrand ? "true" : undefined}>
-      <div
-        className="es-sb-top"
-        draggable={panel && !search?.open ? true : undefined}
-        onDragStart={
-          panel && !search?.open
-            ? (event) => {
-                if (!event.dataTransfer) return;
-                event.dataTransfer.setData(SHELL_DND.list, "list");
-                event.dataTransfer.effectAllowed = "move";
-              }
-            : undefined
-        }
-      >
+      <div className="es-sb-top">
         {search?.open ? (
           <div className="es-sb-find" role="search">
             <Icon name="search" />
@@ -360,11 +346,6 @@ export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCol
         ) : (
           <>
             {withBrand && <ShellBrand />}
-            {panel && (
-              <span className="es-grip" aria-hidden="true" title="ドラッグでドックを移す">
-                <Icon name="grip" />
-              </span>
-            )}
             <span className="es-sp" />
             {search && (
               <button type="button" className="es-ib" aria-label="検索（⌘K）" title="検索（⌘K）" onClick={search.onOpen}>

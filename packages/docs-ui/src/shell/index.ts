@@ -48,6 +48,7 @@ export {
   type ShellDockWidths,
   type ShellDocks,
   type ShellPanelId,
+  type ShellPanelMovableId,
   type ShellPanelShare,
   type ShellPanelTarget,
 } from "./dock-layout";
