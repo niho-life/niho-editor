@@ -43,16 +43,22 @@ const key = (el: Element, name: string) => act(() => el.dispatchEvent(new Keyboa
 const menuLabels = (el: ParentNode) => [...el.querySelectorAll<HTMLElement>('[role="menu"] button')].map((button) => button.textContent?.trim() ?? "");
 
 describe("TabBar（タブの帯。#308）", () => {
-  it("タブが 1 つなら罫線と ＋ だけ（名前の並びも ▾ も無い）。＋ で足す", () => {
+  it("タブが 1 つ（読み込む前の 0 も）なら帯を描かない（罫線も ＋ も無い。足すのは呼ぶ側の「…」の「タブを追加」。#344）", () => {
+    const el = mount(<TabBar tabs={[TABS[0]!]} currentId="t1" onOpen={vi.fn()} onAdd={vi.fn()} actions={actions()} />);
+    expect(el.innerHTML).toBe("");
+    act(() => root!.render(<TabBar tabs={[]} currentId="" onOpen={vi.fn()} onAdd={vi.fn()} busy />));
+    expect(el.innerHTML).toBe("");
+  });
+
+  it("2 つ以上なら右端に ＋。＋ で足す（足している間は押せない）", () => {
     const onAdd = vi.fn();
-    const el = mount(<TabBar tabs={[TABS[0]!]} currentId="t1" onOpen={vi.fn()} onAdd={onAdd} actions={actions()} />);
-    expect(el.querySelector(".es-tabbar-tabs")).toBeNull();
-    expect(el.querySelector(".es-tab")).toBeNull();
-    expect(el.querySelector(".es-tab-menu")).toBeNull();
-    const add = el.querySelector<HTMLButtonElement>(".es-tab-add")!;
+    const el = mount(<TabBar tabs={TABS.slice(0, 2)} currentId="t1" onOpen={vi.fn()} onAdd={onAdd} actions={actions()} />);
+    const add = el.querySelector<HTMLButtonElement>(".es-tabbar > .es-tab-add")!;
     expect(add.getAttribute("aria-label")).toBe(TAB_BAR_TEXT.add);
     click(add);
     expect(onAdd).toHaveBeenCalledTimes(1);
+    act(() => root!.render(<TabBar tabs={TABS.slice(0, 2)} currentId="t1" onOpen={vi.fn()} onAdd={onAdd} actions={actions()} busy />));
+    expect(el.querySelector<HTMLButtonElement>(".es-tab-add")!.disabled).toBe(true);
   });
 
   it("2 つ以上なら左に名前。開いているタブだけ aria-current と ▾。押すと開く。← → で動く", () => {

@@ -28,8 +28,9 @@ export type ImageUploadTicket = {
 export type ImageStartResponse = { status: 200 | 201; assetId: string; upload: ImageUploadTicket | null };
 
 /**
- * 共有画像（SNS・検索結果の OG 画像）にも使ってよい許諾。掲載許諾（consent）とは別の欄で、Web のカバーの欄だけが使う
- * （本文のエディタの口 ImageMeta は Mac と共通なので足さない）。
+ * 共有画像（SNS・検索結果の OG 画像）にも使ってよい許諾。掲載許諾（consent）とは別の欄
+ * （本文のエディタの口 ImageMeta は Mac と共通なので足さない）。古いクライアントとの互換のために読み書きは残すが、
+ * 公開と共有画像の条件にはしない（オーナー決定 2026-11-18。使える形のカバーは許諾によらず共有画像になる）。
  */
 export type ImageShareMeta = { share: boolean };
 

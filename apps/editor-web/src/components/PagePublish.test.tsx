@@ -181,21 +181,52 @@ const byText = (selector: string, text: string) => [...container!.querySelectorA
 const dest = (name: string) => [...container!.querySelectorAll<HTMLElement>(".es-dst")].find((el) => el.querySelector("b")?.textContent === name);
 const click = (el: Element | null | undefined) => act(async () => (el as HTMLElement).click());
 const dialog = () => $('[role="dialog"]');
+/** 公開のシートを開く: ヘッダーの「…」の先頭の「公開…」（ヘッダーに公開のボタンは無い。#344）。 */
+const openSheet = async () => {
+  await click($('.es-dt button[aria-label="その他"]'));
+  await click(byText('[role="menu"] button', "公開…"));
+};
+/** 公開済みのページだけに出る、ヘッダーの状態の札。 */
+const badge = () => $<HTMLButtonElement>(".es-dt .es-pubstate");
 const primary = () => $<HTMLButtonElement>(".es-sh-foot .es-btn--primary")!;
 
-describe("ヘッダーの状態と公開ボタン", () => {
-  it("開いたページの公開の状態を読み、状態の丸と「公開」を出す。公開中は「公開中 ▾」と一覧の 2 行目に発信先", async () => {
+describe("ヘッダーの状態と公開の入口（#344）", () => {
+  it("開いたページの公開の状態を読む。ヘッダーに公開のボタンは無く、「…」の先頭が「公開…」。公開中だけ状態の札と一覧の 2 行目に発信先", async () => {
     server({ sheets: [sheet()] });
     await mount();
-    expect($(".es-pubbtn")!.textContent).toBe("公開");
+    expect($(".es-pubbtn")).toBeNull();
+    // 未公開のページには札を出さない
+    expect(badge()).toBeNull();
+    await click($('.es-dt button[aria-label="その他"]'));
+    const first = $('[role="menu"] button');
+    expect(first!.textContent).toBe("公開…");
+    await click(first);
+    expect(dialog()?.getAttribute("aria-label")).toBe("公開");
     await act(async () => root!.unmount());
     root = null;
     container!.remove();
 
     server({ sheets: [sheet({ status: "published", publication: LIVE, canStop: true })] });
     await mount();
-    expect($(".es-pubbtn")!.textContent).toBe("公開中 ▾");
+    expect($(".es-pubbtn")).toBeNull();
+    expect(badge()!.textContent).toBe("公開中");
+    expect(badge()!.getAttribute("aria-haspopup")).toBe("dialog");
     expect($(".es-sb-list .es-di-sub")!.textContent).toBe("自分のサイト");
+    // 「…」の「公開…」の補足も同じ状態。札を押すと公開のシート
+    await click($('.es-dt button[aria-label="その他"]'));
+    expect($('[role="menu"] button')!.textContent).toBe("公開…公開中");
+    await click($('.es-dt button[aria-label="その他"]'));
+    await click(badge());
+    expect(dialog()?.getAttribute("aria-label")).toBe("公開");
+  });
+
+  it("限定公開は「限定公開」の札。公開したあとに直していれば「 · 更新あり」（「…」の「公開…」の補足も同じ）", async () => {
+    server({ sheets: [sheet({ status: "updated", publication: { ...LIVE!, range: "unlisted" }, canStop: true })] });
+    await mount();
+    expect(badge()!.textContent).toBe("限定公開 · 更新あり");
+    expect(badge()!.getAttribute("title")).toBe("限定公開 · 更新あり");
+    await click($('.es-dt button[aria-label="その他"]'));
+    expect($('[role="menu"] button')!.textContent).toBe("公開…限定公開 · 更新あり");
   });
 
   it("⌘⇧P（jsdom は Mac ではないので Ctrl+Shift+P）で公開のシートを開く", async () => {
@@ -213,7 +244,7 @@ describe("公開のシート", () => {
     const problems = [{ id: "headings", message: "本文に見出しを 1 つ以上入れてください", fix: "body" as const }];
     const { calls } = server({ sheets: [sheet(), sheet(), sitePlan({ problems, primary: null })] });
     await mount();
-    await click($(".es-pubbtn"));
+    await openSheet();
     await click(dest("自分のサイト"));
     expect(calls.at(-1)!.url).toBe(`/api/pages/${PAGE}/publish?handle=field-notes&range=live&extras=&related=`);
     expect(dialog()!.textContent).toContain("本文に見出しを 1 つ以上入れてください");
@@ -227,7 +258,7 @@ describe("公開のシート", () => {
     vi.stubGlobal("open", open);
     const { calls } = server({ sheets: [sheet(), sheet(), sitePlan(), sheet({ status: "published", publication: LIVE, canStop: true })] });
     await mount();
-    await click($(".es-pubbtn"));
+    await openSheet();
     await click(dest("自分のサイト"));
     expect($<HTMLInputElement>(".es-slug input")!.value).toBe("morning-walk");
     expect(primary().disabled).toBe(false);
@@ -237,14 +268,14 @@ describe("公開のシート", () => {
     expect(dialog()!.textContent).toContain("notes.example.net に公開しました");
     await click(byText("button", "見る"));
     expect(open).toHaveBeenCalledWith("https://notes.example.net/morning-walk", "_blank", "noopener,noreferrer");
-    expect($(".es-pubbtn")!.textContent).toBe("公開中 ▾");
+    expect(badge()!.textContent).toBe("公開中");
   });
 
   it("開く前と公開を送る前に、エディタの保存待ちを送り終える（最後の入力を公開版に入れる）", async () => {
     server({ sheets: [sheet(), sheet(), sitePlan(), sheet({ status: "published", publication: LIVE, canStop: true })] });
     await mount();
     order.length = 0;
-    await click($(".es-pubbtn"));
+    await openSheet();
     expect(order).toEqual(["save", "GET"]);
     await click(dest("自分のサイト"));
     order.length = 0;
@@ -256,7 +287,7 @@ describe("公開のシート", () => {
     editor.saved = false;
     const { calls } = server({ sheets: [sheet(), sheet(), sitePlan()] });
     await mount();
-    await click($(".es-pubbtn"));
+    await openSheet();
     expect($('[role="alert"]')!.textContent).toBe("保存できていないので公開できません。保存の状態を確かめてから、もう一度お試しください");
     await click(dest("自分のサイト"));
     await click(primary());
@@ -269,7 +300,7 @@ describe("公開のシート", () => {
     const failed = () => new Response(JSON.stringify({ error: "failed", retryable: true, message: "公開できませんでした。前の公開版と下書きはそのままです。もう一度お試しください" }), { status: 503 });
     server({ sheets: [sheet(), sheet(), sitePlan()], post: failed });
     await mount();
-    await click($(".es-pubbtn"));
+    await openSheet();
     await click(dest("自分のサイト"));
     await click(primary());
     expect(dialog()!.getAttribute("aria-label")).toBe("公開");
@@ -281,7 +312,7 @@ describe("公開のシート", () => {
     const stopped = sheet({ status: "stopped", publication: { ...LIVE, stopped: true } });
     const { calls } = server({ sheets: [live, live, stopped] });
     await mount();
-    await click($(".es-pubbtn"));
+    await openSheet();
     expect(primary().textContent).toBe("保存");
     expect(primary().disabled).toBe(true);
     await click(byText("button", "公開をやめる"));
@@ -294,7 +325,8 @@ describe("公開のシート", () => {
     await click(byText(".es-sh-foot button", "公開をやめる"));
     expect(calls.filter((call) => call.url.endsWith("/stop")).map((call) => call.method)).toEqual(["POST"]);
     expect(dialog()).toBeNull();
-    expect($(".es-pubbtn")!.textContent).toBe("公開");
+    // 公開をやめたページは未公開と同じく札を出さない（一覧の 2 行目が「公開をやめた」）
+    expect(badge()).toBeNull();
     expect($(".es-sb-list .es-di-sub")!.textContent).toBe("公開をやめた");
   });
 
@@ -307,17 +339,17 @@ describe("公開のシート", () => {
     const plan = sitePlan({ problems, primary: null });
     server({ sheets: [sheet(), plan] });
     await mount();
-    await click($(".es-pubbtn"));
+    await openSheet();
     await click(byText("button", "直す"));
     expect(dialog()).toBeNull();
     expect(document.activeElement).toBe($("textarea.page-title"));
 
-    await click($(".es-pubbtn"));
+    await openSheet();
     await click(container!.querySelectorAll<HTMLButtonElement>(".es-need button")[1]);
     expect(dialog()).toBeNull();
     expect(document.activeElement).toBe($(".doc"));
 
-    await click($(".es-pubbtn"));
+    await openSheet();
     await click(container!.querySelectorAll<HTMLButtonElement>(".es-need button")[2]);
     expect(dialog()).toBeNull();
     expect(document.activeElement).toBe($("textarea.page-title"));
@@ -331,7 +363,7 @@ describe("公開のシート", () => {
     ];
     server({ sheets: [sheet(), sitePlan({ problems, primary: null })] });
     await mount();
-    await click($(".es-pubbtn"));
+    await openSheet();
     // 記事の情報（リード・カバー画像・言語）はシートの中。本文の列とレールには無い
     expect(dialog()?.querySelector(".es-sh-fields [data-page-lead]")).not.toBeNull();
     expect($("#es-main [data-page-lead]")).toBeNull();
@@ -354,7 +386,7 @@ describe("公開のシート", () => {
     const { calls } = server({ sheets: [legacy, legacy] });
     await mount();
     expect($(".es-sb-list .es-di-sub")).toBeNull();
-    await click($(".es-pubbtn"));
+    await openSheet();
     expect(dialog()?.textContent).not.toContain("NIHO Experience");
     expect(dialog()?.textContent).toContain("自分のサイト");
     expect(calls.every((call) => !call.url.includes("experience-options") && !call.url.includes("handle=exp"))).toBe(true);
@@ -382,7 +414,7 @@ describe("公開のシート", () => {
     const initial: FrameInitial = { pages: [summary(), pageB], next: null, recent: [], now: Date.parse("2026-10-31T03:00:00.000Z"), me: { name: "開発ユーザー", caption: "stub", initial: "開" }, initialNarrow: false };
     const render = () => act(async () => root!.render(<EditorFrame initial={initial}>{<FakePage />}</EditorFrame>));
     await render();
-    await click($(".es-pubbtn"));
+    await openSheet();
     // A の保存を待っている途中で B へ移る
     nav.pathname = `/p/${PAGE_B}`;
     await render();
@@ -391,13 +423,13 @@ describe("公開のシート", () => {
     // A は最初の読み込みの 1 回だけ（保存のあとの読み込みは始めない）。B の応答（公開中）が画面に出る
     expect(calls.filter((url) => url.includes(PAGE))).toHaveLength(1);
     expect(calls.filter((url) => url.includes(PAGE_B))).toHaveLength(1);
-    expect($(".es-pubbtn")?.textContent).toContain("公開中");
+    expect(badge()?.textContent).toBe("公開中");
   });
 
   it("保存先がクラウドでないときは、理由を一言出して公開は押せない（storageBlock）", async () => {
     server({ sheets: [sheet(), sheet({ storageBlock: "LOCAL", selection: { handle: "field-notes", range: "live", extras: NONE, slug: null, category: null, related: [] } }), sitePlan({ storageBlock: "LOCAL", primary: null })] });
     await mount();
-    await click($(".es-pubbtn"));
+    await openSheet();
     await click(dest("自分のサイト"));
     expect($('[role="alert"]')!.textContent).toBe("保存先が NIHO クラウドではないので、公開できません（公開は保存先がクラウドのときだけです）");
     expect(primary().disabled).toBe(true);
@@ -406,7 +438,7 @@ describe("公開のシート", () => {
   it("「接続する」「発信先を追加」は発信先の設定へ移る", async () => {
     server({ sheets: [sheet({ destinations: [] })] });
     await mount();
-    await click($(".es-pubbtn"));
+    await openSheet();
     await click(byText("button", "自分のサイト"));
     expect(nav.push).toHaveBeenLastCalledWith("/destinations");
   });
@@ -422,7 +454,7 @@ describe("公開のシート", () => {
     await click($("[data-saved]"));
     await act(async () => vi.advanceTimersByTimeAsync(SAVED_REFRESH_DELAY_MS));
     expect(gets()).toBe(2);
-    expect($(".es-pubbtn")!.textContent).toBe("更新を公開");
+    expect(badge()!.textContent).toBe("公開中 · 更新あり");
   });
 });
 

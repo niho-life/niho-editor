@@ -38,8 +38,8 @@ export function SplitDemo({ windowControls = false }: { windowControls?: boolean
           side: side ? <ShellSidePane pageId={side} title={title(side)} onClose={() => setSide(null)} onSwap={() => { setMain(side); setSide(main); }}><p>{title(side)}の本文</p></ShellSidePane> : undefined,
         }}
       >
-        <TabBar tabs={[{ id: main, label: "下書き" }]} currentId={main} onOpen={setMain} onAdd={() => undefined} />
-        <article className="es-canvas-in"><h1>{title(main)}</h1><div className="es-body">{Array.from({ length: 45 }, (_, index) => <p key={index}>合成本文 {index + 1}。スクロールを確認するための文章です。</p>)}</div></article>
+        {/* タブの帯は題名の下（2 つ以上のときだけ描かれる。#344） */}
+        <article className="es-canvas-in"><h1>{title(main)}</h1><TabBar tabs={[{ id: main, label: "下書き" }, { id: `${main}-en`, label: "英語版" }]} currentId={main} onOpen={() => undefined} onAdd={() => undefined} /><div className="es-body">{Array.from({ length: 45 }, (_, index) => <p key={index}>合成本文 {index + 1}。スクロールを確認するための文章です。</p>)}</div></article>
       </EditorShell>
     </div>
   );

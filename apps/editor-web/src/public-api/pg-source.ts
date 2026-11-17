@@ -42,7 +42,7 @@ import type { DraftContent, PublicApiSource, PublishedListRow, PublishedLookup, 
  *   buildSnapshot で組む。version と時刻はページの保存の版（revision）と時刻（updated_at）。
  *   著者は token に結んだもの（発行したときの本人。0009）で、無ければいまの公開版の著者。どちらも無ければ組めない（404）。
  *   公開用の著者紹介（authorProfile）はプレビューには入れない（token に結んでいない。公開版だけが持つ）。
- *   共有画像の許諾（coverShareable）はいまの下書きの資産から組む（公開と同じ）。
+ *   カバーを共有画像にしてよいか（coverShareable）はいまの下書きのカバーから組む（公開と同じ。許諾は見ない）。
  */
 
 export interface PgPublicApiOptions {

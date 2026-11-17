@@ -197,7 +197,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
       <h2 style={HEADING_STYLE}>文字起こし</h2>
       {transcripts.length === 0 ? (
         <p className="es-note" data-transcripts="none">
-          {audio ? "まだ文字起こしがありません。上の「文字起こしをはじめる」か、「ページ」パネルの流れでエンジンを選んで始めます。" : "まだ文字起こしがありません。"}
+          {audio ? "まだ文字起こしがありません。上の「文字起こしをはじめる」か、「手順」の「文字起こしを作る」でエンジンを選んで始めます。" : "まだ文字起こしがありません。"}
         </p>
       ) : (
         <ul style={LIST_STYLE} data-transcripts={transcripts.length} aria-label="文字起こしのタブ">

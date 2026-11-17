@@ -82,7 +82,7 @@ function RunRecipeNote({ folderId, run, busy, onUpdated }: { folderId: string; r
         <details>
           <summary>手順が新しくなっています。変更内容を見る</summary>
           <ul>{(run.designChanges ?? []).map((change, index) => <li key={`${index}-${change}`}>{change}</li>)}</ul>
-          <p>更新後、必要な段階は流れの「作成」か、タブの「作り直す」で実行してください。段階の追加・削除・並び替えがある場合は、はじめから作り直してください。</p>
+          <p>更新後、必要な段階は手順の「◯◯まで作る」か、タブの「作り直す」で実行してください。段階の追加・削除・並び替えがある場合は、はじめから作り直してください。</p>
           <button type="button" className="es-btn es-btn--outline es-btn--sm" disabled={busy || sending || isStepRunActive(run)} onClick={() => void update()}>
             今の設計に更新
           </button>
@@ -93,9 +93,10 @@ function RunRecipeNote({ folderId, run, busy, onUpdated }: { folderId: string; r
 }
 
 /**
- * 「ページ」のパネルの中身（#311 の箱。#309 で「流れ」）。開いているタブの流れ（FlowWatcher が枠に登録した AttachedFlow）を描く:
- * 手順名 ▾ · フォルダ名、録音 › 文字起こし › 段階… の行と右端の 作成／済み、run の一言と操作、失敗の途中出力、手順の版。
- * 流れの無いページ（フォルダ・古い段階のサブページ）では一言だけ。
+ * 「手順」のパネルの中身（#311 の箱。#309 で「流れ」、#344 で使うときだけ出すカード）。開いているタブの流れ
+ * （FlowWatcher が枠に登録した AttachedFlow）を docs-ui の PageFlow で描く: 手順名 ▾ · フォルダ名、段階の行（済み ✓・いま ●・これから ○）、
+ * 作成のボタン 1 つ、run の一言と操作、失敗の途中出力、手順の版。出すかどうかは枠（EditorFrame）が決める。
+ * 流れを読み終えるまでは一言だけ。
  */
 export function PagePanel({ flow, onClose, drag }: { flow: AttachedFlow | null; onClose: () => void; drag: boolean }) {
   // 操作の結果の一言はそのタブの分だけ出す（タブが替わったら前の一言は出さない）
@@ -114,6 +115,8 @@ export function PagePanel({ flow, onClose, drag }: { flow: AttachedFlow | null; 
       <div className="es-pn-body">
         {flow ? (
           <PageFlow
+            // 目標の段階（行を押して選んだもの）はそのタブの間だけ
+            key={flow.ownerId}
             recipe={flow.recipe}
             recipes={flow.recipes}
             folder={flow.folder}
@@ -143,7 +146,7 @@ export function PagePanel({ flow, onClose, drag }: { flow: AttachedFlow | null; 
             ))}
           </PageFlow>
         ) : (
-          <p className="es-pn-note">ページを開くと、そのフォルダの手順の流れ（録音 › 文字起こし › 段階）がここに出ます。</p>
+          <p className="es-pn-note" role="status">手順を読み込んでいます。</p>
         )}
       </div>
     </>

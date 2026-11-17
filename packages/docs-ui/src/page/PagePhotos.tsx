@@ -4,7 +4,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type DragEven
 import { ShellPanelHead } from "../shell/dock";
 import { Icon } from "../shell/icons";
 import { ShellSheet } from "../shell/sheet";
-import { IMAGE_ACCEPT, IMAGE_ALT_MAX_CHARS, IMAGE_CREDIT_MAX_CHARS, IMAGE_MAX_BYTES, IMAGE_PAGE_MAX_COUNT, isAllowedImageSize, isAllowedImageType } from "./image-limits";
+import { IMAGE_ACCEPT, IMAGE_ALT_MAX_CHARS, IMAGE_MAX_BYTES, IMAGE_PAGE_MAX_COUNT, isAllowedImageSize, isAllowedImageType } from "./image-limits";
 import { IMAGE_PROBLEM_TEXT } from "./image-node";
 import type { ImageMeta, ImageProblem, ImageSrcOf, PageImageEntry, PageImages } from "./images";
 import { PAGE_IMAGE_DRAG_TYPE, encodePagePhotoDrag, type PagePhotosBody } from "./page-photos";
@@ -18,7 +18,7 @@ import { PAGE_IMAGE_DRAG_TYPE, encodePagePhotoDrag, type PagePhotosBody } from "
  * - 既定で閉じる（写真アイコンの 1 行だけ）。アイコンを押すと開き、もう一度押すと閉じる。開閉と高さは呼ぶ側がメモリに持つ（保存しない）。
  *   枚数は出さない。＋は開いているときだけ出し、100 枚に達したら押せなくして理由をツールチップと通知で出す。
  * - タイルは正方形 3 列・新しい順。本文で使っている写真には形のある ✓（色だけで表さない）。
- *   押す → 大きく見る（本文に入れる／alt／クレジット／掲載許諾／パネルから外す）。ドラッグ → 本文の落とした位置に入る（image-node.ts）。
+ *   押す → 大きく見る（本文に入れる／alt／パネルから外す。クレジット・掲載許諾の欄は無い。#344）。ドラッグ → 本文の落とした位置に入る（image-node.ts）。
  * - ＋とパネルへのファイルのドロップは、パネルにだけ足す（本文には入れない）。閉じた行に落としたら開いて上げる。
  *   上げている間は細い進み具合、失敗は 1 行で「再試行・取り消す」。
  * - パネルから外すと、本文の全ての出現（とカバー）からも消える。サーバーで外せてから本文を変え、外せなければ何も変えない。
@@ -566,7 +566,7 @@ export function PagePhotos({ pageId, images, srcOf, body, open = true, onOpenCha
   );
 }
 
-/** 大きく見る（ダイアログ）。本文に入れる・alt・クレジット・掲載許諾・パネルから外す。 */
+/** 大きく見る（ダイアログ）。本文に入れる・alt・パネルから外す（クレジット・掲載許諾は入れない。既にある値はそのまま。#344）。 */
 function PhotoSheet(props: {
   pageId: string;
   entry: PageImageEntry;
@@ -610,15 +610,14 @@ function PhotoSheet(props: {
     if (confirm !== null) removeButton.current?.focus();
   }, [confirm]);
 
-  const change = (patch: Partial<ImageMeta>, now = false) => {
+  const change = (patch: Partial<ImageMeta>) => {
     const next = { ...meta, ...patch };
     setMeta(next);
     props.onMeta(next);
     setProblem(null);
     waiting.current = { ...waiting.current, ...patch };
     if (timer.current !== null) clearTimeout(timer.current);
-    if (now) flush();
-    else timer.current = setTimeout(flush, SAVE_DELAY_MS);
+    timer.current = setTimeout(flush, SAVE_DELAY_MS);
   };
 
   const insert = () => {
@@ -675,22 +674,6 @@ function PhotoSheet(props: {
                 onChange={(event) => change({ alt: event.target.value === "" ? null : event.target.value })}
                 onBlur={flush}
               />
-            </label>
-            <label>
-              クレジット
-              <input
-                className="es-input"
-                type="text"
-                value={meta.credit ?? ""}
-                maxLength={IMAGE_CREDIT_MAX_CHARS}
-                placeholder="撮った人・出典"
-                onChange={(event) => change({ credit: event.target.value === "" ? null : event.target.value })}
-                onBlur={flush}
-              />
-            </label>
-            <label className="es-ph-consent">
-              <input type="checkbox" checked={meta.consent} onChange={(event) => change({ consent: event.target.checked }, true)} />
-              掲載の許諾をもらっている
             </label>
           </div>
         </div>

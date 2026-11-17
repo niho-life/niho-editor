@@ -157,10 +157,14 @@ describe("shell.css（フェーズ2）", () => {
     expect(bodyOf(".es-back span")).toContain("text-overflow:ellipsis");
     expect(bodyOf(".es-back .es-ico")).toContain("flex:none");
     expect(mobileOf(".es-dt .es-pubbtn")).toContain("flex:none");
-    // 本文の列（.es-canvas-in）とタブの帯（#315）は同じ幅（680px・中央）
+    // 本文の列（.es-canvas-in）とタブの帯（#315）は同じ幅（680px・中央）。帯は題名の下に置くので、上に貼りつけない（#344）
     expect(bodyOf(".es-canvas-in")).toContain("max-width:680px");
     expect(bodyOf(".es-tabbar")).toContain("max-width:680px");
-    expect(bodyOf(".es-tabbar")).toContain("margin:0 auto 10px");
+    expect(bodyOf(".es-tabbar")).toContain("margin:4px auto 16px");
+    expect(bodyOf(".es-tabbar")).not.toContain("sticky");
+    // 公開済みの状態の札は縮めない（320px でも、縮むのは左の「‹ 行き先」だけ）。「更新あり」は 720px 以下で省く
+    expect(bodyOf(".es-pubstate")).toContain("flex:none");
+    expect(bodyOf(".es-pubstate")).toContain("white-space:nowrap");
   });
 
   it("書体は token。発信先ごとの見え方（serif・sans）も --ed-font-* から引く", () => {

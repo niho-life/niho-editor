@@ -6,8 +6,9 @@ import type { Database, OwnerId, Queryable } from "./types.ts";
  * AI チャット（会話）の層（表 ai_conversations・ai_messages。migration 0022・0025・20261107011826）。
  * 旧アプリ（packages/docs-core の conversation.ts）がファイルに持っていた会話を、サーバーの正本に置き換えたもの。
  *
- * - 会話は**利用者（owner）に属する**（#312。ページを移っても続く）。`page_id` は始めたページを覚えるだけで、読み書きは owner と会話の id で絞る
+ * - 会話は**利用者（owner）に属する**（#312。どのページからも履歴で開いて続けられる）。`page_id` は始めたページを覚えるだけで、読み書きは owner と会話の id で絞る
  *   （他人の会話・無い会話はどちらも null＝同じ 404）。ページの id を受ける口は、そのページが本人のものかを確かめるためだけに使う。
+ *   画面はページを開いたときに、そのページで最後に話した会話を一覧から選ぶ（一覧の `lastPageId` と `pageId`。#344 決定 B）。
  * - 発言には、その turn で開いていたページ（タブ）を残す（`pageId`・`pageTitle`。画面の「◯◯ で」）。消えたページは NULL。
  * - 1 回のやりとり（人の頼み → AI の提案）は 1 transaction で 2 つの発言として足す（途中の片方だけが残らない）。
  * - 採用は提案の発言に後から書く（採用した中身と、採用の前の本文が残った版の番号）。採用しなければ何も書かない。
@@ -37,6 +38,11 @@ export type AiConversationSummary = {
   messages: number;
   /** 一覧に出す最後の発言の文（会話が空なら null）。 */
   lastText: string | null;
+  /**
+   * いちばん新しい発言の turn で開いていたページ（会話が空・古い記録・消えたページなら null）。
+   * 画面はこれで「そのページで最後に話した会話」を選ぶ（#344 決定 B。列ではなく ai_messages から引く）。
+   */
+  lastPageId: string | null;
 };
 
 /** 1 回の依頼で直した・作ったページ（旧アプリの TurnPageChange。migration 0025）。 */
@@ -148,7 +154,7 @@ export function isMessageJson(value: unknown): boolean {
   return new TextEncoder().encode(text).byteLength <= MESSAGE_JSON_MAX_BYTES;
 }
 
-type ConversationRow = { id: string; page_id: string | null; created_at: Date; updated_at: Date; messages: string | number; last_text: string | null };
+type ConversationRow = { id: string; page_id: string | null; created_at: Date; updated_at: Date; messages: string | number; last_text: string | null; last_page_id: string | null };
 type MessageRow = {
   id: string;
   seq: number;
@@ -202,6 +208,7 @@ function toSummary(row: ConversationRow): AiConversationSummary {
     updatedAt: row.updated_at.toISOString(),
     messages: Number(row.messages),
     lastText: row.last_text,
+    lastPageId: row.last_page_id ?? null,
   };
 }
 
@@ -228,9 +235,16 @@ function toMessage(row: MessageRow, changes: readonly ChangeRow[] = []): AiMessa
   };
 }
 
+/**
+ * 会話の要約の列（発言の数・最後の発言の文・その turn で開いていたページ）。`alias` は会話の行の名前。
+ * 一覧・1 つの会話・足したあとの要約で同じものを返す（最後の発言は (conversation_id, seq) の索引で引く）。
+ */
+const summaryColumns = (alias: string) => `(SELECT count(*) FROM ai_messages m WHERE m.conversation_id = ${alias}.id) AS messages,
+         (SELECT m.text FROM ai_messages m WHERE m.conversation_id = ${alias}.id ORDER BY m.seq DESC LIMIT 1) AS last_text,
+         (SELECT m.page_id FROM ai_messages m WHERE m.conversation_id = ${alias}.id ORDER BY m.seq DESC LIMIT 1) AS last_page_id`;
+
 const SUMMARY_SELECT = `SELECT c.id, c.page_id, c.created_at, c.updated_at,
-         (SELECT count(*) FROM ai_messages m WHERE m.conversation_id = c.id) AS messages,
-         (SELECT m.text FROM ai_messages m WHERE m.conversation_id = c.id ORDER BY m.seq DESC LIMIT 1) AS last_text
+         ${summaryColumns("c")}
     FROM ai_conversations c`;
 
 const MESSAGE_COLUMNS = "id, seq, role, text, preset, proposal, adopted, version, adopted_at, items, result, result_code, route, engine, page_id, created_at";
@@ -253,6 +267,7 @@ async function pageExists(db: Queryable, owner: OwnerId, pageId: string): Promis
 
 /**
  * 利用者の会話の一覧（新しい順。どのページで始めたかによらない）。`pageId` は開いているページ（本人のものでない・無い・ゴミ箱の中なら null＝404）。
+ * 各会話は始めたページ（`pageId`）と、最後に話したページ（`lastPageId`）を持つ（画面がページを開いたときの会話選びに使う）。
  */
 export async function listConversations(db: Queryable, owner: OwnerId, pageId: string): Promise<AiConversationSummary[] | null> {
   assertOwner(owner);
@@ -331,8 +346,7 @@ async function conversationSummary(client: PoolClient, conversationId: string): 
   const summary = await client.query<ConversationRow>(
     `UPDATE ai_conversations SET updated_at = clock_timestamp() WHERE id = $1
      RETURNING id, page_id, created_at, updated_at,
-               (SELECT count(*) FROM ai_messages m WHERE m.conversation_id = ai_conversations.id) AS messages,
-               (SELECT m.text FROM ai_messages m WHERE m.conversation_id = ai_conversations.id ORDER BY m.seq DESC LIMIT 1) AS last_text`,
+               ${summaryColumns("ai_conversations")}`,
     [conversationId],
   );
   return toSummary(summary.rows[0]!);

@@ -55,6 +55,18 @@ describe("parseDestinationDeclaration: the fixture declarations (design §8.1)",
     expect(lead && "max" in lead).toBe(false);
   });
 
+  it("cover の consent は既にある宣言のために受け付けるが、意味を持たない（無くてもよく、読んだ宣言には残さない）", () => {
+    const cover = (extra: Record<string, unknown>) => parsed({
+      ...DECLARATIONS.site,
+      requires: [{ id: "cover", kind: "cover", message: "カバー写真を選んでください", fix: "cover", ...extra }],
+    }).requires;
+    const expected = [{ id: "cover", kind: "cover", message: "カバー写真を選んでください", fix: "cover" }];
+    expect(cover({})).toEqual(expected);
+    expect(cover({ consent: true })).toEqual(expected);
+    expect(cover({ consent: false })).toEqual(expected);
+    expect(parsed(DECLARATIONS.exp).requires[1]).toEqual({ id: "cover", kind: "cover", message: "掲載許諾のあるカバー写真を選んでください", fix: "cover" });
+  });
+
   it("accepts an owner's site with no conditions and an empty path", () => {
     const site = parsed(DECLARATIONS.site);
     expect(site.requires).toEqual([]);

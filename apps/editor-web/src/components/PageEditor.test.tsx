@@ -129,8 +129,14 @@ async function renderEditor(page: Partial<EditablePage> & { revision: number }, 
   expect(container.querySelector(".ProseMirror")?.getAttribute("contenteditable")).toBe("true");
   if (options.settings) {
     // 記事の情報（リード・カバー画像・言語・英語版）は、公開のシートの中だけに出る
-    await act(async () => container!.querySelector<HTMLButtonElement>(".es-dt .es-pubbtn")!.click());
+    await openPublishSheet();
   }
+}
+
+/** 公開のシートを開く（ヘッダーの「…」の先頭の「公開…」。ヘッダーに公開のボタンは無い。#344）。 */
+async function openPublishSheet() {
+  await act(async () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="その他"]')!.click());
+  await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="menu"] button')].find((button) => button.textContent?.startsWith("公開…"))!.click());
 }
 
 async function advance(ms: number) {
@@ -218,6 +224,29 @@ describe("niho-docs-ui on React 19", () => {
     expect(status()?.textContent).toBe("保存済み");
   });
 
+  it("belowTitle（#344）: 題名の下・本文の前に置く（タブの帯・録音の欄の置き場）", async () => {
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        <PageEditor
+          page={{ id: PAGE_ID, title: "合成の題名", blocks: [{ type: "paragraph", content: [{ type: "text", text: "本文" }] }], revision: 1, updatedAt: UPDATED_AT }}
+          belowTitle={<input data-probe="" aria-label="合成の欄" />}
+        />,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const title = container.querySelector("textarea.page-title")!;
+    const probe = container.querySelector("[data-probe]")!;
+    const body = container.querySelector(".ProseMirror")!;
+    expect(title.compareDocumentPosition(probe) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(probe.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(probe.closest("[data-below-title]")).not.toBeNull();
+  });
+
   it("caps the title at the server limit so an over-long title never enters autosave", async () => {
     container = document.createElement("div");
     document.body.append(container);
@@ -300,7 +329,7 @@ describe("PageEditor autosave", () => {
     // シートを閉じて開き直しても、打った値はエディタが持っている
     await act(async () => [...container!.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === "閉じる")!.click());
     expect(container!.querySelector("[data-page-lead]")).toBeNull();
-    await act(async () => container!.querySelector<HTMLButtonElement>(".es-dt .es-pubbtn")!.click());
+    await openPublishSheet();
     expect(container!.querySelector<HTMLTextAreaElement>("[data-page-lead]")?.value).toBe("新しい要約");
     await advance(300);
     await settleIdb();
@@ -321,7 +350,7 @@ describe("PageEditor autosave", () => {
     await act(async () => {
       bodyEditor().commands.insertContent({ type: "image", attrs: { assetId } });
     });
-    await act(async () => container!.querySelector<HTMLButtonElement>(".es-dt .es-pubbtn")!.click());
+    await openPublishSheet();
     const after = container!.querySelector<HTMLSelectElement>("[data-page-cover]")!;
     expect(after.disabled).toBe(false);
     expect([...after.options].map((option) => option.value)).toEqual(["", assetId]);
@@ -333,9 +362,6 @@ describe("PageEditor autosave", () => {
     const urls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
       urls.push(url);
-      if (url === `/api/assets/${assetId}/meta`) {
-        return json(200, { image: { assetId, pageId: PAGE_ID, status: "ready", bytes: 5, contentType: "image/png", alt: null, credit: null, consent: false } });
-      }
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       patches.push(body);
       return json(200, { page: { id: PAGE_ID, revision: (body.baseRevision as number) + 1 } });
@@ -354,52 +380,30 @@ describe("PageEditor autosave", () => {
     const blocks = patches[0]?.blocks as Array<Record<string, unknown>>;
     expect(blocks[0]).toMatchObject({ type: "image", attrs: { assetId } });
     expect(urls.some((url) => url.endsWith("/images/start"))).toBe(false);
+    // カバーの許諾は聞かないので、資産のメタデータも読まない
+    expect(urls.some((url) => url.endsWith("/meta"))).toBe(false);
     expect(container!.querySelector<HTMLImageElement>("img[alt='カバー画像のプレビュー']")?.getAttribute("src")).toContain(assetId);
   });
 
-  it("offers the share-image permission for the cover only with 掲載許諾, saves it on the asset, and puts it back when saving fails", async () => {
+  it("カバーの欄に掲載許諾・共有画像の許諾のチェックを出さず、資産の許諾を読みも書きもしない（オーナー決定 2026-11-18）", async () => {
     const assetId = "00000000-0000-4000-8000-000000000004";
-    const metas: Array<Record<string, unknown>> = [];
+    const urls: string[] = [];
     const saves: Array<Record<string, unknown>> = [];
-    let consent = false;
-    let failShare = false;
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
-      const image = () => ({ image: { assetId, pageId: PAGE_ID, status: "ready", bytes: 5, contentType: "image/png", alt: "合成の写真", credit: null, consent, share: false } });
-      if (url === `/api/assets/${assetId}/meta`) return json(200, image());
-      if (url === `/api/assets/${assetId}`) {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        metas.push(body);
-        if (body.share !== undefined && failShare) return json(503, { error: "unavailable" });
-        if (typeof body.consent === "boolean") consent = body.consent;
-        return json(200, { image: { ...image().image, ...body } });
-      }
+      urls.push(url);
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       saves.push(body);
       return json(200, { page: { id: PAGE_ID, revision: (body.baseRevision as number) + 1 } });
     }));
     await renderEditor({ revision: 5, cover: assetId, blocks: [{ type: "image", attrs: { assetId } }] }, { settings: true });
-    const share = () => container!.querySelector<HTMLInputElement>("[data-cover-share]")!;
-    const consentBox = () => share().closest("section")!.querySelector<HTMLInputElement>('input[type="checkbox"]:not([data-cover-share])')!;
     await act(async () => undefined);
-    // 掲載許諾が無いあいだは押せない（理由も文字で出す）
-    expect(share().disabled).toBe(true);
-    expect(share().checked).toBe(false);
-    expect(share().closest("label")?.textContent).toContain("掲載の許諾を確認すると選べます");
-    await act(async () => consentBox().click());
-    await act(async () => undefined);
-    expect(share().disabled).toBe(false);
-    await act(async () => share().click());
-    await act(async () => undefined);
-    expect(metas).toEqual([{ consent: true }, { share: true }]);
-    expect(share().checked).toBe(true);
-    await waitForAutosave();
-    expect(saves.at(-1)).toMatchObject({ cover: assetId });
-    // 保存に失敗したら元に戻して一言出す
-    failShare = true;
-    await act(async () => share().click());
-    await act(async () => undefined);
-    expect(share().checked).toBe(true);
-    expect(container!.textContent).toContain("共有画像の許諾を保存できませんでした。");
+    const fields = container!.querySelector<HTMLElement>('section[aria-label="記事の情報"]')!;
+    expect(fields.querySelector("img[alt='カバー画像のプレビュー']")?.getAttribute("src")).toContain(assetId);
+    expect(fields.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+    expect(fields.querySelector("[data-cover-share]")).toBeNull();
+    expect(fields.textContent).not.toContain("許諾");
+    expect(urls.some((url) => url.startsWith("/api/assets/"))).toBe(false);
+    expect(saves).toEqual([]);
   });
 
   it("sends every autosave with the page's revision as baseRevision and advances it from each response", async () => {

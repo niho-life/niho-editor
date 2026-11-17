@@ -100,9 +100,9 @@ export function framePagesOf(state: FlowState): FrameFlowPage[] {
 
 /**
  * 開いているタブの流れ（#309）。何も描かない。開いたときに読み、動いている間だけ読み直し、
- * 「ページ」パネルの流れ（`registerFlow`）・AI の工程の選択（`registerAiSteps`）・一覧の行（`flowPagesChanged`）へ渡す。
+ * 「手順」パネルの流れ（`registerFlow`）・AI の工程の選択（`registerAiSteps`）・一覧の行（`flowPagesChanged`）へ渡す。
  *
- * - 「作成」は今のタブを入力にその段階までを作り、できた（最後の）タブを開く。作り直す・もう 1 つはタブの ▾ とここから。
+ * - 「◯◯まで作る」は今のタブを入力にその段階までを作り、できた（最後の）タブを開く。作り直す・もう 1 つはタブの ▾ とここから。
  * - 開いているタブが段階の出力で、その実行が終わって本文が入れ替わったら `onBodyReplaced` で知らせる（呼ぶ側が開き直す）。
  * - 実行はサーバー（Cloud Tasks の worker）が進めるので、画面を閉じても進む。開き直すと読み直すので最新になる。
  */
@@ -229,7 +229,7 @@ export function FlowWatcher({ pageId, kind, onBodyReplaced }: { pageId: string; 
     return send(async () => {
       const result = await startFlowRun(pageId, { inputTab: pageId, toStep: stepIndex });
       if (result.opened && result.opened !== pageId) open(result.opened);
-      return `「${name}」を作っています。進み具合は「ページ」パネルの流れに出ます。`;
+      return `「${name}」を作っています。進み具合は「手順」に出ます。`;
     });
   }, [state, pageId, send, open]);
 

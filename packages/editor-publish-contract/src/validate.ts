@@ -522,7 +522,7 @@ function categoryDisplayAt(value: unknown, path: string, issues: Issues): import
     : undefined;
 }
 
-/** Optional; when present it is exactly `true` (absence means "not confirmed"). */
+/** Optional; when present it is exactly `true` (absence means "not a share image"). */
 function coverShareableAt(value: unknown, path: string, issues: Issues): true | undefined {
   if (value === undefined || value === true) return value;
   return issues.add(path, typeof value === "boolean" ? "enum" : "type");

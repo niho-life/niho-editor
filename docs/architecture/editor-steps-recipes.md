@@ -123,7 +123,7 @@ queue・worker・retry・inline は claim した run の写しを使うように
 | 生存確認と再開 | `heartbeatAttempt`（lease の 1/3 おき）、`sweepExpiredLeases`・`listQueuedAttempts`・`requeueAttempt` と Scheduler の掃除（#118 で「消えた task」と「積まれている task」を区別する修正済み） |
 | 再試行 | 一時的な失敗は試行 3 回まで（自動の再試行は 2 回。`MAX_TRIES`）、間隔は指数的（`defaultRetryDelaySeconds`）。入力の誤りはすぐ失敗 |
 | キュー | `cloud-tasks.ts`（本番）・`inline.ts`（開発・CI。本番では受け付けない） |
-| 画面 | 「ページ」パネルの流れ（docs-ui `page/PageFlow.tsx`・`components/FlowWatcher.tsx`・`steps-view.ts`。#309）: 各行の「作成」「済み」・前提変更と作り直し・サイドバーの回るマーク・終了の通知。本文に帯は無い |
+| 画面 | 「手順」のカード（docs-ui `page/PageFlow.tsx`・`components/FlowWatcher.tsx`・`steps-view.ts`。#309・#344）: 使うページだけに出し、済み ✓・いま ●・これから ○ と作成のボタン 1 つ（「◯◯まで作る」。段階の行を押すとそこで止める）・前提変更と作り直し・サイドバーの回るマーク・終了の通知。本文に帯は無い |
 
 **この層は触らない。**足りないものが見つかったら PR 本文で相談する。
 

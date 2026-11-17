@@ -1,7 +1,7 @@
 /*
  * パネルの配置（設計 §5.5・#311）の計算。描画・保存は持たない純粋な関数だけ。
  * 列は左から「左のドック｜境目｜メイン｜境目｜右のページ｜境目｜右のドック」の 7 本（境目は幅 0）。
- * ドック（左右）にはパネル（一覧・AIと作る・ページ・写真）が縦に並び、同じドックに 2 つ以上あれば高さの割合（size）で分ける。
+ * ドック（左右）にはパネル（一覧・AIと作る・手順・写真）が縦に並び、同じドックに 2 つ以上あれば高さの割合（size）で分ける。
  * 正の見本は docs/mockups/editor-folder-pages-v1.html の renderLayout()・movePanel()・placeZones()。
  */
 
@@ -29,12 +29,13 @@ export type ShellPanelTarget = { side: ShellDockSide; at: "top" | "bottom" };
 
 /** パネルの順（ヘッダー右上のボタンの並びもこの順）。 */
 export const SHELL_PANELS: readonly ShellPanelId[] = ["list", "ai", "page", "photos"];
-export const SHELL_PANEL_NAME: Record<ShellPanelId, string> = { list: "一覧", ai: "AIと作る", page: "ページ", photos: "写真" };
+/** パネルの名前。`page` は文書生成の「手順」のカード（#344。モック editor-page-refine-v1。id は保存した配置との互換のため page のまま）。 */
+export const SHELL_PANEL_NAME: Record<ShellPanelId, string> = { list: "一覧", ai: "AIと作る", page: "手順", photos: "写真" };
 /** ヘッダー右上の「出す」ボタンの絵。 */
-export const SHELL_PANEL_ICON: Record<ShellPanelId, ShellIconName> = { list: "side", ai: "panel", page: "info", photos: "img" };
+export const SHELL_PANEL_ICON: Record<ShellPanelId, ShellIconName> = { list: "side", ai: "panel", page: "spark", photos: "img" };
 /** 閉じたパネルを出すとき戻る元のドック（その下に足す）。 */
 export const SHELL_PANEL_HOME: Record<ShellPanelId, ShellDockSide> = { list: "left", ai: "right", page: "right", photos: "right" };
-/** 既定の配置: 左＝一覧、右＝ページ（上）＋AI（下）。写真は閉じている。 */
+/** 既定の配置: 左＝一覧、右＝手順（上。出すのは使うページだけ）＋AI（下）。写真は閉じている。 */
 export const SHELL_DOCKS_DEFAULT: ShellDocks = {
   left: [{ id: "list", size: 1 }],
   right: [

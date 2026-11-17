@@ -122,8 +122,14 @@ describe("evaluateReadiness: NIHO Experience", () => {
     });
   });
 
-  it("requires consent on the cover", () => {
-    const result = evaluate(EXP, {}, { assets: [{ ...COVER, consent: false }, FIGURE, AUDIO] });
+  it("掲載許諾・共有画像の許諾の無いカバーと写真でも、宣言の consent: true によらず止めない（オーナー決定 2026-11-18）", () => {
+    const result = evaluate(EXP, {}, { assets: [{ ...COVER, consent: false, share: false }, { ...FIGURE, consent: false, share: false }, AUDIO] });
+    expect(result.problems).toEqual([]);
+    expect(result.ready).toBe(true);
+  });
+
+  it("still requires a usable cover when the cover is set", () => {
+    const result = evaluate(EXP, {}, { assets: [{ ...COVER, contentType: "image/svg+xml" }, FIGURE, AUDIO] });
     expect(ids(result)).toEqual(["cover"]);
     expect(result.problems[0]).toEqual({ id: "cover", message: "掲載許諾のあるカバー写真を選んでください", fix: "cover" });
   });
@@ -185,9 +191,10 @@ describe("evaluateReadiness: NIHO", () => {
     expect(ids(evaluate(NIHO, page, options))).toEqual(expected);
   });
 
-  it("does not need consent in the declaration but never publishes a cover without consent", () => {
+  it("掲載許諾の無いカバーでも止めない（cover-consent は出さない）", () => {
     const result = evaluate(NIHO, {}, { assets: [{ ...COVER, consent: false }, FIGURE, AUDIO] });
-    expect(result.problems).toEqual([{ id: "cover-consent", message: "カバー写真に掲載許諾がありません", fix: "cover" }]);
+    expect(result.problems).toEqual([]);
+    expect(result.ready).toBe(true);
   });
 
   it("does not care about CONFIRM, language or headings", () => {
@@ -238,9 +245,15 @@ describe("evaluateReadiness: conditions every destination needs", () => {
   it.each([
     ["missing", [COVER, AUDIO], "figure-missing"],
     ["a recording used as a photo", [COVER, { ...FIGURE, kind: "audio", contentType: "audio/mp4" }, AUDIO], "figure-unusable"],
-    ["without consent", [COVER, { ...FIGURE, consent: false }, AUDIO], "figure-consent"],
   ] as const)("a figure whose photo is %s is a problem", (_name, assets, id) => {
     expect(ids(evaluate(SITE, {}, { assets }))).toEqual([id]);
+  });
+
+  it("掲載許諾・共有画像の許諾の無い写真とカバーは問題にしない（figure-consent・cover-consent は出さない）", () => {
+    const result = evaluate(SITE, {}, { assets: [{ ...COVER, consent: false, share: false }, { ...FIGURE, consent: false, share: false }, AUDIO] });
+    expect(result.problems).toEqual([]);
+    expect(result.ready).toBe(true);
+    expect(collectFacts(readyPage(), [{ ...COVER, consent: false }, { ...FIGURE, consent: false }, AUDIO], { relatedLive: true }).cover).toBe("ok");
   });
 
   it.each([

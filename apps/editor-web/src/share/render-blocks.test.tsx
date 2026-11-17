@@ -132,18 +132,21 @@ describe("SharedBlocks", () => {
     expect(html).toBe('<aside data-callout=""><p>囲みの中</p><ul><li><p>項目</p></li></ul></aside>');
   });
 
-  it("renders an image of the shared page through the token's relay, with alt and the credit as a caption", () => {
+  it("renders an image of the shared page through the token's relay, with alt and the caption (never the credit, #344 D)", () => {
     const assetId = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
     const token = "s".repeat(43);
     const html = renderToStaticMarkup(
       <SharedBlocks
-        blocks={[{ type: "image", attrs: { assetId, alt: "合成の写真", credit: "合成の提供元", consent: true } }]}
+        blocks={[
+          { type: "image", attrs: { assetId, alt: "合成の写真", caption: "合成のキャプション", credit: "合成の提供元", consent: true } },
+          { type: "image", attrs: { assetId, alt: "合成の写真", credit: "合成の提供元", consent: false } },
+        ]}
         assetSrc={(id) => `/s/${token}/a/${id}`}
       />,
     );
-    expect(html).toBe(
-      `<figure><img src="/s/${token}/a/${assetId}" alt="合成の写真" loading="lazy" decoding="async" data-doc-asset=""/><figcaption>合成の提供元</figcaption></figure>`,
-    );
+    const img = `<img src="/s/${token}/a/${assetId}" alt="合成の写真" loading="lazy" decoding="async" data-doc-asset=""/>`;
+    expect(html).toBe(`<figure>${img}<figcaption>合成のキャプション</figcaption></figure><figure>${img}</figure>`);
+    expect(html).not.toContain("合成の提供元");
   });
 
   it("never renders an image that cannot be read: no relay, no asset id, or an outside src", () => {

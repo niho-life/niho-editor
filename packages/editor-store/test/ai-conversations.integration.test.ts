@@ -178,6 +178,42 @@ describe("AI conversations", { skip: databaseUrl ? false : "TEST_DATABASE_URL is
     assert.deepEqual((await listConversations(pool, owner, pageB))?.map((item) => item.id), [second.conversation.id, first.conversation.id]);
   });
 
+  it("lists each conversation with the page it was last talked on (lastPageId), besides the page it was started on (#344)", async () => {
+    const owner = alone();
+    const pageA = await newPage(owner, "A");
+    const pageB = await newPage(owner, "B");
+    const started = await appendTurn(pool, owner, turn(pageA));
+    assert.ok(started);
+    assert.equal(started.conversation.lastPageId, pageA);
+    // B へ移って同じ会話を続けた: 始めたページは A のまま、最後に話したページは B
+    const moved = await appendTurn(pool, owner, turn(pageB, { conversationId: started.conversation.id, request: { text: "続き" } }));
+    assert.ok(moved);
+    assert.deepEqual([moved.conversation.pageId, moved.conversation.lastPageId], [pageA, pageB]);
+    const other = await appendTurn(pool, owner, turn(pageA));
+    assert.ok(other);
+    const list = await listConversations(pool, owner, pageA);
+    assert.deepEqual(list?.map((item) => [item.id, item.pageId, item.lastPageId]), [
+      [other.conversation.id, pageA, pageA],
+      [started.conversation.id, pageA, pageB],
+    ]);
+    // 1 つの会話を読んでも同じ
+    assert.equal((await getConversation(pool, owner, pageA, started.conversation.id))?.conversation.lastPageId, pageB);
+    // 最後に話したページが消えたら null（始めたページの A は残る）
+    assert.ok(await store.deletePage(owner, pageB));
+    // 保持の日数を過ぎたことにする（上の「stays when the page … is purged」と同じずらし方）
+    await pool.query(
+      `UPDATE pages
+          SET created_at = created_at - make_interval(days => 32),
+              updated_at = updated_at - make_interval(days => 32),
+              deleted_at = deleted_at - make_interval(days => 31)
+        WHERE id = $1`,
+      [pageB],
+    );
+    assert.ok((await store.purgeTrash()).pages >= 1);
+    const after = (await listConversations(pool, owner, pageA))?.find((item) => item.id === started.conversation.id);
+    assert.deepEqual([after?.pageId, after?.lastPageId], [pageA, null]);
+  });
+
   it("writes the adoption on the proposal that was adopted, once", async () => {
     const pageId = await newPage();
     const added = await appendTurn(pool, OWNER, turn(pageId));

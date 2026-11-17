@@ -44,9 +44,9 @@ import {
   type SidebarPublication,
 } from "@/lib/sidebar-items";
 import { usePageHistory } from "@/lib/use-page-history";
-import { AI_GRAY_ITEM, usePageMenu, type AttachedPage, type PageMenuLocalItem } from "@/lib/use-page-menu";
+import { ADD_TAB_ITEM, AI_GRAY_ITEM, FLOW_ITEM, PUBLISH_ITEM, usePageMenu, type AttachedPage, type PageMenuLocalItem } from "@/lib/use-page-menu";
 import { setAiGray, useAiGray } from "@/lib/ai-gray";
-import type { AttachedAiSteps, AttachedFlow } from "@/lib/attached-page";
+import type { AttachedAiSteps, AttachedFlow, AttachedTabAdder } from "@/lib/attached-page";
 import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
 import { usePageShare } from "@/lib/use-page-share";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
@@ -57,7 +57,7 @@ import { InfoPanel } from "./InfoPanel";
 import { PagePanel } from "./PagePanel";
 import { SidePage } from "./SidePage";
 import { PageInfo } from "./PageInfo";
-import { usePagePublish } from "./PagePublish";
+import { PUBLISHED_LABEL, usePagePublish } from "./PagePublish";
 import { BUSY_STYLE } from "./sheet-parts";
 import { ShareSheet } from "./ShareSheet";
 
@@ -146,8 +146,10 @@ export type EditorFrameApi = {
   registerTools: (tools: PageChromeTools | null) => void;
   /** 流れ（FlowWatcher）の工程の状態と開始を右レールの AI へ共有する。登録元が外れたら返す関数で外す。 */
   registerAiSteps: (steps: AttachedAiSteps) => () => void;
-  /** 「ページ」パネルの流れ（#309）を登録する。登録元が外れたら返す関数で外す。 */
+  /** 「手順」パネルの流れ（#309・#344）を登録する。登録元が外れたら返す関数で外す。 */
   registerFlow: (flow: AttachedFlow) => () => void;
+  /** 「…」の「タブを追加」（開いているページの PageTabs が登録する。#344）。登録元が外れたら返す関数で外す。 */
+  registerTabAdder: (adder: AttachedTabAdder) => () => void;
   /** 公開のシートを開く（ページを開いている画面だけで出る）。 */
   openPublish: () => void;
   /** 「写真」のパネルで写真を上げている途中か（何も足していないページを捨てる判定に使う）。 */
@@ -175,6 +177,7 @@ const FrameContext = createContext<EditorFrameApi>({
   registerTools: noop,
   registerAiSteps: () => noop,
   registerFlow: () => noop,
+  registerTabAdder: () => noop,
   pageRemoved: noop,
   flowPagesChanged: noop,
   attachPage: () => noop,
@@ -207,6 +210,11 @@ type ListState = {
   /** この画面でゴミ箱へ入れたページ（検索の結果からも外す。結果はサーバーの、削除の前の答えのことがある）。 */
   gone: ReadonlySet<string>;
 };
+
+/** 状態の札が出ているときは丸を出さない（state を private にすると丸は消え、tip は読み上げの live region に残る）。 */
+function withoutDot<T extends { state: string; tip: string }>(status: T | undefined, badge: boolean): T | { state: "private"; tip: string } | undefined {
+  return status && badge ? { state: "private", tip: status.tip } : status;
+}
 
 function samePublication(a: SidebarPublication | null, b: SidebarPublication | null): boolean {
   return a === b || (a !== null && b !== null && a.dest === b.dest && a.handle === b.handle && a.range === b.range && a.stopped === b.stopped);
@@ -444,8 +452,10 @@ type FrameSheet = { kind: "move" | "capacity"; id: string };
  *   まだ作っていないページでは「…」を出さない。削除の確認・共有・履歴・移動・フォルダの背景は ShellSheet で overlay に出す。
  *   ヘッダーの左の場所は、まだ作っていないページ（`/p/new`。録音からを含む）では、フォルダの中から開いたとき（`?in=`）だけ入れ先のフォルダ。
  * - ショートカット（設計 §11）: ⌘N 新しいページ、⌘K 検索、⌘⇧P 公開のシート（⌘S はページ、⌘/ は本文が持つ）。
- * - パネル（#311）: 一覧は左に固定し、AIと作る（./InfoPanel.tsx）・ページ（./PagePanel.tsx）・写真（PagePhotos）は左右のドックに置く。
- *   AI・ページ・写真は保存したページ（`/p/{id}`。フォルダ以外）だけで、まだ作っていないページ（`/p/new`）・録音から・設定系の画面では無い。
+ * - パネル（#311）: 一覧は左に固定し、AIと作る（./InfoPanel.tsx）・手順（./PagePanel.tsx）・写真（PagePhotos）は左右のドックに置く。
+ *   AI・手順・写真は保存したページ（`/p/{id}`。フォルダ以外）だけで、まだ作っていないページ（`/p/new`）・録音から・設定系の画面では無い。
+ *   手順（文書生成のカード。#344）は使うときだけ: 流れの中のページ（録音・文字起こし・段階の出力）か、「⋯」・AI の「工程とスキル」の
+ *   「手順で作る…」で呼んだページ（この画面の間だけ覚える）。ほかのページではパネルもヘッダーのボタンも出さない（AI が縦いっぱい）。
  *   ヘッダー右上のボタンは閉じているパネルの分だけ（押すと元のドックの下に戻る）。開いているパネルは × で閉じる。
  *   デスクトップではページを替えても配置はそのまま（端末に覚える。src/lib/use-shell-layout.ts）。狭い画面（900px 以下）は
  *   パネルを 1 つずつ全画面で、開いたページでだけ出す（一覧から別のページを開いたら閉じる）。
@@ -479,7 +489,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const [ordering, setOrdering] = useState(false);
   // 狭い画面で一覧を出している path（path が変われば閉じる）
   const [listFor, setListFor] = useState<string | null>(null);
-  // 狭い画面で全画面に出しているパネル（AI・ページ・写真のどれか 1 つ）と、その path（path が変われば閉じる）。デスクトップの配置は use-shell-layout
+  // 狭い画面で全画面に出しているパネル（AI・手順・写真のどれか 1 つ）と、その path（path が変われば閉じる）。デスクトップの配置は use-shell-layout
   const [panelFor, setPanelFor] = useState<{ id: Exclude<ShellPanelId, "list">; path: string } | null>(null);
   // 「⋯」の移動・フォルダの背景と、ページの情報の ⓘ のシート
   const [frameSheet, setFrameSheet] = useState<FrameSheet | null>(null);
@@ -507,9 +517,19 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const attachedRef = useRef<AttachedPage | null>(null);
   const [aiSteps, setAiSteps] = useState<AttachedAiSteps | null>(null);
   const aiStepsRef = useRef<AttachedAiSteps | null>(null);
-  // 「ページ」パネルの流れ（開いているタブの FlowWatcher が登録する）
+  // 「手順」パネルの流れ（開いているタブの FlowWatcher が登録する）
   const [flow, setFlow] = useState<AttachedFlow | null>(null);
   const flowRef = useRef<AttachedFlow | null>(null);
+  // 「手順で作る…」（⋯・AI の工程とスキル）で呼んだページ（この画面の間だけ覚える。保存しない。#344）
+  const [flowCalled, setFlowCalled] = useState<ReadonlySet<string>>(() => new Set());
+  // 読んだ流れの行の入れ物（流れの中と分かっている入れ物）。開いたタブの流れを読み終えるまでは、これで手順のパネルを出すか決める
+  const [flowHolders, setFlowHolders] = useState<ReadonlySet<string>>(() => new Set());
+  // 「手順で作る…」のあと、手順のカードが出たらフォーカスを移す（描いたあとに 1 回だけ）
+  const flowFocusRef = useRef(false);
+  const [flowFocusTick, setFlowFocusTick] = useState(0);
+  // 「…」の「タブを追加」（開いているページの PageTabs が登録する）
+  const [tabAdder, setTabAdder] = useState<AttachedTabAdder | null>(null);
+  const tabAdderRef = useRef<AttachedTabAdder | null>(null);
   // 版に戻して開き直したページ。そのページが登録し直したとき、フォーカスが外れていたら「…」へ戻す
   const refocusRef = useRef<string | null>(null);
   // 「写真」のパネルで上げている途中か
@@ -530,7 +550,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const sideParam = searchParams.get("side")?.toLowerCase() ?? null;
   const sideId = !narrow && currentId && sideParam && SIDE_ID.test(sideParam) && sideParam !== currentId.toLowerCase() ? sideParam : null;
 
-  // AI・ページ・右下のページの情報のページ: 開いているエディタのページ（作ったばかりで URL がまだ `/p/new` のときも）か、URL のページ。
+  // AI・手順・右下のページの情報のページ: 開いているエディタのページ（作ったばかりで URL がまだ `/p/new` のときも）か、URL のページ。
   // 一覧の行（作成・更新）が分かり、エディタが画面にあるときだけ出す（`/p/new` の作る前・設定系・ページが無い 404 では出さない）。
   // エディタが下書きを読み終えるまでは、パネルは出したまま中のボタンは何もしない（ページを替えるたびにパネルが消えて戻らないように）
   const railId = attached?.id ?? (attached ? currentId : undefined);
@@ -538,9 +558,18 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     ? (list.pages.find((page) => page.id === railId) ?? (list.opened?.id === railId ? list.opened : undefined))
     : undefined;
   const railPage = attached && attached.id !== null && attached.id === railId ? attached : null;
-  // フォルダ（kind = 'folder'）では「…」を「書き出し（.zip）」「削除」だけにし、AI・ページ・写真・公開・挿入の道具・ページの情報を出さない
+  // フォルダ（kind = 'folder'）では「…」を「書き出し（.zip）」「削除」だけにし、AI・手順・写真・公開・挿入の道具・ページの情報を出さない
   const railIsFolder = railSummary?.kind === "folder";
   const aiAvailable = railSummary !== undefined && !railIsFolder;
+  // 開いているページの流れ（FlowWatcher が登録したもの。読み終えるまでは null）
+  const flowHere = flow !== null && flow.ownerId === railId ? flow : null;
+  // 「手順」のパネル（#344）は使うときだけ: 流れの中のページ（どれかの行が今のページ）か、「手順で作る…」で呼んだページ。
+  // 流れを読み終えるまでは、録音のタブ・流れの中と分かっている入れ物のタブなら出したまま（流れの中のタブを渡るたびに消えて戻らないように）
+  const railHolder = railSummary?.page ?? null;
+  const flowCard =
+    aiAvailable &&
+    ((railId !== undefined && flowCalled.has(railId)) ||
+      (flowHere ? flowHere.rows.some((row) => row.current) : railSummary?.kind === "rec" || (railHolder !== null && flowHolders.has(railHolder))));
   // 「写真」のパネル: ページを開いていて（作ってあり、エディタが下書きを読み終えた）、設定などの画面でないときだけ。
   // 本文との橋渡し（✓・本文に入れる・外したら本文とカバーから消す）は、開いているページのエディタで行う
   const photoEditor = attached?.ai?.editor ?? null;
@@ -550,7 +579,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const photosAvailable = Boolean(photoPageId && photosBody && !settings);
   // パネルの配置（#311）: 中身のあるパネルのうちドックに置いてあるものを出す。端末ごとに覚える（src/lib/use-shell-layout.ts）。
   // 900px 未満は 1 つずつ全画面（EditorShell が 1 枚表示にする。覚えた配置は使わない）
-  const available: Record<ShellPanelId, boolean> = { list: true, ai: aiAvailable, page: aiAvailable, photos: photosAvailable };
+  const available: Record<ShellPanelId, boolean> = { list: true, ai: aiAvailable, page: flowCard, photos: photosAvailable };
   const layout = useShellLayout({ wide: !narrow, available, side: sideId !== null });
   const narrowPanel = (id: ShellPanelId) => panelFor !== null && panelFor.id === id && panelFor.path === pathname;
   const shownPanel = (id: ShellPanelId) =>
@@ -569,7 +598,36 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     else if (id === "list") setListFor(null);
     else setPanelFor(null);
   };
-  // ヘッダー右上に出す、閉じているパネル（順は 一覧・AI・ページ・写真）。狭い画面の一覧は左の「一覧を出す」が持つ
+  /** 「手順で作る…」（⋯・AI の工程とスキル）: 開いているページを「呼んだ」として覚え、手順のパネルを出してカードへフォーカスを移す。 */
+  const callFlow = () => {
+    const id = railSummary?.id;
+    if (!id || railIsFolder || flowHere === null) return;
+    setFlowCalled((current) => (current.has(id) ? current : new Set([...current, id])));
+    openPanel("page");
+    flowFocusRef.current = true;
+    setFlowFocusTick((tick) => tick + 1);
+  };
+  /** 手順のパネルの ×: パネルを閉じ（今どおり）、そのページの「呼んだ」も外す。 */
+  const closeFlow = () => {
+    closePanel("page");
+    const id = railSummary?.id;
+    if (!id) return;
+    setFlowCalled((current) => {
+      if (!current.has(id)) return current;
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  };
+  // 呼んだあと、手順のカードが出たらフォーカスを移す（1 回だけ。パネルが後から出ても、呼んでいなければ動かさない）
+  useEffect(() => {
+    if (!flowFocusRef.current || !pageShown) return;
+    const card = frameRoot.current?.querySelector<HTMLElement>('.es-pn[data-panel="page"] .es-flow');
+    if (!card) return;
+    flowFocusRef.current = false;
+    card.focus();
+  }, [flowFocusTick, pageShown, flowHere]);
+  // ヘッダー右上に出す、閉じているパネル（順は 一覧・AI・手順・写真。手順は使うページだけ）。狭い画面の一覧は左の「一覧を出す」が持つ
   const closedPanels = SHELL_PANELS.filter((id) => available[id] && (narrow ? id !== "list" && !narrowPanel(id) : !layout.shown[id]));
   // AI が書き換えたのが右のページなら読み直す（AI の依頼は終わるまでに右のページが替わることがあるので、今の id で比べる）
   const [sideRefresh, setSideRefresh] = useState(0);
@@ -686,10 +744,21 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
       registerFlow: (next) => {
         flowRef.current = next;
         setFlow(next);
+        const holders = next.rows.flatMap((row) => (row.holder ? [row.holder.id] : []));
+        setFlowHolders((current) => (holders.every((id) => current.has(id)) ? current : new Set([...current, ...holders])));
         return () => {
           if (flowRef.current !== next) return;
           flowRef.current = null;
           setFlow(null);
+        };
+      },
+      registerTabAdder: (next) => {
+        tabAdderRef.current = next;
+        setTabAdder(next);
+        return () => {
+          if (tabAdderRef.current !== next) return;
+          tabAdderRef.current = null;
+          setTabAdder(null);
         };
       },
       pageRemoved: (id) => {
@@ -1095,6 +1164,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // 公開のシートはページを開いている画面だけ（一覧・設定・新しいページ・録音からでは出さない）。開いているあいだは ⌘N・⌘K を効かせない
   const sheetShown = publishing.shown;
   const openPublish = publishing.open;
+  // 「…」の「公開…」（フォルダには出さない）と、その補足（公開済みのときの状態の札と同じ言葉）
+  const canPublish = openPage !== undefined && openPage.kind !== "folder";
+  const publishedHint = publishing.badge ? (publishing.badge.updated ? `${publishing.badge.label} · ${PUBLISHED_LABEL.updated}` : publishing.badge.label) : undefined;
 
   const openSearch = () => {
     if (sheetShown) return;
@@ -1165,11 +1237,35 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     openSheet: (sheet, owner) => (sheet === "share" ? share.open(owner) : history.open(owner)),
     focusMore,
     goToGoogleDocsBatch: (path) => router.push(path),
-    extras: railIsFolder ? { folder: true } : { move: canFolder || canOrder, pageInfo: railSummary !== undefined, aiGray },
+    extras: railIsFolder
+      ? { folder: true }
+      : {
+          move: canFolder || canOrder,
+          pageInfo: railSummary !== undefined,
+          aiGray,
+          // 公開の入口（ヘッダーに公開のボタンは出さない。#344）。公開済みなら状態を補足に
+          publish: canPublish ? { hint: publishedHint } : undefined,
+          // タブを足す口は、開いているページの PageTabs が登録したときだけ
+          addTab: tabAdder !== null && tabAdder.ownerId === railSummary?.id,
+          // 手順のカードを呼ぶ口は、開いているページの流れを読めたときだけ（#344）
+          flow: flowHere !== null,
+        },
     // 「移動…」はシート、「ページの情報」は右下のポップオーバー。開いたときのページの id で持つ
     onLocal: (item: PageMenuLocalItem) => {
       if (item === AI_GRAY_ITEM) {
         setAiGray(!aiGray);
+        return;
+      }
+      if (item === PUBLISH_ITEM) {
+        openPublish();
+        return;
+      }
+      if (item === ADD_TAB_ITEM) {
+        if (tabAdder && tabAdder.ownerId === railSummary?.id) tabAdder.add();
+        return;
+      }
+      if (item === FLOW_ITEM) {
+        callFlow();
         return;
       }
       const id = railSummary?.id;
@@ -1222,10 +1318,11 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 placement={narrow ? undefined : { at: layout.dockOf("ai") ?? "right", open: true, onOpenChange: noop }}
                 onClose={() => closePanel("ai")}
                 onPagesChanged={onAiPagesChanged}
+                onFlow={flowHere ? callFlow : undefined}
               />
             ) : undefined
           }
-          page={railSummary ? <PagePanel flow={flow?.ownerId === railId ? flow : null} onClose={() => closePanel("page")} drag={!narrow} /> : undefined}
+          page={railSummary ? <PagePanel flow={flowHere} onClose={closeFlow} drag={!narrow} /> : undefined}
           photos={photos}
           dock={{
             wide: !narrow,
@@ -1301,7 +1398,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               tools={editorBar && !narrow && !railIsFolder ? <ShellTools {...editorBar} compact /> : undefined}
               // 狭い画面のページ・設定の画面で戻る（URL へ。`/` か親のページ）。デスクトップの一覧は右上の「一覧を出す」（閉じているパネルの組）
               back={narrow && !sidebarOpen ? { label: backTo ? backTo.title || "無題" : "一覧", onClick: () => router.push(backTo ? `/p/${backTo.id}` : "/") } : undefined}
-              status={attached ? headerStatus(attached.status, publishing.status) : publishing.status}
+              // 公開済みは状態の札（published）が言葉で出すので、丸（地球のマーク）は出さず、読み上げの文だけ残す（#344）
+              status={withoutDot(attached ? headerStatus(attached.status, publishing.status) : publishing.status, publishing.badge !== null && publishing.badge !== undefined)}
               trailing={
                 <>
                   {attached && SAVE_FAILURES.has(attached.status) && (
@@ -1343,7 +1441,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               }
               panels={{ closed: closedPanels, onOpen: openPanel }}
               more={menu.more}
-              publish={publishing.publish}
+              // 公開は「…」の先頭の「公開…」から。公開済みのページだけ状態の札（押すと公開のシート。#344）
+              published={publishing.badge}
             />
           }
           overlay={

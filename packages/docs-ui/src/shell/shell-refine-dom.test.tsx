@@ -37,24 +37,27 @@ function mount(node: React.ReactNode): HTMLElement {
 const noop = () => undefined;
 
 describe("ShellTools compact（editor-web）", () => {
-  it("compact では ＋・画像・録音だけ（書式と区切り線は出さない）。既定は今のまま", () => {
+  it("ヘッダーの compact は ＋ だけ（画像・録音・書式・区切り線は出さない。#344）。既定は今のまま", () => {
     const compact = renderToStaticMarkup(<ShellTools compact />);
-    expect([...compact.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1])).toEqual(["書式とブロック", "ブロックを足す", "画像", "録音"]);
+    expect([...compact.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1])).toEqual(["書式とブロック", "ブロックを足す"]);
     expect(compact).not.toContain("es-sep");
     const full = renderToStaticMarkup(<ShellTools />);
     expect(full).toContain("太字");
     expect(full).toContain("es-sep");
-    const mobile = renderToStaticMarkup(<ShellMobileToolbar compact />);
-    expect(mobile).not.toContain("太字");
-    expect(mobile).toContain('aria-label="録音"');
+    expect(full).toContain('aria-label="画像"');
+    expect(full).toContain('aria-label="録音"');
   });
 
-  it("compact の録音・画像も onAction に届く", () => {
+  it("下端の帯（ShellMobileToolbar）の compact は今のまま ＋・画像・録音。録音・画像も onAction に届く", () => {
+    const mobile = renderToStaticMarkup(<ShellMobileToolbar compact />);
+    expect(mobile).not.toContain("太字");
+    expect([...mobile.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1])).toEqual(["道具の帯", "書式とブロック", "ブロックを足す", "画像", "録音"]);
     const onAction = vi.fn();
-    const host = mount(<ShellTools compact onAction={onAction} />);
+    const host = mount(<ShellMobileToolbar compact onAction={onAction} />);
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="ブロックを足す"]')!.click());
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="録音"]')!.click());
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="画像"]')!.click());
-    expect(onAction.mock.calls.map((call) => call[0])).toEqual(["record", "image"]);
+    expect(onAction.mock.calls.map((call) => call[0])).toEqual(["add-block", "record", "image"]);
   });
 });
 

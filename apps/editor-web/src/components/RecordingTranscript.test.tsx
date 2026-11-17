@@ -157,7 +157,7 @@ describe("録音のタブ: 文字起こしのタブの一覧（#310）", () => {
     await act(async () => root?.unmount());
     root = null;
     await mount(createServer());
-    expect(container!.querySelector('[data-transcripts="none"]')?.textContent).toContain("「ページ」パネルの流れでエンジンを選んで始めます");
+    expect(container!.querySelector('[data-transcripts="none"]')?.textContent).toContain("「手順」の「文字起こしを作る」でエンジンを選んで始めます");
   });
 
   it("says so when the page has no recording (404) and when it cannot be read", async () => {

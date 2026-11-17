@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageSummary } from "@niho/editor-store";
-import { TabBar } from "niho-docs-ui/page/TabBar";
 import { ShellLocation, ShellSettingsPage } from "niho-docs-ui/shell";
 import { rememberLastPage } from "@/lib/last-page";
 import { addLeftEmptyCandidate, isRetryableDiscardError, isTabCreatedPage, markTabCreatedPage } from "@/lib/left-empty-pages";
@@ -70,7 +69,8 @@ function useLeftEmpty(): (id: string, options: { keepalive: boolean }) => void {
  * そのときはページを読み直し、エディタを**開き直す**（key を替えて作り直す。保存・下書き・Undo の部品も新しくなるので、
  * 入れ替わった本文が Undo に混ざらず、自動保存も起きない。端末の下書きがあれば、開いたときと同じく比べて帯を出す）。
  *
- * tabs は同じ入れ物のタブ（本文なし。#308）。本文の上にタブの帯（./PageTabs.tsx）を出す（フォルダには出さない）。
+ * tabs は同じ入れ物のタブ（本文なし。#308）。タブが 2 つ以上なら、題名の下にタブの帯（./PageTabs.tsx）を出す（1 つなら帯は無く、
+ * 「…」の「タブを追加」で足す。フォルダには出さない。#344）。
  */
 export function OpenPage({
   summary,
@@ -146,10 +146,24 @@ export function OpenPage({
   // 文字起こしのタブ（#310）かどうかは本文（page_transcripts）の有無で（複製したタブも。サーバーが `transcriptOf` に元の録音を入れる）。
   // 本文のエディタは出さず（題名だけ）、その下に段落（TranscriptPage）
   const transcriptOf = summary.transcriptOf ?? null;
+  // 題名の下・本文の前（#344）: タブの帯（2 つ以上のときだけ描かれる。1 つでも「…」の「タブを追加」の口は登録する）、
+  // その下に録音のタブ（「この録音について」・再生・文字起こしの開始・文字起こしのタブの一覧）。帯の下に録音の並びが来る順は今のまま
+  const belowTitle = (
+    <>
+      <PageTabs key={`tabs-${id}`} page={summary} tabs={tabs} saveNow={saveNow} />
+      {summary.kind === "rec" && (
+        <>
+          <RecordingInfo key={`info-${id}`} pageId={id} />
+          <RecordingTranscript key={id} pageId={id} />
+        </>
+      )}
+    </>
+  );
   const editor = (
     <PageEditor
       key={fresh?.count ?? 0}
       aboveTitle={aboveTitle}
+      belowTitle={belowTitle}
       bodyless={transcriptOf !== null}
       page={{
         id,
@@ -177,19 +191,11 @@ export function OpenPage({
       }
     />
   );
-  // タブの帯（#308）はページのいちばん上。流れ（#309）の状態は FlowWatcher が読み続け、「ページ」パネルに出す（本文には帯もボタンも置かない）。
-  // 録音のタブ（「この録音について」・再生・文字起こしの開始・文字起こしのタブの一覧）はその下、本文の前。
-  // 文字起こしのタブ（#310）は題名（本文なしのエディタ）の下に段落
+  // 流れ（#309）の状態は FlowWatcher が読み続け、「手順」パネルに出す（本文には帯もボタンも置かない。出すかどうかは枠が決める。#344）。
+  // タブの帯と録音のタブは題名の下（belowTitle）。文字起こしのタブ（#310）は題名（本文なしのエディタ）の下に段落
   return (
     <>
-      <PageTabs key={`tabs-${id}`} page={summary} tabs={tabs} saveNow={saveNow} />
       <FlowWatcher pageId={id} kind={summary.kind} onBodyReplaced={onBodyReplaced} />
-      {summary.kind === "rec" && (
-        <>
-          <RecordingInfo key={`info-${id}`} pageId={id} />
-          <RecordingTranscript key={id} pageId={id} />
-        </>
-      )}
       {editor}
       {transcriptOf && <TranscriptPage key={`transcript-${id}`} tabId={id} recording={transcriptOf} />}
     </>
@@ -238,9 +244,9 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
       aliveRef.current = false;
     };
   }, []);
-  // 作ったページ（URL が `/p/{id}` になったあと）にもタブの帯を出す。`/p/{id}` を読み直した OpenPage にしか帯が無いと、
-  // 新しいページを作った直後は「＋」でタブを足せない（再読み込みするまで帯が出ない）。タブは 1 つ（このページ）で、入れ物は足すときにサーバーが結ぶ
-  // 親のフォルダは作った時点の値を持つ（作ったあとの URL の置換で `?in=` が消え、createIn が null になるため。帯がタブを足す行の親に使う）
+  // 作ったページ（URL が `/p/{id}` になったあと）にもタブを足す口（PageTabs。「…」の「タブを追加」）を置く。`/p/{id}` を読み直した OpenPage にしか
+  // 無いと、新しいページを作った直後はタブを足せない。タブは 1 つ（このページ）なので帯は描かれない（作る前の場所取りの空の帯も出さない。#344）。
+  // 入れ物は足すときにサーバーが結ぶ。親のフォルダは作った時点の値を持つ（作ったあとの URL の置換で `?in=` が消え、createIn が null になるため。足す行の親に使う）
   const [created, setCreated] = useState<{ id: string; parent: string | null } | null>(null);
   // 帯が使う題名（タブを足した行・削除の確認に出す。書いている間は題名の変更で替わる）
   const [title, setTitle] = useState("");
@@ -260,55 +266,52 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
     [registerPageSaver],
   );
   return (
-    <>
-      {created === null ? (
-        // ページを作る間は ＋ を押せない。帯の場所は先に取っておく（作り終えて帯が出たとき、書いている本文が下へずれない）
-        <TabBar tabs={[]} currentId="" onOpen={() => undefined} onAdd={() => undefined} busy />
-      ) : (
-        <PageTabs
-          key={`tabs-${created.id}`}
-          page={{ id: created.id, kind: "note", title, parent: created.parent, page: null }}
-          tabs={[{ id: created.id, kind: "note", title, tabName: null, tabPos: 1, stepStatus: null }]}
-          saveNow={saveNow}
-        />
-      )}
-      <PageEditor
-        page={{ id: null, title: "", blocks: [], revision: null }}
-        createOnOpen
-        createIn={createIn}
-        // 作ったばかりのページは共有していない
-        shared={false}
-        onTitleChange={(value) => {
-          titleRef.current = value;
-          setTitle(value);
-          if (createdRef.current) frame.pageTitleChanged(createdRef.current, value);
-        }}
-        onCreated={(id) => {
-          createdRef.current = id;
-          // 再読み込みのあと `/p/{id}` で開き直しても、このタブで作ったページと分かるように
-          markTabCreatedPage(id);
-          props.onCreated(id);
-          frame.pageCreated(id, titleRef.current, "note", createIn);
-          // タブの帯を出す（画面にまだこのエディタがあるときだけ）
-          if (aliveRef.current) setCreated({ id, parent: createIn });
-          // 保存が終わる前に別の画面へ移っていたら、その画面の URL は替えない
-          if (!aliveRef.current || window.location.pathname !== "/p/new") return;
-          window.history.replaceState(null, "", `/p/${id}`);
-          rememberLastPage(id);
-        }}
-        onSaved={() => {
-          if (createdRef.current) frame.pageSaved(createdRef.current);
-        }}
-        registerSaveNow={registerSaveNow}
-        onLangChange={(lang) => {
-          if (createdRef.current) frame.pageLangChanged(createdRef.current, lang);
-        }}
-        onLeftEmpty={(id, options) => {
-          // 離れる時点の印で決める（タブの ＋ で足したあとは外れている）
-          if (id === createdRef.current && isTabCreatedPage(id)) leftEmpty(id, options);
-        }}
-      />
-    </>
+    <PageEditor
+      belowTitle={
+        created === null ? undefined : (
+          <PageTabs
+            key={`tabs-${created.id}`}
+            page={{ id: created.id, kind: "note", title, parent: created.parent, page: null }}
+            tabs={[{ id: created.id, kind: "note", title, tabName: null, tabPos: 1, stepStatus: null }]}
+            saveNow={saveNow}
+          />
+        )
+      }
+      page={{ id: null, title: "", blocks: [], revision: null }}
+      createOnOpen
+      createIn={createIn}
+      // 作ったばかりのページは共有していない
+      shared={false}
+      onTitleChange={(value) => {
+        titleRef.current = value;
+        setTitle(value);
+        if (createdRef.current) frame.pageTitleChanged(createdRef.current, value);
+      }}
+      onCreated={(id) => {
+        createdRef.current = id;
+        // 再読み込みのあと `/p/{id}` で開き直しても、このタブで作ったページと分かるように
+        markTabCreatedPage(id);
+        props.onCreated(id);
+        frame.pageCreated(id, titleRef.current, "note", createIn);
+        // タブを足す口を置く（画面にまだこのエディタがあるときだけ）
+        if (aliveRef.current) setCreated({ id, parent: createIn });
+        // 保存が終わる前に別の画面へ移っていたら、その画面の URL は替えない
+        if (!aliveRef.current || window.location.pathname !== "/p/new") return;
+        window.history.replaceState(null, "", `/p/${id}`);
+        rememberLastPage(id);
+      }}
+      onSaved={() => {
+        if (createdRef.current) frame.pageSaved(createdRef.current);
+      }}
+      registerSaveNow={registerSaveNow}
+      onLangChange={(lang) => {
+        if (createdRef.current) frame.pageLangChanged(createdRef.current, lang);
+      }}
+      onLeftEmpty={(id, options) => {
+        // 離れる時点の印で決める（タブの ＋ で足したあとは外れている）
+        if (id === createdRef.current && isTabCreatedPage(id)) leftEmpty(id, options);
+      }}
+    />
   );
 }
 

@@ -268,6 +268,7 @@ export interface PublishedAsset {
   readonly bytes: number;
   readonly sha256: string;
   readonly alt: string;
+  /** editor は常に null を書く（公開ページにクレジットを出さない。オーナー決定 2026-11-18）。それより前の公開版には値が残る。 */
   readonly credit: string | null;
 }
 
@@ -311,8 +312,9 @@ export interface PublishedListItem {
   readonly lead: string | null;
   readonly cover: PublishedAsset | null;
   /**
-   * Present (always `true`) only when the author also confirmed the cover may be used as the share image
-   * (OG image, `Article.image`) — not only shown on the page. Absent otherwise; never present without a cover.
+   * Present (always `true`) only when the cover may also be used as the share image (OG image, `Article.image`),
+   * not only shown on the page. Absent otherwise; never present without a cover.
+   * editor は使える形のカバーなら常に付ける（掲載許諾・共有画像の許諾は見ない。オーナー決定 2026-11-18）。
    * Top level on purpose: `PublishedAsset` is strict, and older validators reject unknown nested keys.
    */
   readonly coverShareable?: true;

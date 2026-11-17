@@ -33,16 +33,13 @@ for (const mode of [{ width: 1280, mac: false }, { width: 1280, mac: true }, { w
     const main = page.locator("#es-main");
     const tab = page.locator(".es-tabbar");
     await expect(main).toBeVisible();
+    // タブの帯は題名の下・本文の前（#344）。上に貼りつけず、本文と一緒に送られる
+    const titleBox = (await main.locator("h1").boundingBox())!;
+    const tabBox = (await tab.boundingBox())!;
+    expect(tabBox.y).toBeGreaterThanOrEqual(titleBox.y + titleBox.height - 1);
+    expect(tabBox.y + tabBox.height).toBeLessThanOrEqual((await main.locator(".es-body").boundingBox())!.y + 1);
     await main.evaluate((element) => { element.scrollTop = 600; });
-    const mainBox = await main.boundingBox();
-    await expect.poll(async () => (await tab.boundingBox())!.y).toBeCloseTo(mainBox!.y);
-    const color = await root.evaluate((element) => getComputedStyle(element).backgroundColor);
-    await expect(tab).toHaveCSS("background-color", color);
-    // 以前透けていた上端の余白も、本文でなく不透明なタブ行の背景が覆う。
-    expect(await tab.evaluate((element) => {
-      const box = element.getBoundingClientRect();
-      return document.elementFromPoint(box.x + box.width / 2, box.y + 8)?.closest(".es-tabbar") === element;
-    })).toBe(true);
+    await expect.poll(async () => (await tab.boundingBox())!.y).toBeLessThan(tabBox.y - 500);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
     const accessibility = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
     expect(accessibility.violations.filter((item) => item.impact === "serious" || item.impact === "critical").map((item) => item.id)).toEqual([]);

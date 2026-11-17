@@ -5,7 +5,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PageSummary } from "@niho/editor-store";
 
 const router = { push: vi.fn(), replace: vi.fn(), refresh: vi.fn() };
-const frame = { pageCreated: vi.fn(), pageRemoved: vi.fn(), openPage: vi.fn(), pages: [] as PageSummary[], narrow: false };
+/** 枠に登録された「…」の「タブを追加」の口（#344）。 */
+const tabAdders: { ownerId: string; add: () => void }[] = [];
+const frame = {
+  pageCreated: vi.fn(),
+  pageRemoved: vi.fn(),
+  openPage: vi.fn(),
+  pages: [] as PageSummary[],
+  narrow: false,
+  registerTabAdder: vi.fn((adder: { ownerId: string; add: () => void }) => {
+    tabAdders.push(adder);
+    return () => {
+      tabAdders.splice(tabAdders.indexOf(adder), 1);
+    };
+  }),
+};
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 vi.mock("./EditorFrame", () => ({ useEditorFrame: () => frame }));
 vi.mock("@/lib/page-actions-client", async (original) => ({
@@ -39,6 +53,7 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
   vi.clearAllMocks();
+  tabAdders.length = 0;
   saveNow.mockResolvedValue(true);
   frame.pages = [];
   frame.narrow = false;
@@ -55,17 +70,32 @@ const pick = async (label: string) => {
   await act(async () => item.click());
 };
 
-describe("PageTabs（本文の上のタブの帯。#308）", () => {
-  it("＋: まっさらなタブを足し、一覧に知らせて（同じ入れ物）開く。届かなければ一言", async () => {
+describe("PageTabs（題名の下のタブの帯。#308・#344）", () => {
+  it("タブが 1 つなら帯を描かず、「…」の「タブを追加」の口だけを枠に登録する。口から足すと、一覧に知らせて（同じ入れ物）開く。届かなければ一言", async () => {
     vi.mocked(createTabRequest).mockResolvedValue({ id: OTHER, page: HOLDER });
     mount([tab(PAGE, 1)]);
-    await act(async () => host.querySelector<HTMLButtonElement>(".es-tab-add")!.click());
+    expect(host.querySelector(".es-tabbar")).toBeNull();
+    expect(tabAdders.map((adder) => adder.ownerId)).toEqual([PAGE]);
+    await act(async () => tabAdders[0]!.add());
     expect(createTabRequest).toHaveBeenCalledWith(PAGE);
     expect(frame.pageCreated).toHaveBeenCalledWith(OTHER, "冬の鎌倉", "note", FOLDER, HOLDER);
     expect(router.push).toHaveBeenCalledWith(`/p/${OTHER}`);
     vi.mocked(createTabRequest).mockRejectedValue(new PageActionError(503));
-    await act(async () => host.querySelector<HTMLButtonElement>(".es-tab-add")!.click());
+    await act(async () => tabAdders[0]!.add());
+    // 帯が無くても、失敗の一言は題名の下に出す
     expect(host.querySelector('[role="alert"]')?.textContent).toBe(PAGE_TABS_TEXT.addFailed);
+    // 画面を離れたら口を外す
+    act(() => root.unmount());
+    expect(tabAdders).toEqual([]);
+    root = createRoot(host);
+  });
+
+  it("＋（2 つ以上のときの帯の右端）: 同じくまっさらなタブを足して開く", async () => {
+    vi.mocked(createTabRequest).mockResolvedValue({ id: "88888888-8888-4888-8888-888888888888", page: HOLDER });
+    mount([tab(PAGE, 1), tab(OTHER, 2)]);
+    await act(async () => host.querySelector<HTMLButtonElement>(".es-tabbar > .es-tab-add")!.click());
+    expect(createTabRequest).toHaveBeenCalledWith(PAGE);
+    expect(router.push).toHaveBeenCalledWith("/p/88888888-8888-4888-8888-888888888888");
   });
 
   it("▾ 名前を変える: 送って読み直す。空は名前なし（null）", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AI_GRAY_ITEM, pageMenuItems } from "./use-page-menu";
+import { ADD_TAB_ITEM, AI_GRAY_ITEM, FLOW_ITEM, PUBLISH_ITEM, pageMenuItems } from "./use-page-menu";
 import { googleDocsConnectPath, GOOGLE_DOCS_CONNECT_PATH } from "./google-docs-paths";
 
 /** 「…」の項目と、Google ドキュメントの失敗の文言（code ごと）。 */
@@ -41,6 +41,29 @@ describe("「…」の項目", () => {
     expect(on.find((item) => item.id === AI_GRAY_ITEM)).toMatchObject({ label: "AI の文を灰色で見せる", checked: true });
     expect(pageMenuItems(null, { aiGray: false }).find((item) => item.id === AI_GRAY_ITEM)?.checked).toBe(false);
     expect(pageMenuItems(null).some((item) => item.id === AI_GRAY_ITEM)).toBe(false);
+  });
+
+  it("「公開…」は先頭、「タブを追加」は書き出しの後ろ（前後に区切り）。渡さなければ出さず、フォルダには出さない（#344）", () => {
+    const items = pageMenuItems(null, { publish: { hint: "公開中 · 更新あり" }, addTab: true, pageInfo: true });
+    expect(items.map((item) => item.label)).toEqual(["公開…", "リンクで共有", "書き出し", "Google ドキュメントへ", "タブを追加", "履歴", "複製", "ページの情報", "削除"]);
+    expect(items[0]).toMatchObject({ id: PUBLISH_ITEM, icon: "globe", hint: "公開中 · 更新あり" });
+    expect(items.filter((item) => item.separated).map((item) => item.id)).toEqual([ADD_TAB_ITEM, "history"]);
+    expect(pageMenuItems(null, { publish: {} })[0]).toMatchObject({ id: PUBLISH_ITEM, label: "公開…" });
+    expect(pageMenuItems(null, { publish: {} })[0]!.hint).toBeUndefined();
+    expect(pageMenuItems(null).some((item) => item.id === PUBLISH_ITEM || item.id === ADD_TAB_ITEM || item.separated)).toBe(false);
+    expect(pageMenuItems(null, { folder: true, publish: {}, addTab: true }).map((item) => item.id)).toEqual(["export-folder", "delete"]);
+  });
+
+  it("「手順で作る…」は「タブを追加」の後ろ（同じ区切りの間）。タブを追加が無くても区切る。渡さなければ出さず、フォルダには出さない（#344）", () => {
+    const both = pageMenuItems(null, { addTab: true, flow: true });
+    expect(both.map((item) => item.label)).toEqual(["リンクで共有", "書き出し", "Google ドキュメントへ", "タブを追加", "手順で作る…", "履歴", "複製", "削除"]);
+    expect(both.find((item) => item.id === FLOW_ITEM)).toMatchObject({ icon: "spark" });
+    expect(both.filter((item) => item.separated).map((item) => item.id)).toEqual([ADD_TAB_ITEM, "history"]);
+    const alone = pageMenuItems(null, { flow: true });
+    expect(alone.map((item) => item.id)).toEqual(["share", "export", "export-google-docs-batch", FLOW_ITEM, "history", "duplicate", "delete"]);
+    expect(alone.filter((item) => item.separated).map((item) => item.id)).toEqual([FLOW_ITEM, "history"]);
+    expect(pageMenuItems(null).some((item) => item.id === FLOW_ITEM)).toBe(false);
+    expect(pageMenuItems(null, { folder: true, flow: true }).map((item) => item.id)).toEqual(["export-folder", "delete"]);
   });
 
   it("共有中が分かっているときだけ補足を出す", () => {

@@ -4,11 +4,12 @@ import { ShellMenu } from "../shell/menu";
 import type { ShellMenuItem } from "../shell/types";
 
 /**
- * タブの帯（#308。モック docs/mockups/editor-folder-pages-v1.html の .tabbar。Mac・Web で共通。Tauri-free）。
+ * タブの帯（#308。モック docs/mockups/editor-page-refine-v1.html の 4。Mac・Web で共通。Tauri-free）。
  *
- * ページ名の上、本文のコンテンツ幅いっぱいの薄い罫線。右端に ＋（まっさらなタブをすぐ足す）。
- * タブが 2 つ以上あるときだけ、左にタブの名前を並べる（押すとそのタブへ移る。開いているタブは `aria-current`。
- * 画面が替わる「タブ」なので WAI-ARIA の tablist/tab にはしない: tablist は ▾ のようなほかの部品を中に持てない）。
+ * **タブが 2 つ以上あるときだけ描く**（1 つなら何も描かない。足すのは呼ぶ側の「…」の「タブを追加」。#344）。
+ * 置き場は題名の下・本文の前（題名はページの名前で、タブは中身の切り替え）。本文の幅いっぱいの薄い罫線に、タブの名前を並べ
+ * （押すとそのタブへ移る。開いているタブは `aria-current`。画面が替わる「タブ」なので WAI-ARIA の tablist/tab にはしない:
+ * tablist は ▾ のようなほかの部品を中に持てない）、右端に ＋（まっさらなタブをすぐ足す）。
  * 開いているタブの右に ▾（メニュー: 名前を変える・複製・並べて開く・別のページへ移す・削除）。
  * 「作り直す」「同じ入力でもう 1 つ」は手順（#309）が足す。
  * 通信・保存は持たない（アプリの側が持つ。名前の欄はその場で開き、Enter で `onRename`）。
@@ -149,60 +150,61 @@ export function TabBar({ tabs, currentId, onOpen, onAdd, busy = false, actions }
     buttons[(at + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length]?.focus();
   };
 
+  // タブが 1 つ（または読み込む前で 0）なら帯を出さない
+  if (tabs.length < 2) return null;
+
   return (
     <div className="es-tabbar" ref={bar}>
-      {tabs.length >= 2 && (
-        <div className="es-tabbar-tabs" role="group" aria-label={TAB_BAR_TEXT.list} onKeyDown={onListKey} onScroll={() => setMenu(null)}>
-          {tabs.map((tab) => {
-            const on = tab.id === currentId;
-            return (
-              <span key={tab.id} className={`es-tab-w${on ? " es-tab-w--on" : ""}`}>
-                {on && renaming ? (
-                  <input
-                    className="es-tab-name"
-                    aria-label={TAB_BAR_TEXT.nameField}
-                    defaultValue={tab.label}
-                    maxLength={100}
-                    autoFocus
-                    onFocus={(event) => event.currentTarget.select()}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        commitName(event.currentTarget.value);
-                        menuButton.current?.focus();
-                      } else if (event.key === "Escape") {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        cancelName();
-                      }
-                    }}
-                    onBlur={(event) => commitName(event.currentTarget.value)}
-                  />
-                ) : (
-                  <button type="button" className="es-tab" aria-current={on ? "true" : undefined} onClick={() => onOpen(tab.id)}>
-                    {/* 手順が動いている印。状態の言葉はページの側（パネル）が持つので、マークは支援技術から隠す */}
-                    {tab.busy && <i className="es-busy" aria-hidden="true" />}
-                    {tab.label}
-                  </button>
-                )}
-                {on && actions && !renaming && (
-                  <button
-                    ref={menuButton}
-                    type="button"
-                    className="es-tab-menu"
-                    aria-label={TAB_BAR_TEXT.menu(tab.label)}
-                    aria-haspopup="menu"
-                    aria-expanded={menu !== null}
-                    onClick={toggleMenu}
-                  >
-                    <Icon name="down" />
-                  </button>
-                )}
-              </span>
-            );
-          })}
-        </div>
-      )}
+      <div className="es-tabbar-tabs" role="group" aria-label={TAB_BAR_TEXT.list} onKeyDown={onListKey} onScroll={() => setMenu(null)}>
+        {tabs.map((tab) => {
+          const on = tab.id === currentId;
+          return (
+            <span key={tab.id} className={`es-tab-w${on ? " es-tab-w--on" : ""}`}>
+              {on && renaming ? (
+                <input
+                  className="es-tab-name"
+                  aria-label={TAB_BAR_TEXT.nameField}
+                  defaultValue={tab.label}
+                  maxLength={100}
+                  autoFocus
+                  onFocus={(event) => event.currentTarget.select()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      commitName(event.currentTarget.value);
+                      menuButton.current?.focus();
+                    } else if (event.key === "Escape") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      cancelName();
+                    }
+                  }}
+                  onBlur={(event) => commitName(event.currentTarget.value)}
+                />
+              ) : (
+                <button type="button" className="es-tab" aria-current={on ? "true" : undefined} onClick={() => onOpen(tab.id)}>
+                  {/* 手順が動いている印。状態の言葉はページの側（パネル）が持つので、マークは支援技術から隠す */}
+                  {tab.busy && <i className="es-busy" aria-hidden="true" />}
+                  {tab.label}
+                </button>
+              )}
+              {on && actions && !renaming && (
+                <button
+                  ref={menuButton}
+                  type="button"
+                  className="es-tab-menu"
+                  aria-label={TAB_BAR_TEXT.menu(tab.label)}
+                  aria-haspopup="menu"
+                  aria-expanded={menu !== null}
+                  onClick={toggleMenu}
+                >
+                  <Icon name="down" />
+                </button>
+              )}
+            </span>
+          );
+        })}
+      </div>
       {/* メニューは帯の直下（タブの並びの外）に描く: 並びは overflow-x:auto で縦も切るので、中に置くと高さ 36px の帯でメニューが切れる */}
       {menu === "main" && (
         <ShellMenu label={TAB_BAR_TEXT.menuLabel} className="es-menu--tab" style={{ left: menuLeft }} items={items} trigger={menuButton} onSelect={pick} onClose={() => setMenu(null)} />
