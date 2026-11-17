@@ -22,6 +22,7 @@ import {
   type ShellDockWidths,
   type ShellDocks,
   type ShellPanelId,
+  type ShellPanelMovableId,
   type ShellPanelTarget,
 } from "niho-docs-ui/shell";
 
@@ -186,7 +187,7 @@ export type ShellLayout = {
   /** 細い列から上に重ねて開いているドック（細い列でなくなったら null）。 */
   peek: ShellDockSide | null;
   setPeek: (side: ShellDockSide | null) => void;
-  move: (panel: ShellPanelId, to: ShellPanelTarget) => void;
+  move: (panel: ShellPanelMovableId, to: ShellPanelTarget) => void;
   /** 同じドックの上下の境目を動かした（index は下のパネルの位置、fraction は上のパネルの分）。 */
   resize: (side: ShellDockSide, index: number, fraction: number) => void;
   /** パネルを閉じる（×）・出す（ヘッダー右上のボタン。元のドックの下に戻る）。 */
@@ -223,7 +224,7 @@ export function useShellLayout(input: { wide: boolean; available: ShellPanelFlag
     if (next !== current) writeLayout(next);
   }, []);
   const move = useCallback(
-    (panel: ShellPanelId, to: ShellPanelTarget) => {
+    (panel: ShellPanelMovableId, to: ShellPanelTarget) => {
       setPeek(null);
       update((current) => {
         const next = movePanel(current.docks, panel, to);

@@ -24,6 +24,7 @@ import {
   type ShellDockWidths,
   type ShellDocks,
   type ShellPanelId,
+  type ShellPanelMovableId,
   type ShellPanelShare,
   type ShellPanelTarget,
 } from "./dock-layout";
@@ -31,7 +32,7 @@ import { Icon } from "./icons";
 import type { ShellIconName } from "./types";
 
 /**
- * EditorShell のパネルの配置（設計 §5.5・#311）。渡したときだけ、一覧・AI・ページ・写真を左右のドックに置き、右に読むだけのページを並べる。
+ * EditorShell のパネルの配置（設計 §5.5・#311）。渡したときだけ、左固定の一覧と AI・ページ・写真を左右のドックに置き、右に読むだけのページを並べる。
  * 状態はすべて呼ぶ側が持つ（ドックの中身と高さの割合・幅）。ここが持つのはドラッグ中の印だけ。
  */
 export type EditorShellDock = {
@@ -52,7 +53,7 @@ export type EditorShellDock = {
   peek?: ShellDockSide | null;
   onPeek?: (side: ShellDockSide | null) => void;
   /** パネルの見出しを掴んで、落とし先（ドックの上か下）へ落とした。 */
-  onMove?: (panel: ShellPanelId, to: ShellPanelTarget) => void;
+  onMove?: (panel: ShellPanelMovableId, to: ShellPanelTarget) => void;
   /** 同じドックの上下の境目を動かした。index は下のパネルの位置（1〜）、fraction は上のパネルが 2 つの合計に占める割合。 */
   onResize?: (side: ShellDockSide, index: number, fraction: number) => void;
   /** 右に並べたページ（ShellSidePane）。渡さなければ列を出さない。 */
@@ -164,7 +165,7 @@ export function ShellSash({ label, value, min, max, defaultValue, orientation = 
 }
 
 export type ShellPanelHeadProps = {
-  panel: ShellPanelId;
+  panel: ShellPanelMovableId;
   /** 見出しの文字（省くとパネルの名前）。 */
   title?: string;
   /** × を出す（押すとパネルを閉じる）。 */
@@ -272,19 +273,19 @@ export function ShellSidePane({ pageId, title, onSwap, onClose, children }: Shel
 }
 
 /** ドラッグで運んでいるもの（独自の型から決める。どれでもなければ null）。row は一覧の行（ページ）、band は右のページの帯。 */
-type DragKind = { what: "row" } | { what: "band" } | { what: "panel"; panel: ShellPanelId };
+type DragKind = { what: "row" } | { what: "band" } | { what: "panel"; panel: ShellPanelMovableId };
 
 function dragKindOf(types: readonly string[] | DOMStringList | undefined, accepts: { page: boolean; side: boolean; panels: boolean }): DragKind | null {
   const list = types ? Array.from(types as ArrayLike<string>) : [];
   if (accepts.page && list.includes(SHELL_DND.page)) return { what: "row" };
   if (accepts.side && list.includes(SHELL_DND.side)) return { what: "band" };
   if (accepts.panels) {
-    for (const panel of Object.keys(SHELL_DND.panel) as ShellPanelId[]) if (list.includes(SHELL_DND.panel[panel])) return { what: "panel", panel };
+    for (const panel of Object.keys(SHELL_DND.panel) as ShellPanelMovableId[]) if (list.includes(SHELL_DND.panel[panel])) return { what: "panel", panel };
   }
   return null;
 }
 
-const panelOf = (kind: DragKind | null): ShellPanelId | null => (kind && kind.what === "panel" ? kind.panel : null);
+const panelOf = (kind: DragKind | null): ShellPanelMovableId | null => (kind && kind.what === "panel" ? kind.panel : null);
 
 type Shown = Readonly<Record<ShellPanelId, boolean>>;
 
@@ -327,7 +328,7 @@ function ShellDockDnd({ host, dock, shown }: DndProps) {
       setGhost(null);
       setHot(null);
     };
-    const target = (event: DragEvent, panel: ShellPanelId): { at: ShellPanelTarget; height: number } | null => {
+    const target = (event: DragEvent, panel: ShellPanelMovableId): { at: ShellPanelTarget; height: number } | null => {
       const box = root.getBoundingClientRect();
       const { fit, docks } = latest.current.dock;
       const at = panelDropTarget(panel, { x: event.clientX - box.left, y: event.clientY - box.top }, fit, box.height, idsOf(docks, latest.current.shown));

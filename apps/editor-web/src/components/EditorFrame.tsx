@@ -444,7 +444,7 @@ type FrameSheet = { kind: "move" | "capacity"; id: string };
  *   まだ作っていないページでは「…」を出さない。削除の確認・共有・履歴・移動・フォルダの背景は ShellSheet で overlay に出す。
  *   ヘッダーの左の場所は、まだ作っていないページ（`/p/new`。録音からを含む）では、フォルダの中から開いたとき（`?in=`）だけ入れ先のフォルダ。
  * - ショートカット（設計 §11）: ⌘N 新しいページ、⌘K 検索、⌘⇧P 公開のシート（⌘S はページ、⌘/ は本文が持つ）。
- * - パネル（#311）: 一覧・AIと作る（./InfoPanel.tsx）・ページ（./PagePanel.tsx）・写真（PagePhotos）を左右のドックに置く。
+ * - パネル（#311）: 一覧は左に固定し、AIと作る（./InfoPanel.tsx）・ページ（./PagePanel.tsx）・写真（PagePhotos）は左右のドックに置く。
  *   AI・ページ・写真は保存したページ（`/p/{id}`。フォルダ以外）だけで、まだ作っていないページ（`/p/new`）・録音から・設定系の画面では無い。
  *   ヘッダー右上のボタンは閉じているパネルの分だけ（押すと元のドックの下に戻る）。開いているパネルは × で閉じる。
  *   デスクトップではページを替えても配置はそのまま（端末に覚える。src/lib/use-shell-layout.ts）。狭い画面（900px 以下）は
@@ -1289,7 +1289,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               }
               side={!narrow && currentId ? { id: sideId ?? undefined, onOpen: openSide } : undefined}
               onDeleteRow={(id) => rowDelete.open(id, rowTitle(id))}
-              panel={!narrow}
             />
           }
           header={
