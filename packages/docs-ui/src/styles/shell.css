@@ -100,7 +100,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-window-controls="true"]::before{content:"";position:absolute;top:-32px;left:0;right:0;height:32px;background:var(--ed-canvas)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas-in{max-width:680px;margin:auto}
 /* 本文の文字（PageEditor の本文の包み .be に .es-body を付ける）。枠の基準の 14px を継がず、本文の token を読む。中の見出し・箇条書きは本文に対する em のまま。
-   見出しは本文の行間（1.9）を継がず詰める（見直し 2026-11-07）。editor.css（既存の画面の CSS）は es- を読まない決まりなので、ここに置く */
+   見出しは本文の行間（--ed-lh-body）を継がず詰める（見直し 2026-11-07）。editor.css（既存の画面の CSS）は es- を読まない決まりなので、ここに置く */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-body{font-size:var(--ed-fs-body,16px);line-height:var(--ed-lh-body,1.6)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-body :is(h1,h2,h3){line-height:1.4}
 /* 本文のブロックの間（Notion 並み。見直し 2026-11-19）。editor-web は app.css（.doc p の 12px など）を読まず、上の reset も .ProseMirror の中を外すので、何もしないと段落・箇条書きの 1 行ごとにブラウザ既定の上下 1em が付く。
