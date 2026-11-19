@@ -149,7 +149,12 @@ describe("shell.css（フェーズ2）", () => {
     expect(bodyOf(".es-di-t")).toContain("font-size:var(--ed-fs-list,15px)");
     // 本文の文字は包み .es-body が token から決める（editor.css は es- を読まない決まりなので shell.css に置く）
     expect(bodyOf(".es-body")).toContain("font-size:var(--ed-fs-body,16px)");
-    expect(bodyOf(".es-body")).toContain("line-height:var(--ed-lh-body,1.9)");
+    expect(bodyOf(".es-body")).toContain("line-height:var(--ed-lh-body,1.6)");
+    // 本文のブロックの間（Notion 並み。2026-11-19）: ブラウザ既定の上下 1em を消し、上下 3px の内の余白で取る。箇条書きの字下げは 1.6em（チェックボックスの列は除く）
+    expect(bodyOf('.es-body [role="textbox"] :is(p,h1,h2,h3,ul,ol,li,blockquote,pre)')).toBe("margin-block:0");
+    expect(bodyOf('.es-body [role="textbox"] :is(p,h1,h2,h3,blockquote,pre)')).toBe("padding-block:3px");
+    expect(bodyOf('.es-body [role="textbox"] :is(ul,ol):not([data-type="taskList"])')).toBe("padding-left:1.6em");
+    expect(bodyOf('.es-body [role="textbox"] > :is(h1,h2,h3):first-child')).toBe("margin-top:0");
     // 狭い画面のヘッダー左の「‹ 行き先」（#320 A1）: 34px の高さ。縮む（右の操作が先に場所を取る。320px ではみ出さない）、長い名前は省略、‹ は残る
     expect(bodyOf(".es-back")).toContain("height:34px");
     expect(bodyOf(".es-back")).toContain("flex:0 1 auto");
