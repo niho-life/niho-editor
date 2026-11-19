@@ -69,7 +69,7 @@
    * 枠（shell.css）と本文（editor.css）が同じ値を読む。枠の基準の 14px（ボタン・補足）はそのままで、読む・書く文字だけを大きくした。
    * 色ではないので editor-tokens.test.ts のコントラストの検査の対象外。 */
   --ed-fs-body: 16px; /* 本文（日本語）。行の高さは --ed-lh-body */
-  --ed-lh-body: 1.9;
+  --ed-lh-body: 1.6; /* Notion（1.5）並みに詰める。日本語の折り返しが詰まって見えないよう 0.1 だけ広い（見直し 2026-11-19。もとは 1.9） */
   --ed-fs-title: 30px; /* ページ・フォルダの題名（900px 未満は --ed-fs-title-narrow） */
   --ed-fs-title-narrow: 26px;
   --ed-fs-list: 15px; /* 一覧の行の題名 */

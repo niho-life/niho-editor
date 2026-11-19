@@ -100,9 +100,21 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-window-controls="true"]::before{content:"";position:absolute;top:-32px;left:0;right:0;height:32px;background:var(--ed-canvas)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas-in{max-width:680px;margin:auto}
 /* 本文の文字（PageEditor の本文の包み .be に .es-body を付ける）。枠の基準の 14px を継がず、本文の token を読む。中の見出し・箇条書きは本文に対する em のまま。
-   見出しは本文の行間（1.9）を継がず詰める（見直し 2026-11-07）。editor.css（既存の画面の CSS）は es- を読まない決まりなので、ここに置く */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-body{font-size:var(--ed-fs-body,16px);line-height:var(--ed-lh-body,1.9)}
+   見出しは本文の行間（--ed-lh-body）を継がず詰める（見直し 2026-11-07）。editor.css（既存の画面の CSS）は es- を読まない決まりなので、ここに置く */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-body{font-size:var(--ed-fs-body,16px);line-height:var(--ed-lh-body,1.6)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-body :is(h1,h2,h3){line-height:1.4}
+/* 本文のブロックの間（Notion 並み。見直し 2026-11-19）。editor-web は app.css（.doc p の 12px など）を読まず、上の reset も .ProseMirror の中を外すので、何もしないと段落・箇条書きの 1 行ごとにブラウザ既定の上下 1em が付く。
+   外の余白は上下だけ 0 にし（引用の字下げなど横は既定のまま）、ブロックの間は上下 3px の内の余白（隣り合うと 6px）で取る。
+   本文の要素は PageEditor・ReadOnlyBody が role="textbox" を付けた TipTap の要素（es- 以外のクラスは参照しない決まりなので役割で選ぶ） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-body [role="textbox"] :is(p,h1,h2,h3,ul,ol,li,blockquote,pre){margin-block:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-body [role="textbox"] :is(p,h1,h2,h3,blockquote,pre){padding-block:3px}
+/* 箇条書きの字下げは既定の 40px を詰める（チェックボックスの列は editor.css の 2px のまま） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-body [role="textbox"] :is(ul,ol):not([data-type="taskList"]){padding-left:1.6em}
+/* 見出しは上だけ空けて前の段落と離す（見出しの文字に対する em。本文の先頭では空けない） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-body [role="textbox"] h1{margin-top:1em}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-body [role="textbox"] h2{margin-top:.9em}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-body [role="textbox"] h3{margin-top:.8em}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-body [role="textbox"] > :is(h1,h2,h3):first-child{margin-top:0}
 /* 本文へ移動（skip link）。普段は切り抜いて見せず（場所と大きさは保つので、はみ出しにならない）、フォーカスで現れる。移動先の main（tabindex=-1）には枠を出さない */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-skip{position:absolute;top:8px;left:8px;z-index:60;display:inline-flex;align-items:center;height:36px;padding:0 16px;border-radius:999px;background:var(--ed-white);color:var(--ed-ink);font-size:13.5px;font-weight:600;box-shadow:0 8px 24px rgba(28,28,26,.14),0 0 0 1px var(--ed-line-2)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-skip:not(:focus){clip-path:inset(50%)}
