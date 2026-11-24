@@ -52,7 +52,12 @@ if(cmd==='transcribe') {
 `,{mode:0o700});
   const options={audio,sidecarPath,workRoot,limits:{monitorMs:10,killGraceMs:30}};
   const log=async()=>{
-    try { return (await readFile(audit,'utf8')).trim().split('\n').map(JSON.parse); }
+    try {
+      const lines=(await readFile(audit,'utf8')).split('\n');
+      // The sidecar can be appending the last record while the cancellation test polls.
+      lines.pop();
+      return lines.map(JSON.parse);
+    }
     catch(error) { if(error.code==='ENOENT')return []; throw error; }
   };
   const clean=async()=>{
