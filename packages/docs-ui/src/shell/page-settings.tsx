@@ -19,7 +19,7 @@ export type ShellPageSettingsProps = {
     onFix?: (id: string) => void;
   };
   category?: { options: string[]; value: string; onPick: (value: string) => void };
-  /** NIHO Experience のときの、関連する体験（最大 3）。 */
+  /** NIHO Travel のときの、関連する体験（最大 3）。 */
   related?: { items: { id: string; title: string; by: string }[]; max?: number; onRemove?: (id: string) => void; onAdd?: () => void };
   /**
    * フォルダ（フォルダ＝子を持てるふつうのページ）。`value` はいまの入れ先（上の段なら null）、`options` は入れられる

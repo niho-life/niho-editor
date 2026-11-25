@@ -73,7 +73,7 @@ export type PublishFormProps = {
   submitDisabled?: boolean;
   /** URL の欄。省略すると出さない（足もとの URL だけ）。 */
   slug?: PublishSlug;
-  /** NIHO Experience の任意設定。server が候補と現在権限を決める。 */
+  /** NIHO Travel の任意設定。server が候補と現在権限を決める。 */
   experience?: PublishExperienceSettings;
   /** 公開に失敗したときなどの 1 行（role="alert"）。 */
   error?: string | null;
@@ -332,7 +332,7 @@ function PublishForm(props: PublishFormProps) {
                 }}
               >
                 <i aria-hidden="true" />
-                体験ページに載せる<small>{chosen.id === "exp" ? "関連する体験の末尾" : "NIHO Experience のときだけ"}</small>
+                体験ページに載せる<small>{chosen.id === "exp" ? "関連する体験の末尾" : "NIHO Travel のときだけ"}</small>
               </button>
             </div>
           </div>

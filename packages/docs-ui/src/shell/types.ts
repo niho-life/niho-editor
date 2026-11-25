@@ -3,7 +3,7 @@
  * 保存・通信・DocsHost は持たない（状態は呼ぶ側が持つ）。
  */
 
-/** 公開先。exp＝NIHO Experience、niho＝NIHO、site＝本人のサイト。 */
+/** 公開先。exp＝NIHO Travel、niho＝NIHO、site＝本人のサイト。 */
 export type ShellDest = "exp" | "niho" | "site";
 export type ShellLang = "ja" | "en";
 /** ページの種類。step は録音から作った手順のサブページ、folder は本文を持たない入れ物。 */

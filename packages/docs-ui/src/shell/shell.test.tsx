@@ -31,7 +31,7 @@ const ITEMS: ShellListItem[] = [
   { id: "a", title: "10月30日（木）", when: "たった今" },
   { id: "b", title: "Takuya さんと話したこと", when: "昨日", sub: { text: "録音" }, folder: true, open: true },
   { id: "c", title: "文字起こし修正", when: "昨日", depth: 1 },
-  { id: "d", title: "Riding the Enoden", when: "昨日", sub: { text: "NIHO Experience", dest: "exp" } },
+  { id: "d", title: "Riding the Enoden", when: "昨日", sub: { text: "NIHO Travel", dest: "exp" } },
   { id: "e", title: "", when: "たった今" },
 ];
 
@@ -57,7 +57,7 @@ function header(over: Partial<Parameters<typeof ShellHeader>[0]> = {}) {
       showListButton
       onToggleList={noop}
       tools={<ShellTools />}
-      status={shellStatus({ dest: "exp", range: "live", url: "experience.niho.life/stories/enoden" })}
+      status={shellStatus({ dest: "exp", range: "live", url: "travel.example.test/stories/enoden" })}
       publish={{ label: "公開", tone: "outline" }}
       railOpen={false}
       onToggleRail={noop}
@@ -190,7 +190,7 @@ describe("ShellSidebar", () => {
     expect(html).not.toContain("たった今");
     expect([...html.matchAll(/class="es-di-sub"/g)]).toHaveLength(2);
     expect(html).toContain("es-di es-di--on es-di--one");
-    expect(html).toContain('<i class="es-dest es-dest--exp" aria-hidden="true"></i>NIHO Experience');
+    expect(html).toContain('<i class="es-dest es-dest--exp" aria-hidden="true"></i>NIHO Travel');
     expect(html).toContain('<span class="es-di-t es-di-t--untitled">無題</span>');
   });
 
@@ -274,12 +274,12 @@ describe("ShellHeader", () => {
   });
 
   it("状態の文言とボタン（モック v6 と同じ）", () => {
-    const pub = (over: object) => ({ dest: "exp" as const, range: "live" as const, url: "experience.niho.life/guides/x", ...over });
+    const pub = (over: object) => ({ dest: "exp" as const, range: "live" as const, url: "travel.example.test/guides/x", ...over });
     expect(shellStatus(null)).toEqual({ state: "private", tip: "自分だけ · 保存済み" });
     expect(shellStatus(pub({ range: "stopped" }))).toEqual({ state: "stopped", tip: "公開をやめた · 保存済み" });
     expect(shellStatus(pub({ updated: true })).state).toBe("updated");
     expect(shellStatus(pub({ range: "unlisted" })).tip).toBe("限定公開 · URL を知っている人だけ · 保存済み");
-    expect(shellStatus(pub({}))).toEqual({ state: "published", tip: "公開中 · experience.niho.life/guides/x · 保存済み" });
+    expect(shellStatus(pub({}))).toEqual({ state: "published", tip: "公開中 · travel.example.test/guides/x · 保存済み" });
     expect(shellPublishButton({ pub: null })).toEqual({ label: "公開", tone: "quiet", menu: false });
     expect(shellPublishButton({ pub: null, isArticle: true }).tone).toBe("primary");
     expect(shellPublishButton({ pub: null, planned: true }).tone).toBe("primary");
@@ -425,12 +425,12 @@ describe("ShellRail", () => {
   });
 
   it("状態の丸は公開中だけ（地球のマーク）。非公開は丸を出さず、読み上げのための文だけを置く", () => {
-    const published = renderToStaticMarkup(<StatusDot {...shellStatus({ dest: "exp", range: "live", url: "experience.niho.life/stories/enoden" })} />);
+    const published = renderToStaticMarkup(<StatusDot {...shellStatus({ dest: "exp", range: "live", url: "travel.example.test/stories/enoden" })} />);
     expect(published).toContain("es-st es-st--published");
     expect(published).toContain('aria-label="ページの状態"');
     expect(published).toContain('role="tooltip"');
 
-    for (const pub of [null, { dest: "exp", range: "stopped", url: "experience.niho.life/stories/enoden" } as const]) {
+    for (const pub of [null, { dest: "exp", range: "stopped", url: "travel.example.test/stories/enoden" } as const]) {
       const quiet = renderToStaticMarkup(<StatusDot {...shellStatus(pub)} />);
       expect(quiet, String(pub?.range)).toContain("es-st-wrap es-st-wrap--quiet");
       expect(quiet, String(pub?.range)).not.toContain('class="es-st ');
@@ -551,9 +551,9 @@ describe("ページの部品", () => {
   it("ページ設定: 公開中は発信先と URL、更新ありなら一言、予定なら足りないもの", () => {
     const base = { lang: "en" as const, author: { name: "Mika Sato", title: "Writer", initial: "M" }, info: [{ label: "作成", value: "2026-10-28" }] };
     const published = renderToStaticMarkup(
-      <ShellPageSettings {...base} destination={{ dest: "exp", label: "NIHO Experience", url: "experience.niho.life/guides/x", updated: true }} category={{ options: ["Food", "Travel"], value: "Travel", onPick: noop }} related={{ items: [{ id: "d", title: "Dinner", by: "NIHO kamakura" }] }} />,
+      <ShellPageSettings {...base} destination={{ dest: "exp", label: "NIHO Travel", url: "travel.example.test/guides/x", updated: true }} category={{ options: ["Food", "Travel"], value: "Travel", onPick: noop }} related={{ items: [{ id: "d", title: "Dinner", by: "NIHO kamakura" }] }} />,
     );
-    expect(published).toContain("experience.niho.life/guides/x");
+    expect(published).toContain("travel.example.test/guides/x");
     expect(published).toContain("直した内容はまだ読者に出ていません");
     expect(published).toContain("1/3");
     expect(published).toContain('aria-pressed="true"');

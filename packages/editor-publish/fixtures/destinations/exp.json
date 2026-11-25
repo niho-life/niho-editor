@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "exp",
-  "label": "NIHO Experience",
+  "label": "NIHO Travel",
   "host": "exp.example.com",
   "path": "guides",
   "ranges": ["live", "unlisted"],

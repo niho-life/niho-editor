@@ -40,7 +40,7 @@ function type(input: HTMLInputElement, value: string) {
 }
 
 const DESTS: PublishDestOption[] = [
-  { id: "exp", label: "NIHO Experience", who: "旅行者向け · 英語", url: "experience.niho.life/guides/x", role: "ライター", connected: true },
+  { id: "exp", label: "NIHO Travel", who: "旅行者向け · 英語", url: "travel.example.test/guides/x", role: "ライター", connected: true },
   { id: "niho", label: "NIHO", who: "鎌倉の人向け", url: "", role: "NIHO アカウント", connected: false, note: "いまは公開できません" },
   { id: "site", label: "自分のサイト", who: "本人のサイト", url: "", role: "接続済み", connected: false },
 ];
@@ -66,27 +66,27 @@ function form(props: Partial<PublishFormProps> = {}) {
 describe("公開のシート（#39 で足した props）", () => {
   it("URL の欄: 初回の公開までは「URL」の入力で、打つと onChange(値)。使えないときは一言と aria-invalid", () => {
     const onChange = vi.fn();
-    const host = mount(<PublishSheet kind="publish" {...form({ slug: { prefix: "experience.niho.life/guides/", value: "morning-walk", editable: true, onChange } })} />);
+    const host = mount(<PublishSheet kind="publish" {...form({ slug: { prefix: "travel.example.test/guides/", value: "morning-walk", editable: true, onChange } })} />);
     const input = host.querySelector<HTMLInputElement>("input.es-input")!;
     const label = [...host.querySelectorAll("label")].find((node) => node.getAttribute("for") === input.id);
     expect(label?.textContent).toBe("URL");
     expect(input.value).toBe("morning-walk");
-    expect(host.querySelector(".es-slug")!.textContent).toContain("experience.niho.life/guides/");
+    expect(host.querySelector(".es-slug")!.textContent).toContain("travel.example.test/guides/");
     expect(input.getAttribute("aria-invalid")).toBeNull();
     expect(document.getElementById(input.getAttribute("aria-describedby")!)!.textContent).toBe("公開するまで変えられます");
     type(input, "morning-walk-2");
     expect(onChange).toHaveBeenCalledWith("morning-walk-2");
 
-    const taken = mount(<PublishSheet kind="publish" {...form({ slug: { prefix: "experience.niho.life/guides/", value: "index", editable: true, error: "この URL は使えません" } })} />);
+    const taken = mount(<PublishSheet kind="publish" {...form({ slug: { prefix: "travel.example.test/guides/", value: "index", editable: true, error: "この URL は使えません" } })} />);
     const invalid = taken.querySelector<HTMLInputElement>("input.es-input")!;
     expect(invalid.getAttribute("aria-invalid")).toBe("true");
     expect(document.getElementById(invalid.getAttribute("aria-describedby")!)!.textContent).toBe("この URL は使えません");
   });
 
   it("URL の欄: 公開したあとは入力を出さず、URL と「公開したあとは変えられません」だけ", () => {
-    const host = mount(<PublishSheet kind="publish" {...form({ current: {}, slug: { prefix: "experience.niho.life/guides/", value: "morning-walk", editable: false } })} />);
+    const host = mount(<PublishSheet kind="publish" {...form({ current: {}, slug: { prefix: "travel.example.test/guides/", value: "morning-walk", editable: false } })} />);
     expect(host.querySelector("input")).toBeNull();
-    expect(host.querySelector(".es-sh-url")!.textContent).toBe("experience.niho.life/guides/morning-walk");
+    expect(host.querySelector(".es-sh-url")!.textContent).toBe("travel.example.test/guides/morning-walk");
     expect(host.textContent).toContain("公開したあとは変えられません");
   });
 
@@ -94,7 +94,7 @@ describe("公開のシート（#39 で足した props）", () => {
     const host = mount(<PublishSheet kind="publish" {...form()} />);
     expect(host.querySelector(".es-slug")).toBeNull();
     expect(host.querySelector(".es-sh-url")).toBeNull();
-    expect(host.querySelector("code.es-sh-note")!.textContent).toBe("experience.niho.life/guides/x");
+    expect(host.querySelector("code.es-sh-note")!.textContent).toBe("travel.example.test/guides/x");
   });
 
   it("主ボタン: action で文言を替え、submitDisabled のあいだは押せない", () => {

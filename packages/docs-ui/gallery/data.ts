@@ -12,7 +12,7 @@ export const ME = {
 };
 
 export const DEST: Record<ShellDest, { label: string; host: string; path: string; who: string; role: string; cats: string[] }> = {
-  exp: { label: "NIHO Experience", host: "experience.niho.life", path: "guides/", who: "旅行者向け · 英語", role: "ライター", cats: ["Food", "Culture", "Travel"] },
+  exp: { label: "NIHO Travel", host: "travel.example.test", path: "guides/", who: "旅行者向け · 英語", role: "ライター", cats: ["Food", "Culture", "Travel"] },
   niho: { label: "NIHO", host: "niho.life", path: "article/", who: "鎌倉の人向け", role: "NIHO アカウント", cats: ["暮らし", "お知らせ", "コラム"] },
   site: { label: "自分のサイト", host: ME.site, path: "posts/", who: "本人のサイト", role: "接続済み", cats: [] },
 };

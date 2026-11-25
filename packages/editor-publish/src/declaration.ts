@@ -356,7 +356,7 @@ function declarationAt(input: unknown, issues: Issues): DestinationDeclaration |
   // Limited release (限定公開) exists only on NIHO-operated faces.
   if (id === "site" && ranges?.includes("unlisted")) issues.add("$.ranges", "not-allowed");
   const extras = setAt(fields.extras, EXTRA_KEYS, "$.extras", issues, false);
-  // "体験ページに載せる" is offered by NIHO Experience only.
+  // "体験ページに載せる" is offered by NIHO Travel only.
   if (id !== undefined && id !== "exp" && extras?.includes("xp")) issues.add("$.extras", "not-allowed");
   const acceptsFields = objectAt(fields.accepts, "$.accepts", issues, ["blocks", "marks"], ["blocks", "marks"]);
   const blocks = acceptsFields && setAt(acceptsFields.blocks, BLOCK_TYPES, "$.accepts.blocks", issues, false);

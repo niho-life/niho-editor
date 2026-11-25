@@ -223,7 +223,7 @@
       }
     },
     {
-      "name": "xp extra outside NIHO Experience",
+      "name": "xp extra outside NIHO Travel",
       "base": "niho",
       "path": [
         "extras"

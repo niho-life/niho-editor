@@ -244,7 +244,7 @@ describe("EditorShell の corner", () => {
 
 describe("公開のシートの fields", () => {
   const base: PublishFormProps = {
-    dests: [{ id: "exp", label: "NIHO Experience", who: "旅行者向け", url: "x", role: "ライター", connected: true }],
+    dests: [{ id: "exp", label: "NIHO Travel", who: "旅行者向け", url: "x", role: "ライター", connected: true }],
     missing: [{ id: "0", label: "リード" }],
     range: "live",
     extras: { app: false, news: false, xp: false },
