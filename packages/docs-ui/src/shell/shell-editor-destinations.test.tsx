@@ -19,7 +19,7 @@ const PLAINTEXT = "ek_synthetic-plaintext-key-value-not-a-real-key";
 const MASKED = "ek_••••••••3f9a";
 
 const FACES: EditorDestinationFace[] = [
-  { id: "exp", label: "NIHO Experience", host: "experience.niho.life", path: "guides", who: "旅行者向け · 英語", role: "ライター", available: true, reason: null, published: 2 },
+  { id: "exp", label: "NIHO Travel", host: "travel.niho.life", path: "guides", who: "旅行者向け · 英語", role: "ライター", available: true, reason: null, published: 2 },
   { id: "niho", label: "NIHO", host: null, path: null, who: "鎌倉の人向け", role: "NIHO アカウント", available: false, reason: "role", published: 0 },
 ];
 
@@ -117,15 +117,15 @@ describe("EditorDestinationsPage", () => {
 
   it("lists faces and sites with only their normal connection state", () => {
     const shown = plain(destHtml());
-    expect(shown).toContain("NIHO Experience");
+    expect(shown).toContain("NIHO Travel");
     expect(shown).toContain("接続済み");
     expect(shown).toContain("未接続");
-    expect(shown).not.toContain("experience.niho.life/guides");
+    expect(shown).not.toContain("travel.niho.life/guides");
     expect(shown).not.toContain("公開中 2");
     expect(shown).not.toContain(EDITOR_DESTINATIONS_TEXT.noRole);
     expect(shown).not.toContain("mika-sato.example/posts");
     expect(shown).toContain("note.mika-sato.example");
-    expect(destHtml()).toContain('aria-label="NIHO Experience の詳細"');
+    expect(destHtml()).toContain('aria-label="NIHO Travel の詳細"');
     expect(destHtml()).toContain('aria-label="mika-sato.example の設定"');
   });
 

@@ -45,7 +45,7 @@ export function deriveStatus(publication: PublicationView | null, draftFingerpri
   return publication.range === "unlisted" ? "limited" : "published";
 }
 
-export const FACE_LABELS = { exp: "NIHO Experience", niho: "NIHO" } as const;
+export const FACE_LABELS = { exp: "NIHO Travel", niho: "NIHO" } as const;
 
 /** The current publication as the sheet sees it. */
 export interface SheetPublication extends PublicationView {

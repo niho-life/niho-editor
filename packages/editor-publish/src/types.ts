@@ -49,7 +49,7 @@ export interface Notice {
   readonly message: string;
 }
 
-/** "あわせて" options. `xp` is only offered by NIHO Experience. */
+/** "あわせて" options. `xp` is only offered by NIHO Travel. */
 export const EXTRA_KEYS = ["app", "news", "xp"] as const;
 export type ExtraKey = (typeof EXTRA_KEYS)[number];
 

@@ -148,9 +148,9 @@ export function AccountDemo({ forced }: { forced: PagesForced }) {
       <AccountPage
         account={{ name: ME.name, initial: ME.initial, email: ME.email }}
         roles={[
-          { id: "writer", name: "ライター", detail: "NIHO Experience · NIHO 事務局の招待 · 2026-10-29", dest: "exp" },
+          { id: "writer", name: "ライター", detail: "NIHO Travel · NIHO 事務局の招待 · 2026-10-29", dest: "exp" },
           { id: "local", name: "鎌倉の人", detail: "NIHO", dest: "niho" },
-          { id: "host", name: "体験ホスト", detail: "体験を掲載するには NIHO Experience で申し込み", off: { action: "申し込む" } },
+          { id: "host", name: "体験ホスト", detail: "体験を掲載するには NIHO Travel で申し込み", off: { action: "申し込む" } },
         ]}
         invite={pending ? { initial: "N", name: "NIHO kamakura", detail: "Takuya · 公開中の体験を記事に関連付け" } : null}
         links={links}
@@ -281,7 +281,7 @@ export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: bo
           storageUsageNote={null}
           audio={{ maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30 }}
           account={{ name: ME.name, caption: ME.email, initial: ME.initial }}
-          destinations={{ faces: [{ id: "exp", label: "NIHO Experience", available: false, reason: "role" }], sites: [] }}
+          destinations={{ faces: [{ id: "exp", label: "NIHO Travel", available: false, reason: "role" }], sites: [] }}
           onLogout={() => navigate("login")}
           onNavigate={go}
         />

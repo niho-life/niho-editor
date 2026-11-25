@@ -23,7 +23,7 @@ export type PublishPreviewProps = {
   live: boolean;
   /** 本人のサイトのホスト。 */
   siteHost: string;
-  /** NIHO Experience のときだけ、記事の末尾に出す関連する体験。 */
+  /** NIHO Travel のときだけ、記事の末尾に出す関連する体験。 */
   experience?: { title: string; price: string; from?: boolean };
   onBack: () => void;
   onTo: (dest: ShellDest) => void;
@@ -130,7 +130,7 @@ export function PublishPreview(props: PublishPreviewProps) {
           <>
             <div className="es-pv-hd">
               <span className="es-pv-lg">
-                NIHO <span>Experience</span>
+                NIHO <span>Travel</span>
               </span>
               <nav className="es-pv-nav" aria-label="見本のメニュー">
                 <span>Experiences</span>

@@ -46,7 +46,7 @@ const click = (el: Element | null | undefined) => act(() => (el as HTMLElement).
 const byText = (host: ParentNode, selector: string, text: string) => [...host.querySelectorAll<HTMLButtonElement>(selector)].find((el) => el.textContent?.trim().startsWith(text));
 
 const DESTS: PublishDestOption[] = [
-  { id: "exp", label: "NIHO Experience", who: "旅行者向け · 英語", url: "experience.niho.life/guides/x", role: "ライター", connected: true },
+  { id: "exp", label: "NIHO Travel", who: "旅行者向け · 英語", url: "travel.niho.life/guides/x", role: "ライター", connected: true },
   { id: "niho", label: "NIHO", who: "鎌倉の人向け", url: "niho.life/article/x", role: "NIHO アカウント", connected: true },
   { id: "site", label: "自分のサイト", who: "本人のサイト", url: "mika-sato.example/posts/x", role: "接続済み", connected: true },
 ];
@@ -102,7 +102,7 @@ describe("公開のシート（dialog・Esc・フォーカス）", () => {
     expect(dialog.getAttribute("aria-modal")).toBe("true");
     expect(host.querySelector(".es-root")!.contains(dialog)).toBe(true);
     expect(dialog.contains(document.activeElement)).toBe(true);
-    expect(document.activeElement?.textContent).toContain("NIHO Experience");
+    expect(document.activeElement?.textContent).toContain("NIHO Travel");
   });
 
   it("Esc で閉じ、フォーカスは開いた公開ボタンへ戻る", () => {
@@ -364,9 +364,9 @@ describe("公開のシート（選ぶ・直す・公開）", () => {
     click(byText(host, "button", "公開"));
     expect(host.textContent).toContain("発信先を選ぶと条件が出ます");
     expect(byText(host, "button", "公開する")!.disabled).toBe(true);
-    click(byText(host, '[role="radio"]', "NIHO Experience"));
-    expect(byText(host, '[role="radio"]', "NIHO Experience")!.getAttribute("aria-checked")).toBe("true");
-    expect(host.textContent).toContain("NIHO Experience の条件はそろっています");
+    click(byText(host, '[role="radio"]', "NIHO Travel"));
+    expect(byText(host, '[role="radio"]', "NIHO Travel")!.getAttribute("aria-checked")).toBe("true");
+    expect(host.textContent).toContain("NIHO Travel の条件はそろっています");
     expect(byText(host, "button", "公開する")!.disabled).toBe(false);
     click(byText(host, '[role="radio"]', "限定公開"));
     expect(byText(host, '[role="radio"]', "限定公開")!.getAttribute("aria-checked")).toBe("true");
@@ -376,7 +376,7 @@ describe("公開のシート（選ぶ・直す・公開）", () => {
   it("あわせて: 押すと aria-checked が替わり、本人サイトでは追加掲載を出さない", () => {
     const host = mount(<Opener />);
     click(byText(host, "button", "公開"));
-    click(byText(host, '[role="radio"]', "NIHO Experience"));
+    click(byText(host, '[role="radio"]', "NIHO Travel"));
     const news = byText(host, '[role="checkbox"]', "ニュースレター")!;
     expect(news.getAttribute("aria-checked")).toBe("false");
     click(news);
@@ -394,7 +394,7 @@ describe("公開のシート（選ぶ・直す・公開）", () => {
     const onPublish = vi.fn();
     const host = mount(<Opener missing={[{ id: "cat", label: "カテゴリ" }]} onFix={onFix} onPublish={onPublish} />);
     click(byText(host, "button", "公開"));
-    click(byText(host, '[role="radio"]', "NIHO Experience"));
+    click(byText(host, '[role="radio"]', "NIHO Travel"));
     expect(host.textContent).toContain("あと 1 つ");
     const publish = byText(host, "button", "公開する")!;
     expect(publish.disabled).toBe(true);

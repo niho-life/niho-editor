@@ -35,7 +35,7 @@ function unlabeledInputs(html: string): string[] {
 }
 
 const DESTS: PublishDestOption[] = [
-  { id: "exp", label: "NIHO Experience", who: "旅行者向け · 英語", url: "experience.niho.life/guides/x", role: "ライター", connected: true },
+  { id: "exp", label: "NIHO Travel", who: "旅行者向け · 英語", url: "travel.niho.life/guides/x", role: "ライター", connected: true },
   { id: "niho", label: "NIHO", who: "鎌倉の人向け", url: "niho.life/article/x", role: "NIHO アカウント", connected: true },
   { id: "site", label: "自分のサイト", who: "本人のサイト", url: "mika-sato.example/posts/x", role: "接続済み", connected: true },
 ];
@@ -83,7 +83,7 @@ describe("PublishSheet（publish）", () => {
     expect(html).toMatch(/role="radiogroup" aria-labelledby=/);
     expect([...html.matchAll(/role="radio"/g)]).toHaveLength(3 + 2); // 発信先 3 つ＋範囲 2 つ
     expect(html).toMatch(/aria-checked="true" class="es-dst es-dst--exp es-dst--on"/);
-    for (const text of ["どこに出すか", "NIHO Experience", "旅行者向け · 英語", "experience.niho.life/guides/x", "ライター", "発信先を追加"]) expect(html).toContain(text);
+    for (const text of ["どこに出すか", "NIHO Travel", "旅行者向け · 英語", "travel.niho.life/guides/x", "ライター", "発信先を追加"]) expect(html).toContain(text);
     expect(unlabeledButtons(html)).toEqual([]);
   });
 
@@ -98,7 +98,7 @@ describe("PublishSheet（publish）", () => {
 
   it("足りないものがあれば「直す」を出し、あと N つ。公開は押せない", () => {
     const html = form({ picked: "exp", missing: [{ id: "cat", label: "カテゴリ" }, { id: "confirm", label: "CONFIRM 開門時間" }] });
-    expect(html).toContain("NIHO Experience に出すには");
+    expect(html).toContain("NIHO Travel に出すには");
     expect(html).toContain('aria-label="カテゴリ を直す"');
     expect(html).toContain("CONFIRM 開門時間");
     expect(html).toContain("あと 2 つ");
@@ -108,9 +108,9 @@ describe("PublishSheet（publish）", () => {
 
   it("条件がそろえば「条件はそろっています」と URL。公開が押せる。範囲・あわせてが出る", () => {
     const html = form({ picked: "exp" });
-    expect(html).toContain("NIHO Experience の条件はそろっています");
+    expect(html).toContain("NIHO Travel の条件はそろっています");
     expect(html).toContain("<code");
-    expect(html).toContain("experience.niho.life/guides/x</code>");
+    expect(html).toContain("travel.niho.life/guides/x</code>");
     expect(html).not.toMatch(/disabled=""[^>]*>公開する/);
     for (const text of ["範囲", "公開", "一覧・検索に出る", "限定公開", "URLを知っている人だけ", "あわせて", "NIHOアプリに載せる", "ニュースレター", "次号", "体験ページに載せる", "関連する体験の末尾"]) expect(html).toContain(text);
     expect(html).toContain('role="checkbox" aria-checked="true"');
@@ -119,7 +119,7 @@ describe("PublishSheet（publish）", () => {
   it("本人サイトに運営面の範囲・追加掲載・Experienceの説明を出さない", () => {
     const html = form({ picked: "site", dests: DESTS.filter((dest) => dest.id === "site") });
     expect(html).not.toContain("一覧・検索に出る");
-    for (const text of ["NIHO Experience", "あわせて", "NIHOアプリに載せる", "体験ページに載せる"]) expect(html).not.toContain(text);
+    for (const text of ["NIHO Travel", "あわせて", "NIHOアプリに載せる", "体験ページに載せる"]) expect(html).not.toContain(text);
   });
 
   it("接続していない発信先は選べず「接続する ›」。名前は見えている文字そのもの（aria-label で置き換えない。WCAG 2.5.3・#43）", () => {
@@ -157,10 +157,10 @@ describe("PublishSheet（publish）", () => {
 
 describe("PublishSheet（done / addDest）", () => {
   it("公開しました: dialog の名前、公開先と URL、見る・リンクをコピー・閉じる", () => {
-    const html = renderToStaticMarkup(<PublishSheet kind="done" host="experience.niho.life" url="experience.niho.life/guides/x" onView={noop} onCopy={noop} onClose={noop} />);
+    const html = renderToStaticMarkup(<PublishSheet kind="done" host="travel.niho.life" url="travel.niho.life/guides/x" onView={noop} onCopy={noop} onClose={noop} />);
     expect(html).toContain('role="dialog" aria-modal="true" aria-label="公開しました"');
-    expect(html).toContain("experience.niho.life に公開しました");
-    expect(html).toContain("<code>experience.niho.life/guides/x</code>");
+    expect(html).toContain("travel.niho.life に公開しました");
+    expect(html).toContain("<code>travel.niho.life/guides/x</code>");
     for (const text of ["見る", "リンクをコピー", "閉じる"]) expect(html).toContain(text);
     expect(unlabeledButtons(html)).toEqual([]);
   });
@@ -197,7 +197,7 @@ describe("PublishPreview", () => {
     date: "2026-10-27",
     author: { name: "Mika Sato", title: "Writer, lives in Kita-Kamakura", initial: "M" },
     dests: [
-      { id: "exp" as const, host: "experience.niho.life", path: "guides/" },
+      { id: "exp" as const, host: "travel.niho.life", path: "guides/" },
       { id: "niho" as const, host: "niho.life", path: "article/" },
       { id: "site" as const, host: "mika-sato.example", path: "posts/" },
     ],
@@ -214,17 +214,17 @@ describe("PublishPreview", () => {
     expect(html).toContain("ページ</button>");
     expect(html).toContain('aria-live="polite">公開するとこう見えます');
     expect(html).toContain('<div class="es-track" role="group" aria-label="発信先ごとの見え方">');
-    expect(html).toMatch(/<button type="button" aria-pressed="true">experience\.niho\.life<\/button>/);
+    expect(html).toMatch(/<button type="button" aria-pressed="true">travel\.niho\.life<\/button>/);
     expect(html).toMatch(/<button type="button" aria-pressed="false">niho\.life<\/button>/);
     expect(html).toContain("mika-sato.example</button>");
     expect(render({ live: true })).toContain('aria-live="polite">公開中');
     expect(unlabeledButtons(html)).toEqual([]);
   });
 
-  it("NIHO Experience: 見出し・リード・カテゴリ・本文・関連する体験（From ¥15,000 / adult）。写真は持ち込まない", () => {
+  it("NIHO Travel: 見出し・リード・カテゴリ・本文・関連する体験（From ¥15,000 / adult）。写真は持ち込まない", () => {
     const html = render();
     expect(html).toContain('<main class="es-pv es-pv--exp"');
-    for (const text of ["Experiences", "Journal", "Host with NIHO", "<h1>Riding the Enoden Like You Live Here</h1>", "Travel", "Which stops are worth getting off at.", "By <b>Mika Sato</b>", "2026-10-27", "<h2>Get off at Hase</h2>", "<li>a</li>", "Kamakura Community Dinner with Locals", "From ¥15,000 / adult"]) {
+    for (const text of ["NIHO <span>Travel</span>", "Experiences", "Journal", "Host with NIHO", "<h1>Riding the Enoden Like You Live Here</h1>", "Travel", "Which stops are worth getting off at.", "By <b>Mika Sato</b>", "2026-10-27", "<h2>Get off at Hase</h2>", "<li>a</li>", "Kamakura Community Dinner with Locals", "From ¥15,000 / adult"]) {
       expect(html).toContain(text);
     }
     expect(html).not.toMatch(/<img|background-image|url\(/);
@@ -245,7 +245,7 @@ describe("PublishPreview", () => {
 
 describe("DestinationsPage", () => {
   const rows: DestinationRow[] = [
-    { id: "exp", label: "NIHO Experience", host: "experience.niho.life", path: "guides/", who: "旅行者向け · 英語", role: "ライター", connected: true, published: 2 },
+    { id: "exp", label: "NIHO Travel", host: "travel.niho.life", path: "guides/", who: "旅行者向け · 英語", role: "ライター", connected: true, published: 2 },
     { id: "niho", label: "NIHO", host: "niho.life", path: "article/", who: "鎌倉の人向け", role: "NIHO アカウント", connected: true, published: 1 },
     { id: "site", label: "自分のサイト", host: "mika-sato.example", path: "posts/", who: "本人のサイト", role: "接続済み", connected: false, published: 0 },
   ];
@@ -255,11 +255,11 @@ describe("DestinationsPage", () => {
     expect(html).toContain("✓ ライター");
     expect(html).toContain("公開中 2");
     expect(html).toContain("未接続");
-    expect(html).toContain("experience.niho.life/guides/");
+    expect(html).toContain("travel.niho.life/guides/");
     expect(html).toMatch(/aria-label="mika-sato.example の設定"[^>]*>設定</);
     expect(html).toContain("発信先を追加");
     expect(html).toContain("自分のサイト · WordPress · Ghost");
-    expect(html).toContain('<a class="es-btn es-btn--quiet es-btn--sm" href="https://experience.niho.life" target="_blank" rel="noopener noreferrer">');
+    expect(html).toContain('<a class="es-btn es-btn--quiet es-btn--sm" href="https://travel.niho.life" target="_blank" rel="noopener noreferrer">');
     expect(unlabeledButtons(html)).toEqual([]);
   });
 });
@@ -304,14 +304,14 @@ describe("AccountPage", () => {
   const props = {
     account: { name: "Mika Sato", initial: "M", email: "mika@example.com" },
     roles: [
-      { id: "writer", name: "ライター", detail: "NIHO Experience · NIHO 事務局の招待 · 2026-10-29", dest: "exp" as const },
-      { id: "host", name: "体験ホスト", detail: "体験を掲載するには NIHO Experience で申し込み", off: { action: "申し込む" } },
+      { id: "writer", name: "ライター", detail: "NIHO Travel · NIHO 事務局の招待 · 2026-10-29", dest: "exp" as const },
+      { id: "host", name: "体験ホスト", detail: "体験を掲載するには NIHO Travel で申し込み", off: { action: "申し込む" } },
     ],
     links: [{ id: "sora", provider: "Sora's Zen Mornings", initial: "S", experience: "Morning Zazen and a Quiet Temple Walk", pages: 1 }],
   };
   it("NIHO アカウント・役割（持っている／いない）・記事連携の表", () => {
     const html = renderToStaticMarkup(<AccountPage {...props} />);
-    for (const text of ["役割とつながり", "NIHO アカウント", "mika@example.com", "NIHOで管理", "ライター", "experience.niho.life", "es-role es-role--off", "申し込む", "記事連携", "提供者", "使える体験", "関連付けたページ", "Sora&#x27;s Zen Mornings"]) {
+    for (const text of ["役割とつながり", "NIHO アカウント", "mika@example.com", "NIHOで管理", "ライター", "travel.niho.life", "es-role es-role--off", "申し込む", "記事連携", "提供者", "使える体験", "関連付けたページ", "Sora&#x27;s Zen Mornings"]) {
       expect(html).toContain(text);
     }
     expect(html).toContain('data-label="使える体験"');

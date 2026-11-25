@@ -53,7 +53,7 @@ function hubProps(patch: Partial<EditorSettingsHubProps> = {}): EditorSettingsHu
     audio: { maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30 },
     account: { name: "合成の名前", caption: "synthetic@example.invalid", initial: "合" },
     destinations: {
-      faces: [{ id: "exp", label: "NIHO Experience", available: false, reason: "role" }],
+      faces: [{ id: "exp", label: "NIHO Travel", available: false, reason: "role" }],
       sites: [{ id: "11111111-2222-4333-8444-555555555555", label: "synthetic.example" }],
     },
     onLogout: noop,
@@ -176,7 +176,7 @@ describe("EditorSettingsHub（/settings）", () => {
     expect(account).toContain('<span class="es-av" aria-hidden="true">合</span>');
     expect(account).toContain("<b>合成の名前</b><small>synthetic@example.invalid</small>");
     const destinations = markup.slice(markup.indexOf('id="es-s-destinations"'), markup.indexOf('id="es-s-ai"'));
-    expect(destinations).toMatch(/href="\/destinations\/experience"[^>]*>[\s\S]*?NIHO Experience[\s\S]*?未接続/);
+    expect(destinations).toMatch(/href="\/destinations\/experience"[^>]*>[\s\S]*?NIHO Travel[\s\S]*?未接続/);
     expect(destinations).toMatch(/href="\/destinations\/11111111-2222-4333-8444-555555555555"[^>]*>[\s\S]*?synthetic.example[\s\S]*?接続済み/);
     expect(destinations).toMatch(/href="\/destinations"[^>]*>[\s\S]*?発信先を追加・管理/);
     const nameless = hub({ account: { name: " ", caption: "", initial: "?" } });
@@ -187,10 +187,10 @@ describe("EditorSettingsHub（/settings）", () => {
   });
 
   it("shows role as disconnected and only unavailable as a connection error", () => {
-    expect(textOf(hub())).toContain("NIHO Experience 未接続");
-    const failed = hub({ destinations: { faces: [{ id: "exp", label: "NIHO Experience", available: false, reason: "unavailable" }], sites: [] } });
-    expect(textOf(failed)).toContain("NIHO Experience 接続を確認できません");
-    expect(textOf(failed)).not.toContain("NIHO Experience 未接続");
+    expect(textOf(hub())).toContain("NIHO Travel 未接続");
+    const failed = hub({ destinations: { faces: [{ id: "exp", label: "NIHO Travel", available: false, reason: "unavailable" }], sites: [] } });
+    expect(textOf(failed)).toContain("NIHO Travel 接続を確認できません");
+    expect(textOf(failed)).not.toContain("NIHO Travel 未接続");
   });
 
   it("links the rows to the detail pages", () => {
