@@ -46,7 +46,7 @@ const click = (el: Element | null | undefined) => act(() => (el as HTMLElement).
 const byText = (host: ParentNode, selector: string, text: string) => [...host.querySelectorAll<HTMLButtonElement>(selector)].find((el) => el.textContent?.trim().startsWith(text));
 
 const DESTS: PublishDestOption[] = [
-  { id: "exp", label: "NIHO Travel", who: "旅行者向け · 英語", url: "travel.niho.life/guides/x", role: "ライター", connected: true },
+  { id: "exp", label: "NIHO Travel", who: "旅行者向け · 英語", url: "travel.example.test/guides/x", role: "ライター", connected: true },
   { id: "niho", label: "NIHO", who: "鎌倉の人向け", url: "niho.life/article/x", role: "NIHO アカウント", connected: true },
   { id: "site", label: "自分のサイト", who: "本人のサイト", url: "mika-sato.example/posts/x", role: "接続済み", connected: true },
 ];

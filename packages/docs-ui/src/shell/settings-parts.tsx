@@ -4,7 +4,7 @@ import type { ShellDest } from "./types";
 
 /* 設定系ページ（発信先・自分のサイト・役割とつながり・設定）の共有部品。props 駆動。 */
 
-export const SHELL_DEST_PILL: Record<ShellDest, string> = { exp: "travel.niho.life", niho: "niho.life", site: "自分のサイト" };
+export const SHELL_DEST_PILL: Record<ShellDest, string> = { exp: "NIHO Travel", niho: "niho.life", site: "自分のサイト" };
 
 /** `<a href>` のまま、普通のクリックだけを onNavigate へ回す（修飾キー・中クリックはブラウザに任せる）。 */
 export function linkTo(href: string, onNavigate: (href: string) => void) {
